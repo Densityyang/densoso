@@ -25,12 +25,9 @@ final class HealthKitService {
             HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
         ]
 
-        let birthday = HKObjectType.characteristicType(forIdentifier: .dateOfBirth)!
-        let sex = HKObjectType.characteristicType(forIdentifier: .biologicalSex)!
-
         try await store.requestAuthorization(
             toShare: writeTypes,
-            read: readTypes.union([birthday, sex])
+            read: readTypes
         )
         isAuthorized = true
     }

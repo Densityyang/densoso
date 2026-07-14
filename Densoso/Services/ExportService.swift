@@ -148,8 +148,8 @@ final class ExportService {
 
         for m in payload.dailyMetrics {
             context.insert(DailyMetrics(
-                date: m.date, totalIntakeKcal: m.totalIntakeKcal,
-                totalExpenditureKcal: m.totalExpenditureKcal, deficitKcal: m.deficitKcal,
+                date: m.date, totalExpenditureKcal: m.totalExpenditureKcal,
+                totalIntakeKcal: m.totalIntakeKcal, deficitKcal: m.deficitKcal,
                 mealCount: m.mealCount, workoutCount: m.workoutCount
             ))
         }
