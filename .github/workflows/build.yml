@@ -1,0 +1,61 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-horowitz/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build for iOS Simulator
+        run: |
+          xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest' \
+            clean build
+
+      # TODO: 导出 .ipa 供 AltStore 侧载需要 Apple ID 签名。
+      # 在仓库 Settings -> Secrets and variables -> Actions 中设置:
+      #   APPLE_ID: 你的 Apple ID 邮箱
+      #   APPLE_APP_PASSWORD: Apple ID 应用专用密码（非登录密码）
+      # 然后取消下面注释并配置 exportOptions.plist:
+      #
+      # - name: Archive & Export .ipa
+      #   env:
+      #     APPLE_ID: ${{ secrets.APPLE_ID }}
+      #     APPLE_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      #   run: |
+      #     xcodebuild -project Densoso.xcodeproj \
+      #       -scheme Densoso \
+      #       -destination 'generic/platform=iOS' \
+      #       -archivePath Densoso.xcarchive \
+      #       -allowProvisioningUpdates \
+      #       archive
+      #     xcodebuild -exportArchive \
+      #       -archivePath Densoso.xcarchive \
+      #       -exportPath ./export \
+      #       -exportOptionsPlist ./scripts/exportOptions.plist
+      #
+      # - name: Upload .ipa
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: Densoso.ipa
+      #     path: ./export/Densoso.ipa

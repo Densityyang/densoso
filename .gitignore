@@ -1,0 +1,28 @@
+# XcodeGen / Xcode
+Densoso.xcodeproj
+*.xcworkspace
+xcuserdata/
+*.ipa
+*.xcarchive
+build/
+DerivedData/
+
+# Swift Package Manager
+.build/
+Package.resolved
+
+# macOS / iOS
+.DS_Store
+*.swp
+*.lock
+
+# IDE
+.vscode/
+.idea/
+
+# 开发配置（含 API Key 指向）
+dev.env
+
+# 自动生成的产物（CI 中生成）
+*.dSYM.zip
+*.dSYM

@@ -1,0 +1,46 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ipa:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-horowitz/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Archive & Export .ipa
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination 'generic/platform=iOS' \
+            -archivePath Densoso.xcarchive \
+            -allowProvisioningUpdates \
+            archive
+
+          xcodebuild -exportArchive \
+            -archivePath Densoso.xcarchive \
+            -exportPath ./export \
+            -exportOptionsPlist ./scripts/exportOptions.plist
+
+      - name: Upload .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: Densoso.ipa
+          path: ./export/Densoso.ipa
+          if-no-files-found: error

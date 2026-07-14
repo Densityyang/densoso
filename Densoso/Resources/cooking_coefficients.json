@@ -1,0 +1,117 @@
+{
+  "coefficients": [
+    {
+      "method": "steam",
+      "label": "清蒸",
+      "min": 1.0,
+      "max": 1.05,
+      "default": 1.0,
+      "oilAdded": false,
+      "defaultOilG": 0,
+      "description": "几乎不额外加油，热量接近食材原值"
+    },
+    {
+      "method": "boil",
+      "label": "水煮",
+      "min": 1.0,
+      "max": 1.05,
+      "default": 1.0,
+      "oilAdded": false,
+      "defaultOilG": 0,
+      "description": "清水煮，无额外油"
+    },
+    {
+      "method": "coldDress",
+      "label": "凉拌",
+      "min": 1.0,
+      "max": 1.2,
+      "default": 1.05,
+      "oilAdded": true,
+      "defaultOilG": 3,
+      "description": "部分凉拌菜加少量香油"
+    },
+    {
+      "method": "stirFry",
+      "label": "爆炒",
+      "min": 1.1,
+      "max": 1.3,
+      "default": 1.2,
+      "oilAdded": true,
+      "defaultOilG": 8,
+      "description": "高温快炒，每盘用油约5-10g"
+    },
+    {
+      "method": "braise",
+      "label": "红烧",
+      "min": 1.2,
+      "max": 1.5,
+      "default": 1.3,
+      "oilAdded": true,
+      "defaultOilG": 10,
+      "description": "先煎后炖，加糖色，油+糖热量"
+    },
+    {
+      "method": "dryFry",
+      "label": "干煸/干锅",
+      "min": 1.4,
+      "max": 1.8,
+      "default": 1.6,
+      "oilAdded": true,
+      "defaultOilG": 15,
+      "description": "油煸至干，炒锅食材吸油多"
+    },
+    {
+      "method": "deepFry",
+      "label": "煎炸",
+      "min": 1.5,
+      "max": 3.0,
+      "default": 2.0,
+      "oilAdded": true,
+      "defaultOilG": 20,
+      "description": "油炸，油脂吸收率15-40%"
+    },
+    {
+      "method": "roast",
+      "label": "烤",
+      "min": 1.0,
+      "max": 1.2,
+      "default": 1.05,
+      "oilAdded": false,
+      "defaultOilG": 0,
+      "description": "干烤不加油，部分刷油"
+    },
+    {
+      "method": "stew",
+      "label": "炖",
+      "min": 1.0,
+      "max": 1.2,
+      "default": 1.05,
+      "oilAdded": false,
+      "defaultOilG": 2,
+      "description": "慢炖，少量油"
+    }
+  ],
+  "oilPerGramKcal": 9.0,
+  "ingredientAbsorption": [
+    {
+      "keywords": ["茄子", "豆腐", "油豆腐", "腐竹", "油条"],
+      "absorptionFactor": 1.5,
+      "note": "高吸油多孔食材"
+    },
+    {
+      "keywords": ["土豆", "山药", "莲藕", "南瓜", "芋头"],
+      "absorptionFactor": 1.2,
+      "note": "淀粉类多孔食材"
+    },
+    {
+      "keywords": ["鸡蛋"],
+      "absorptionFactor": 1.3,
+      "note": "炒鸡蛋吸油多"
+    },
+    {
+      "keywords": ["面", "粉", "面包", "裹粉", "面糊", "饼"],
+      "absorptionFactor": 1.4,
+      "note": "面衣/面糊油炸吸油"
+    }
+  ]
+}
