@@ -115,7 +115,7 @@ struct DashboardScreen: View {
         let today = calendar.startOfDay(for: Date())
         let predicate = #Predicate<DailyMetrics> { $0.date == today }
         let descriptor = FetchDescriptor<DailyMetrics>(predicate: predicate)
-        metrics = (try? modelContext.fetch(descriptor)).first
+        metrics = (try? modelContext.fetch(descriptor))?.first
 
         // TODO: 周报查询
     }

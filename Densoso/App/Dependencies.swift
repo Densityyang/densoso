@@ -3,6 +3,7 @@ import SwiftData
 import Observation
 
 /// 全局依赖容器 —— 持有所有 Service 单例，通过 .environment() 注入
+@MainActor
 @Observable
 final class Dependencies {
     var foodDatabase: FoodDatabase?
@@ -23,7 +24,6 @@ final class Dependencies {
         self.exportService = ExportService()
         self.toolRegistry = ToolRegistry()
 
-        // AgentSession 初始化，需要 foodDB 和 modelContext —— 在 setupFoodDB 后补
         self.agentSession = AgentSession(
             client: deepSeekClient,
             registry: toolRegistry

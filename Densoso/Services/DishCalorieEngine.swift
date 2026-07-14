@@ -64,7 +64,7 @@ enum DishCalorieEngine {
             // 通过 foodDB 反查原始食材（这里简化为比例估算）
             // 实际生产版本中应该从 FoodItem 带出完整营养素
             // v1 简化：蛋白/碳水/脂肪按热量比例估算
-            let ratio = est.adjustedCaloriesKcal / max(totalKcal, 1)
+            let ratio = est.adjustedCaloriesKcal / Double(max(totalKcal, 1))
             totalProtein += est.adjustedCaloriesKcal * 0.15 / 4.0 * ratio // 约15%热量来自蛋白
             totalFat += est.adjustedCaloriesKcal * 0.30 / 9.0 * ratio   // 约30%热量来自脂肪
             totalCarbs += est.adjustedCaloriesKcal * 0.55 / 4.0 * ratio  // 约55%热量来自碳水

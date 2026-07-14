@@ -286,7 +286,7 @@ final class DeepSeekClient {
             }
 
         return ChatResult(
-            text: text?.isEmpty == false ? text : nil,
+            text: text.isEmpty ? nil : text,
             toolCalls: toolCalls,
             stopReason: apiResponse.stopReason ?? "end_turn"
         )
