@@ -2,6 +2,7 @@ import Foundation
 import SwiftData
 
 /// 工具注册中心
+@MainActor
 final class ToolRegistry {
     weak var foodDatabase: FoodDatabase?
 
@@ -21,6 +22,7 @@ final class ToolRegistry {
         ]
     }
 
+    @MainActor
     func execute(name: String, argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
         guard let tool = allTools.first(where: { $0.definition.name == name }) else {
             throw ToolError.unknownTool(name)
@@ -38,7 +40,7 @@ enum ToolError: Error, LocalizedError {
     }
 }
 
-protocol AgentTool {
+@MainActor protocol AgentTool {
     var definition: DeepSeekClient.ToolDef { get }
     func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String
 }

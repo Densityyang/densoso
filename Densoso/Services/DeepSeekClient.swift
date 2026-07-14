@@ -235,6 +235,7 @@ final class DeepSeekClient {
 
     // MARK: - 调用
 
+    @MainActor
     func chat(
         system: String?,
         messages: [Message],
@@ -243,7 +244,7 @@ final class DeepSeekClient {
     ) async throws -> ChatResult {
         guard let key = apiKey else { throw DeepSeekError.noAPIKey }
 
-        var urlComponents = URLComponents(string: "\(baseURL)/v1/messages")!
+        let urlComponents = URLComponents(string: "\(baseURL)/v1/messages")!
         // Anthropic Messages API 不支持 query parameter 的 beta 标记，直接发请求即可
 
         var request = URLRequest(url: urlComponents.url!)

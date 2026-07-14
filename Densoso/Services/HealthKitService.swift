@@ -4,6 +4,7 @@ import HealthKit
 /// HealthKit 读写服务
 /// v1: 读 BMR/体重/身高；写饮食热量
 /// v2: 读 Apple Watch 运动/睡眠数据
+@MainActor
 @Observable
 final class HealthKitService {
     private let store = HKHealthStore()

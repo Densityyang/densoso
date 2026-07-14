@@ -3,6 +3,7 @@ import AVFoundation
 import Speech
 
 /// 语音识别服务 —— Apple Speech framework，on-device zh-CN
+@MainActor
 @Observable
 final class SpeechService {
     private let speechRecognizer: SFSpeechRecognizer
@@ -33,7 +34,7 @@ final class SpeechService {
         speechRecognizer.defaultTaskHint = .dictation
     }
 
-    /// 请求权限
+    @MainActor
     func requestAuthorization() async -> Bool {
         await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in
