@@ -16,26 +16,27 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Archive & Export .ipa
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      - name: Build for device (unsigned)
         run: |
-          xcodebuild -project Densoso.xcodeproj \
+          xcodebuild build -project Densoso.xcodeproj \
             -scheme Densoso \
             -destination 'generic/platform=iOS' \
-            -archivePath Densoso.xcarchive \
-            -allowProvisioningUpdates \
-            archive
+            -derivedDataPath ./DerivedData \
+            -configuration Release \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
 
-          xcodebuild -exportArchive \
-            -archivePath Densoso.xcarchive \
-            -exportPath ./export \
-            -exportOptionsPlist ./scripts/exportOptions.plist
+      - name: Package unsigned .ipa
+        run: |
+          mkdir -p Payload
+          cp -R DerivedData/Build/Products/Release-iphoneos/Densoso.app Payload/
+          zip -ry Densoso.ipa Payload/
+          rm -rf Payload
 
       - name: Upload .ipa
         uses: actions/upload-artifact@v4
         with:
           name: Densoso.ipa
-          path: ./export/Densoso.ipa
+          path: Densoso.ipa
           if-no-files-found: error
