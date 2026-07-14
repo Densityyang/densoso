@@ -2,6 +2,7 @@ name: Build IPA
 
 on:
   workflow_dispatch:
+    branches: [master]
 
 jobs:
   build-ipa:
