@@ -2,11 +2,9 @@ import Foundation
 import GRDB
 
 /// 本地食材库（只读 SQLite + FTS5）
-/// 食材数据来源：GitHub `andforce/ChinaFoodComposition`
 final class FoodDatabase {
     private let dbQueue: DatabaseQueue
 
-    /// 从 Bundle 中加载预建的 food_composition.db
     init() throws {
         guard let dbURL = Bundle.main.url(forResource: "food_composition", withExtension: "db") else {
             throw FoodDBError.databaseNotFound
@@ -16,7 +14,6 @@ final class FoodDatabase {
         self.dbQueue = try DatabaseQueue(path: dbURL.path, configuration: config)
     }
 
-    /// 开发模式：从内存中的 JSON 种子数据创建临时数据库
     init(seedJSON: Data) throws {
         self.dbQueue = try DatabaseQueue()
         try createSchema()
@@ -54,14 +51,10 @@ final class FoodDatabase {
         }
     }
 
-    // MARK: - 查询
-
-    /// 按 ID 精确查找
     func lookup(id: Int64) throws -> FoodItem? {
         try dbQueue.read { db in try FoodItem.fetchOne(db, key: id) }
     }
 
-    /// 按名称精确匹配
     func lookup(name: String) throws -> FoodItem? {
         try dbQueue.read { db in
             try FoodItem
@@ -70,7 +63,6 @@ final class FoodDatabase {
         }
     }
 
-    /// 前缀模糊搜索
     func searchByPrefix(_ prefix: String, limit: Int = 20) throws -> [FoodItem] {
         try dbQueue.read { db in
             try FoodItem
@@ -80,7 +72,7 @@ final class FoodDatabase {
         }
     }
 
-    /// 模糊搜索（包含子串匹配）
+    /// 模糊搜索（包含子串匹配）—— GRDB 参数化查询，query 中的 % 为 SQL LIKE 通配符
     func search(query: String, limit: Int = 10) throws -> [FoodItem] {
         try dbQueue.read { db in
             try FoodItem
@@ -113,7 +105,6 @@ final class FoodDatabase {
         }
     }
 
-    /// 按分类列出
     func listByCategory(_ category: String, limit: Int = 50) throws -> [FoodItem] {
         try dbQueue.read { db in
             try FoodItem
@@ -123,14 +114,12 @@ final class FoodDatabase {
         }
     }
 
-    /// 所有分类
     func allCategories() throws -> [String] {
         try dbQueue.read { db in
             try String.fetchAll(db, sql: "SELECT DISTINCT category FROM food_items ORDER BY category")
         }
     }
 
-    /// 总数
     var count: Int {
         (try? dbQueue.read { db in try FoodItem.fetchCount(db) }) ?? 0
     }

@@ -13,7 +13,7 @@ targets:
       - path: Densoso
     resources:
       - path: Densoso/Resources
-        type: group
+        type: folder
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso
@@ -22,6 +22,7 @@ targets:
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: "YES"
         INFOPLIST_KEY_CFBundleDisplayName: densoso
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
@@ -34,14 +35,14 @@ targets:
     preBuildScripts:
       - name: "Generate Food DB"
         script: |
-          # 如果 food_composition.db 不存在，用 seed_foods.json 创建临时数据库用于开发
           if [ ! -f "${SRCROOT}/Densoso/Resources/food_composition.db" ]; then
             python3 "${SRCROOT}/scripts/import_food_db.py" \
               --input "${SRCROOT}/Densoso/Resources/seed_foods.json" \
               --output "${SRCROOT}/Densoso/Resources/food_composition.db"
           fi
         inputFiles: []
-        outputFiles: []
+        outputFiles:
+          - ${SRCROOT}/Densoso/Resources/food_composition.db
 
 packages:
   GRDB:

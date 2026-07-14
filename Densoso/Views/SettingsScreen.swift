@@ -62,8 +62,10 @@ struct SettingsScreen: View {
                     apiKey = String(saved.prefix(8)) + "..."
                 }
             }
-            .sheet(item: $exportURL) { url in
-                ShareSheet(items: [url])
+            .sheet(isPresented: $showShareSheet) {
+                if let url = exportURL {
+                    ShareSheet(items: [url])
+                }
             }
         }
     }
@@ -80,6 +82,7 @@ struct SettingsScreen: View {
         do {
             let url = try await dependencies.exportService.exportJSON(context: modelContext)
             exportURL = url
+            showShareSheet = true
         } catch {
             dependencies.exportService.lastError = error.localizedDescription
         }
