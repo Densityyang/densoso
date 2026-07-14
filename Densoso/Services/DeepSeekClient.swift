@@ -83,13 +83,12 @@ final class DeepSeekClient {
         let type: String
         let description: String?
         let `enum`: [String]?
-        let items: PropertySchema?
         let `default`: IntOrString?
 
         init(type: String, description: String? = nil, enum: [String]? = nil,
-             items: PropertySchema? = nil, default: IntOrString? = nil) {
+             default: IntOrString? = nil) {
             self.type = type; self.description = description; self.enum = `enum`
-            self.items = items; self.default = `default`
+            self.default = `default`
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 struct SuggestMealPlanTool: AgentTool {
     var definition: DeepSeekClient.ToolDef { .make(

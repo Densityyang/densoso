@@ -18,7 +18,7 @@ enum KeychainError: Error, LocalizedError {
 }
 
 final class KeychainStore {
-    static let shared = KeychainStore()
+    nonisolated(unsafe) static let shared = KeychainStore()
 
     private let service = "com.densoso.keychain"
     private let apiKeyAccount = "deepseek_api_key"

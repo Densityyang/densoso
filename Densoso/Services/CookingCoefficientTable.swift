@@ -3,7 +3,7 @@ import Foundation
 /// 从 cooking_coefficients.json 加载的静态系数表
 /// v1: 启动时加载，失败则返回安全默认值（不打断 App）
 final class CookingCoefficientTable {
-    static let shared = CookingCoefficientTable()
+    nonisolated(unsafe) static let shared = CookingCoefficientTable()
 
     let coefficients: [MethodCoefficient]
     let ingredientAbsorption: [IngredientAbsorption]

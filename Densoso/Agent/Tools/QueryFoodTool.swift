@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 struct QueryFoodTool: AgentTool {
     var definition: DeepSeekClient.ToolDef { .make(

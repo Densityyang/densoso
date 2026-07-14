@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 /// 工具注册中心
 final class ToolRegistry {
