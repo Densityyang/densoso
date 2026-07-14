@@ -24,7 +24,7 @@ jobs:
         run: |
           xcodebuild -project Densoso.xcodeproj \
             -scheme Densoso \
-            -destination 'platform=iOS Simulator,OS=latest' \
+            -destination 'generic/platform=iOS Simulator' \
             clean build 2>&1 | tee xcodebuild.log
 
       # TODO: 导出 .ipa 供 AltStore 侧载需要 Apple ID 签名。
