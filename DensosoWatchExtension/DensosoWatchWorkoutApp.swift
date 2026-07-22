@@ -11,14 +11,22 @@ struct DensosoWatchWorkoutApp: App {
 }
 
 private struct WatchWorkoutScreen: View {
-    @State private var coordinator = WatchWorkoutCoordinator()
-    @State private var state: WorkoutSessionState = .idle
-    @State private var errorMessage: String?
+    @State private var workout = WatchHealthKitWorkoutManager()
 
     var body: some View {
         VStack(spacing: 10) {
-            Text(state.rawValue.capitalized)
+            Text(workout.state.rawValue.capitalized)
                 .font(.headline)
+
+            if let heartRate = workout.heartRate {
+                Text("\(heartRate, format: .number.precision(.fractionLength(0))) BPM")
+                    .font(.title3.monospacedDigit())
+            }
+
+            if let activeEnergy = workout.activeEnergy {
+                Text("\(activeEnergy, format: .number.precision(.fractionLength(0))) kcal")
+                    .font(.footnote.monospacedDigit())
+            }
 
             if let event = primaryEvent {
                 Button(event.rawValue.capitalized) {
@@ -27,17 +35,21 @@ private struct WatchWorkoutScreen: View {
                 .buttonStyle(.borderedProminent)
             }
 
-            if state == .running {
+            if workout.state == .running {
                 Button("Pause") { send(.pause) }
-            } else if state == .paused {
+            } else if workout.state == .paused {
                 Button("Resume") { send(.resume) }
             }
 
-            if state == .prepared || state == .running || state == .paused {
+            if workout.state == .prepared || workout.state == .running || workout.state == .paused {
                 Button("Discard", role: .destructive) { send(.discard) }
             }
 
-            if let errorMessage {
+            if workout.isEnding {
+                ProgressView("Saving workout")
+            }
+
+            if let errorMessage = workout.errorMessage {
                 Text(errorMessage)
                     .font(.footnote)
                     .foregroundStyle(.red)
@@ -47,7 +59,7 @@ private struct WatchWorkoutScreen: View {
     }
 
     private var primaryEvent: WorkoutSessionEvent? {
-        switch state {
+        switch workout.state {
         case .idle, .ended, .discarded:
             .prepare
         case .prepared:
@@ -59,13 +71,7 @@ private struct WatchWorkoutScreen: View {
 
     private func send(_ event: WorkoutSessionEvent) {
         Task {
-            do {
-                let snapshot = try await coordinator.send(event)
-                state = snapshot.state
-                errorMessage = nil
-            } catch {
-                errorMessage = "Unable to \(event.rawValue)."
-            }
+            await workout.send(event)
         }
     }
 }

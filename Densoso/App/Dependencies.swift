@@ -10,6 +10,7 @@ final class Dependencies {
     let deepSeekClient: DeepSeekClient
     let speechService: SpeechService
     let healthKitService: HealthKitService
+    let workoutSessionMirroringService: WorkoutSessionMirroringService
     let exportService: ExportService
     let toolRegistry: ToolRegistry
     let agentSession: AgentSession
@@ -21,6 +22,7 @@ final class Dependencies {
         self.deepSeekClient = DeepSeekClient()
         self.speechService = SpeechService()
         self.healthKitService = HealthKitService()
+        self.workoutSessionMirroringService = WorkoutSessionMirroringService()
         self.exportService = ExportService()
         self.toolRegistry = ToolRegistry()
 
