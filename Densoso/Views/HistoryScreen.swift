@@ -80,16 +80,14 @@ struct HistoryScreen: View {
 
     private func deleteMeals(offsets: IndexSet) {
         for index in offsets {
-            modelContext.delete(meals[index])
+            try? HealthRepository(modelContext: modelContext).delete(meals[index])
         }
-        try? modelContext.save()
     }
 
     private func deleteWorkouts(offsets: IndexSet) {
         for index in offsets {
-            modelContext.delete(workouts[index])
+            try? HealthRepository(modelContext: modelContext).delete(workouts[index])
         }
-        try? modelContext.save()
     }
 }
 
