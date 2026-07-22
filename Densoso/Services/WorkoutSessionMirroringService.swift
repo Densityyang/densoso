@@ -7,7 +7,7 @@ import Observation
 final class WorkoutSessionMirroringService {
     private let healthStore = HKHealthStore()
 
-    private(set) var activeMirroredSessionID: UUID?
+    private(set) var activeMirroredSessionStartDate: Date?
     private(set) var reconnectCount = 0
 
     init() {
@@ -19,7 +19,7 @@ final class WorkoutSessionMirroringService {
     }
 
     private func accept(_ session: HKWorkoutSession) {
-        activeMirroredSessionID = session.uuid
+        activeMirroredSessionStartDate = session.startDate
         reconnectCount += 1
     }
 }
