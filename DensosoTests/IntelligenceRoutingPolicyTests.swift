@@ -18,4 +18,12 @@ final class IntelligenceRoutingPolicyTests: XCTestCase {
         let capabilities = PlatformCapabilities(onDeviceLanguageModelAvailable: true, modernSpeechAvailable: true)
         XCTAssertEqual(policy.path(for: .cloudDeepSeek, capabilities: capabilities), .cloudDeepSeek)
     }
+
+    func testSpeechUsesLegacyBackendWhenModernSpeechIsUnavailable() {
+        XCTAssertEqual(SpeechRoutingPolicy().backend(modernSpeechAvailable: false), .legacySpeechRecognizer)
+    }
+
+    func testSpeechUsesAnalyzerWhenModernSpeechIsAvailable() {
+        XCTAssertEqual(SpeechRoutingPolicy().backend(modernSpeechAvailable: true), .speechAnalyzer)
+    }
 }

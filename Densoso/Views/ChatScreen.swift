@@ -89,14 +89,14 @@ struct ChatScreen: View {
     private func toggleVoice() async {
         let speech = dependencies.speechService
         if speech.isRecording {
-            speech.stopRecording()
+            await speech.stopRecording()
             if !inputText.isEmpty {
                 await send(text: inputText)
             }
         } else {
             let authorized = await speech.requestAuthorization()
             if authorized {
-                try? speech.startRecording()
+                try? await speech.startRecording()
             } else {
                 addMessage(text: "请在设置中开启语音识别权限。", isUser: false)
             }

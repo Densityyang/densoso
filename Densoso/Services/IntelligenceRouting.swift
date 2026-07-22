@@ -12,6 +12,17 @@ enum IntelligencePath: Equatable, Sendable {
     case manual
 }
 
+enum SpeechBackend: Equatable, Sendable {
+    case speechAnalyzer
+    case legacySpeechRecognizer
+}
+
+struct SpeechRoutingPolicy: Sendable {
+    func backend(modernSpeechAvailable: Bool) -> SpeechBackend {
+        modernSpeechAvailable ? .speechAnalyzer : .legacySpeechRecognizer
+    }
+}
+
 struct PlatformCapabilities: Equatable, Sendable {
     let onDeviceLanguageModelAvailable: Bool
     let modernSpeechAvailable: Bool
