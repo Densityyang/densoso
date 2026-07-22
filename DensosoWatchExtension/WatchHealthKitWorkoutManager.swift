@@ -1,6 +1,7 @@
 import Foundation
 import HealthKit
 import Observation
+import DensosoWorkoutDomain
 
 @MainActor
 @Observable
