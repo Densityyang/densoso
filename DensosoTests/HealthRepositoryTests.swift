@@ -8,22 +8,18 @@ final class HealthRepositoryTests: XCTestCase {
     private var context: ModelContext!
 
     override func setUpWithError() throws {
-        try MainActor.assumeIsolated {
-            container = try ModelContainer(
-                for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, HealthSyncOutboxEntry.self,
-                configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-            )
-            context = ModelContext(container)
-            context.insert(UserProfile())
-            try context.save()
-        }
+        container = try ModelContainer(
+            for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, HealthSyncOutboxEntry.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        context = ModelContext(container)
+        context.insert(UserProfile())
+        try context.save()
     }
 
     override func tearDown() {
-        MainActor.assumeIsolated {
-            context = nil
-            container = nil
-        }
+        context = nil
+        container = nil
         super.tearDown()
     }
 
