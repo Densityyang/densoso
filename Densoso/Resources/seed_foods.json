@@ -1,6 +1,6 @@
 [
   {"id": 1, "name": "小麦粉(标准粉)", "alias": "面粉", "category": "谷类及制品", "edible": 100, "energyKcal": 354, "proteinG": 11.2, "fatG": 1.5, "carbohydrateG": 73.6, "fiberG": 2.1},
-  {"id": 2, "name": "大米(均值)", "alias": "米饭", "category": "谷类及制品", "edible": 100, "energyKcal": 346, "proteinG": 7.4, "fatG": 0.8, "carbohydrateG": 77.9, "fiberG": 0.7},
+  {"id": 2, "name": "米饭(熟)", "alias": "熟米饭", "category": "谷类及制品", "edible": 100, "energyKcal": 116, "proteinG": 2.6, "fatG": 0.3, "carbohydrateG": 25.9, "fiberG": 0.3},
   {"id": 3, "name": "糯米", "alias": "江米", "category": "谷类及制品", "edible": 100, "energyKcal": 350, "proteinG": 7.3, "fatG": 1.0, "carbohydrateG": 78.3, "fiberG": 0.8},
   {"id": 4, "name": "挂面(均值)", "alias": "面条", "category": "谷类及制品", "edible": 100, "energyKcal": 348, "proteinG": 10.3, "fatG": 0.6, "carbohydrateG": 75.6, "fiberG": 0.7},
   {"id": 5, "name": "馒头(均值)", "alias": null, "category": "谷类及制品", "edible": 100, "energyKcal": 223, "proteinG": 7.0, "fatG": 1.1, "carbohydrateG": 45.0, "fiberG": 1.3},
@@ -28,5 +28,6 @@
   {"id": 27, "name": "草鱼", "alias": null, "category": "鱼虾蟹贝类", "edible": 58, "energyKcal": 113, "proteinG": 16.6, "fatG": 5.2, "carbohydrateG": 0.0, "fiberG": null},
   {"id": 28, "name": "对虾", "alias": "虾", "category": "鱼虾蟹贝类", "edible": 61, "energyKcal": 93, "proteinG": 18.6, "fatG": 0.8, "carbohydrateG": 2.8, "fiberG": null},
   {"id": 29, "name": "苹果(均值)", "alias": "苹果", "category": "水果类及制品", "edible": 76, "energyKcal": 52, "proteinG": 0.2, "fatG": 0.2, "carbohydrateG": 13.5, "fiberG": 1.2},
-  {"id": 30, "name": "香蕉", "alias": null, "category": "水果类及制品", "edible": 59, "energyKcal": 91, "proteinG": 1.4, "fatG": 0.2, "carbohydrateG": 22.0, "fiberG": 1.2}
+  {"id": 30, "name": "香蕉", "alias": null, "category": "水果类及制品", "edible": 59, "energyKcal": 91, "proteinG": 1.4, "fatG": 0.2, "carbohydrateG": 22.0, "fiberG": 1.2},
+  {"id": 31, "name": "大米(生)", "alias": "生大米", "category": "谷类及制品", "edible": 100, "energyKcal": 346, "proteinG": 7.4, "fatG": 0.8, "carbohydrateG": 77.9, "fiberG": 0.7}
 ]

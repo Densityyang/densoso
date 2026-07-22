@@ -87,6 +87,29 @@ final class FoodDatabase {
         }
     }
 
+    /// Returns candidates in deterministic relevance order. Callers can show evidence instead of silently treating a fuzzy match as certain.
+    func rankedSearch(query: String, limit: Int = 10) throws -> [(item: FoodItem, score: Double)] {
+        let normalizedQuery = normalize(query)
+        guard !normalizedQuery.isEmpty else { return [] }
+        let candidates = try search(query: query, limit: min(max(limit * 4, 1), 100))
+        return candidates.map { item in
+            let name = normalize(item.name)
+            let alias = normalize(item.alias ?? "")
+            let score: Double
+            if name == normalizedQuery || alias == normalizedQuery { score = 1 }
+            else if name.hasPrefix(normalizedQuery) || alias.hasPrefix(normalizedQuery) { score = 0.8 }
+            else { score = 0.55 }
+            return (item, score)
+        }
+        .sorted { $0.score == $1.score ? $0.item.name < $1.item.name : $0.score > $1.score }
+        .prefix(max(0, limit))
+        .map { $0 }
+    }
+
+    private func normalize(_ value: String) -> String {
+        value.lowercased().components(separatedBy: .whitespacesAndNewlines).joined()
+    }
+
     /// FTS5 全文搜索（多关键词）
     func ftsSearch(query: String, limit: Int = 10) throws -> [FoodItem] {
         let boundedLimit = min(max(limit, 0), 100)
