@@ -64,7 +64,7 @@ enum CalorieEstimator {
 
         for ingredient in ingredients {
             let amount = ingredient.normalizedAmountG
-            let calories = ingredient.item.energyKcal * amount / 100
+            let calories = Double(ingredient.item.energyKcal) * amount / 100
             likelyCalories += calories
             protein += ingredient.item.proteinG * amount / 100
             fat += ingredient.item.fatG * amount / 100
