@@ -9,7 +9,7 @@ final class HealthRepositoryTests: XCTestCase {
 
     override func setUpWithError() throws {
         container = try ModelContainer(
-            for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self,
+            for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, HealthSyncOutboxEntry.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         context = ModelContext(container)
@@ -38,6 +38,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metrics[0].workoutCount, 1)
         XCTAssertEqual(metrics[0].totalIntakeKcal, 500)
         XCTAssertEqual(metrics[0].activeCaloriesKcal, 120)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).count, 2)
 
         try repository.delete(meal)
         metrics = try context.fetch(FetchDescriptor<DailyMetrics>())
@@ -46,5 +47,6 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metrics[0].workoutCount, 1)
         XCTAssertEqual(metrics[0].totalIntakeKcal, 0)
         XCTAssertEqual(metrics[0].activeCaloriesKcal, 120)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).count, 3)
     }
 }

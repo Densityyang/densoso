@@ -4,19 +4,15 @@ import SwiftData
 @main
 struct DensosoApp: App {
     @State private var dependencies = Dependencies()
+    private let sharedModelContainer: ModelContainer = {
+        let schema = Schema(versionedSchema: DensosoSchemaV1.self)
+        return try! ModelContainer(for: schema, migrationPlan: DensosoMigrationPlan.self)
+    }()
 
     var body: some Scene {
         WindowGroup {
             AppRoot()
-                .modelContainer(for: [
-                    UserProfile.self,
-                    MealRecord.self,
-                    DishEntry.self,
-                    WorkoutRecord.self,
-                    DailyMetrics.self,
-                    WeeklyReport.self,
-                    ScheduleEvent.self
-                ])
+                .modelContainer(sharedModelContainer)
                 .environment(dependencies)
                 .environment(AppState.shared)
         }
