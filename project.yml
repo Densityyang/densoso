@@ -58,11 +58,12 @@ targets:
     deploymentTarget: "11.0"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.watchapp
+        PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.watchkitapp
         SWIFT_VERSION: "6.0"
         WATCHOS_DEPLOYMENT_TARGET: "11.0"
         GENERATE_INFOPLIST_FILE: "YES"
         INFOPLIST_KEY_CFBundleDisplayName: densoso
+        INFOPLIST_KEY_WKWatchKitApp: "YES"
         INFOPLIST_KEY_WKCompanionAppBundleIdentifier: com.densoso.densoso
     dependencies:
       - target: DensosoWatchExtension
@@ -80,8 +81,7 @@ targets:
         SWIFT_VERSION: "6.0"
         WATCHOS_DEPLOYMENT_TARGET: "11.0"
         GENERATE_INFOPLIST_FILE: "YES"
-        INFOPLIST_KEY_WKApplication: "YES"
-        INFOPLIST_KEY_WKCompanionAppBundleIdentifier: com.densoso.densoso
+        INFOPLIST_KEY_WKAppBundleIdentifier: com.densoso.densoso.watchkitapp
         INFOPLIST_KEY_NSHealthShareUsageDescription: "densoso needs HealthKit access to record workouts."
         INFOPLIST_KEY_NSHealthUpdateUsageDescription: "densoso needs HealthKit access to save workouts."
     entitlements:
