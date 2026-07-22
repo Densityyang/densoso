@@ -63,6 +63,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.watchkitapp
         SWIFT_VERSION: "6.0"
         WATCHOS_DEPLOYMENT_TARGET: "11.0"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_FILE: DensosoWatchApp/Info.plist
     dependencies:
       - target: DensosoWatchExtension
@@ -79,6 +81,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.watchkitextension
         SWIFT_VERSION: "6.0"
         WATCHOS_DEPLOYMENT_TARGET: "11.0"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_FILE: DensosoWatchExtension/Info.plist
     entitlements:
       path: DensosoWatchExtension/DensosoWatchExtension.entitlements
