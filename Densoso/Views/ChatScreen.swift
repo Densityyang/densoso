@@ -112,14 +112,26 @@ struct ChatScreen: View {
         isProcessing = true
         appState.isAgentProcessing = true
 
+        let path = IntelligenceRoutingPolicy().path(
+            for: dependencies.intelligencePreferences.mode,
+            capabilities: .current
+        )
         do {
-            let response = try await dependencies.agentSession.send(
-                userText: userText,
-                modelContext: modelContext
-            )
-            addMessage(text: response.text, isUser: false)
+            switch path {
+            case .localOnDevice:
+                let response = try await dependencies.localIntelligence.respond(to: userText)
+                addMessage(text: response, isUser: false)
+            case .cloudDeepSeek:
+                let response = try await dependencies.agentSession.send(
+                    userText: userText,
+                    modelContext: modelContext
+                )
+                addMessage(text: response.text, isUser: false)
+            case .manual:
+                addMessage(text: "本地智能当前不可用；你的输入尚未保存。可在设置中选择 DeepSeek 云端处理，或使用支持的设备继续。", isUser: false)
+            }
         } catch {
-            addMessage(text: "抱歉，处理出错了：\(error.localizedDescription)", isUser: false)
+            addMessage(text: "处理失败：\(error.localizedDescription)。你的记录尚未保存。", isUser: false)
         }
 
         isProcessing = false

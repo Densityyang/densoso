@@ -9,6 +9,8 @@ final class Dependencies {
     var foodDatabase: FoodDatabase?
     let deepSeekClient: DeepSeekClient
     let speechService: SpeechService
+    let localIntelligence: LocalIntelligenceService
+    let intelligencePreferences: IntelligencePreferences
     let healthKitService: HealthKitService
     let exportService: ExportService
     let toolRegistry: ToolRegistry
@@ -20,6 +22,8 @@ final class Dependencies {
     init() {
         self.deepSeekClient = DeepSeekClient()
         self.speechService = SpeechService()
+        self.localIntelligence = LocalIntelligenceService()
+        self.intelligencePreferences = IntelligencePreferences()
         self.healthKitService = HealthKitService()
         self.exportService = ExportService()
         self.toolRegistry = ToolRegistry()

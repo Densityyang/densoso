@@ -34,6 +34,20 @@ struct SettingsScreen: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Intelligence") {
+                    Picker("Processing", selection: Binding(
+                        get: { dependencies.intelligencePreferences.mode },
+                        set: { dependencies.intelligencePreferences.mode = $0 }
+                    )) {
+                        Text("On device").tag(IntelligenceMode.localOnly)
+                        Text("DeepSeek cloud").tag(IntelligenceMode.cloudDeepSeek)
+                    }
+                    .pickerStyle(.segmented)
+                    Text("On-device mode keeps meal and workout text on this device. Cloud mode sends text to DeepSeek only when you choose it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 if let profile = profiles.first {
                     Section("个人资料") {
                         Text("身高: \(String(format: "%.1f", profile.heightCm)) cm")
