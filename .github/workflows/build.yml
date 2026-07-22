@@ -14,18 +14,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate bundled food database
+        run: python3 scripts/validate_food_db.py
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build for iOS Simulator
+      - name: Test on iOS Simulator
         run: |
-          xcodebuild -project Densoso.xcodeproj \
+          set -o pipefail
+          xcodebuild test -project Densoso.xcodeproj \
             -scheme Densoso \
-            -destination 'generic/platform=iOS Simulator' \
-            clean build 2>&1 | tee xcodebuild.log
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=latest' \
+            -enableCodeCoverage YES \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            clean test 2>&1 | tee xcodebuild.log
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-test-results
+          path: |
+            TestResults.xcresult
+            xcodebuild.log
+          if-no-files-found: warn
 
       # TODO: 导出 .ipa 供 AltStore 侧载需要 Apple ID 签名。
       # 在仓库 Settings -> Secrets and variables -> Actions 中设置:
