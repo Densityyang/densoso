@@ -12,7 +12,8 @@ enum DensosoSchemaV1: VersionedSchema {
             DailyMetrics.self,
             WeeklyReport.self,
             ScheduleEvent.self,
-            HealthSyncOutboxEntry.self
+            HealthSyncOutboxEntry.self,
+            HealthKitImportCursor.self
         ]
     }
 }

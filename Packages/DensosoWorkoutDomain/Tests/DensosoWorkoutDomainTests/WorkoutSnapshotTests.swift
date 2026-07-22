@@ -32,7 +32,7 @@ final class WorkoutSnapshotTests: XCTestCase {
             try WorkoutSnapshot(
                 healthKitUUID: UUID(),
                 startedAt: Date(),
-                duration: -.infinity,
+                duration: -Double.infinity,
                 activityType: "other",
                 energyInput: .init(),
                 origin: .externalHealthKit,

@@ -19,6 +19,8 @@ final class HealthKitService {
         let readTypes: Set<HKSampleType> = [
             HKObjectType.quantityType(forIdentifier: .bodyMass)!,
             HKObjectType.quantityType(forIdentifier: .height)!,
+            HKObjectType.workoutType(),
+            HKSeriesType.workoutRoute(),
         ]
 
         let writeTypes: Set<HKSampleType> = [

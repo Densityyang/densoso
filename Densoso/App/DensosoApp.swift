@@ -23,12 +23,16 @@ struct AppRoot: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AppState.self) private var appState
     @Environment(Dependencies.self) private var dependencies
+    @State private var healthKitWorkoutImporter = HealthKitWorkoutImporter()
+    @State private var workoutRouteImporter = WorkoutRouteImporter()
 
     var body: some View {
         ContentView()
             .task {
                 await dependencies.setupFoodDB()
                 checkOnboarding()
+                healthKitWorkoutImporter.importChanges(in: modelContext)
+                workoutRouteImporter.importPendingRoutes(in: modelContext)
             }
     }
 
