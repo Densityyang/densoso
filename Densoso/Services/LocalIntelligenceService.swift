@@ -19,7 +19,7 @@ final class LocalIntelligenceService {
         }
     }
 
-    static var isSystemModelAvailable: Bool {
+    nonisolated static var isSystemModelAvailable: Bool {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
             return SystemLanguageModel.default.isAvailable
