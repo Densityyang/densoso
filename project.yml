@@ -78,7 +78,7 @@ targets:
       - path: DensosoWatchExtension
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.watchkitextension
+        PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.watchkitapp.watchkitextension
         SWIFT_VERSION: "6.0"
         WATCHOS_DEPLOYMENT_TARGET: "11.0"
         MARKETING_VERSION: "1.0.0"
