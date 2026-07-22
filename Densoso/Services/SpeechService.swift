@@ -135,7 +135,7 @@ final class SpeechService {
             throw SpeechError.localeUnsupported
         }
 
-        let transcriber = SpeechTranscriber(locale: supportedLocale, preset: .progressiveLiveTranscription)
+        let transcriber = SpeechTranscriber(locale: supportedLocale, preset: .progressiveTranscription)
         let installedLocales = await SpeechTranscriber.installedLocales
         if !installedLocales.contains(where: { $0.identifier == supportedLocale.identifier }) {
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
