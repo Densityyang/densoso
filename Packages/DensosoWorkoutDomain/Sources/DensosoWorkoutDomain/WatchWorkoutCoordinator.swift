@@ -66,6 +66,9 @@ public actor WatchWorkoutCoordinator {
         guard let nextState = Self.nextState(after: event, from: sessionState) else {
             throw WorkoutSessionTransitionError.invalidTransition(state: sessionState, event: event)
         }
+        if event == .prepare, (sessionState == .ended || sessionState == .discarded) {
+            logicalSession = LogicalWorkoutSession()
+        }
         sessionState = nextState
         return snapshot()
     }

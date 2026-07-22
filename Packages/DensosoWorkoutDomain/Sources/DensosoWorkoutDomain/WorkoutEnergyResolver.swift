@@ -6,7 +6,7 @@ public enum WorkoutEnergySource: String, Codable, Sendable, Equatable {
     case metEstimate
 }
 
-public struct WorkoutEnergyInput: Sendable, Equatable {
+public struct WorkoutEnergyInput: Codable, Sendable, Equatable {
     public let measuredKilocalories: Double?
     public let userEnteredKilocalories: Double?
     public let metEstimatedKilocalories: Double?
@@ -22,7 +22,7 @@ public struct WorkoutEnergyInput: Sendable, Equatable {
     }
 }
 
-public struct ResolvedWorkoutEnergy: Sendable, Equatable {
+public struct ResolvedWorkoutEnergy: Codable, Sendable, Equatable {
     public let kilocalories: Double
     public let source: WorkoutEnergySource
 

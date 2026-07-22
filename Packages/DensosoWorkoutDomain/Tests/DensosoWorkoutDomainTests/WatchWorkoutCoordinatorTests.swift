@@ -29,7 +29,7 @@ final class WatchWorkoutCoordinatorTests: XCTestCase {
         XCTAssertEqual(snapshot.state, .idle)
     }
 
-    func testDiscardAllowsFreshPreparationWithoutChangingSessionID() async throws {
+    func testDiscardCreatesANewLogicalSessionForTheNextWorkout() async throws {
         let coordinator = WatchWorkoutCoordinator()
         let initial = await coordinator.snapshot()
 
@@ -38,6 +38,19 @@ final class WatchWorkoutCoordinatorTests: XCTestCase {
         let preparedAgain = try await coordinator.send(.prepare)
 
         XCTAssertEqual(preparedAgain.state, .prepared)
-        XCTAssertEqual(preparedAgain.logicalSession.id, initial.logicalSession.id)
+        XCTAssertNotEqual(preparedAgain.logicalSession.id, initial.logicalSession.id)
+    }
+
+    func testEndCreatesANewLogicalSessionForTheNextWorkout() async throws {
+        let coordinator = WatchWorkoutCoordinator()
+        let initial = await coordinator.snapshot()
+
+        _ = try await coordinator.send(.prepare)
+        _ = try await coordinator.send(.start)
+        _ = try await coordinator.send(.end)
+        let preparedAgain = try await coordinator.send(.prepare)
+
+        XCTAssertEqual(preparedAgain.state, .prepared)
+        XCTAssertNotEqual(preparedAgain.logicalSession.id, initial.logicalSession.id)
     }
 }
