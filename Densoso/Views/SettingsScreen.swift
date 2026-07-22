@@ -13,6 +13,10 @@ struct SettingsScreen: View {
     @State private var showKeySaved = false
     @State private var exportURL: URL?
     @State private var showShareSheet = false
+    @State private var isAuthorizingHealth = false
+    @State private var healthAuthorizationError: String?
+    @State private var healthKitWorkoutImporter = HealthKitWorkoutImporter()
+    @State private var workoutRouteImporter = WorkoutRouteImporter()
 
     var body: some View {
         NavigationStack {
@@ -53,6 +57,23 @@ struct SettingsScreen: View {
                     }
                 }
 
+                Section("Apple Health") {
+                    Button(dependencies.healthKitService.isAuthorized ? "同步训练记录" : "连接 Apple Health") {
+                        Task { await authorizeAndImportHealthData() }
+                    }
+                    .disabled(isAuthorizingHealth)
+
+                    if isAuthorizingHealth {
+                        ProgressView()
+                    }
+
+                    if let healthAuthorizationError {
+                        Text(healthAuthorizationError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+
                 Section("关于") {
                     Text("densoso v1.0")
                     Text("本地优先 · 语音驱动 · 中餐热量估算")
@@ -89,6 +110,20 @@ struct SettingsScreen: View {
             showShareSheet = true
         } catch {
             dependencies.exportService.lastError = error.localizedDescription
+        }
+    }
+
+    private func authorizeAndImportHealthData() async {
+        isAuthorizingHealth = true
+        healthAuthorizationError = nil
+        defer { isAuthorizingHealth = false }
+
+        do {
+            try await dependencies.healthKitService.requestAuthorization()
+            healthKitWorkoutImporter.importChanges(in: modelContext)
+            workoutRouteImporter.importPendingRoutes(in: modelContext)
+        } catch {
+            healthAuthorizationError = "Apple Health authorization failed: \(error.localizedDescription)"
         }
     }
 }
