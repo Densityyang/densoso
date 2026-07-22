@@ -23,6 +23,9 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Test shared workout domain
+        run: swift test --package-path Packages/DensosoWorkoutDomain
+
       - name: Test on iOS Simulator
         run: |
           set -o pipefail
