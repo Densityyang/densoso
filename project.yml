@@ -38,6 +38,8 @@ targets:
     dependencies:
       - target: DensosoWatchApp
         embed: true
+      - sdk: AppIntents.framework
+      - sdk: WorkoutKit.framework
       - package: DensosoWorkoutDomain
       - package: GRDB
     preBuildScripts:

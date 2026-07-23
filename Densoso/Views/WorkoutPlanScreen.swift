@@ -9,7 +9,7 @@ struct WorkoutPlanScreen: View {
     @State private var location = WorkoutPlanDraft.Location.indoor
     @State private var usesTimeGoal = true
     @State private var durationMinutes = 45
-    @State private var shouldSchedule = false
+    @State private var shouldSchedule = true
     @State private var scheduledAt = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
     @State private var strengthSets = WorkoutPlanDraft.squatFiveByFive.strengthSets
     @State private var isPresentingConfirmation = false
@@ -107,7 +107,7 @@ struct WorkoutPlanScreen: View {
     private func confirm() async {
         do {
             try await schedulingService.previewOrSchedule(draft)
-            resultMessage = shouldSchedule ? "已请求系统安排该训练计划。" : "已请求在 Apple Watch Workout App 中打开该计划。"
+            resultMessage = "已请求系统安排该训练计划。"
         } catch {
             resultMessage = error.localizedDescription
         }

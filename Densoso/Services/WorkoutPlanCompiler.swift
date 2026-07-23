@@ -9,6 +9,7 @@ enum WorkoutPlanCompileError: LocalizedError, Equatable {
     case invalidStrengthSet
     case unsupportedActivity
     case unsupportedGoal
+    case scheduleDateRequired
     case scheduleAuthorizationDenied
     case schedulingUnavailable
 
@@ -19,6 +20,7 @@ enum WorkoutPlanCompileError: LocalizedError, Equatable {
         case .invalidStrengthSet: "力量训练的动作名称、组数、次数或重量无效。"
         case .unsupportedActivity: "此设备的 Workout App 不支持该训练类型。"
         case .unsupportedGoal: "该训练类型不支持所选目标。"
+        case .scheduleDateRequired: "请先选择训练开始时间，再同步到 Apple Watch。"
         case .scheduleAuthorizationDenied: "未获得将训练计划同步到 Apple Watch 的授权。"
         case .schedulingUnavailable: "此设备当前不支持训练计划同步。"
         }
@@ -98,10 +100,7 @@ final class WorkoutPlanSchedulingService {
     func previewOrSchedule(_ draft: WorkoutPlanDraft) async throws {
         let plan = try compiler.compile(draft)
 
-        guard let scheduledAt = draft.scheduledAt else {
-            try await plan.openInWorkoutApp()
-            return
-        }
+        guard let scheduledAt = draft.scheduledAt else { throw WorkoutPlanCompileError.scheduleDateRequired }
 
         guard WorkoutScheduler.isSupported else {
             throw WorkoutPlanCompileError.schedulingUnavailable
