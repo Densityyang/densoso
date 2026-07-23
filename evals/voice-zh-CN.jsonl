@@ -1,0 +1,300 @@
+{"text":"今天没吃一百克鸡凶肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"一百克","unit":"g","time":"今天","negated":true},"notes":"meal"}
+{"text":"明天吃了半公斤番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"半公斤","unit":"kg","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了250毫升牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"250毫升","unit":"ml","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了两勺三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"两勺","unit":"serving","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了一碗瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"一碗","unit":"serving","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了300克可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"300克","unit":"g","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了一百克全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"一百克","unit":"g","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了半公斤麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"半公斤","unit":"kg","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了250毫升酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"250毫升","unit":"ml","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了两勺燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"两勺","unit":"serving","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了一碗鸡胸肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"一碗","unit":"serving","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了300克番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"300克","unit":"g","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了一百克牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"一百克","unit":"g","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了半公斤三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"半公斤","unit":"kg","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了250毫升瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"250毫升","unit":"ml","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了两勺可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"两勺","unit":"serving","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了一碗全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"一碗","unit":"serving","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚没吃300克麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"300克","unit":"g","time":"昨晚","negated":true},"notes":"meal"}
+{"text":"上午吃了一百克酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"一百克","unit":"g","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了半公斤燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"半公斤","unit":"kg","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了250毫升鸡胸肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"250毫升","unit":"ml","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了两勺番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"两勺","unit":"serving","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了一碗牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"一碗","unit":"serving","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了300克三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"300克","unit":"g","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了一百克瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"一百克","unit":"g","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了半公斤可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"半公斤","unit":"kg","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了250毫升全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"250毫升","unit":"ml","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了两勺麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"两勺","unit":"serving","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了一碗酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"一碗","unit":"serving","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了300克燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"300克","unit":"g","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了一百克鸡胸肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"一百克","unit":"g","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了半公斤番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"半公斤","unit":"kg","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了250毫升牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"250毫升","unit":"ml","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了两勺三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"两勺","unit":"serving","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后没吃一碗瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"一碗","unit":"serving","time":"训练后","negated":true},"notes":"meal"}
+{"text":"今天吃了300克可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"300克","unit":"g","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了一百克全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"一百克","unit":"g","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了半公斤麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"半公斤","unit":"kg","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了250毫升酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"250毫升","unit":"ml","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了两勺燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"两勺","unit":"serving","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了一碗鸡胸肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"一碗","unit":"serving","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了300克番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"300克","unit":"g","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了一百克牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"一百克","unit":"g","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了半公斤三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"半公斤","unit":"kg","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了250毫升瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"250毫升","unit":"ml","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了两勺可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"两勺","unit":"serving","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了一碗全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"一碗","unit":"serving","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了300克麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"300克","unit":"g","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了一百克酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"一百克","unit":"g","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了半公斤燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"半公斤","unit":"kg","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了250毫升鸡胸肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"250毫升","unit":"ml","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天没吃两勺番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"两勺","unit":"serving","time":"明天","negated":true},"notes":"meal"}
+{"text":"昨晚吃了一碗牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"一碗","unit":"serving","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了300克三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"300克","unit":"g","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了一百克瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"一百克","unit":"g","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了半公斤可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"半公斤","unit":"kg","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了250毫升全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"250毫升","unit":"ml","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了两勺麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"两勺","unit":"serving","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了一碗酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"一碗","unit":"serving","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了300克燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"300克","unit":"g","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了一百克鸡胸肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"一百克","unit":"g","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了半公斤番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"半公斤","unit":"kg","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了250毫升牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"250毫升","unit":"ml","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了两勺三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"两勺","unit":"serving","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了一碗瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"一碗","unit":"serving","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了300克可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"300克","unit":"g","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了一百克全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"一百克","unit":"g","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了半公斤麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"半公斤","unit":"kg","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午没吃250毫升酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"250毫升","unit":"ml","time":"上午","negated":true},"notes":"meal"}
+{"text":"训练后吃了两勺燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"两勺","unit":"serving","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了一碗鸡胸肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"一碗","unit":"serving","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了300克番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"300克","unit":"g","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了一百克牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"一百克","unit":"g","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了半公斤三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"半公斤","unit":"kg","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了250毫升瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"250毫升","unit":"ml","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了两勺可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"两勺","unit":"serving","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了一碗全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"一碗","unit":"serving","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了300克麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"300克","unit":"g","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了一百克酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"一百克","unit":"g","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了半公斤燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"半公斤","unit":"kg","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了250毫升鸡胸肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"250毫升","unit":"ml","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了两勺番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"两勺","unit":"serving","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了一碗牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"一碗","unit":"serving","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了300克三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"300克","unit":"g","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了一百克瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"一百克","unit":"g","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天没吃半公斤可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"半公斤","unit":"kg","time":"今天","negated":true},"notes":"meal"}
+{"text":"明天吃了250毫升全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"250毫升","unit":"ml","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了两勺麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"两勺","unit":"serving","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了一碗酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"一碗","unit":"serving","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了300克燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"300克","unit":"g","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了一百克鸡胸肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"一百克","unit":"g","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了半公斤番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"半公斤","unit":"kg","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了250毫升牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"250毫升","unit":"ml","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了两勺三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"两勺","unit":"serving","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了一碗瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"一碗","unit":"serving","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了300克可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"300克","unit":"g","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了一百克全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"一百克","unit":"g","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了半公斤麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"半公斤","unit":"kg","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了250毫升酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"250毫升","unit":"ml","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了两勺燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"两勺","unit":"serving","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了一碗鸡胸肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"一碗","unit":"serving","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了300克番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"300克","unit":"g","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚没吃一百克牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"一百克","unit":"g","time":"昨晚","negated":true},"notes":"meal"}
+{"text":"上午吃了半公斤三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"半公斤","unit":"kg","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了250毫升瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"250毫升","unit":"ml","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了两勺可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"两勺","unit":"serving","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了一碗全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"一碗","unit":"serving","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了300克麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"300克","unit":"g","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了一百克酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"一百克","unit":"g","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了半公斤燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"半公斤","unit":"kg","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了250毫升鸡胸肉","expectedKind":"mealDraft","slots":{"dish":"鸡胸肉","amount":"250毫升","unit":"ml","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了两勺番茄鸡蛋","expectedKind":"mealDraft","slots":{"dish":"番茄鸡蛋","amount":"两勺","unit":"serving","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了一碗牛肉面","expectedKind":"mealDraft","slots":{"dish":"牛肉面","amount":"一碗","unit":"serving","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了300克三文鱼","expectedKind":"mealDraft","slots":{"dish":"三文鱼","amount":"300克","unit":"g","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后吃了一百克瑞幸拿铁","expectedKind":"mealDraft","slots":{"dish":"瑞幸拿铁","amount":"一百克","unit":"g","time":"训练后","negated":false},"notes":"meal"}
+{"text":"今天吃了半公斤可口可乐","expectedKind":"mealDraft","slots":{"dish":"可口可乐","amount":"半公斤","unit":"kg","time":"今天","negated":false},"notes":"meal"}
+{"text":"明天吃了250毫升全家饭团","expectedKind":"mealDraft","slots":{"dish":"全家饭团","amount":"250毫升","unit":"ml","time":"明天","negated":false},"notes":"meal"}
+{"text":"昨晚吃了两勺麻婆豆腐","expectedKind":"mealDraft","slots":{"dish":"麻婆豆腐","amount":"两勺","unit":"serving","time":"昨晚","negated":false},"notes":"meal"}
+{"text":"上午吃了一碗酸奶","expectedKind":"mealDraft","slots":{"dish":"酸奶","amount":"一碗","unit":"serving","time":"上午","negated":false},"notes":"meal"}
+{"text":"训练后没吃300克燕麦","expectedKind":"mealDraft","slots":{"dish":"燕麦","amount":"300克","unit":"g","time":"训练后","negated":true},"notes":"meal"}
+{"text":"深蹲补1组，每组3次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":1,"repetitions":3,"loadKg":20},"notes":"strength"}
+{"text":"卧推补2组，每组5次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":2,"repetitions":5,"loadKg":30},"notes":"strength"}
+{"text":"硬拉补3组，每组8次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":3,"repetitions":8,"loadKg":40},"notes":"strength"}
+{"text":"引体向上补4组，每组10次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":4,"repetitions":10,"loadKg":50},"notes":"strength"}
+{"text":"哑铃弯举补5组，每组12次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":5,"repetitions":12,"loadKg":60},"notes":"strength"}
+{"text":"划船补1组，每组3次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":1,"repetitions":3,"loadKg":70},"notes":"strength"}
+{"text":"深蹲补2组，每组5次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":2,"repetitions":5,"loadKg":80},"notes":"strength"}
+{"text":"卧推补3组，每组8次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":3,"repetitions":8,"loadKg":90},"notes":"strength"}
+{"text":"硬拉补4组，每组10次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":4,"repetitions":10,"loadKg":100},"notes":"strength"}
+{"text":"引体向上补5组，每组12次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":5,"repetitions":12,"loadKg":20},"notes":"strength"}
+{"text":"哑铃弯举补1组，每组3次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":1,"repetitions":3,"loadKg":30},"notes":"strength"}
+{"text":"划船补2组，每组5次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":2,"repetitions":5,"loadKg":40},"notes":"strength"}
+{"text":"深蹲补3组，每组8次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":3,"repetitions":8,"loadKg":50},"notes":"strength"}
+{"text":"卧推补4组，每组10次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":4,"repetitions":10,"loadKg":60},"notes":"strength"}
+{"text":"硬拉补5组，每组12次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":5,"repetitions":12,"loadKg":70},"notes":"strength"}
+{"text":"引体向上补1组，每组3次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":1,"repetitions":3,"loadKg":80},"notes":"strength"}
+{"text":"哑铃弯举补2组，每组5次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":2,"repetitions":5,"loadKg":90},"notes":"strength"}
+{"text":"划船补3组，每组8次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":3,"repetitions":8,"loadKg":100},"notes":"strength"}
+{"text":"深蹲补4组，每组10次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":4,"repetitions":10,"loadKg":20},"notes":"strength"}
+{"text":"卧推补5组，每组12次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":5,"repetitions":12,"loadKg":30},"notes":"strength"}
+{"text":"硬拉补1组，每组3次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":1,"repetitions":3,"loadKg":40},"notes":"strength"}
+{"text":"引体向上补2组，每组5次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":2,"repetitions":5,"loadKg":50},"notes":"strength"}
+{"text":"哑铃弯举补3组，每组8次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":3,"repetitions":8,"loadKg":60},"notes":"strength"}
+{"text":"划船补4组，每组10次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":4,"repetitions":10,"loadKg":70},"notes":"strength"}
+{"text":"深蹲补5组，每组12次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":5,"repetitions":12,"loadKg":80},"notes":"strength"}
+{"text":"卧推补1组，每组3次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":1,"repetitions":3,"loadKg":90},"notes":"strength"}
+{"text":"硬拉补2组，每组5次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":2,"repetitions":5,"loadKg":100},"notes":"strength"}
+{"text":"引体向上补3组，每组8次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":3,"repetitions":8,"loadKg":20},"notes":"strength"}
+{"text":"哑铃弯举补4组，每组10次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":4,"repetitions":10,"loadKg":30},"notes":"strength"}
+{"text":"划船补5组，每组12次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":5,"repetitions":12,"loadKg":40},"notes":"strength"}
+{"text":"深蹲补1组，每组3次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":1,"repetitions":3,"loadKg":50},"notes":"strength"}
+{"text":"卧推补2组，每组5次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":2,"repetitions":5,"loadKg":60},"notes":"strength"}
+{"text":"硬拉补3组，每组8次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":3,"repetitions":8,"loadKg":70},"notes":"strength"}
+{"text":"引体向上补4组，每组10次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":4,"repetitions":10,"loadKg":80},"notes":"strength"}
+{"text":"哑铃弯举补5组，每组12次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":5,"repetitions":12,"loadKg":90},"notes":"strength"}
+{"text":"划船补1组，每组3次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":1,"repetitions":3,"loadKg":100},"notes":"strength"}
+{"text":"深蹲补2组，每组5次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":2,"repetitions":5,"loadKg":20},"notes":"strength"}
+{"text":"卧推补3组，每组8次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":3,"repetitions":8,"loadKg":30},"notes":"strength"}
+{"text":"硬拉补4组，每组10次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":4,"repetitions":10,"loadKg":40},"notes":"strength"}
+{"text":"引体向上补5组，每组12次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":5,"repetitions":12,"loadKg":50},"notes":"strength"}
+{"text":"哑铃弯举补1组，每组3次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":1,"repetitions":3,"loadKg":60},"notes":"strength"}
+{"text":"划船补2组，每组5次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":2,"repetitions":5,"loadKg":70},"notes":"strength"}
+{"text":"深蹲补3组，每组8次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":3,"repetitions":8,"loadKg":80},"notes":"strength"}
+{"text":"卧推补4组，每组10次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":4,"repetitions":10,"loadKg":90},"notes":"strength"}
+{"text":"硬拉补5组，每组12次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":5,"repetitions":12,"loadKg":100},"notes":"strength"}
+{"text":"引体向上补1组，每组3次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":1,"repetitions":3,"loadKg":20},"notes":"strength"}
+{"text":"哑铃弯举补2组，每组5次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":2,"repetitions":5,"loadKg":30},"notes":"strength"}
+{"text":"划船补3组，每组8次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":3,"repetitions":8,"loadKg":40},"notes":"strength"}
+{"text":"深蹲补4组，每组10次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":4,"repetitions":10,"loadKg":50},"notes":"strength"}
+{"text":"卧推补5组，每组12次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":5,"repetitions":12,"loadKg":60},"notes":"strength"}
+{"text":"硬拉补1组，每组3次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":1,"repetitions":3,"loadKg":70},"notes":"strength"}
+{"text":"引体向上补2组，每组5次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":2,"repetitions":5,"loadKg":80},"notes":"strength"}
+{"text":"哑铃弯举补3组，每组8次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":3,"repetitions":8,"loadKg":90},"notes":"strength"}
+{"text":"划船补4组，每组10次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":4,"repetitions":10,"loadKg":100},"notes":"strength"}
+{"text":"深蹲补5组，每组12次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":5,"repetitions":12,"loadKg":20},"notes":"strength"}
+{"text":"卧推补1组，每组3次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":1,"repetitions":3,"loadKg":30},"notes":"strength"}
+{"text":"硬拉补2组，每组5次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":2,"repetitions":5,"loadKg":40},"notes":"strength"}
+{"text":"引体向上补3组，每组8次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":3,"repetitions":8,"loadKg":50},"notes":"strength"}
+{"text":"哑铃弯举补4组，每组10次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":4,"repetitions":10,"loadKg":60},"notes":"strength"}
+{"text":"划船补5组，每组12次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":5,"repetitions":12,"loadKg":70},"notes":"strength"}
+{"text":"深蹲补1组，每组3次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":1,"repetitions":3,"loadKg":80},"notes":"strength"}
+{"text":"卧推补2组，每组5次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":2,"repetitions":5,"loadKg":90},"notes":"strength"}
+{"text":"硬拉补3组，每组8次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":3,"repetitions":8,"loadKg":100},"notes":"strength"}
+{"text":"引体向上补4组，每组10次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":4,"repetitions":10,"loadKg":20},"notes":"strength"}
+{"text":"哑铃弯举补5组，每组12次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":5,"repetitions":12,"loadKg":30},"notes":"strength"}
+{"text":"划船补1组，每组3次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":1,"repetitions":3,"loadKg":40},"notes":"strength"}
+{"text":"深蹲补2组，每组5次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":2,"repetitions":5,"loadKg":50},"notes":"strength"}
+{"text":"卧推补3组，每组8次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":3,"repetitions":8,"loadKg":60},"notes":"strength"}
+{"text":"硬拉补4组，每组10次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":4,"repetitions":10,"loadKg":70},"notes":"strength"}
+{"text":"引体向上补5组，每组12次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":5,"repetitions":12,"loadKg":80},"notes":"strength"}
+{"text":"哑铃弯举补1组，每组3次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":1,"repetitions":3,"loadKg":90},"notes":"strength"}
+{"text":"划船补2组，每组5次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":2,"repetitions":5,"loadKg":100},"notes":"strength"}
+{"text":"深蹲补3组，每组8次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":3,"repetitions":8,"loadKg":20},"notes":"strength"}
+{"text":"卧推补4组，每组10次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":4,"repetitions":10,"loadKg":30},"notes":"strength"}
+{"text":"硬拉补5组，每组12次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":5,"repetitions":12,"loadKg":40},"notes":"strength"}
+{"text":"引体向上补1组，每组3次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":1,"repetitions":3,"loadKg":50},"notes":"strength"}
+{"text":"哑铃弯举补2组，每组5次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":2,"repetitions":5,"loadKg":60},"notes":"strength"}
+{"text":"划船补3组，每组8次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":3,"repetitions":8,"loadKg":70},"notes":"strength"}
+{"text":"深蹲补4组，每组10次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":4,"repetitions":10,"loadKg":80},"notes":"strength"}
+{"text":"卧推补5组，每组12次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":5,"repetitions":12,"loadKg":90},"notes":"strength"}
+{"text":"硬拉补1组，每组3次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":1,"repetitions":3,"loadKg":100},"notes":"strength"}
+{"text":"引体向上补2组，每组5次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":2,"repetitions":5,"loadKg":20},"notes":"strength"}
+{"text":"哑铃弯举补3组，每组8次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":3,"repetitions":8,"loadKg":30},"notes":"strength"}
+{"text":"划船补4组，每组10次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":4,"repetitions":10,"loadKg":40},"notes":"strength"}
+{"text":"深蹲补5组，每组12次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":5,"repetitions":12,"loadKg":50},"notes":"strength"}
+{"text":"卧推补1组，每组3次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":1,"repetitions":3,"loadKg":60},"notes":"strength"}
+{"text":"硬拉补2组，每组5次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":2,"repetitions":5,"loadKg":70},"notes":"strength"}
+{"text":"引体向上补3组，每组8次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":3,"repetitions":8,"loadKg":80},"notes":"strength"}
+{"text":"哑铃弯举补4组，每组10次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":4,"repetitions":10,"loadKg":90},"notes":"strength"}
+{"text":"划船补5组，每组12次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":5,"repetitions":12,"loadKg":100},"notes":"strength"}
+{"text":"深蹲补1组，每组3次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":1,"repetitions":3,"loadKg":20},"notes":"strength"}
+{"text":"卧推补2组，每组5次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":2,"repetitions":5,"loadKg":30},"notes":"strength"}
+{"text":"硬拉补3组，每组8次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":3,"repetitions":8,"loadKg":40},"notes":"strength"}
+{"text":"引体向上补4组，每组10次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":4,"repetitions":10,"loadKg":50},"notes":"strength"}
+{"text":"哑铃弯举补5组，每组12次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":5,"repetitions":12,"loadKg":60},"notes":"strength"}
+{"text":"划船补1组，每组3次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":1,"repetitions":3,"loadKg":70},"notes":"strength"}
+{"text":"深蹲补2组，每组5次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":2,"repetitions":5,"loadKg":80},"notes":"strength"}
+{"text":"卧推补3组，每组8次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":3,"repetitions":8,"loadKg":90},"notes":"strength"}
+{"text":"硬拉补4组，每组10次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":4,"repetitions":10,"loadKg":100},"notes":"strength"}
+{"text":"引体向上补5组，每组12次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":5,"repetitions":12,"loadKg":20},"notes":"strength"}
+{"text":"哑铃弯举补1组，每组3次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":1,"repetitions":3,"loadKg":30},"notes":"strength"}
+{"text":"划船补2组，每组5次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":2,"repetitions":5,"loadKg":40},"notes":"strength"}
+{"text":"深蹲补3组，每组8次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":3,"repetitions":8,"loadKg":50},"notes":"strength"}
+{"text":"卧推补4组，每组10次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":4,"repetitions":10,"loadKg":60},"notes":"strength"}
+{"text":"硬拉补5组，每组12次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":5,"repetitions":12,"loadKg":70},"notes":"strength"}
+{"text":"引体向上补1组，每组3次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":1,"repetitions":3,"loadKg":80},"notes":"strength"}
+{"text":"哑铃弯举补2组，每组5次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":2,"repetitions":5,"loadKg":90},"notes":"strength"}
+{"text":"划船补3组，每组8次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":3,"repetitions":8,"loadKg":100},"notes":"strength"}
+{"text":"深蹲补4组，每组10次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":4,"repetitions":10,"loadKg":20},"notes":"strength"}
+{"text":"卧推补5组，每组12次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":5,"repetitions":12,"loadKg":30},"notes":"strength"}
+{"text":"硬拉补1组，每组3次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":1,"repetitions":3,"loadKg":40},"notes":"strength"}
+{"text":"引体向上补2组，每组5次，50公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":2,"repetitions":5,"loadKg":50},"notes":"strength"}
+{"text":"哑铃弯举补3组，每组8次，60公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":3,"repetitions":8,"loadKg":60},"notes":"strength"}
+{"text":"划船补4组，每组10次，70公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":4,"repetitions":10,"loadKg":70},"notes":"strength"}
+{"text":"深蹲补5组，每组12次，80公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"深蹲","sets":5,"repetitions":12,"loadKg":80},"notes":"strength"}
+{"text":"卧推补1组，每组3次，90公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"卧推","sets":1,"repetitions":3,"loadKg":90},"notes":"strength"}
+{"text":"硬拉补2组，每组5次，100公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"硬拉","sets":2,"repetitions":5,"loadKg":100},"notes":"strength"}
+{"text":"引体向上补3组，每组8次，20公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"引体向上","sets":3,"repetitions":8,"loadKg":20},"notes":"strength"}
+{"text":"哑铃弯举补4组，每组10次，30公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"哑铃弯举","sets":4,"repetitions":10,"loadKg":30},"notes":"strength"}
+{"text":"划船补5组，每组12次，40公斤","expectedKind":"strengthSetDraft","slots":{"exercise":"划船","sets":5,"repetitions":12,"loadKg":40},"notes":"strength"}
+{"text":"明天做 3×5 深蹲","expectedKind":"workoutPlanDraft","slots":{"exercise":"深蹲","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 4×6 卧推","expectedKind":"workoutPlanDraft","slots":{"exercise":"卧推","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 5×7 硬拉","expectedKind":"workoutPlanDraft","slots":{"exercise":"硬拉","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 6×8 引体向上","expectedKind":"workoutPlanDraft","slots":{"exercise":"引体向上","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 3×9 哑铃弯举","expectedKind":"workoutPlanDraft","slots":{"exercise":"哑铃弯举","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 4×5 划船","expectedKind":"workoutPlanDraft","slots":{"exercise":"划船","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 5×6 深蹲","expectedKind":"workoutPlanDraft","slots":{"exercise":"深蹲","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 6×7 卧推","expectedKind":"workoutPlanDraft","slots":{"exercise":"卧推","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 3×8 硬拉","expectedKind":"workoutPlanDraft","slots":{"exercise":"硬拉","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 4×9 引体向上","expectedKind":"workoutPlanDraft","slots":{"exercise":"引体向上","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 5×5 哑铃弯举","expectedKind":"workoutPlanDraft","slots":{"exercise":"哑铃弯举","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 6×6 划船","expectedKind":"workoutPlanDraft","slots":{"exercise":"划船","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 3×7 深蹲","expectedKind":"workoutPlanDraft","slots":{"exercise":"深蹲","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 4×8 卧推","expectedKind":"workoutPlanDraft","slots":{"exercise":"卧推","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 5×9 硬拉","expectedKind":"workoutPlanDraft","slots":{"exercise":"硬拉","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 6×5 引体向上","expectedKind":"workoutPlanDraft","slots":{"exercise":"引体向上","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 3×6 哑铃弯举","expectedKind":"workoutPlanDraft","slots":{"exercise":"哑铃弯举","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 4×7 划船","expectedKind":"workoutPlanDraft","slots":{"exercise":"划船","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 5×8 深蹲","expectedKind":"workoutPlanDraft","slots":{"exercise":"深蹲","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 6×9 卧推","expectedKind":"workoutPlanDraft","slots":{"exercise":"卧推","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 3×5 硬拉","expectedKind":"workoutPlanDraft","slots":{"exercise":"硬拉","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 4×6 引体向上","expectedKind":"workoutPlanDraft","slots":{"exercise":"引体向上","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 5×7 哑铃弯举","expectedKind":"workoutPlanDraft","slots":{"exercise":"哑铃弯举","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 6×8 划船","expectedKind":"workoutPlanDraft","slots":{"exercise":"划船","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 3×9 深蹲","expectedKind":"workoutPlanDraft","slots":{"exercise":"深蹲","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 4×5 卧推","expectedKind":"workoutPlanDraft","slots":{"exercise":"卧推","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 5×6 硬拉","expectedKind":"workoutPlanDraft","slots":{"exercise":"硬拉","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 6×7 引体向上","expectedKind":"workoutPlanDraft","slots":{"exercise":"引体向上","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 3×8 哑铃弯举","expectedKind":"workoutPlanDraft","slots":{"exercise":"哑铃弯举","time":"明天"},"notes":"workout-plan"}
+{"text":"明天做 4×9 划船","expectedKind":"workoutPlanDraft","slots":{"exercise":"划船","time":"明天"},"notes":"workout-plan"}
+{"text":"查询今天第1个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第2个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第3个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第4个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第5个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第6个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第7个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第8个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第9个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第10个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第11个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第12个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第13个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第14个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第15个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第16个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第17个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第18个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第19个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第20个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第21个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第22个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第23个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第24个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第25个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第26个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第27个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第28个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第29个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
+{"text":"查询今天第30个热量和本周进度","expectedKind":"readOnlyQuery","slots":{"time":"今天"},"notes":"query"}
