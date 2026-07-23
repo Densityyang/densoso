@@ -56,24 +56,19 @@ final class SpeechService {
     }
 
     func requestAuthorization() async -> Bool {
-        let microphoneGranted = await requestMicrophonePermission()
+        let microphoneGranted = await Self.requestMicrophonePermission()
         guard microphoneGranted else {
             isAuthorized = false
             return false
         }
 
-        if SpeechRoutingPolicy().backend(modernSpeechAvailable: PlatformCapabilities.current.modernSpeechAvailable) == .speechAnalyzer {
-            isAuthorized = true
-            return true
-        }
-
-        let speechGranted = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status == .authorized)
-            }
-        }
-        isAuthorized = speechGranted
-        return speechGranted
+        let speechStatus = await Self.requestLegacySpeechAuthorization()
+        let legacySpeechGranted = speechStatus == .authorized
+        let modernSpeechAvailable = PlatformCapabilities.current.modernSpeechAvailable
+        // SpeechAnalyzer itself does not need SFSpeechRecognizer authorization, but the
+        // authorization is requested now so a later legacy fallback remains safe.
+        isAuthorized = modernSpeechAvailable || legacySpeechGranted
+        return isAuthorized
     }
 
     func startRecording() async throws {
@@ -115,10 +110,18 @@ final class SpeechService {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    private func requestMicrophonePermission() async -> Bool {
+    private nonisolated static func requestMicrophonePermission() async -> Bool {
         await withCheckedContinuation { continuation in
             AVAudioSession.sharedInstance().requestRecordPermission { granted in
                 continuation.resume(returning: granted)
+            }
+        }
+    }
+
+    private nonisolated static func requestLegacySpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
+        await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status)
             }
         }
     }
@@ -168,7 +171,7 @@ final class SpeechService {
             }
         }
 
-        installAudioTap { [weak self] buffer in
+        try installAudioTap { [weak self] buffer in
             Task { @MainActor [weak self] in
                 self?.appendModernAudio(buffer)
             }
@@ -239,10 +242,10 @@ final class SpeechService {
         }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = true
+        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
         legacyRequest = request
 
-        installAudioTap { buffer in request.append(buffer) }
+        try installAudioTap { buffer in request.append(buffer) }
         audioEngine.prepare()
         try audioEngine.start()
 
@@ -260,9 +263,12 @@ final class SpeechService {
         isRecording = true
     }
 
-    private func installAudioTap(_ handler: @escaping (AVAudioPCMBuffer) -> Void) {
+    private func installAudioTap(_ handler: @escaping (AVAudioPCMBuffer) -> Void) throws {
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw SpeechError.audioEngineUnavailable
+        }
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
             handler(buffer)
         }
