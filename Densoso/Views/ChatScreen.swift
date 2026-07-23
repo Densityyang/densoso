@@ -119,8 +119,15 @@ struct ChatScreen: View {
         do {
             switch path {
             case .localOnDevice:
-                let response = try await dependencies.localIntelligence.respond(to: userText)
-                addMessage(text: response, isUser: false)
+                let result = try await dependencies.localIntelligence.extract(from: userText)
+                addMessage(text: result.reply, isUser: false)
+                if let suggestion = result.suggestion {
+                    let amount = suggestion.amount.map { "（\($0)）" } ?? ""
+                    addMessage(
+                        text: "已生成本地\(suggestion.kind == .meal ? "餐食" : "训练")草稿：\(suggestion.item)\(amount)。尚未保存，请在确认界面补全并确认。",
+                        isUser: false
+                    )
+                }
             case .cloudDeepSeek:
                 let response = try await dependencies.agentSession.send(
                     userText: userText,
