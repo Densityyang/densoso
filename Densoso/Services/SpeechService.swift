@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import Speech
+import DensosoWorkoutDomain
 
 /// 语音识别服务 —— Apple Speech framework，on-device zh-CN
 @MainActor

@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import DensosoWorkoutDomain
 
 struct ChatScreen: View {
     @Environment(Dependencies.self) private var dependencies

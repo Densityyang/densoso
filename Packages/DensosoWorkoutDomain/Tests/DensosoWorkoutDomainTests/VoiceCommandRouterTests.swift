@@ -1,5 +1,5 @@
 import XCTest
-@testable import Densoso
+@testable import DensosoWorkoutDomain
 
 final class VoiceCommandRouterTests: XCTestCase {
     private let router = VoiceCommandRouter()
@@ -11,7 +11,6 @@ final class VoiceCommandRouterTests: XCTestCase {
             VoiceCommandEnvelope(text: text, locale: Locale(identifier: "zh-CN"), source: .watchDictation),
             VoiceCommandEnvelope(text: text, locale: Locale(identifier: "zh-CN"), source: .manualText),
         ].map(router.route)
-
         XCTAssertEqual(routes, [.mealDraft, .mealDraft, .mealDraft])
     }
 
@@ -20,7 +19,7 @@ final class VoiceCommandRouterTests: XCTestCase {
         XCTAssertEqual(router.route(.init(text: "深蹲补一组 5 次 80 公斤", source: .watchDictation)), .strengthSetDraft)
     }
 
-    func testRouterNeverPersistsAnEmptyTranscript() {
+    func testEmptyTranscriptIsUnclassified() {
         XCTAssertEqual(router.route(.init(text: "   ", source: .manualText)), .unclassified)
     }
 }
