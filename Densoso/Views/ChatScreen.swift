@@ -85,7 +85,6 @@ struct ChatScreen: View {
             .padding()
         }
         .onAppear {
-            Task { await dependencies.speechService.refreshRuntime() }
             if messages.isEmpty {
                 addMessage(text: "你好，我是 densoso。按住麦克风或输入文字，告诉我你吃了什么、练了什么。", isUser: false)
             }
@@ -113,6 +112,7 @@ struct ChatScreen: View {
                 voiceDraftSummary = "已生成\(kind.displayName)草稿，请检查文字后点击发送；尚未保存任何记录。"
             }
         } else {
+            await speech.refreshRuntime()
             let authorized = await speech.requestAuthorization()
             if authorized {
                 do {
