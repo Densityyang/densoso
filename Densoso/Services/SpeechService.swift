@@ -6,6 +6,11 @@ import Speech
 @MainActor
 @Observable
 final class SpeechService {
+    enum Runtime: Equatable {
+        case speechAnalyzer(localeIdentifier: String)
+        case legacySpeech
+        case manualEntry
+    }
     private let speechRecognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -15,6 +20,7 @@ final class SpeechService {
     var transcribedText = ""
     var isAuthorized = false
     var error: SpeechError?
+    private(set) var runtime: Runtime = .legacySpeech
 
     enum SpeechError: Error, LocalizedError {
         case notAuthorized
@@ -43,6 +49,26 @@ final class SpeechService {
         let status = await Self.requestSpeechAuthorization()
         isAuthorized = status == .authorized
         return isAuthorized
+    }
+
+    /// Checks the iOS 26 on-device path without downloading assets or changing
+    /// the current transcript. A failure retains the editable legacy/manual path.
+    func refreshRuntime(locale: Locale = Locale(identifier: "zh-CN")) async {
+        if #available(iOS 26.0, *), SpeechTranscriber.isAvailable,
+           let supportedLocale = await SpeechTranscriber.supportedLocale(equivalentTo: locale) {
+            runtime = .speechAnalyzer(localeIdentifier: supportedLocale.identifier)
+        } else if speechRecognizer?.isAvailable == true {
+            runtime = .legacySpeech
+        } else {
+            runtime = .manualEntry
+        }
+    }
+
+    var envelopeSource: VoiceCommandEnvelope.Source {
+        switch runtime {
+        case .speechAnalyzer: .iPhoneSpeechAnalyzer
+        case .legacySpeech, .manualEntry: .iPhoneLegacySpeech
+        }
     }
 
     /// 开始录音并识别

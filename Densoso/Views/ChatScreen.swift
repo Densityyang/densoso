@@ -9,6 +9,7 @@ struct ChatScreen: View {
     @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
     @State private var isProcessing = false
+    @State private var voiceDraftSummary: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,6 +46,13 @@ struct ChatScreen: View {
                 .padding(.horizontal)
             }
 
+            if let voiceDraftSummary {
+                Text(voiceDraftSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+            }
+
             // 底部输入区
             HStack(spacing: 12) {
                 Button {
@@ -77,6 +85,7 @@ struct ChatScreen: View {
             .padding()
         }
         .onAppear {
+            Task { await dependencies.speechService.refreshRuntime() }
             if messages.isEmpty {
                 addMessage(text: "你好，我是 densoso。按住麦克风或输入文字，告诉我你吃了什么、练了什么。", isUser: false)
             }
@@ -96,7 +105,12 @@ struct ChatScreen: View {
         if speech.isRecording {
             speech.stopRecording()
             if !inputText.isEmpty {
-                await send(text: inputText)
+                let envelope = VoiceCommandEnvelope(
+                    text: inputText,
+                    source: speech.envelopeSource
+                )
+                let kind = VoiceCommandRouter().route(envelope)
+                voiceDraftSummary = "已生成\(kind.displayName)草稿，请检查文字后点击发送；尚未保存任何记录。"
             }
         } else {
             let authorized = await speech.requestAuthorization()
@@ -115,7 +129,11 @@ struct ChatScreen: View {
     private func send(text: String) async {
         guard !text.isEmpty else { return }
         let userText = text
+        let route = VoiceCommandRouter().route(
+            VoiceCommandEnvelope(text: userText, source: .manualText)
+        )
         inputText = ""
+        voiceDraftSummary = "正在处理\(route.displayName)草稿；涉及写入时仍需在确认卡片中确认。"
         addMessage(text: userText, isUser: true)
 
         isProcessing = true
@@ -153,6 +171,18 @@ struct ChatScreen: View {
     private func scrollToBottom(proxy: ScrollViewProxy) {
         if let last = messages.last {
             withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+        }
+    }
+}
+
+private extension VoiceCommandKind {
+    var displayName: String {
+        switch self {
+        case .mealDraft: "餐食"
+        case .workoutPlanDraft: "训练计划"
+        case .strengthSetDraft: "力量组次"
+        case .readOnlyQuery: "查询"
+        case .unclassified: "文本"
         }
     }
 }
