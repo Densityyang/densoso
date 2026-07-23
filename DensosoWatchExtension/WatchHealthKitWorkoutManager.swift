@@ -1,6 +1,7 @@
 import Foundation
 import HealthKit
 import Observation
+import WatchKit
 import DensosoWorkoutDomain
 
 @MainActor
@@ -12,12 +13,17 @@ final class WatchHealthKitWorkoutManager: NSObject, HKWorkoutSessionDelegate, HK
     private var session: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
     private var isFinalizing = false
+    private var restTimer = RestTimer()
+    private var restTimerTask: Task<Void, Never>?
 
     private(set) var state: WorkoutSessionState = .idle
     private(set) var heartRate: Double?
     private(set) var activeEnergy: Double?
     private(set) var savedWorkoutID: UUID?
     private(set) var errorMessage: String?
+    private(set) var completedStrengthSets: [StrengthSetLog] = []
+    private(set) var restSecondsRemaining = 0
+    private(set) var isResting = false
 
     var isEnding: Bool { isFinalizing }
 
@@ -119,6 +125,63 @@ final class WatchHealthKitWorkoutManager: NSObject, HKWorkoutSessionDelegate, HK
         clearSession()
     }
 
+    /// Captures an app-owned strength set without attempting to encode custom
+    /// repetitions into HealthKit's workout schema. The final summary is linked
+    /// to the saved HKWorkout UUID in `finishWorkout`.
+    func logStrengthSet(
+        exerciseID: String = "free-exercise-db:Barbell_Squat",
+        exerciseName: String = "Barbell Squat",
+        repetitions: Int = 5,
+        loadKilograms: Double? = nil,
+        restDuration: TimeInterval = 90
+    ) {
+        guard state == .running || state == .paused else {
+            errorMessage = "Start the workout before logging a strength set."
+            return
+        }
+        completedStrengthSets.append(
+            StrengthSetLog(
+                exerciseID: exerciseID,
+                exerciseName: exerciseName,
+                repetitions: repetitions,
+                loadKilograms: loadKilograms
+            )
+        )
+        WKInterfaceDevice.current().play(.click)
+        startRestTimer(duration: restDuration)
+    }
+
+    func cancelRestTimer() {
+        restTimerTask?.cancel()
+        restTimerTask = nil
+        restTimer.cancel()
+        restSecondsRemaining = 0
+        isResting = false
+    }
+
+    private func startRestTimer(duration: TimeInterval) {
+        cancelRestTimer()
+        restTimer.start(duration: duration)
+        isResting = true
+        restSecondsRemaining = restTimer.secondsRemaining()
+        WKInterfaceDevice.current().play(.start)
+        restTimerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                guard let self else { return }
+                if self.restTimer.refresh() {
+                    self.restSecondsRemaining = 0
+                    self.isResting = false
+                    self.restTimerTask = nil
+                    WKInterfaceDevice.current().play(.notification)
+                    return
+                }
+                self.restSecondsRemaining = self.restTimer.secondsRemaining()
+            }
+        }
+    }
+
     private func finishWorkout(at date: Date) async {
         guard let session, let builder else { return }
         defer {
@@ -130,12 +193,24 @@ final class WatchHealthKitWorkoutManager: NSObject, HKWorkoutSessionDelegate, HK
             try await builder.endCollection(at: date)
             savedWorkoutID = try await builder.finishWorkout()?.uuid
             try await updateState(for: .end)
+            if let savedWorkoutID {
+                let logicalSessionID = await coordinator.snapshot().logicalSession.id
+                WatchStrengthWorkoutStore.save(
+                    StrengthWorkoutSummary(
+                        healthKitUUID: savedWorkoutID,
+                        logicalSessionID: logicalSessionID,
+                        catalogVersion: ExerciseCatalogVersion.current,
+                        completedSets: completedStrengthSets
+                    )
+                )
+            }
         } catch {
             errorMessage = "Unable to save this workout: \(error.localizedDescription)"
         }
     }
 
     private func clearSession() {
+        cancelRestTimer()
         session = nil
         builder = nil
         isFinalizing = false
@@ -187,6 +262,20 @@ final class WatchHealthKitWorkoutManager: NSObject, HKWorkoutSessionDelegate, HK
         Task { @MainActor [weak self] in
             self?.refreshStatistics()
         }
+    }
+}
+
+private enum WatchStrengthWorkoutStore {
+    private static let storageKey = "watch.strengthWorkoutSummaries"
+
+    static func save(_ summary: StrengthWorkoutSummary, defaults: UserDefaults = .standard) {
+        var summaries = (try? JSONDecoder().decode(
+            [StrengthWorkoutSummary].self,
+            from: defaults.data(forKey: storageKey) ?? Data()
+        )) ?? []
+        summaries.removeAll { $0.healthKitUUID == summary.healthKitUUID }
+        summaries.append(summary)
+        defaults.set(try? JSONEncoder().encode(summaries), forKey: storageKey)
     }
 }
 

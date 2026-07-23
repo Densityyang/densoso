@@ -15,6 +15,8 @@ struct WorkoutPlanScreen: View {
     @State private var isPresentingConfirmation = false
     @State private var resultMessage: String?
     @State private var schedulingService = WorkoutPlanSchedulingService()
+    @State private var catalogEntries: [ExerciseCatalog.Entry] = []
+    @State private var catalogVersion: String?
 
     var body: some View {
         NavigationStack {
@@ -44,6 +46,14 @@ struct WorkoutPlanScreen: View {
                     ForEach($strengthSets) { $set in
                         VStack(alignment: .leading, spacing: 8) {
                             TextField("动作", text: $set.exerciseName)
+                            Menu("从离线目录选择") {
+                                ForEach(strengthExercises) { exercise in
+                                    Button(exercise.name) {
+                                        set.exerciseID = exercise.id
+                                        set.exerciseName = exercise.aliases.first ?? exercise.name
+                                    }
+                                }
+                            }
                             Stepper("\(set.setCount) 组 × \(set.repetitions) 次", value: $set.setCount, in: 1...100)
                             Stepper("每组 \(set.repetitions) 次", value: $set.repetitions, in: 1...1_000)
                         }
@@ -52,6 +62,11 @@ struct WorkoutPlanScreen: View {
 
                     Button("添加动作") {
                         strengthSets.append(.init(exerciseName: "", setCount: 3, repetitions: 10))
+                    }
+                    if let catalogVersion {
+                        Text("动作目录：\(catalogVersion)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -74,6 +89,7 @@ struct WorkoutPlanScreen: View {
             }
             .navigationTitle("训练计划")
             .onAppear {
+                loadExerciseCatalog()
                 if let incomingDraft = appState.pendingWorkoutPlan {
                     apply(incomingDraft)
                     appState.pendingWorkoutPlan = nil
@@ -126,5 +142,20 @@ struct WorkoutPlanScreen: View {
         shouldSchedule = draft.scheduledAt != nil
         scheduledAt = draft.scheduledAt ?? scheduledAt
         strengthSets = draft.strengthSets
+    }
+
+    private var strengthExercises: [ExerciseCatalog.Entry] {
+        Array(catalogEntries.filter { $0.category == "strength" }.prefix(12))
+    }
+
+    private func loadExerciseCatalog() {
+        guard catalogEntries.isEmpty else { return }
+        do {
+            let catalog = try ExerciseCatalog.loadBundled()
+            catalogEntries = catalog.entries
+            catalogVersion = catalog.catalogVersion
+        } catch {
+            resultMessage = error.localizedDescription
+        }
     }
 }

@@ -42,6 +42,7 @@ struct WorkoutPlanDraft: Codable, Equatable, Identifiable, Sendable {
 
     struct StrengthSet: Codable, Equatable, Identifiable, Sendable {
         let id: UUID
+        var exerciseID: String?
         var exerciseName: String
         var setCount: Int
         var repetitions: Int
@@ -49,12 +50,14 @@ struct WorkoutPlanDraft: Codable, Equatable, Identifiable, Sendable {
 
         init(
             id: UUID = UUID(),
+            exerciseID: String? = nil,
             exerciseName: String,
             setCount: Int,
             repetitions: Int,
             loadKilograms: Double? = nil
         ) {
             self.id = id
+            self.exerciseID = exerciseID
             self.exerciseName = exerciseName
             self.setCount = setCount
             self.repetitions = repetitions
