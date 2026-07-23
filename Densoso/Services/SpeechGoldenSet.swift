@@ -89,10 +89,11 @@ struct SpeechGoldenSet: Sendable {
     private static var mealCases: [SpeechGoldenCase] {
         mealItems.enumerated().flatMap { itemIndex, item in
             mealPatterns.enumerated().map { patternIndex, pattern in
+                let spokenFood = (item.brand ?? "") + item.food
                 SpeechGoldenCase(
                     id: "meal-\(itemIndex + 1)-\(patternIndex + 1)",
                     domain: .meal,
-                    referenceTranscript: String(format: pattern, item.food, item.amount),
+                    referenceTranscript: String(format: pattern, spokenFood, item.amount),
                     expectedSlots: slots(food: item.food, amount: item.amount, brand: item.brand)
                 )
             }
