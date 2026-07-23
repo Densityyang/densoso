@@ -90,7 +90,7 @@ struct SpeechGoldenSet: Sendable {
         mealItems.enumerated().flatMap { itemIndex, item in
             mealPatterns.enumerated().map { patternIndex, pattern in
                 let spokenFood = (item.brand ?? "") + item.food
-                SpeechGoldenCase(
+                return SpeechGoldenCase(
                     id: "meal-\(itemIndex + 1)-\(patternIndex + 1)",
                     domain: .meal,
                     referenceTranscript: String(format: pattern, spokenFood, item.amount),
