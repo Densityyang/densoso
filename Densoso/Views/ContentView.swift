@@ -5,11 +5,22 @@ struct ContentView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        Group {
-            if appState.isOnboarded {
-                MainTabView()
-            } else {
-                OnboardingView()
+        VStack(spacing: 0) {
+            if let warning = appState.startupWarning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.orange.opacity(0.12))
+            }
+
+            Group {
+                if appState.isOnboarded {
+                    MainTabView()
+                } else {
+                    OnboardingView()
+                }
             }
         }
     }

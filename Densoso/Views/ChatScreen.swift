@@ -50,10 +50,10 @@ struct ChatScreen: View {
                 Button {
                     Task { await toggleVoice() }
                 } label: {
-                    Image(systemName: appState.isRecording ? "mic.fill" : "mic")
+                    Image(systemName: dependencies.speechService.isRecording ? "mic.fill" : "mic")
                         .font(.title2)
                         .frame(width: 44, height: 44)
-                        .background(appState.isRecording ? Color.red : Color.blue)
+                        .background(dependencies.speechService.isRecording ? Color.red : Color.blue)
                         .foregroundColor(.white)
                         .clipShape(Circle())
                 }
@@ -96,9 +96,13 @@ struct ChatScreen: View {
         } else {
             let authorized = await speech.requestAuthorization()
             if authorized {
-                try? speech.startRecording()
+                do {
+                    try speech.startRecording()
+                } catch {
+                    addMessage(text: "无法启动语音：\(error.localizedDescription)。", isUser: false)
+                }
             } else {
-                addMessage(text: "请在设置中开启语音识别权限。", isUser: false)
+                addMessage(text: "请在设置中开启麦克风和语音识别权限。", isUser: false)
             }
         }
     }

@@ -72,6 +72,10 @@ struct SettingsScreen: View {
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
+
+                    Text("HealthKit 由 Apple 的签名描述文件和健康 App 授权共同控制；侧载签名未包含 HealthKit entitlement 时无法连接。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("关于") {

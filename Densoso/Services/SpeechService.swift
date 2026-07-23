@@ -6,7 +6,7 @@ import Speech
 @MainActor
 @Observable
 final class SpeechService {
-    private let speechRecognizer: SFSpeechRecognizer
+    private let speechRecognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -30,18 +30,19 @@ final class SpeechService {
     }
 
     init() {
-        self.speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))!
-        speechRecognizer.defaultTaskHint = .dictation
+        self.speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
+        self.speechRecognizer?.defaultTaskHint = .dictation
     }
 
     @MainActor
     func requestAuthorization() async -> Bool {
-        await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                self.isAuthorized = status == .authorized
-                continuation.resume(returning: self.isAuthorized)
-            }
+        guard await Self.requestMicrophonePermission() else {
+            isAuthorized = false
+            return false
         }
+        let status = await Self.requestSpeechAuthorization()
+        isAuthorized = status == .authorized
+        return isAuthorized
     }
 
     /// 开始录音并识别
@@ -52,6 +53,10 @@ final class SpeechService {
         // 停止之前的任务
         stopRecording()
 
+        guard let speechRecognizer, speechRecognizer.isAvailable else {
+            throw SpeechError.recognitionUnavailable
+        }
+
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
         try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
@@ -61,10 +66,13 @@ final class SpeechService {
             throw SpeechError.recognitionUnavailable
         }
         recognitionRequest.shouldReportPartialResults = true
-        recognitionRequest.requiresOnDeviceRecognition = true  // 本地识别，隐私保护
+        recognitionRequest.requiresOnDeviceRecognition = speechRecognizer.supportsOnDeviceRecognition
 
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
+        guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
+            throw SpeechError.audioEngineUnavailable
+        }
 
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
             recognitionRequest.append(buffer)
@@ -77,13 +85,15 @@ final class SpeechService {
         transcribedText = ""
         error = nil
 
-        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { result, err in
-            if let result = result {
-                self.transcribedText = result.bestTranscription.formattedString
-            }
-            if let err = err {
-                self.error = SpeechError.recognitionUnavailable
-                print("[Speech] 识别错误: \(err.localizedDescription)")
+        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, err in
+            Task { @MainActor [weak self] in
+                if let result {
+                    self?.transcribedText = result.bestTranscription.formattedString
+                }
+                if let err {
+                    self?.error = SpeechError.recognitionUnavailable
+                    print("[Speech] 识别错误: \(err.localizedDescription)")
+                }
             }
         }
     }
@@ -97,5 +107,22 @@ final class SpeechService {
         recognitionRequest = nil
         recognitionTask = nil
         isRecording = false
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private nonisolated static func requestMicrophonePermission() async -> Bool {
+        await withCheckedContinuation { continuation in
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                continuation.resume(returning: granted)
+            }
+        }
+    }
+
+    private nonisolated static func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
+        await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status)
+            }
+        }
     }
 }
