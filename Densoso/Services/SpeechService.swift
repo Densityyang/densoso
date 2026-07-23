@@ -66,10 +66,10 @@ final class SpeechService {
     }
 
     var envelopeSource: VoiceCommandEnvelope.Source {
-        switch runtime {
-        case .speechAnalyzer: .iPhoneSpeechAnalyzer
-        case .legacySpeech, .manualEntry: .iPhoneLegacySpeech
-        }
+        // The current capture transport is SFSpeechRecognizer. Runtime probing
+        // may advertise a future SpeechAnalyzer path, but provenance must
+        // describe the engine that actually produced this transcript.
+        .iPhoneLegacySpeech
     }
 
     /// 开始录音并识别
