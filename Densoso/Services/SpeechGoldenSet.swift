@@ -42,17 +42,17 @@ struct SpeechGoldenSet: Sendable {
         ("苹果", "两个", nil)
     ]
 
-    private static let mealPatterns: [(String, (String, String, String?) -> [String: String])] = [
-        ("早餐吃了%@%@", slots(food:amount:brand:)),
-        ("午饭吃了%@%@", slots(food:amount:brand:)),
-        ("晚餐我要记%@%@", slots(food:amount:brand:)),
-        ("帮我记录%@%@", slots(food:amount:brand:)),
-        ("今天加餐%@%@", slots(food:amount:brand:)),
-        ("刚刚吃完%@%@", slots(food:amount:brand:)),
-        ("把%@%@做成餐食草稿", slots(food:amount:brand:)),
-        ("我想补记%@%@", slots(food:amount:brand:)),
-        ("这一餐是%@%@", slots(food:amount:brand:)),
-        ("请先识别%@%@但不要保存", slots(food:amount:brand:))
+    private static let mealPatterns = [
+        "早餐吃了%@%@",
+        "午饭吃了%@%@",
+        "晚餐我要记%@%@",
+        "帮我记录%@%@",
+        "今天加餐%@%@",
+        "刚刚吃完%@%@",
+        "把%@%@做成餐食草稿",
+        "我想补记%@%@",
+        "这一餐是%@%@",
+        "请先识别%@%@但不要保存"
     ]
 
     private static let workoutItems: [(exercise: String, sets: String, reps: String, weight: String)] = [
@@ -73,17 +73,17 @@ struct SpeechGoldenSet: Sendable {
         ("壶铃摆动", "五组", "每组十五次", "十六公斤")
     ]
 
-    private static let workoutPatterns: [(String, (String, String, String, String) -> [String: String])] = [
-        ("记录%@%@%@%@", workoutSlots(exercise:sets:reps:weight:)),
-        ("我要做%@%@%@%@", workoutSlots(exercise:sets:reps:weight:)),
-        ("今天训练%@%@%@%@", workoutSlots(exercise:sets:reps:weight:)),
-        ("补记%@%@%@%@", workoutSlots(exercise:sets:reps:weight:)),
-        ("明天安排%@%@%@%@", workoutSlots(exercise:sets:reps:weight:)),
-        ("给我创建%@%@%@%@的计划", workoutSlots(exercise:sets:reps:weight:)),
-        ("这一组是%@%@%@%@", workoutSlots(exercise:sets:reps:weight:)),
-        ("先生成%@%@%@%@草稿", workoutSlots(exercise:sets:reps:weight:)),
-        ("我刚完成%@%@%@%@", workoutSlots(exercise:sets:reps:weight:)),
-        ("不保存，只识别%@%@%@%@", workoutSlots(exercise:sets:reps:weight:))
+    private static let workoutPatterns = [
+        "记录%@%@%@%@",
+        "我要做%@%@%@%@",
+        "今天训练%@%@%@%@",
+        "补记%@%@%@%@",
+        "明天安排%@%@%@%@",
+        "给我创建%@%@%@%@的计划",
+        "这一组是%@%@%@%@",
+        "先生成%@%@%@%@草稿",
+        "我刚完成%@%@%@%@",
+        "不保存，只识别%@%@%@%@"
     ]
 
     private static var mealCases: [SpeechGoldenCase] {
@@ -92,8 +92,8 @@ struct SpeechGoldenSet: Sendable {
                 SpeechGoldenCase(
                     id: "meal-\(itemIndex + 1)-\(patternIndex + 1)",
                     domain: .meal,
-                    referenceTranscript: String(format: pattern.0, item.food, item.amount),
-                    expectedSlots: pattern.1(item.food, item.amount, item.brand)
+                    referenceTranscript: String(format: pattern, item.food, item.amount),
+                    expectedSlots: slots(food: item.food, amount: item.amount, brand: item.brand)
                 )
             }
         }
@@ -105,8 +105,8 @@ struct SpeechGoldenSet: Sendable {
                 SpeechGoldenCase(
                     id: "workout-\(itemIndex + 1)-\(patternIndex + 1)",
                     domain: .workout,
-                    referenceTranscript: String(format: pattern.0, item.exercise, item.sets, item.reps, item.weight),
-                    expectedSlots: pattern.1(item.exercise, item.sets, item.reps, item.weight)
+                    referenceTranscript: String(format: pattern, item.exercise, item.sets, item.reps, item.weight),
+                    expectedSlots: workoutSlots(exercise: item.exercise, sets: item.sets, reps: item.reps, weight: item.weight)
                 )
             }
         }
