@@ -10,6 +10,7 @@ on:
 jobs:
   build:
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,12 +24,26 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Test shared workout domain
+        run: swift test --package-path Packages/DensosoWorkoutDomain
+
+      - name: Prepare iOS Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          xcrun simctl list devices available
+
       - name: Test on iOS Simulator
         run: |
           set -o pipefail
-          xcodebuild test -project Densoso.xcodeproj \
+          perl -e 'alarm shift; exec @ARGV' 720 xcodebuild test -project Densoso.xcodeproj \
             -scheme Densoso \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=latest' \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
