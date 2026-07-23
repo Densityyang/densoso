@@ -17,6 +17,8 @@ final class AppState {
     // Agent
     var isAgentProcessing = false
     var agentStreamedText = ""
+    var pendingWorkoutPlan: WorkoutPlanDraft?
+    var pendingMealText: String?
 
     // 语音
     var isRecording = false

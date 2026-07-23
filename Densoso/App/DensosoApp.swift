@@ -58,6 +58,8 @@ struct AppRoot: View {
         ContentView()
             .task {
                 await dependencies.setupFoodDB()
+                appState.pendingWorkoutPlan = AppIntentInbox.consumeWorkoutPlan()
+                appState.pendingMealText = AppIntentInbox.consumeMealText()
                 checkOnboarding()
                 healthKitWorkoutImporter.importChanges(in: modelContext)
                 workoutRouteImporter.importPendingRoutes(in: modelContext)
