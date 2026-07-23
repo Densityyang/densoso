@@ -56,7 +56,7 @@ final class HealthKitWorkoutImporter {
         }
     }
 
-    private static func snapshot(from workout: HKWorkout) -> WorkoutSnapshot? {
+    nonisolated private static func snapshot(from workout: HKWorkout) -> WorkoutSnapshot? {
         let activeEnergy = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)
         let measuredEnergy = activeEnergy
             .flatMap { workout.statistics(for: $0)?.sumQuantity() }
