@@ -3,6 +3,10 @@ import GRDB
 
 /// 本地食材库（只读 SQLite + FTS5）
 final class FoodDatabase {
+    struct FoodMatch {
+        let item: FoodItem
+        let score: Double
+    }
     private let dbQueue: DatabaseQueue
 
     init() throws {
@@ -85,6 +89,31 @@ final class FoodDatabase {
                 .limit(limit)
                 .fetchAll(db)
         }
+    }
+
+    /// Returns candidates in deterministic relevance order. Callers can show evidence instead of silently treating a fuzzy match as certain.
+    func rankedSearch(query: String, limit: Int = 10) throws -> [FoodMatch] {
+        let normalizedQuery = normalize(query)
+        guard !normalizedQuery.isEmpty else { return [] }
+        let candidates = try search(query: query, limit: min(max(limit * 4, 1), 100))
+        var ranked: [FoodMatch] = []
+        for item in candidates {
+            let name = normalize(item.name)
+            let alias = normalize(item.alias ?? "")
+            let score: Double
+            if name == normalizedQuery || alias == normalizedQuery { score = 1 }
+            else if name.hasPrefix(normalizedQuery) || alias.hasPrefix(normalizedQuery) { score = 0.8 }
+            else { score = 0.55 }
+            ranked.append(FoodMatch(item: item, score: score))
+        }
+        ranked.sort { lhs, rhs in
+            lhs.score == rhs.score ? lhs.item.name < rhs.item.name : lhs.score > rhs.score
+        }
+        return Array(ranked.prefix(max(0, limit)))
+    }
+
+    private func normalize(_ value: String) -> String {
+        value.lowercased().components(separatedBy: .whitespacesAndNewlines).joined()
     }
 
     /// FTS5 全文搜索（多关键词）

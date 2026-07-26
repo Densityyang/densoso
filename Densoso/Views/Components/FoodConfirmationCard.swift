@@ -73,6 +73,39 @@ struct FoodConfirmationCard: View {
     }
 }
 
+/// 所有健康数据写入共用的显式确认边界。
+struct PendingActionConfirmationCard: View {
+    let action: PendingAction
+    let onConfirm: () -> Void
+    let onReject: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(action.payload.title).font(.headline)
+                Spacer()
+                Text("确认前不会保存")
+                    .font(.caption.bold())
+                    .foregroundStyle(.orange)
+            }
+            Text(action.payload.summary).font(.subheadline)
+            if case .meal = action.payload {
+                Text("估算可信度：\(Int(action.payload.confidence * 100))%")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("拒绝", role: .cancel, action: onReject)
+                    .buttonStyle(.bordered)
+                Button("确认并保存", action: onConfirm)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
 #Preview {
     FoodConfirmationCard(
         summary: "红烧肉一小碗 ≈ 690 kcal\n五花肉 120g + 冰糖 10g + 油 10g",

@@ -1,138 +1,69 @@
 import Foundation
-import SwiftData
 
-struct LogMealTool: AgentTool {
+struct LogMealTool: ConfirmationRequiredTool {
     var definition: DeepSeekClient.ToolDef { .make(
         name: "log_meal",
-        description: """
-        记录一餐。对每道菜必须拆解为食材+烹饪方式+份量估计。
-        如果菜名或份量模糊，设置 lowConfidence=true，系统会触发确认。
-        注意：中餐烹饪方式与用油量是热量估算的关键变量。
-        """,
+        description: "准备一餐的结构化草稿，不会保存数据。dishes 是数组 JSON；烹饪方式只用于推断油量，绝不能乘食材热量。",
         properties: [
             ("mealType", "string", "进餐类型: breakfast/lunch/dinner/snack", true),
-            ("dishes", "string", "菜品数组 JSON", true),
+            ("dishes", "string", "菜品数组 JSON；每项含 dishName、cookingMethod、ingredientNames、ingredientAmounts、notedOilG、lowConfidence", true),
             ("datetime", "string", "用餐时间 ISO8601，默认当前", false),
         ]
-    )}
+    ) }
 
-    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
+    func prepare(argumentsJSON: String, context: AgentSession) async throws -> PendingActionPreparation {
         guard let data = argumentsJSON.data(using: .utf8),
-              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return #"{"error": "参数解析失败"}"#
-        }
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let mealType = json["mealType"] as? String,
+              Set(["breakfast", "lunch", "dinner", "snack"]).contains(mealType),
+              let dishesJSON = json["dishes"] as? String,
+              let dishesData = dishesJSON.data(using: .utf8),
+              let rawDishes = try JSONSerialization.jsonObject(with: dishesData) as? [[String: Any]],
+              !rawDishes.isEmpty, rawDishes.count <= 20 else { throw DraftError.invalidMeal }
 
-        let mealType = json["mealType"] as? String ?? "lunch"
-        let dishesJSON = json["dishes"] as? String ?? "[]"
+        let date: Date
+        if let datetime = json["datetime"] as? String {
+            guard let parsed = ISO8601DateFormatter().date(from: datetime) else { throw DraftError.invalidMeal }
+            date = parsed
+        } else { date = Date() }
 
-        guard let dishesData = dishesJSON.data(using: .utf8),
-              let dishes = try? JSONSerialization.jsonObject(with: dishesData) as? [[String: Any]] else {
-            return #"{"error": "dishes 字段格式错误"}"#
-        }
+        let table = CookingCoefficientTable.shared
+        let drafts = try rawDishes.map { rawDish -> MealDishDraft in
+            guard let name = rawDish["dishName"] as? String,
+                  !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let cookingMethod = rawDish["cookingMethod"] as? String,
+                  let ingredientNames = rawDish["ingredientNames"] as? [String],
+                  let ingredientAmounts = rawDish["ingredientAmounts"] as? [Double],
+                  !ingredientNames.isEmpty, ingredientNames.count == ingredientAmounts.count,
+                  ingredientNames.count <= 20,
+                  ingredientAmounts.allSatisfy({ $0 > 0 && $0 <= 5_000 }) else { throw DraftError.invalidMeal }
 
-        let foodDB = context.foodDatabase
-        var createdDishes: [DishEntry] = []
-        var totalKcal = 0
-        var totalProtein = 0.0
-        var totalFat = 0.0
-        var totalCarbs = 0.0
-        var anyLowConfidence = false
-
-        for dish in dishes {
-            let dishName = dish["dishName"] as? String ?? "未知菜品"
-            let cookingMethod = dish["cookingMethod"] as? String ?? "unknown"
-            let ingredientNames = dish["ingredientNames"] as? [String] ?? []
-            let ingredientAmounts = dish["ingredientAmounts"] as? [Double] ?? []
-            let notedOilG = dish["notedOilG"] as? Double
-            let lowConfidence = dish["lowConfidence"] as? Bool ?? false
-            if lowConfidence { anyLowConfidence = true }
-
-            var estimates: [IngredientEstimate] = []
-            var dishKcal = 0; var dishProtein = 0.0; var dishFat = 0.0; var dishCarbs = 0.0
-            let coefTable = CookingCoefficientTable.shared
-            let methodCoef = coefTable[cookingMethod]
-            let oilGrams = notedOilG ?? methodCoef.defaultOilG
-
-            for (idx, name) in ingredientNames.enumerated() {
-                let amountG = idx < ingredientAmounts.count ? ingredientAmounts[idx] : 100.0
-                if let db = foodDB, let match = try? db.search(query: name, limit: 1).first {
-                    let baseKcal = match.adjustedEnergyKcal * amountG / 100.0
-                    let oilFactor = coefTable.absorptionFactor(for: match.name)
-                    let combinedCoef = methodCoef.default * oilFactor
-                    let adjustedKcal = baseKcal * combinedCoef
-                    estimates.append(IngredientEstimate(
-                        foodItemId: match.id, name: match.name, amountG: amountG,
-                        baseCaloriesKcal: baseKcal, oilCoefficient: combinedCoef, adjustedCaloriesKcal: adjustedKcal
-                    ))
-                    dishKcal += Int(round(adjustedKcal))
-                    dishProtein += match.proteinG * amountG / 100.0
-                    dishFat += match.fatG * amountG / 100.0
-                    dishCarbs += match.carbohydrateG * amountG / 100.0
-                }
+            let explicitOil = rawDish["notedOilG"] as? Double
+            guard explicitOil == nil || (explicitOil! >= 0 && explicitOil! <= 500) else { throw DraftError.invalidMeal }
+            guard let database = context.foodDatabase else { throw DraftError.invalidMeal }
+            let ingredients = try zip(ingredientNames, ingredientAmounts).compactMap { pair -> CalorieEstimator.Ingredient? in
+                guard let candidate = try database.rankedSearch(query: pair.0, limit: 3).first else { return nil }
+                return CalorieEstimator.Ingredient(item: candidate.item, amountG: pair.1,
+                                                   massBasis: massBasis(for: candidate.item, requestedName: pair.0), matchScore: candidate.score)
             }
-            let oilKcal = Int(round(oilGrams * coefTable.oilPerGramKcal))
-            dishKcal += oilKcal; dishFat += oilGrams
-
-            let foundRatio = ingredientNames.isEmpty ? 0.0 : Double(estimates.count) / Double(ingredientNames.count)
-            let conf = foundRatio * 0.4 + (notedOilG != nil ? 0.4 : 0.2) + (cookingMethod != "unknown" ? 0.2 : 0.1)
-
-            let entry = DishEntry(
-                dishName: dishName, cookingMethod: cookingMethod,
-                estimatedCaloriesKcal: dishKcal, estimatedProteinG: dishProtein,
-                estimatedFatG: dishFat, estimatedCarbsG: dishCarbs,
-                confidenceScore: min(conf, 1.0)
-            )
-            entry.setIngredients(estimates)
-            createdDishes.append(entry)
-            totalKcal += dishKcal; totalProtein += dishProtein; totalFat += dishFat; totalCarbs += dishCarbs
+            guard ingredients.count == ingredientNames.count else { throw DraftError.invalidMeal }
+            let oil: CalorieEstimator.OilSource = explicitOil.map(CalorieEstimator.OilSource.provided)
+                ?? .inferred(grams: table[cookingMethod].defaultOilG)
+            let estimate = CalorieEstimator.estimate(ingredients: ingredients, oil: oil, oilCaloriesPerGram: table.oilPerGramKcal)
+            let lowConfidence = rawDish["lowConfidence"] as? Bool ?? false
+            return MealDishDraft(dishName: name, cookingMethod: cookingMethod, ingredients: estimate.ingredientEstimates,
+                                 caloriesKcal: estimate.calories.likely, proteinG: estimate.proteinG, fatG: estimate.fatG,
+                                 carbsG: estimate.carbsG, confidence: lowConfidence ? min(estimate.confidence, 0.5) : estimate.confidence,
+                                 calorieRange: estimate.calories, evidence: estimate.evidence)
         }
-
-        let meal = MealRecord(
-            date: Date(), mealType: mealType, totalCaloriesKcal: totalKcal,
-            proteinG: totalProtein, fatG: totalFat, carbsG: totalCarbs,
-            confidence: anyLowConfidence ? "medium" : "high"
-        )
-        meal.dishes = createdDishes
-        modelContext.insert(meal)
-        try modelContext.save()
-
-        // 触发 DailyMetrics 重算并保存
-        recomputeDailyMetrics(modelContext: modelContext)
-
-        let dishesSummary = createdDishes.map { "\($0.dishName): \($0.estimatedCaloriesKcal) kcal" }.joined(separator: "; ")
-        let result: [String: Any] = [
-            "mealId": meal.id.uuidString, "mealType": mealType, "totalCalories": totalKcal,
-            "totalProtein": totalProtein, "totalFat": totalFat, "totalCarbs": totalCarbs,
-            "dishes": dishesSummary, "needsConfirmation": anyLowConfidence,
-        ]
-        let resultData = try JSONSerialization.data(withJSONObject: result)
-        return String(data: resultData, encoding: .utf8) ?? "{}"
+        let draft = MealDraft(date: date, mealType: mealType, dishes: drafts)
+        return PendingActionPreparation(payload: .meal(draft),
+                                        idempotencyKey: PendingActionStore.idempotencyKey(for: argumentsJSON, toolName: definition.name))
     }
 
-    private func recomputeDailyMetrics(modelContext: ModelContext) {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
-
-        let profile = (try? modelContext.fetch(FetchDescriptor<UserProfile>()).first) ?? UserProfile()
-
-        let mealPred = #Predicate<MealRecord> { m in
-            m.date >= today && m.date < tomorrow
-        }
-        let meals = (try? modelContext.fetch(FetchDescriptor<MealRecord>(predicate: mealPred))) ?? []
-
-        let workoutPred = #Predicate<WorkoutRecord> { w in
-            w.date >= today && w.date < tomorrow
-        }
-        let workouts = (try? modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: workoutPred))) ?? []
-
-        let metrics = CaloricEngine.computeDailyMetrics(date: today, meals: meals, workouts: workouts, userProfile: profile)
-
-        let existingPred = #Predicate<DailyMetrics> { $0.date == today }
-        if let existing = (try? modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: existingPred)))?.first {
-            modelContext.delete(existing)
-        }
-        modelContext.insert(metrics)
-        try? modelContext.save()
+    private func massBasis(for item: FoodItem, requestedName: String) -> CalorieEstimator.MassBasis {
+        let requested = requestedName.lowercased()
+        if item.name.contains("米饭") || requested.contains("熟") { return .cooked }
+        return .grossRaw
     }
 }

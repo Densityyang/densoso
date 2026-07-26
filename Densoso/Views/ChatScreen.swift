@@ -31,6 +31,20 @@ struct ChatScreen: View {
                 }
             }
 
+            if !dependencies.agentSession.pendingActions.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(dependencies.agentSession.pendingActions) { action in
+                        PendingActionConfirmationCard(action: action) {
+                            confirm(action)
+                        } onReject: {
+                            dependencies.agentSession.rejectPendingAction(id: action.id)
+                            addMessage(text: "已拒绝该记录草稿，未保存任何健康数据。", isUser: false)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+
             // 底部输入区
             HStack(spacing: 12) {
                 Button {
@@ -114,6 +128,17 @@ struct ChatScreen: View {
 
     private func addMessage(text: String, isUser: Bool) {
         messages.append(ChatMessage(text: text, isUser: isUser))
+    }
+
+    private func confirm(_ action: PendingAction) {
+        Task {
+            do {
+                let message = try dependencies.agentSession.confirmPendingAction(id: action.id, modelContext: modelContext)
+                addMessage(text: message, isUser: false)
+            } catch {
+                addMessage(text: "未能保存：\(error.localizedDescription)", isUser: false)
+            }
+        }
     }
 
     private func scrollToBottom(proxy: ScrollViewProxy) {
