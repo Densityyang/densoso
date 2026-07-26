@@ -31,7 +31,14 @@ targets:
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "densoso 需要语音识别权限来语音录入饮食和运动记录。"
         INFOPLIST_KEY_NSHealthShareUsageDescription: "densoso 需要读取健康数据来获取体重和身高信息。"
         INFOPLIST_KEY_NSHealthUpdateUsageDescription: "densoso 需要写入饮食热量数据到 Apple Health。"
+    entitlements:
+      path: Densoso/Densoso.entitlements
+      properties:
+        com.apple.developer.healthkit: true
     dependencies:
+      - target: DensosoWatchApp
+        embed: true
+      - package: DensosoWorkoutDomain
       - package: GRDB
     preBuildScripts:
       - name: "Generate Food DB"
@@ -44,6 +51,45 @@ targets:
         inputFiles: []
         outputFiles:
           - ${SRCROOT}/Densoso/Resources/food_composition.db
+
+  DensosoWatchApp:
+    type: application.watchapp2
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources:
+      - path: DensosoWatchApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.watchkitapp
+        SWIFT_VERSION: "6.0"
+        WATCHOS_DEPLOYMENT_TARGET: "11.0"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: DensosoWatchApp/Info.plist
+    dependencies:
+      - target: DensosoWatchExtension
+        embed: true
+
+  DensosoWatchExtension:
+    type: watchkit2-extension
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources:
+      - path: DensosoWatchExtension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.watchkitapp.watchkitextension
+        SWIFT_VERSION: "6.0"
+        WATCHOS_DEPLOYMENT_TARGET: "11.0"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: DensosoWatchExtension/Info.plist
+    entitlements:
+      path: DensosoWatchExtension/DensosoWatchExtension.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+    dependencies:
+      - package: DensosoWorkoutDomain
 
   DensosoTests:
     type: bundle.unit-test
@@ -69,6 +115,8 @@ schemes:
         - name: DensosoTests
 
 packages:
+  DensosoWorkoutDomain:
+    path: Packages/DensosoWorkoutDomain
   GRDB:
     url: https://github.com/groue/GRDB.swift
     from: "6.29.0"

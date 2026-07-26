@@ -12,6 +12,7 @@ final class Dependencies {
     let localIntelligence: LocalIntelligenceService
     let intelligencePreferences: IntelligencePreferences
     let healthKitService: HealthKitService
+    let workoutSessionMirroringService: WorkoutSessionMirroringService
     let exportService: ExportService
     let toolRegistry: ToolRegistry
     let agentSession: AgentSession
@@ -25,6 +26,7 @@ final class Dependencies {
         self.localIntelligence = LocalIntelligenceService()
         self.intelligencePreferences = IntelligencePreferences()
         self.healthKitService = HealthKitService()
+        self.workoutSessionMirroringService = WorkoutSessionMirroringService()
         self.exportService = ExportService()
         self.toolRegistry = ToolRegistry()
 

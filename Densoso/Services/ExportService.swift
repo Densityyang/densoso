@@ -73,6 +73,19 @@ final class ExportService {
             let intensity: String
             let notes: String?
             let createdAt: Date
+            let updatedAt: Date?
+            let healthKitUUID: UUID?
+            let logicalSessionID: UUID?
+            let workoutOrigin: String?
+            let energySource: String?
+            let sourceBundleIdentifier: String?
+            let sourceVersion: String?
+            let sourceRevision: String?
+            let deviceName: String?
+            let deviceModel: String?
+            let dataQuality: String?
+            let routeStatus: String?
+            let routePointCount: Int?
         }
     }
 
@@ -128,6 +141,7 @@ final class ExportService {
             try context.delete(model: WorkoutRecord.self)
             try context.delete(model: DailyMetrics.self)
             try context.delete(model: HealthSyncOutboxEntry.self)
+            try context.delete(model: HealthKitImportCursor.self)
 
             if let source = document.payload.userProfile {
                 let profile = UserProfile(
@@ -185,10 +199,23 @@ final class ExportService {
                     durationMinutes: source.durationMinutes,
                     estimatedCaloriesBurned: source.estimatedCaloriesBurned,
                     intensity: source.intensity,
-                    notes: source.notes
+                    notes: source.notes,
+                    healthKitUUID: source.healthKitUUID,
+                    logicalSessionID: source.logicalSessionID,
+                    workoutOrigin: source.workoutOrigin ?? "userEntered",
+                    energySource: source.energySource,
+                    sourceBundleIdentifier: source.sourceBundleIdentifier,
+                    sourceVersion: source.sourceVersion,
+                    sourceRevision: source.sourceRevision,
+                    deviceName: source.deviceName,
+                    deviceModel: source.deviceModel,
+                    dataQuality: source.dataQuality ?? "complete",
+                    routeStatus: source.routeStatus ?? "unavailable",
+                    routePointCount: source.routePointCount
                 )
                 workout.id = source.id
                 workout.createdAt = source.createdAt
+                workout.updatedAt = source.updatedAt ?? source.createdAt
                 context.insert(workout)
             }
 
@@ -273,7 +300,20 @@ final class ExportService {
                     estimatedCaloriesBurned: source.estimatedCaloriesBurned,
                     intensity: source.intensity,
                     notes: source.notes,
-                    createdAt: source.createdAt
+                    createdAt: source.createdAt,
+                    updatedAt: source.updatedAt,
+                    healthKitUUID: source.healthKitUUID,
+                    logicalSessionID: source.logicalSessionID,
+                    workoutOrigin: source.workoutOrigin,
+                    energySource: source.energySource,
+                    sourceBundleIdentifier: source.sourceBundleIdentifier,
+                    sourceVersion: source.sourceVersion,
+                    sourceRevision: source.sourceRevision,
+                    deviceName: source.deviceName,
+                    deviceModel: source.deviceModel,
+                    dataQuality: source.dataQuality,
+                    routeStatus: source.routeStatus,
+                    routePointCount: source.routePointCount
                 )
             }
         )

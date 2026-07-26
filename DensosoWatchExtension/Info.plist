@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>densoso Watch Extension</string>
+    <key>CFBundleDisplayName</key>
+    <string>densoso</string>
+    <key>CFBundlePackageType</key>
+    <string>XPC!</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>NSHealthShareUsageDescription</key>
+    <string>densoso needs HealthKit access to record workouts.</string>
+    <key>NSHealthUpdateUsageDescription</key>
+    <string>densoso needs HealthKit access to save workouts.</string>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionAttributes</key>
+        <dict>
+            <key>WKAppBundleIdentifier</key>
+            <string>com.densoso.densoso.watchkitapp</string>
+        </dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.watchkit</string>
+    </dict>
+</dict>
+</plist>

@@ -10,7 +10,20 @@ final class ExportServiceTests: XCTestCase {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         source.insert(UserProfile())
         source.insert(MealRecord(date: date, totalCaloriesKcal: 640, proteinG: 32, fatG: 20, carbsG: 72))
-        source.insert(WorkoutRecord(date: date, type: "walking", durationMinutes: 30, estimatedCaloriesBurned: 130))
+        let healthKitUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000030")!
+        let workout = WorkoutRecord(
+            date: date,
+            type: "walking",
+            durationMinutes: 30,
+            estimatedCaloriesBurned: 130,
+            healthKitUUID: healthKitUUID,
+            workoutOrigin: "watchHealthKit",
+            energySource: "measured",
+            sourceBundleIdentifier: "com.densoso.densoso",
+            dataQuality: "complete",
+            routeStatus: "pending"
+        )
+        source.insert(workout)
         try source.save()
 
         let service = ExportService()
@@ -32,6 +45,11 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(metrics.count, 1)
         XCTAssertEqual(metrics[0].totalIntakeKcal, 640)
         XCTAssertEqual(metrics[0].activeCaloriesKcal, 130)
+        let workouts = try target.fetch(FetchDescriptor<WorkoutRecord>())
+        XCTAssertEqual(workouts.count, 1)
+        XCTAssertEqual(workouts[0].healthKitUUID, healthKitUUID)
+        XCTAssertEqual(workouts[0].workoutOrigin, "watchHealthKit")
+        XCTAssertEqual(workouts[0].energySource, "measured")
     }
 
     func testChecksumFailureLeavesExistingRecordsUntouched() async throws {
@@ -65,7 +83,7 @@ final class ExportServiceTests: XCTestCase {
 
     private func makeContext() throws -> (ModelContainer, ModelContext) {
         let container = try ModelContainer(
-            for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, HealthSyncOutboxEntry.self,
+            for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         return (container, ModelContext(container))

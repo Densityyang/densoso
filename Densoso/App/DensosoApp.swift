@@ -25,15 +25,15 @@ private struct PersistenceBootstrap {
     let warning: String?
 
     static func make() -> PersistenceBootstrap {
-        let schema = Schema(versionedSchema: DensosoSchemaV1.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV2.self)
         do {
             return PersistenceBootstrap(
                 container: try ModelContainer(for: schema, migrationPlan: DensosoMigrationPlan.self),
                 warning: nil
             )
         } catch {
-            // Preserve the incompatible store by opening a separately named store instead of
-            // deleting user data or terminating during app launch.
+            // Preserve an incompatible store and keep the app launchable. The recovery
+            // configuration uses a separate on-disk store; it does not delete user data.
             let recoveryConfiguration = ModelConfiguration("DensosoRecovery", schema: schema)
             do {
                 return PersistenceBootstrap(
@@ -51,12 +51,16 @@ struct AppRoot: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AppState.self) private var appState
     @Environment(Dependencies.self) private var dependencies
+    @State private var healthKitWorkoutImporter = HealthKitWorkoutImporter()
+    @State private var workoutRouteImporter = WorkoutRouteImporter()
 
     var body: some View {
         ContentView()
             .task {
                 await dependencies.setupFoodDB()
                 checkOnboarding()
+                healthKitWorkoutImporter.importChanges(in: modelContext)
+                workoutRouteImporter.importPendingRoutes(in: modelContext)
             }
     }
 

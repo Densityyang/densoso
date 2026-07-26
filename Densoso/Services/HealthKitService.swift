@@ -7,6 +7,23 @@ import HealthKit
 @MainActor
 @Observable
 final class HealthKitService {
+    enum HealthError: LocalizedError {
+        case unavailable
+        case sharingDenied
+        case authorizationRequestFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unavailable:
+                "此设备无法使用 Apple Health。"
+            case .sharingDenied:
+                "Apple Health 未允许写入膳食能量。请在健康 App 的共享设置中允许 densoso；若仍失败，请确认侧载签名的描述文件已启用 HealthKit。"
+            case .authorizationRequestFailed(let message):
+                "Apple Health 授权请求失败：\(message)。侧载应用必须使用包含 HealthKit entitlement 的签名描述文件。"
+            }
+        }
+    }
+
     private let store = HKHealthStore()
 
     var isAuthorized = false
@@ -14,21 +31,33 @@ final class HealthKitService {
     // MARK: - 权限
 
     func requestAuthorization() async throws {
-        guard HKHealthStore.isHealthDataAvailable() else { return }
+        guard HKHealthStore.isHealthDataAvailable() else { throw HealthError.unavailable }
 
         let readTypes: Set<HKSampleType> = [
             HKObjectType.quantityType(forIdentifier: .bodyMass)!,
             HKObjectType.quantityType(forIdentifier: .height)!,
+            HKObjectType.workoutType(),
+            HKSeriesType.workoutRoute(),
         ]
 
         let writeTypes: Set<HKSampleType> = [
             HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
         ]
 
-        try await store.requestAuthorization(
-            toShare: writeTypes,
-            read: readTypes
-        )
+        do {
+            try await store.requestAuthorization(
+                toShare: writeTypes,
+                read: readTypes
+            )
+        } catch {
+            throw HealthError.authorizationRequestFailed(error.localizedDescription)
+        }
+
+        guard let dietaryEnergyType = HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed),
+              store.authorizationStatus(for: dietaryEnergyType) == .sharingAuthorized else {
+            isAuthorized = false
+            throw HealthError.sharingDenied
+        }
         isAuthorized = true
     }
 
