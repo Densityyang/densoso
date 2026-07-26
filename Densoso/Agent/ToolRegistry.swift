@@ -45,6 +45,32 @@ enum ToolError: Error, LocalizedError {
     func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String
 }
 
+extension AgentTool {
+    var effect: ToolEffect { .readOnly }
+}
+
+/// 写入类工具只能准备待确认操作；它们不接收持久化上下文。
+@MainActor protocol ConfirmationRequiredTool: AgentTool {
+    func prepare(argumentsJSON: String, context: AgentSession) async throws -> PendingActionPreparation
+}
+
+extension ConfirmationRequiredTool {
+    var effect: ToolEffect { .requiresConfirmation }
+
+    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
+        let action = try context.enqueuePendingAction(try await prepare(argumentsJSON: argumentsJSON, context: context))
+        let response: [String: Any] = [
+            "actionId": action.id.uuidString,
+            "effect": ToolEffect.requiresConfirmation.rawValue,
+            "expiresAt": ISO8601DateFormatter().string(from: action.expiresAt),
+            "summary": action.payload.summary,
+            "saved": false,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: response)
+        return String(data: data, encoding: .utf8) ?? #"{"error":"确认草稿编码失败"}"#
+    }
+}
+
 extension DeepSeekClient.ToolDef {
     static func make(
         name: String,

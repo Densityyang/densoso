@@ -9,6 +9,7 @@ struct SettingsScreen: View {
 
     @Query private var profiles: [UserProfile]
     @State private var apiKey = ""
+    @State private var hasSavedAPIKey = false
     @State private var showKeySaved = false
     @State private var exportURL: URL?
     @State private var showShareSheet = false
@@ -17,7 +18,7 @@ struct SettingsScreen: View {
         NavigationStack {
             Form {
                 Section("API Key") {
-                    TextField("DeepSeek API Key", text: $apiKey)
+                    SecureField(hasSavedAPIKey ? "输入新 API Key 以替换现有密钥" : "DeepSeek API Key", text: $apiKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     Button("保存到 Keychain") {
@@ -28,6 +29,9 @@ struct SettingsScreen: View {
                             .font(.caption)
                             .foregroundStyle(.green)
                     }
+                    Text("密钥保存在本机 Keychain；发起云端请求时会发送给 DeepSeek，用于认证。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 if let profile = profiles.first {
@@ -58,9 +62,7 @@ struct SettingsScreen: View {
             }
             .navigationTitle("设置")
             .task {
-                if let saved = try? KeychainStore.shared.readAPIKey() {
-                    apiKey = String(saved.prefix(8)) + "..."
-                }
+                hasSavedAPIKey = (try? KeychainStore.shared.readAPIKey()) != nil
             }
             .sheet(isPresented: $showShareSheet) {
                 if let url = exportURL {
@@ -73,6 +75,8 @@ struct SettingsScreen: View {
     private func saveKey() async {
         guard !apiKey.isEmpty else { return }
         try? KeychainStore.shared.saveAPIKey(apiKey)
+        apiKey = ""
+        hasSavedAPIKey = true
         showKeySaved = true
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         showKeySaved = false

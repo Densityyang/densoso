@@ -34,13 +34,19 @@ final class DeepSeekClient {
         let messages: [Message]
         let tools: [ToolDef]?
         let toolChoice: ToolChoice?
+        let thinking: Thinking
 
         enum CodingKeys: String, CodingKey {
             case model
             case maxTokens = "max_tokens"
-            case system, messages, tools
+            case system, messages, tools, thinking
             case toolChoice = "tool_choice"
         }
+    }
+
+    struct Thinking: Encodable {
+        let type: String
+        static let disabled = Thinking(type: "disabled")
     }
 
     enum ToolChoice: Encodable {
@@ -259,7 +265,8 @@ final class DeepSeekClient {
             system: system,
             messages: messages,
             tools: tools,
-            toolChoice: tools != nil ? toolChoice : nil
+            toolChoice: tools != nil ? toolChoice : nil,
+            thinking: .disabled
         )
         request.httpBody = try JSONEncoder().encode(body)
 

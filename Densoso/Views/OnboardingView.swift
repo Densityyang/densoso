@@ -21,10 +21,10 @@ struct OnboardingView: View {
         NavigationStack {
             Form {
                 Section("API Key") {
-                    TextField("DeepSeek API Key", text: $apiKey)
+                    SecureField("DeepSeek API Key", text: $apiKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    Text("您的 API Key 仅存储在 iOS Keychain 中，不会上传到任何服务器。")
+                    Text("API Key 存储在 iOS Keychain。请求餐食或运动文本时，密钥会发送给 DeepSeek 进行认证；您可随时在设置中替换或删除它。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
