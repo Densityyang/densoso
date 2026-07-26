@@ -30,7 +30,8 @@ final class OpenFoodFactsPackagedFoodProviderTests: XCTestCase {
             client: RecordingHTTPClient(statusCode: 200, body: "{\"status\":0}")
         )
 
-        XCTAssertNil(try await provider.lookup(barcode: "6901234567890"))
+        let result = try await provider.lookup(barcode: "6901234567890")
+        XCTAssertNil(result)
     }
 
     func testRejectsMismatchedProductBarcode() async throws {

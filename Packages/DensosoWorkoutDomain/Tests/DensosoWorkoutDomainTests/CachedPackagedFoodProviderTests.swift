@@ -36,7 +36,8 @@ final class CachedPackagedFoodProviderTests: XCTestCase {
         let result = try await provider.lookup(barcode: "6901234567890")
 
         XCTAssertEqual(result?.displayName, "新条目")
-        XCTAssertEqual(await upstream.callCount(), 2)
+        let calls = await upstream.callCount()
+        XCTAssertEqual(calls, 2)
     }
 }
 
