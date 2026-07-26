@@ -38,6 +38,9 @@ struct MainTabView: View {
             HistoryScreen()
                 .tabItem { Label("历史", systemImage: "clock.fill") }
 
+            WorkoutPlanScreen()
+                .tabItem { Label("计划", systemImage: "figure.strengthtraining.traditional") }
+
             SettingsScreen()
                 .tabItem { Label("设置", systemImage: "gearshape.fill") }
         }

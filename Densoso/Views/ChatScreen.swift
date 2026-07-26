@@ -80,6 +80,11 @@ struct ChatScreen: View {
             if messages.isEmpty {
                 addMessage(text: "你好，我是 densoso。按住麦克风或输入文字，告诉我你吃了什么、练了什么。", isUser: false)
             }
+            if let pendingMealText = appState.pendingMealText {
+                inputText = pendingMealText
+                appState.pendingMealText = nil
+                addMessage(text: "已收到系统语音转写草稿，请检查后再发送；尚未保存任何餐食记录。", isUser: false)
+            }
         }
         .onChange(of: dependencies.speechService.transcribedText) { _, newValue in
             inputText = newValue

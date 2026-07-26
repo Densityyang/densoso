@@ -37,8 +37,23 @@ private struct WatchWorkoutScreen: View {
 
             if workout.state == .running {
                 Button("Pause") { send(.pause) }
+                Button("Log 5 reps") { workout.logStrengthSet() }
             } else if workout.state == .paused {
                 Button("Resume") { send(.resume) }
+            }
+
+            if workout.isResting {
+                VStack(spacing: 4) {
+                    Text("Rest \(workout.restSecondsRemaining)s")
+                        .font(.title3.monospacedDigit())
+                    Button("Skip rest") { workout.cancelRestTimer() }
+                        .buttonStyle(.bordered)
+                }
+            }
+
+            if !workout.completedStrengthSets.isEmpty {
+                Text("Sets: \(workout.completedStrengthSets.count)")
+                    .font(.footnote.monospacedDigit())
             }
 
             if workout.state == .prepared || workout.state == .running || workout.state == .paused {
