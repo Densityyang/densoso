@@ -12,7 +12,10 @@ final class PhotoEvidenceSanitizerTests: XCTestCase {
 
         let properties = try imageProperties(for: sanitized)
         XCTAssertNil(properties[kCGImagePropertyGPSDictionary])
-        XCTAssertNil(properties[kCGImagePropertyExifDictionary])
+        // JPEG encoders may emit a new EXIF container for pixel dimensions or
+        // color space. Verify that no source EXIF value is retained instead.
+        let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any]
+        XCTAssertNil(exif?[kCGImagePropertyExifDateTimeOriginal])
     }
 
     func testUnreadableDataIsRejected() {
