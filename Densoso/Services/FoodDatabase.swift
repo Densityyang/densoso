@@ -22,6 +22,7 @@ final class FoodDatabase {
             for item in items {
                 try item.insert(db)
             }
+            try db.execute(sql: "INSERT INTO food_fts(food_fts) VALUES('rebuild')")
         }
     }
 
@@ -88,11 +89,19 @@ final class FoodDatabase {
 
     /// FTS5 全文搜索（多关键词）
     func ftsSearch(query: String, limit: Int = 10) throws -> [FoodItem] {
-        try dbQueue.read { db in
-            let pattern = query
-                .components(separatedBy: .whitespaces)
-                .filter { !$0.isEmpty }
-                .map { "\"\($0)\"" }
+        let boundedLimit = min(max(limit, 0), 100)
+        guard boundedLimit > 0 else { return [] }
+
+        let tokens = query
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+            .filter { !$0.isEmpty }
+
+        guard !tokens.isEmpty else { return [] }
+
+        return try dbQueue.read { db in
+            let pattern = tokens
+                .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
                 .joined(separator: " AND ")
             let sql = """
                 SELECT food_items.* FROM food_items
@@ -101,7 +110,7 @@ final class FoodDatabase {
                 ORDER BY rank
                 LIMIT ?
                 """
-            return try FoodItem.fetchAll(db, sql: sql, arguments: [pattern, limit])
+            return try FoodItem.fetchAll(db, sql: sql, arguments: [pattern, boundedLimit])
         }
     }
 

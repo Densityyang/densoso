@@ -26,3 +26,7 @@ dev.env
 # 自动生成的产物（CI 中生成）
 *.dSYM.zip
 *.dSYM
+
+# 本地验证缓存
+/.validation/
+__pycache__/

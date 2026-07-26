@@ -45,6 +45,29 @@ targets:
         outputFiles:
           - ${SRCROOT}/Densoso/Resources/food_composition.db
 
+  DensosoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: DensosoTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.tests
+        SWIFT_VERSION: "6.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: Densoso
+
+schemes:
+  Densoso:
+    build:
+      targets:
+        Densoso: all
+    test:
+      targets:
+        - name: DensosoTests
+
 packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift
