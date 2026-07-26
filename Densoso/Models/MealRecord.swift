@@ -3,7 +3,7 @@ import SwiftData
 
 @Model
 final class MealRecord {
-    var id: UUID = UUID()
+    @Attribute(.unique) var id: UUID = UUID()
     var date: Date
     var mealType: String          // breakfast / lunch / dinner / snack
     var totalCaloriesKcal: Int

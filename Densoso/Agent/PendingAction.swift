@@ -154,32 +154,14 @@ enum PendingActionCommitter {
                 dish.setIngredients($0.ingredients)
                 return dish
             }
-            modelContext.insert(meal)
-            try modelContext.save()
-            try recomputeMetrics(on: draft.date, modelContext: modelContext)
+            try HealthRepository(modelContext: modelContext).insert(meal)
             return "已确认并保存餐食：\(draft.summary)"
         case .workout(let draft):
-            modelContext.insert(WorkoutRecord(date: draft.date, type: draft.type, durationMinutes: draft.durationMinutes,
-                                               estimatedCaloriesBurned: draft.estimatedCalories, intensity: draft.intensity, notes: draft.notes))
-            try modelContext.save()
-            try recomputeMetrics(on: draft.date, modelContext: modelContext)
+            let workout = WorkoutRecord(date: draft.date, type: draft.type, durationMinutes: draft.durationMinutes,
+                                        estimatedCaloriesBurned: draft.estimatedCalories, intensity: draft.intensity, notes: draft.notes)
+            try HealthRepository(modelContext: modelContext).insert(workout)
             return "已确认并保存运动：\(draft.summary)"
         }
     }
 
-    private static func recomputeMetrics(on date: Date, modelContext: ModelContext) throws {
-        let calendar = Calendar.current
-        let day = calendar.startOfDay(for: date)
-        let nextDay = calendar.date(byAdding: .day, value: 1, to: day)!
-        let profile = try modelContext.fetch(FetchDescriptor<UserProfile>()).first ?? UserProfile()
-        let mealPredicate = #Predicate<MealRecord> { $0.date >= day && $0.date < nextDay }
-        let workoutPredicate = #Predicate<WorkoutRecord> { $0.date >= day && $0.date < nextDay }
-        let meals = try modelContext.fetch(FetchDescriptor<MealRecord>(predicate: mealPredicate))
-        let workouts = try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: workoutPredicate))
-        let metrics = CaloricEngine.computeDailyMetrics(date: day, meals: meals, workouts: workouts, userProfile: profile)
-        let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
-        try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).forEach { modelContext.delete($0) }
-        modelContext.insert(metrics)
-        try modelContext.save()
-    }
 }
