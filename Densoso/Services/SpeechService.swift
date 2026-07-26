@@ -2,11 +2,17 @@ import AVFoundation
 import Foundation
 import Observation
 import Speech
+import DensosoWorkoutDomain
 
 /// Uses SpeechAnalyzer on capable devices and retains SFSpeechRecognizer as a fallback.
 @MainActor
 @Observable
 final class SpeechService {
+    enum Runtime: Equatable {
+        case speechAnalyzer(localeIdentifier: String)
+        case legacySpeech
+        case manualEntry
+    }
     enum Backend: Equatable {
         case speechAnalyzer
         case legacySpeechRecognizer
@@ -29,7 +35,9 @@ final class SpeechService {
     var transcribedText = ""
     var isAuthorized = false
     var error: SpeechError?
+    private(set) var runtime: Runtime = .legacySpeech
     private(set) var activeBackend: Backend?
+    private(set) var transcriptSource: VoiceCommandEnvelope.Source = .iPhoneLegacySpeech
 
     enum SpeechError: Error, LocalizedError {
         case notAuthorized
@@ -71,6 +79,23 @@ final class SpeechService {
         return isAuthorized
     }
 
+    /// Checks the iOS 26 on-device path without downloading assets or changing
+    /// the current transcript. A failure retains the editable legacy/manual path.
+    func refreshRuntime(locale: Locale = Locale(identifier: "zh-CN")) async {
+        if #available(iOS 26.0, *), SpeechTranscriber.isAvailable,
+           let supportedLocale = await SpeechTranscriber.supportedLocale(equivalentTo: locale) {
+            runtime = .speechAnalyzer(localeIdentifier: supportedLocale.identifier)
+        } else if legacyRecognizer?.isAvailable == true {
+            runtime = .legacySpeech
+        } else {
+            runtime = .manualEntry
+        }
+    }
+
+    var envelopeSource: VoiceCommandEnvelope.Source {
+        transcriptSource
+    }
+
     func startRecording() async throws {
         guard isAuthorized else { throw SpeechError.notAuthorized }
         guard !audioEngine.isRunning else { return }
@@ -83,6 +108,7 @@ final class SpeechService {
         if SpeechRoutingPolicy().backend(modernSpeechAvailable: PlatformCapabilities.current.modernSpeechAvailable) == .speechAnalyzer {
             do {
                 try await startModernRecognition()
+                transcriptSource = .iPhoneSpeechAnalyzer
                 return
             } catch {
                 // A missing locale asset or an analyzer setup failure must not block legacy dictation.
@@ -90,6 +116,7 @@ final class SpeechService {
             }
         }
         try startLegacyRecognition()
+        transcriptSource = .iPhoneLegacySpeech
     }
 
     func stopRecording() async {
