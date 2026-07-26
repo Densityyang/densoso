@@ -12,6 +12,8 @@ final class MealRecord {
     var carbsG: Double
     var notes: String?
     var confidence: String        // high / medium / low / userConfirmed
+    /// v1 records used cooking multipliers; v2 records use explicit oil and an interval estimate.
+    var algorithmVersion: String = "v1"
     var createdAt: Date
 
     @Relationship(deleteRule: .cascade, inverse: \DishEntry.mealRecord)
@@ -25,7 +27,8 @@ final class MealRecord {
         fatG: Double = 0,
         carbsG: Double = 0,
         notes: String? = nil,
-        confidence: String = "medium"
+        confidence: String = "medium",
+        algorithmVersion: String = "v2"
     ) {
         self.date = date
         self.mealType = mealType
@@ -35,6 +38,7 @@ final class MealRecord {
         self.carbsG = carbsG
         self.notes = notes
         self.confidence = confidence
+        self.algorithmVersion = algorithmVersion
         self.createdAt = Date()
     }
 }

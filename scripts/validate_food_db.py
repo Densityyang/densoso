@@ -43,6 +43,15 @@ def main() -> None:
             ).fetchone()[0]
             if match_count != 1:
                 raise SystemExit(f"FTS smoke test failed for {sample_name!r}: matches={match_count}")
+
+            cooked_rice = connection.execute(
+                "SELECT energyKcal FROM food_items WHERE name = '米饭(熟)'"
+            ).fetchone()
+            raw_rice = connection.execute(
+                "SELECT energyKcal FROM food_items WHERE name = '大米(生)'"
+            ).fetchone()
+            if cooked_rice != (116,) or raw_rice != (346,):
+                raise SystemExit("rice mass-basis fixtures are missing or have incorrect energy values")
         finally:
             connection.close()
 

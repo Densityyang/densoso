@@ -16,6 +16,8 @@ struct MealDishDraft {
     let fatG: Double
     let carbsG: Double
     let confidence: Double
+    let calorieRange: CalorieEstimator.Range
+    let evidence: [CalorieEstimator.Evidence]
 }
 
 struct MealDraft {
@@ -28,7 +30,7 @@ struct MealDraft {
     var totalFatG: Double { dishes.map(\.fatG).reduce(0, +) }
     var totalCarbsG: Double { dishes.map(\.carbsG).reduce(0, +) }
     var confidence: String { dishes.allSatisfy { $0.confidence >= 0.8 } ? "high" : "medium" }
-    var summary: String { dishes.map { "\($0.dishName): \($0.caloriesKcal) kcal" }.joined(separator: "; ") }
+    var summary: String { dishes.map { "\($0.dishName): \($0.calorieRange.likely) kcal (\($0.calorieRange.low)-\($0.calorieRange.high))" }.joined(separator: "; ") }
 }
 
 struct WorkoutDraft {
@@ -144,7 +146,7 @@ enum PendingActionCommitter {
         case .meal(let draft):
             let meal = MealRecord(date: draft.date, mealType: draft.mealType, totalCaloriesKcal: draft.totalCaloriesKcal,
                                   proteinG: draft.totalProteinG, fatG: draft.totalFatG, carbsG: draft.totalCarbsG,
-                                  confidence: "userConfirmed")
+                                  confidence: "userConfirmed", algorithmVersion: "v2")
             meal.dishes = draft.dishes.map {
                 let dish = DishEntry(dishName: $0.dishName, cookingMethod: $0.cookingMethod, estimatedCaloriesKcal: $0.caloriesKcal,
                                      estimatedProteinG: $0.proteinG, estimatedFatG: $0.fatG, estimatedCarbsG: $0.carbsG,
