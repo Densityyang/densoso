@@ -14,12 +14,24 @@ struct OnboardingView: View {
     @State private var weight = "70"
     @State private var activity = "sedentary"
     @State private var deficitTarget = "500"
+    @State private var intelligenceMode: IntelligenceMode = .localOnly
     @State private var errorMessage: String?
     @State private var isSaving = false
 
     var body: some View {
         NavigationStack {
             Form {
+                Section("Intelligence") {
+                    Picker("Processing", selection: $intelligenceMode) {
+                        Text("On device").tag(IntelligenceMode.localOnly)
+                        Text("DeepSeek cloud").tag(IntelligenceMode.cloudDeepSeek)
+                    }
+                    .pickerStyle(.segmented)
+                    Text("On-device mode never sends meal or workout text to DeepSeek. When it is unavailable, Densoso keeps the input unsaved and falls back safely.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("API Key") {
                     SecureField("DeepSeek API Key", text: $apiKey)
                         .textInputAutocapitalization(.never)
@@ -68,7 +80,7 @@ struct OnboardingView: View {
                             if isSaving { ProgressView() }
                         }
                     }
-                    .disabled(apiKey.isEmpty || isSaving)
+                    .disabled((intelligenceMode == .cloudDeepSeek && apiKey.isEmpty) || isSaving)
                 }
             }
             .navigationTitle("欢迎使用 densoso")
@@ -80,7 +92,10 @@ struct OnboardingView: View {
         errorMessage = nil
 
         do {
-            try KeychainStore.shared.saveAPIKey(apiKey)
+            if intelligenceMode == .cloudDeepSeek {
+                try KeychainStore.shared.saveAPIKey(apiKey)
+            }
+            dependencies.intelligencePreferences.mode = intelligenceMode
 
             let profile = UserProfile(
                 name: name,

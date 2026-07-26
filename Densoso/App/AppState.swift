@@ -9,6 +9,7 @@ final class AppState {
     var isOnboarded = false
     var isLoading = false
     var errorMessage: String?
+    var startupWarning: String?
     var todayMetrics: DailyMetrics?
     var weeklyReport: WeeklyReport?
     var userProfile: UserProfile?

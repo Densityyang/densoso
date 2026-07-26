@@ -50,10 +50,10 @@ struct ChatScreen: View {
                 Button {
                     Task { await toggleVoice() }
                 } label: {
-                    Image(systemName: appState.isRecording ? "mic.fill" : "mic")
+                    Image(systemName: dependencies.speechService.isRecording ? "mic.fill" : "mic")
                         .font(.title2)
                         .frame(width: 44, height: 44)
-                        .background(appState.isRecording ? Color.red : Color.blue)
+                        .background(dependencies.speechService.isRecording ? Color.red : Color.blue)
                         .foregroundColor(.white)
                         .clipShape(Circle())
                 }
@@ -89,16 +89,20 @@ struct ChatScreen: View {
     private func toggleVoice() async {
         let speech = dependencies.speechService
         if speech.isRecording {
-            speech.stopRecording()
+            await speech.stopRecording()
             if !inputText.isEmpty {
                 await send(text: inputText)
             }
         } else {
             let authorized = await speech.requestAuthorization()
             if authorized {
-                try? speech.startRecording()
+                do {
+                    try await speech.startRecording()
+                } catch {
+                    addMessage(text: "无法启动语音：\(error.localizedDescription)。", isUser: false)
+                }
             } else {
-                addMessage(text: "请在设置中开启语音识别权限。", isUser: false)
+                addMessage(text: "请在设置中开启麦克风和语音识别权限。", isUser: false)
             }
         }
     }
@@ -112,14 +116,33 @@ struct ChatScreen: View {
         isProcessing = true
         appState.isAgentProcessing = true
 
+        let path = IntelligenceRoutingPolicy().path(
+            for: dependencies.intelligencePreferences.mode,
+            capabilities: .current
+        )
         do {
-            let response = try await dependencies.agentSession.send(
-                userText: userText,
-                modelContext: modelContext
-            )
-            addMessage(text: response.text, isUser: false)
+            switch path {
+            case .localOnDevice:
+                let result = try await dependencies.localIntelligence.extract(from: userText)
+                addMessage(text: result.reply, isUser: false)
+                if let suggestion = result.suggestion {
+                    let amount = suggestion.amount.map { "（\($0)）" } ?? ""
+                    addMessage(
+                        text: "已生成本地\(suggestion.kind == .meal ? "餐食" : "训练")草稿：\(suggestion.item)\(amount)。尚未保存，请在确认界面补全并确认。",
+                        isUser: false
+                    )
+                }
+            case .cloudDeepSeek:
+                let response = try await dependencies.agentSession.send(
+                    userText: userText,
+                    modelContext: modelContext
+                )
+                addMessage(text: response.text, isUser: false)
+            case .manual:
+                addMessage(text: "本地智能当前不可用；你的输入尚未保存。可在设置中选择 DeepSeek 云端处理，或使用支持的设备继续。", isUser: false)
+            }
         } catch {
-            addMessage(text: "抱歉，处理出错了：\(error.localizedDescription)", isUser: false)
+            addMessage(text: "处理失败：\(error.localizedDescription)。你的记录尚未保存。", isUser: false)
         }
 
         isProcessing = false
