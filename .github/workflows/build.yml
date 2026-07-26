@@ -25,7 +25,12 @@ jobs:
         run: xcodegen generate
 
       - name: Test shared workout domain
-        run: swift test --package-path Packages/DensosoWorkoutDomain
+        run: |
+          if [[ -f Packages/DensosoWorkoutDomain/Package.swift ]]; then
+            swift test --package-path Packages/DensosoWorkoutDomain
+          else
+            echo "Shared workout domain is introduced after this integration range; skipping package test."
+          fi
 
       - name: Prepare iOS Simulator
         run: |
