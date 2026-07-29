@@ -20,6 +20,9 @@ targets:
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1"
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        # The final brand icon is intentionally not part of the approved UI
+        # prototype yet. Compile the color catalog without inventing an AppIcon.
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
