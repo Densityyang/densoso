@@ -124,8 +124,14 @@ struct SettingsScreen: View {
         if let profile = profiles.first {
             Section("个人资料") {
                 LabeledContent("称呼", value: profile.name.isEmpty ? "未填写" : profile.name)
-                LabeledContent("身高", value: "\(profile.heightCm, format: .number.precision(.fractionLength(1))) cm")
-                LabeledContent("体重", value: "\(profile.weightKg, format: .number.precision(.fractionLength(1))) kg")
+                LabeledContent(
+                    "身高",
+                    value: "\(profile.heightCm.formatted(.number.precision(.fractionLength(1)))) cm"
+                )
+                LabeledContent(
+                    "体重",
+                    value: "\(profile.weightKg.formatted(.number.precision(.fractionLength(1)))) kg"
+                )
                 LabeledContent("日目标缺口", value: "\(profile.dailyDeficitTarget) kcal")
                 Button("编辑个人资料", systemImage: "person.crop.circle") {
                     isEditingProfile = true
