@@ -34,6 +34,9 @@ targets:
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "densoso 需要语音识别权限来语音录入饮食和运动记录。"
         INFOPLIST_KEY_NSHealthShareUsageDescription: "densoso 需要读取健康数据来获取体重和身高信息。"
         INFOPLIST_KEY_NSHealthUpdateUsageDescription: "densoso 需要写入饮食热量数据到 Apple Health。"
+        # HealthKit's public authorization API validates the signed entitlement.
+        # This marker reports that the source target is configured to request it.
+        INFOPLIST_KEY_DensosoHealthKitCapabilityConfigured: YES
     entitlements:
       path: Densoso/Densoso.entitlements
       properties:

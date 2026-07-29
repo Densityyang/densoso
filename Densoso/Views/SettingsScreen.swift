@@ -151,10 +151,10 @@ struct SettingsScreen: View {
                     tone: snapshot.healthDataAvailable ? .success : .danger
                 )
                 CapabilityRow(
-                    title: "签名能力",
-                    detail: "运行中二进制的 HealthKit entitlement",
-                    value: snapshot.healthKitEntitlementPresent ? "已包含" : "缺失",
-                    tone: snapshot.healthKitEntitlementPresent ? .success : .danger
+                    title: "工程能力",
+                    detail: "HealthKit entitlement 已配置；真机签名在授权时验证",
+                    value: snapshot.healthKitCapabilityConfigured ? "已配置" : "未配置",
+                    tone: snapshot.healthKitCapabilityConfigured ? .success : .danger
                 )
                 CapabilityRow(
                     title: "膳食能量写入",
@@ -187,7 +187,11 @@ struct SettingsScreen: View {
                 ) {
                     Task { await authorizeAndImportHealthData() }
                 }
-                .disabled(isAuthorizingHealth || !snapshot.healthDataAvailable || !snapshot.healthKitEntitlementPresent)
+                .disabled(
+                    isAuthorizingHealth
+                        || !snapshot.healthDataAvailable
+                        || !snapshot.healthKitCapabilityConfigured
+                )
 
                 if isAuthorizingHealth {
                     ProgressView("正在请求系统授权")

@@ -23,9 +23,10 @@ architecture and all confirmation boundaries.
 - `WeeklyAnalyticsService` builds an explicit seven-day series and upserts the
   current `WeeklyReport`; missing dates remain marked as missing.
 - `CapabilityDiagnosticsService` publishes device HealthKit availability,
-  runtime HealthKit entitlement presence, dietary-energy write authorization,
-  authorization-request state, microphone and Speech authorization, modern
-  on-device speech availability, and the last HealthKit import time.
+  source-build HealthKit capability configuration, dietary-energy write
+  authorization, authorization-request state, microphone and Speech
+  authorization, modern on-device speech availability, and the last HealthKit
+  import time.
 - Onboarding, conversation, dashboard, history, workout planning, settings, and
   confirmation cards consume the shared design system while retaining native
   `NavigationStack`, `TabView`, `Form`, `List`, and `Chart` semantics.
@@ -36,6 +37,12 @@ HealthKit exposes write authorization status, but it deliberately does not tell
 an app whether read access was denied. The settings UI therefore labels read
 authorization as system-protected instead of claiming an allowed or denied
 state.
+
+The app uses a generated Info.plist marker to report that the source target is
+configured with the HealthKit entitlement. HealthKit's public authorization API
+validates the signed entitlement when the user requests access, and Settings
+keeps any resulting error visible. This avoids private `SecTask` APIs and does
+not claim that an unsigned simulator build proves device signing.
 
 ## Follow-up phase
 

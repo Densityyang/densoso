@@ -2,7 +2,6 @@ import AVFAudio
 import Foundation
 import HealthKit
 import Observation
-import Security
 import Speech
 
 enum CapabilityPermissionState: Equatable, Sendable {
@@ -41,7 +40,7 @@ enum HealthAuthorizationRequestState: Equatable, Sendable {
 
 struct CapabilityDiagnosticsSnapshot: Equatable, Sendable {
     var healthDataAvailable = false
-    var healthKitEntitlementPresent = false
+    var healthKitCapabilityConfigured = false
     var dietaryEnergyWritePermission: CapabilityPermissionState = .unknown
     var healthAuthorizationRequest: HealthAuthorizationRequestState = .unknown
     var healthReadPermission: CapabilityPermissionState = .privacyProtected
@@ -49,6 +48,25 @@ struct CapabilityDiagnosticsSnapshot: Equatable, Sendable {
     var speechRecognitionPermission: CapabilityPermissionState = .unknown
     var modernSpeechAvailable = false
     var lastHealthImportAt: Date?
+}
+
+enum CapabilityBuildConfiguration {
+    static let healthKitInfoKey = "DensosoHealthKitCapabilityConfigured"
+
+    static func boolValue(_ value: Any?) -> Bool {
+        switch value {
+        case let value as Bool:
+            value
+        case let value as NSNumber:
+            value.boolValue
+        case let value as String:
+            ["1", "true", "yes"].contains(
+                value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            )
+        default:
+            false
+        }
+    }
 }
 
 @MainActor
@@ -63,7 +81,9 @@ final class CapabilityDiagnosticsService {
         defer { isRefreshing = false }
 
         let healthDataAvailable = HKHealthStore.isHealthDataAvailable()
-        let entitlementPresent = Self.hasEntitlement("com.apple.developer.healthkit")
+        let capabilityConfigured = CapabilityBuildConfiguration.boolValue(
+            Bundle.main.object(forInfoDictionaryKey: CapabilityBuildConfiguration.healthKitInfoKey)
+        )
         let writePermission: CapabilityPermissionState
         if !healthDataAvailable {
             writePermission = .unavailable
@@ -82,7 +102,7 @@ final class CapabilityDiagnosticsService {
 
         snapshot = CapabilityDiagnosticsSnapshot(
             healthDataAvailable: healthDataAvailable,
-            healthKitEntitlementPresent: entitlementPresent,
+            healthKitCapabilityConfigured: capabilityConfigured,
             dietaryEnergyWritePermission: writePermission,
             healthAuthorizationRequest: requestState,
             healthReadPermission: .privacyProtected,
@@ -130,14 +150,6 @@ final class CapabilityDiagnosticsService {
         case .undetermined: .notDetermined
         @unknown default: .unknown
         }
-    }
-
-    private static func hasEntitlement(_ name: String) -> Bool {
-        guard let task = SecTaskCreateFromSelf(nil),
-              let value = SecTaskCopyValueForEntitlement(task, name as CFString, nil) else {
-            return false
-        }
-        return (value as? Bool) == true
     }
 
     private static func map(_ status: HKAuthorizationStatus) -> CapabilityPermissionState {

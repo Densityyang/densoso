@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import Densoso
 
@@ -16,6 +17,15 @@ final class CapabilityDiagnosticsTests: XCTestCase {
         let snapshot = CapabilityDiagnosticsSnapshot()
         XCTAssertEqual(snapshot.healthReadPermission, .privacyProtected)
         XCTAssertEqual(snapshot.dietaryEnergyWritePermission, .unknown)
+        XCTAssertFalse(snapshot.healthKitCapabilityConfigured)
         XCTAssertNil(snapshot.lastHealthImportAt)
+    }
+
+    func testHealthKitCapabilityMarkerParsesGeneratedInfoPlistValues() {
+        XCTAssertTrue(CapabilityBuildConfiguration.boolValue(true))
+        XCTAssertTrue(CapabilityBuildConfiguration.boolValue("YES"))
+        XCTAssertTrue(CapabilityBuildConfiguration.boolValue(NSNumber(value: 1)))
+        XCTAssertFalse(CapabilityBuildConfiguration.boolValue("NO"))
+        XCTAssertFalse(CapabilityBuildConfiguration.boolValue(nil))
     }
 }
