@@ -50,10 +50,13 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
 
         let reports = try context.fetch(FetchDescriptor<WeeklyReport>())
         XCTAssertEqual(reports.count, 1)
-        XCTAssertEqual(reports[0].totalDeficitKcal, 1_700)
-        XCTAssertEqual(reports[0].mealsCount, 9)
-        XCTAssertEqual(reports[0].workoutsCount, 2)
-        XCTAssertEqual(reports[0].compliance, 2.0 / 3.0, accuracy: 0.001)
+        // July 26 is part of the rolling seven-day snapshot, but it precedes
+        // this Monday-based calendar week and must not enter its report.
+        XCTAssertEqual(reports[0].weekStartDate, makeDate(year: 2026, month: 7, day: 27))
+        XCTAssertEqual(reports[0].totalDeficitKcal, 1_000)
+        XCTAssertEqual(reports[0].mealsCount, 5)
+        XCTAssertEqual(reports[0].workoutsCount, 1)
+        XCTAssertEqual(reports[0].compliance, 0.5, accuracy: 0.001)
     }
 
     func testMissingDaysRemainExplicitInsteadOfInventingMetrics() throws {

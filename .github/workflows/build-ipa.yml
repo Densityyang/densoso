@@ -18,7 +18,7 @@ jobs:
 
       - name: Build for device (unsigned)
         run: |
-          xcodebuild build -project Densoso.xcodeproj \
+          xcodebuild -project Densoso.xcodeproj \
             -scheme Densoso \
             -destination 'generic/platform=iOS' \
             -derivedDataPath ./DerivedData \
