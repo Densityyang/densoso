@@ -6,15 +6,6 @@ This phase implements the iPhone-side visual foundation and the data services
 required by the approved target UI. It keeps the existing five-tab information
 architecture and all confirmation boundaries.
 
-## Verification status
-
-The Orbit UI implementation is covered by the repository Build workflow and the
-manual unsigned IPA workflow. The macOS runner validates XcodeGen generation,
-the shared workout package, the iOS Simulator build, and the XCTest target.
-The IPA workflow validates a Release device build and package structure only;
-Sideloadly signing and physical-device permission behavior remain separate
-acceptance steps.
-
 ## Reused application boundaries
 
 - `VoiceCommandRouter`, `IntelligenceRoutingPolicy`, and the existing local or
