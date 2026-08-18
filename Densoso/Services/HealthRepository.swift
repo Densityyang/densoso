@@ -1,6 +1,6 @@
 import Foundation
 import SwiftData
-import DensosoWorkoutDomain
+import DensosoDomain
 
 /// Coordinates local health-record writes and their derived daily metrics.
 /// SwiftData persists both the source change and its projection with one save.

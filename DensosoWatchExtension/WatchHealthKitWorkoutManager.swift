@@ -2,7 +2,7 @@ import Foundation
 import HealthKit
 import Observation
 import WatchKit
-import DensosoWorkoutDomain
+import DensosoDomain
 
 @MainActor
 @Observable

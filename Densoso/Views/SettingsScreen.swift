@@ -66,8 +66,10 @@ struct SettingsScreen: View {
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .task {
-                hasSavedAPIKey = (try? KeychainStore.shared.readAPIKey()) != nil
-                await refreshDiagnostics()
+                if !AppLaunchConfiguration.current.isUITesting {
+                    hasSavedAPIKey = (try? KeychainStore.shared.readAPIKey()) != nil
+                    await refreshDiagnostics()
+                }
             }
             .onChange(of: healthImportCursors.first?.updatedAt) { _, _ in
                 Task { await refreshDiagnostics() }

@@ -2,7 +2,14 @@ import AVFoundation
 import Foundation
 import Observation
 import Speech
-import DensosoWorkoutDomain
+import DensosoDomain
+
+@MainActor
+private protocol ModernSpeechRecognitionBackend: AnyObject {
+    func append(_ buffer: AVAudioPCMBuffer)
+    func finish() async
+    func cancel() async
+}
 
 /// Uses SpeechAnalyzer on capable devices and retains SFSpeechRecognizer as a fallback.
 @MainActor
@@ -24,12 +31,7 @@ final class SpeechService {
     private var legacyRequest: SFSpeechAudioBufferRecognitionRequest?
     private var legacyTask: SFSpeechRecognitionTask?
 
-    private var analyzer: SpeechAnalyzer?
-    private var transcriber: SpeechTranscriber?
-    private var analyzerInputBuilder: AsyncStream<AnalyzerInput>.Continuation?
-    private var analyzerFormat: AVAudioFormat?
-    private var audioConverter: AVAudioConverter?
-    private var modernResultsTask: Task<Void, Never>?
+    private var modernBackend: (any ModernSpeechRecognitionBackend)?
 
     var isRecording = false
     var transcribedText = ""
@@ -161,81 +163,31 @@ final class SpeechService {
 
     private func startModernRecognition() async throws {
         guard #available(iOS 26.0, *) else { throw SpeechError.recognitionUnavailable }
-        guard let supportedLocale = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
-            throw SpeechError.localeUnsupported
+        let inputFormat = audioEngine.inputNode.outputFormat(forBus: 0)
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            throw SpeechError.audioEngineUnavailable
         }
-
-        let transcriber = SpeechTranscriber(locale: supportedLocale, preset: .progressiveTranscription)
-        let installedLocales = await SpeechTranscriber.installedLocales
-        if !installedLocales.contains(where: { $0.identifier == supportedLocale.identifier }) {
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-                try await request.downloadAndInstall()
+        let backend = try await SpeechAnalyzerRecognitionBackend.make(
+            locale: locale,
+            inputFormat: inputFormat,
+            onTranscript: { [weak self] text, isFinal in
+                self?.acceptModernTranscript(text, isFinal: isFinal)
+            },
+            onFailure: { [weak self] in
+                self?.recordModernFailure()
             }
-        }
+        )
+        modernBackend = backend
 
-        let analyzer = SpeechAnalyzer(modules: [transcriber])
-        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
-            throw SpeechError.invalidAudioFormat
-        }
-
-        let (inputSequence, inputBuilder) = AsyncStream<AnalyzerInput>.makeStream()
-        try await analyzer.start(inputSequence: inputSequence)
-
-        self.transcriber = transcriber
-        self.analyzer = analyzer
-        self.analyzerFormat = format
-        self.analyzerInputBuilder = inputBuilder
-        self.audioConverter = try makeConverter(outputFormat: format)
-        self.modernResultsTask = Task { [weak self, transcriber] in
-            do {
-                for try await result in transcriber.results {
-                    guard !Task.isCancelled else { return }
-                    let text = String(result.text.characters)
-                    await self?.acceptModernTranscript(text, isFinal: result.isFinal)
-                }
-            } catch {
-                await self?.recordModernFailure()
-            }
-        }
-
-        try installAudioTap { [weak self] buffer in
-            Task { @MainActor [weak self] in
-                self?.appendModernAudio(buffer)
+        try installAudioTap { [weak backend] buffer in
+            Task { @MainActor in
+                backend?.append(buffer)
             }
         }
         audioEngine.prepare()
         try audioEngine.start()
         activeBackend = .speechAnalyzer
         isRecording = true
-    }
-
-    private func makeConverter(outputFormat: AVAudioFormat) throws -> AVAudioConverter {
-        let inputFormat = audioEngine.inputNode.outputFormat(forBus: 0)
-        guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
-            throw SpeechError.invalidAudioFormat
-        }
-        return converter
-    }
-
-    private func appendModernAudio(_ buffer: AVAudioPCMBuffer) {
-        guard let converter = audioConverter, let format = analyzerFormat, let inputBuilder = analyzerInputBuilder else { return }
-        let ratio = format.sampleRate / max(buffer.format.sampleRate, 1)
-        let capacity = AVAudioFrameCount(max(1, Int(Double(buffer.frameLength) * ratio) + 1))
-        guard let converted = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
-            error = .invalidAudioFormat
-            return
-        }
-
-        var conversionError: NSError?
-        let status = converter.convert(to: converted, error: &conversionError) { _, outputStatus in
-            outputStatus.pointee = .haveData
-            return buffer
-        }
-        guard status != .error, conversionError == nil else {
-            error = .invalidAudioFormat
-            return
-        }
-        inputBuilder.yield(AnalyzerInput(buffer: converted))
     }
 
     private func acceptModernTranscript(_ text: String, isFinal: Bool) {
@@ -248,19 +200,12 @@ final class SpeechService {
     }
 
     private func tearDownModernRecognition(finalize: Bool) async {
-        analyzerInputBuilder?.finish()
         if finalize {
-            try? await analyzer?.finalizeAndFinishThroughEndOfInput()
+            await modernBackend?.finish()
         } else {
-            await analyzer?.cancelAndFinishNow()
+            await modernBackend?.cancel()
         }
-        modernResultsTask?.cancel()
-        modernResultsTask = nil
-        analyzerInputBuilder = nil
-        analyzerFormat = nil
-        audioConverter = nil
-        analyzer = nil
-        transcriber = nil
+        modernBackend = nil
     }
 
     private func startLegacyRecognition() throws {
@@ -299,5 +244,125 @@ final class SpeechService {
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
             handler(buffer)
     }
+    }
+}
+
+@available(iOS 26.0, *)
+@MainActor
+private final class SpeechAnalyzerRecognitionBackend: ModernSpeechRecognitionBackend {
+    private let analyzer: SpeechAnalyzer
+    private let transcriber: SpeechTranscriber
+    private let inputBuilder: AsyncStream<AnalyzerInput>.Continuation
+    private let analyzerFormat: AVAudioFormat
+    private let audioConverter: AVAudioConverter
+    private let onTranscript: @MainActor @Sendable (String, Bool) -> Void
+    private let onFailure: @MainActor @Sendable () -> Void
+    private var resultsTask: Task<Void, Never>?
+
+    private init(
+        analyzer: SpeechAnalyzer,
+        transcriber: SpeechTranscriber,
+        inputBuilder: AsyncStream<AnalyzerInput>.Continuation,
+        analyzerFormat: AVAudioFormat,
+        audioConverter: AVAudioConverter,
+        onTranscript: @escaping @MainActor @Sendable (String, Bool) -> Void,
+        onFailure: @escaping @MainActor @Sendable () -> Void
+    ) {
+        self.analyzer = analyzer
+        self.transcriber = transcriber
+        self.inputBuilder = inputBuilder
+        self.analyzerFormat = analyzerFormat
+        self.audioConverter = audioConverter
+        self.onTranscript = onTranscript
+        self.onFailure = onFailure
+    }
+
+    static func make(
+        locale: Locale,
+        inputFormat: AVAudioFormat,
+        onTranscript: @escaping @MainActor @Sendable (String, Bool) -> Void,
+        onFailure: @escaping @MainActor @Sendable () -> Void
+    ) async throws -> SpeechAnalyzerRecognitionBackend {
+        guard let supportedLocale = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
+            throw SpeechService.SpeechError.localeUnsupported
+        }
+
+        let transcriber = SpeechTranscriber(locale: supportedLocale, preset: .progressiveTranscription)
+        let installedLocales = await SpeechTranscriber.installedLocales
+        if !installedLocales.contains(where: { $0.identifier == supportedLocale.identifier }) {
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+                try await request.downloadAndInstall()
+            }
+        }
+
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+            throw SpeechService.SpeechError.invalidAudioFormat
+        }
+        guard let audioConverter = AVAudioConverter(from: inputFormat, to: analyzerFormat) else {
+            throw SpeechService.SpeechError.invalidAudioFormat
+        }
+
+        let (inputSequence, inputBuilder) = AsyncStream<AnalyzerInput>.makeStream()
+        try await analyzer.start(inputSequence: inputSequence)
+
+        let backend = SpeechAnalyzerRecognitionBackend(
+            analyzer: analyzer,
+            transcriber: transcriber,
+            inputBuilder: inputBuilder,
+            analyzerFormat: analyzerFormat,
+            audioConverter: audioConverter,
+            onTranscript: onTranscript,
+            onFailure: onFailure
+        )
+        backend.startResultsTask()
+        return backend
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        let ratio = analyzerFormat.sampleRate / max(buffer.format.sampleRate, 1)
+        let capacity = AVAudioFrameCount(max(1, Int(Double(buffer.frameLength) * ratio) + 1))
+        guard let converted = AVAudioPCMBuffer(pcmFormat: analyzerFormat, frameCapacity: capacity) else {
+            onFailure()
+            return
+        }
+
+        var conversionError: NSError?
+        let status = audioConverter.convert(to: converted, error: &conversionError) { _, outputStatus in
+            outputStatus.pointee = .haveData
+            return buffer
+        }
+        guard status != .error, conversionError == nil else {
+            onFailure()
+            return
+        }
+        inputBuilder.yield(AnalyzerInput(buffer: converted))
+    }
+
+    func finish() async {
+        inputBuilder.finish()
+        try? await analyzer.finalizeAndFinishThroughEndOfInput()
+        resultsTask?.cancel()
+        resultsTask = nil
+    }
+
+    func cancel() async {
+        inputBuilder.finish()
+        await analyzer.cancelAndFinishNow()
+        resultsTask?.cancel()
+        resultsTask = nil
+    }
+
+    private func startResultsTask() {
+        resultsTask = Task { [weak self, transcriber] in
+            do {
+                for try await result in transcriber.results {
+                    guard !Task.isCancelled else { return }
+                    self?.onTranscript(String(result.text.characters), result.isFinal)
+                }
+            } catch {
+                self?.onFailure()
+            }
+        }
     }
 }

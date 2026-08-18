@@ -1,5 +1,5 @@
 import CoreGraphics
-import DensosoWorkoutDomain
+import DensosoDomain
 import Vision
 
 /// Local Vision adapter for static meal images. It emits sanitized evidence

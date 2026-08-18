@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
-@testable import DensosoWorkoutDomain
+import DensosoDomain
+@testable import Densoso
 
 final class OpenFoodFactsPackagedFoodProviderTests: XCTestCase {
     func testMapsProductAndSendsRequiredAttributionHeaders() async throws {

@@ -1,4 +1,5 @@
 import Foundation
+import DensosoDomain
 
 #if canImport(FoundationNetworking)
 import FoundationNetworking

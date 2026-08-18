@@ -1,5 +1,5 @@
 import XCTest
-@testable import DensosoWorkoutDomain
+@testable import DensosoDomain
 
 final class PackagedFoodProviderTests: XCTestCase {
     func testCoordinatorNormalizesBarcodeBeforeCallingProvider() async throws {

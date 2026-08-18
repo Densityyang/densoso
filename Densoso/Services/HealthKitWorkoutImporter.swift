@@ -1,7 +1,7 @@
 import Foundation
 import HealthKit
 import SwiftData
-import DensosoWorkoutDomain
+import DensosoDomain
 
 /// Imports canonical HealthKit workouts with an anchored query.
 /// The next anchor is saved only in the same SwiftData transaction as the changes it represents.

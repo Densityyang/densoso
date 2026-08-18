@@ -1,0 +1,29 @@
+{
+  "screens": [
+    {
+      "id": "chat",
+      "tab": "对话",
+      "marker": "今天，想记录什么？"
+    },
+    {
+      "id": "dashboard",
+      "tab": "数据",
+      "marker": "今天的能量轨迹"
+    },
+    {
+      "id": "history",
+      "tab": "历史",
+      "marker": "按时间回看每一次确认。"
+    },
+    {
+      "id": "workout-plan",
+      "tab": "计划",
+      "marker": "手机负责意图，手表负责训练现场。"
+    },
+    {
+      "id": "settings",
+      "tab": "设置",
+      "marker": "权限和数据状态，都给出下一步。"
+    }
+  ]
+}

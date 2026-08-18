@@ -21,7 +21,7 @@ final class Dependencies {
     /// 食材库是否已初始化
     var isFoodDBReady: Bool { foodDatabase != nil }
 
-    init() {
+    init(automaticallyLoadFoodDatabase: Bool = true) {
         self.deepSeekClient = DeepSeekClient()
         self.speechService = SpeechService()
         self.localIntelligence = LocalIntelligenceService()
@@ -38,7 +38,9 @@ final class Dependencies {
         )
 
         // 尝试加载食材库
-        Task { await setupFoodDB() }
+        if automaticallyLoadFoodDatabase {
+            Task { await setupFoodDB() }
+        }
     }
 
     /// 加载食材库（优先 SQLite，fallback 种子 JSON）

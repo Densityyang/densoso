@@ -1,4 +1,4 @@
-import DensosoWorkoutDomain
+import DensosoDomain
 import SwiftData
 import SwiftUI
 

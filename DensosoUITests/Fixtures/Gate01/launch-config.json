@@ -1,0 +1,8 @@
+{
+  "arguments": [
+    "-ui-testing"
+  ],
+  "environment": {
+    "DENSOSO_UI_TESTING": "1"
+  }
+}

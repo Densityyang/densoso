@@ -60,7 +60,7 @@ HealthKit 有两个独立层面：工程/签名能力和用户授权。工程 ta
 ```bash
 brew install xcodegen
 xcodegen generate
-swift test --package-path Packages/DensosoWorkoutDomain
+swift test --package-path Packages/DensosoDomain
 ```
 
 执行 iOS Simulator 测试：
@@ -88,12 +88,17 @@ IPA workflow 生成的包包含 `Payload/Densoso.app` 和嵌入的 Watch App，�
 ```bash
 python scripts/validate_food_db.py
 python scripts/validate_voice_goldens.py --input evals/voice-zh-CN.jsonl
-python -m compileall -q scripts
+python -m py_compile scripts/evaluate_voice_transcripts.py scripts/generate_voice_goldens.py \
+  scripts/import_exercise_catalog.py scripts/import_food_db.py scripts/validate_food_db.py \
+  scripts/validate_gate0_ui.py scripts/validate_phase1_foundation.py \
+  scripts/validate_voice_goldens.py
 ```
 
 GitHub Actions 工作流位于 `.github/workflows/`：
 
-- `build.yml`：食物库校验、XcodeGen、共享 workout domain 测试、模拟器上的完整 XCTest。
+- `build.yml`：`gate-01-foundation` 执行纯 `DensosoDomain` 测试、确定性 XcodeGen、
+  iOS 18 deployment 构建、iOS 26 Simulator 单测/UI 截图与 Watch 编译，
+  并上传 `.xcresult` 和日志证据。
 - `build-ipa.yml`：手动触发 Release device build、IPA 打包和 artifact 上传。
 
 ## 文档索引

@@ -1,4 +1,4 @@
-name: Build
+name: V3 Gates
 
 on:
   push:
@@ -7,22 +7,42 @@ on:
     branches: [master]
   workflow_dispatch:
 
+concurrency:
+  group: v3-gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  # Later jobs are added only when their production code and tests exist:
+  # foundation -> domain-persistence -> agent-provider -> speech ->
+  # meal-capture -> healthkit -> health-intelligence -> watch -> integration.
+  foundation:
+    name: gate-01-foundation
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set DerivedData path
-        run: echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoDerivedData" >> "$GITHUB_ENV"
+      - name: Set Gate 1 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoDerivedData" >> "$GITHUB_ENV"
+          echo "UNIT_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate01UnitTests.xcresult" >> "$GITHUB_ENV"
+          echo "UI_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate01UITests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Python scripts
+        run: |
+          python3 -m py_compile \
+            scripts/evaluate_voice_transcripts.py \
+            scripts/generate_voice_goldens.py \
+            scripts/import_exercise_catalog.py \
+            scripts/import_food_db.py \
+            scripts/validate_food_db.py \
+            scripts/validate_gate0_ui.py \
+            scripts/validate_phase1_foundation.py \
+            scripts/validate_voice_goldens.py
 
       - name: Validate bundled food database
         run: python3 scripts/validate_food_db.py
-
-      - name: Validate Python scripts
-        run: python3 -m compileall -q scripts
 
       - name: Validate voice routing goldens
         run: python3 scripts/validate_voice_goldens.py --input evals/voice-zh-CN.jsonl
@@ -30,16 +50,28 @@ jobs:
       - name: Validate Gate 0 UI structure
         run: python3 scripts/validate_gate0_ui.py
 
+      - name: Validate Phase 1 static contracts
+        run: python3 scripts/validate_phase1_foundation.py
+
+      - name: Test pure DensosoDomain package
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate01-domain.log
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Generate Xcode project
-        run: xcodegen generate
+      - name: Verify deterministic XcodeGen output
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          cp -R Densoso.xcodeproj "$RUNNER_TEMP/Densoso.first.xcodeproj"
+          rm -rf Densoso.xcodeproj
+          xcodegen generate
+          diff -ru "$RUNNER_TEMP/Densoso.first.xcodeproj" Densoso.xcodeproj \
+            | tee gate01-xcodegen-determinism.log
 
-      - name: Test shared workout domain
-        run: swift test --package-path Packages/DensosoWorkoutDomain
-
-      - name: Prepare iOS Simulator
+      - name: Prepare iOS 26 Simulator
         run: |
           set -euo pipefail
           SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
@@ -49,18 +81,68 @@ jobs:
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
           xcrun simctl list devices available
 
-      - name: Test on iOS Simulator
+      - name: Build with iOS 18 deployment target
         run: |
           set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 720 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            IPHONEOS_DEPLOYMENT_TARGET=18.0 \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build 2>&1 | tee gate01-ios18-build.log
+
+      - name: Test units on iOS 26 Simulator
+        run: |
+          set -o pipefail
+          rm -rf "$UNIT_RESULT_BUNDLE"
           perl -e 'alarm shift; exec @ARGV' 720 xcodebuild -project Densoso.xcodeproj \
             -scheme Densoso \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             -destination-timeout 120 \
             -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests \
             -enableCodeCoverage YES \
-            -resultBundlePath TestResults.xcresult \
+            -resultBundlePath "$UNIT_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
-            clean test 2>&1 | tee xcodebuild.log
+            test 2>&1 | tee gate01-unit-tests.log
+
+      - name: Test UI fixtures and capture screenshots
+        run: |
+          set -o pipefail
+          rm -rf "$UI_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoUITests \
+            -resultBundlePath "$UI_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate01-ui-tests.log
+
+      - name: Export UI screenshot attachments
+        run: |
+          set -euo pipefail
+          rm -rf Gate01Screenshots
+          mkdir -p Gate01Screenshots
+          xcrun xcresulttool export attachments \
+            --path "$UI_RESULT_BUNDLE" \
+            --output-path Gate01Screenshots
+          SCREENSHOT_COUNT="$(find Gate01Screenshots -type f -name '*.png' | wc -l | tr -d ' ')"
+          test "$SCREENSHOT_COUNT" -ge 6
+          echo "Exported $SCREENSHOT_COUNT Gate 1 screenshots."
+
+      - name: Build Watch app and extension
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 720 xcodebuild -project Densoso.xcodeproj \
+            -scheme DensosoWatch \
+            -destination "generic/platform=watchOS Simulator" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            WATCHOS_DEPLOYMENT_TARGET=11.0 \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee gate01-watch-build.log
 
       - name: Validate built launch screen
         run: |
@@ -70,40 +152,15 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :UILaunchStoryboardName' "$APP_BUNDLE/Info.plist")" = "LaunchScreen"
           test -d "$APP_BUNDLE/LaunchScreen.storyboardc"
 
-      - name: Upload test results
+      - name: Upload Gate 1 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: xcode-test-results
+          name: gate-01-foundation-results
           path: |
-            TestResults.xcresult
-            xcodebuild.log
+            Gate01UnitTests.xcresult
+            Gate01UITests.xcresult
+            Gate01Screenshots
+            gate01-*.log
           if-no-files-found: warn
-
-      # TODO: 导出 .ipa 供 AltStore 侧载需要 Apple ID 签名。
-      # 在仓库 Settings -> Secrets and variables -> Actions 中设置:
-      #   APPLE_ID: 你的 Apple ID 邮箱
-      #   APPLE_APP_PASSWORD: Apple ID 应用专用密码（非登录密码）
-      # 然后取消下面注释并配置 exportOptions.plist:
-      #
-      # - name: Archive & Export .ipa
-      #   env:
-      #     APPLE_ID: ${{ secrets.APPLE_ID }}
-      #     APPLE_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-      #   run: |
-      #     xcodebuild -project Densoso.xcodeproj \
-      #       -scheme Densoso \
-      #       -destination 'generic/platform=iOS' \
-      #       -archivePath Densoso.xcarchive \
-      #       -allowProvisioningUpdates \
-      #       archive
-      #     xcodebuild -exportArchive \
-      #       -archivePath Densoso.xcarchive \
-      #       -exportPath ./export \
-      #       -exportOptionsPlist ./scripts/exportOptions.plist
-      #
-      # - name: Upload .ipa
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: Densoso.ipa
-      #     path: ./export/Densoso.ipa
+          retention-days: 14
