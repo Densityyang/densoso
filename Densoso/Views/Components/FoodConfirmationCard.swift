@@ -10,7 +10,7 @@ struct FoodConfirmationCard: View {
     @State private var selectedFactor = 1.0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("热量确认")
                     .font(.headline)
@@ -22,12 +22,13 @@ struct FoodConfirmationCard: View {
                 .font(.subheadline)
                 .lineLimit(5)
 
-            HStack(spacing: 8) {
-                adjustmentButton(label: "-20%", factor: 0.8)
-                adjustmentButton(label: "正常", factor: 1.0)
-                adjustmentButton(label: "+20%", factor: 1.2)
-                adjustmentButton(label: "+50%", factor: 1.5)
+            Picker("估算调整", selection: $selectedFactor) {
+                Text("-20%").tag(0.8)
+                Text("正常").tag(1.0)
+                Text("+20%").tag(1.2)
+                Text("+50%").tag(1.5)
             }
+            .pickerStyle(.segmented)
 
             Button("确认记录") {
                 onAdjust(selectedFactor)
@@ -36,9 +37,7 @@ struct FoodConfirmationCard: View {
             .buttonStyle(.borderedProminent)
             .frame(maxWidth: .infinity)
         }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
+        .orbitCard(emphasized: true)
     }
 
     private var confidenceBadge: some View {
@@ -52,24 +51,9 @@ struct FoodConfirmationCard: View {
         return Text(text)
             .font(.caption.bold())
             .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.2))
+            .padding(.vertical, 4)
+            .background(color.opacity(0.16), in: Capsule())
             .foregroundStyle(color)
-            .clipShape(Capsule())
-    }
-
-    private func adjustmentButton(label: String, factor: Double) -> some View {
-        Button {
-            selectedFactor = factor
-        } label: {
-            Text(label)
-                .font(.caption.bold())
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(selectedFactor == factor ? Color.blue : Color.gray.opacity(0.2))
-                .foregroundStyle(selectedFactor == factor ? .white : .primary)
-                .clipShape(Capsule())
-        }
     }
 }
 
@@ -80,29 +64,33 @@ struct PendingActionConfirmationCard: View {
     let onReject: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text(action.payload.title).font(.headline)
                 Spacer()
-                Text("确认前不会保存")
-                    .font(.caption.bold())
-                    .foregroundStyle(.orange)
+                OrbitStatusBadge(text: "确认前不会保存", tone: .gold)
             }
-            Text(action.payload.summary).font(.subheadline)
+            Text(action.payload.summary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             if case .meal = action.payload {
-                Text("估算可信度：\(Int(action.payload.confidence * 100))%")
-                    .font(.caption).foregroundStyle(.secondary)
+                Label(
+                    "估算可信度：\(Int(action.payload.confidence * 100))%",
+                    systemImage: "checkmark.seal"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             HStack {
                 Button("拒绝", role: .cancel, action: onReject)
                     .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
                 Button("确认并保存", action: onConfirm)
                     .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
             }
         }
-        .padding()
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .orbitCard(emphasized: true)
     }
 }
 

@@ -15,8 +15,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set DerivedData path
+        run: echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoDerivedData" >> "$GITHUB_ENV"
+
       - name: Validate bundled food database
         run: python3 scripts/validate_food_db.py
+
+      - name: Validate Python scripts
+        run: python3 -m compileall -q scripts
+
+      - name: Validate voice routing goldens
+        run: python3 scripts/validate_voice_goldens.py --input evals/voice-zh-CN.jsonl
+
+      - name: Validate Gate 0 UI structure
+        run: python3 scripts/validate_gate0_ui.py
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -40,14 +52,23 @@ jobs:
       - name: Test on iOS Simulator
         run: |
           set -o pipefail
-          perl -e 'alarm shift; exec @ARGV' 720 xcodebuild test -project Densoso.xcodeproj \
+          perl -e 'alarm shift; exec @ARGV' 720 xcodebuild -project Densoso.xcodeproj \
             -scheme Densoso \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             clean test 2>&1 | tee xcodebuild.log
+
+      - name: Validate built launch screen
+        run: |
+          set -euo pipefail
+          APP_BUNDLE="$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/Densoso.app"
+          test -d "$APP_BUNDLE"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :UILaunchStoryboardName' "$APP_BUNDLE/Info.plist")" = "LaunchScreen"
+          test -d "$APP_BUNDLE/LaunchScreen.storyboardc"
 
       - name: Upload test results
         if: always()

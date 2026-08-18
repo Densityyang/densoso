@@ -17,9 +17,9 @@ final class HealthKitService {
             case .unavailable:
                 "此设备无法使用 Apple Health。"
             case .sharingDenied:
-                "Apple Health 未允许写入膳食能量。请在健康 App 的共享设置中允许 densoso；若仍失败，请确认侧载签名的描述文件已启用 HealthKit。"
+                "Apple Health 未允许写入膳食能量。请在健康 App 的共享设置中检查 densoso 的写入权限。"
             case .authorizationRequestFailed(let message):
-                "Apple Health 授权请求失败：\(message)。侧载应用必须使用包含 HealthKit entitlement 的签名描述文件。"
+                "Apple Health 授权请求失败：\(message)。请返回设置页查看设备、签名能力和授权状态。"
             }
         }
     }

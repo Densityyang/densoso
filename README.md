@@ -1,4 +1,103 @@
 # densoso
 
+densoso 是一个面向 iPhone 与 Apple Watch 的个人健康记录应用：语音优先记录饮食和运动，本地完成结构化、食物匹配、热量估算和确认后写入；HealthKit 负责系统健康数据同步，Apple Watch 负责实测运动链路。
 
-个人项目.
+## 产品能力
+
+- 五个原生 SwiftUI 页面：对话、仪表盘、历史、训练计划和设置。
+- 语音输入：设备支持 `SpeechAnalyzer` 时优先使用，否则回退到兼容 Speech 路径。
+- 结构化餐食与训练草稿，支持最少量澄清问题和用户修正。
+- 本地食物数据库、食物匹配、确定性区间估算和数据证据展示。
+- HealthKit 体重、身高、训练和饮食能量同步。
+- WorkoutKit/HealthKit 运动记录与 Apple Watch 到 iPhone 的增量导入。
+- 滚动七天趋势和自然周报告，缺失日期保持显式缺失。
+- 版本化中文语音 golden set，用于 transcript、slot 和 latency 评估。
+
+## 核心架构
+
+```text
+语音 / 文本 / 照片证据
+        ↓
+结构化草稿（不写库）
+        ↓
+本地校验、食物匹配、区间估算
+        ↓
+PendingActionStore + 用户确认
+        ↓
+幂等写入 SwiftData
+        ↓
+DailyMetricsProjector / WeeklyAnalyticsService
+        ↓
+可选 HealthKit 同步
+```
+
+核心边界：
+
+- Agent 只负责意图提取、草稿生成和澄清问题。
+- 营养计算、权限判断、确认状态、幂等写入和日指标重算由本地领域代码负责。
+- `PendingActionStore` 是所有餐食和训练写入的确认边界，模型输出不能直接成为健康事实。
+- `IntelligenceRoutingPolicy` 统一选择本地模型、Speech 路径或显式云端路径。
+- `DailyMetrics` 是日指标和周分析的唯一聚合来源。
+
+## 数据与隐私边界
+
+- API Key 保存在设备 Keychain。
+- 启用云端路径时，Key 和请求文本会发送给所选服务商；本地路径不应被描述为云端同步。
+- 原始照片只作为条码、营养标签、食物类别和份量区间的辅助证据，不能从单张图像承诺精确克重或热量。
+- HealthKit 读取权限受到系统隐私保护；应用不会把“无数据”误报为用户拒绝读取。
+- 所有健康数据写入都应经过用户确认，并通过幂等键避免重复记录。
+
+## HealthKit 与系统能力
+
+HealthKit 有两个独立层面：工程/签名能力和用户授权。工程 target 通过 `project.yml` 与 `Densoso/Densoso.entitlements` 配置 HealthKit，并声明读写用途；运行时由公开的 `HKHealthStore` API 请求具体数据类型。
+
+麦克风和 Speech 是系统运行时权限；HealthKit、麦克风和 Speech 的状态在设置页分开展示。应用不会使用私有 API 读取签名信息，签名能力由授权请求返回结果验证。
+
+## 构建与部署
+
+生成 Xcode 项目并执行共享域测试：
+
+```bash
+brew install xcodegen
+xcodegen generate
+swift test --package-path Packages/DensosoWorkoutDomain
+```
+
+执行 iOS Simulator 测试：
+
+```bash
+xcodebuild -project Densoso.xcodeproj \
+  -scheme Densoso \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  CODE_SIGNING_ALLOWED=NO clean test
+```
+
+生成可供重签的 Release IPA：
+
+```bash
+gh workflow run build-ipa.yml --repo Densityyang/densoso --ref <branch>
+gh run download <run-id> --repo Densityyang/densoso --name Densoso.ipa --dir ./artifacts
+```
+
+IPA workflow 生成的包包含 `Payload/Densoso.app` 和嵌入的 Watch App，但不包含最终签名。部署前必须使用与 App ID 匹配、并保留所需 capability 的 provisioning profile 重签；安装后仍需由用户在系统授权页确认具体 HealthKit、麦克风和 Speech 权限。
+
+## 自动化验证
+
+数据和语音基线也可以通过以下命令验证：
+
+```bash
+python scripts/validate_food_db.py
+python scripts/validate_voice_goldens.py --input evals/voice-zh-CN.jsonl
+python -m compileall -q scripts
+```
+
+GitHub Actions 工作流位于 `.github/workflows/`：
+
+- `build.yml`：食物库校验、XcodeGen、共享 workout domain 测试、模拟器上的完整 XCTest。
+- `build-ipa.yml`：手动触发 Release device build、IPA 打包和 artifact 上传。
+
+## 文档索引
+
+- [Orbit UI v1.2 实现说明](docs/orbit-ui-v1.2.md)
+- [语音评测基线](docs/speech-evaluation.md)
+- [PR-001 历史设计与审计基线](docs/PR-001-stabilize-agent-and-calorie-pipeline.md)

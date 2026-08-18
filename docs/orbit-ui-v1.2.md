@@ -1,0 +1,63 @@
+# Orbit UI v1.2 implementation notes
+
+Approved Canva prototype: <https://www.canva.com/d/HMWHySIIBED-80L>
+
+This phase implements the iPhone-side visual foundation and the data services
+required by the approved target UI. It keeps the existing five-tab information
+architecture and all confirmation boundaries.
+
+## Reused application boundaries
+
+- `VoiceCommandRouter`, `IntelligenceRoutingPolicy`, and the existing local or
+  DeepSeek paths remain the only text-routing paths.
+- `PendingActionStore` remains the mandatory boundary before a meal or workout
+  record is persisted.
+- `DailyMetrics` remains the source for daily and rolling weekly analytics.
+- HealthKit import cursors remain the source of the last successful import time.
+- WorkoutKit and HealthKit behavior is unchanged in this phase.
+
+## New implementation pieces
+
+- `OrbitDesignSystem.swift` supplies semantic dark surfaces, named brand colors,
+  reusable headers, cards, status badges, metrics, and decorative orbit geometry.
+- `WeeklyAnalyticsService` builds an explicit seven-day series and upserts the
+  current `WeeklyReport`; missing dates remain marked as missing.
+- `CapabilityDiagnosticsService` publishes device HealthKit availability,
+  source-build HealthKit capability configuration, dietary-energy write
+  authorization, authorization-request state, microphone and Speech
+  authorization, modern on-device speech availability, and the last HealthKit
+  import time.
+- Onboarding, conversation, dashboard, history, workout planning, settings, and
+  confirmation cards consume the shared design system while retaining native
+  `NavigationStack`, `TabView`, `Form`, `List`, and `Chart` semantics.
+- `ContentView` owns the only full-screen `OrbitPage` background in the main
+  application hierarchy. Child screens remain transparent and respect the safe
+  area while `OrbitBackground` alone extends under system bars.
+- `LaunchScreen.storyboard` is the explicit native launch surface and is wired
+  through `UILaunchStoryboardName`; it does not use a fixed device height or a
+  simulated aspect ratio.
+- `scripts/validate_gate0_ui.py` keeps the launch-screen wiring, the single
+  `OrbitPage` root, and the background-only safe-area exception under CI. It is
+  intentionally not a substitute for the required iPhone 17 screenshots.
+- The macOS job also inspects the built simulator app to require both the
+  generated `UILaunchStoryboardName` value and `LaunchScreen.storyboardc`.
+
+## Platform privacy boundary
+
+HealthKit exposes write authorization status, but it deliberately does not tell
+an app whether read access was denied. The settings UI therefore labels read
+authorization as system-protected instead of claiming an allowed or denied
+state.
+
+The app uses a generated Info.plist marker to report that the source target is
+configured with the HealthKit entitlement. HealthKit's public authorization API
+validates the signed entitlement when the user requests access, and Settings
+keeps any resulting error visible. This avoids private `SecTask` APIs and does
+not claim that an unsigned simulator build proves device signing.
+
+## Follow-up phase
+
+- Connect the existing meal evidence domain to a SwiftUI photo/barcode/OCR flow.
+- Transfer strength-set plan context and the next-set index to watchOS through
+  WatchConnectivity, while keeping the workout state machine and HealthKit
+  workout schema unchanged.
