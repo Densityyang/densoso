@@ -14,11 +14,9 @@ struct ChatScreen: View {
 
     var body: some View {
         NavigationStack {
-            OrbitPage {
-                VStack(spacing: 0) {
-                    conversation
-                    composer
-                }
+            VStack(spacing: 0) {
+                conversation
+                composer
             }
             .navigationTitle("对话")
             .navigationBarTitleDisplayMode(.inline)

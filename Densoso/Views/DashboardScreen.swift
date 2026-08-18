@@ -12,48 +12,46 @@ struct DashboardScreen: View {
 
     var body: some View {
         NavigationStack {
-            OrbitPage {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        OrbitScreenHeader(
-                            eyebrow: "From records to rhythm",
-                            title: "今天的能量轨迹",
-                            subtitle: "先看今天，再用七日趋势判断节奏。没有记录的日期会明确留空。"
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    OrbitScreenHeader(
+                        eyebrow: "From records to rhythm",
+                        title: "今天的能量轨迹",
+                        subtitle: "先看今天，再用七日趋势判断节奏。没有记录的日期会明确留空。"
+                    )
+
+                    if let metrics {
+                        todayCard(metrics)
+                    } else {
+                        ContentUnavailableView(
+                            "今日暂无记录",
+                            systemImage: "chart.bar",
+                            description: Text("去对话页记一餐或一次运动后，这里会自动更新。")
                         )
-
-                        if let metrics {
-                            todayCard(metrics)
-                        } else {
-                            ContentUnavailableView(
-                                "今日暂无记录",
-                                systemImage: "chart.bar",
-                                description: Text("去对话页记一餐或一次运动后，这里会自动更新。")
-                            )
-                            .orbitCard()
-                        }
-
-                        if let weekly, weekly.hasData {
-                            weeklyCard(weekly)
-                        } else {
-                            ContentUnavailableView(
-                                "七日趋势等待数据",
-                                systemImage: "calendar.badge.clock",
-                                description: Text("记录会按自然日聚合；空白日期不会被补成虚假数据。")
-                            )
-                            .orbitCard()
-                        }
-
-                        if let loadError {
-                            Label(loadError, systemImage: "exclamationmark.triangle.fill")
-                                .font(.footnote)
-                                .foregroundStyle(OrbitPalette.coral)
-                                .orbitCard()
-                        }
+                        .orbitCard()
                     }
-                    .padding()
+
+                    if let weekly, weekly.hasData {
+                        weeklyCard(weekly)
+                    } else {
+                        ContentUnavailableView(
+                            "七日趋势等待数据",
+                            systemImage: "calendar.badge.clock",
+                            description: Text("记录会按自然日聚合；空白日期不会被补成虚假数据。")
+                        )
+                        .orbitCard()
+                    }
+
+                    if let loadError {
+                        Label(loadError, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(OrbitPalette.coral)
+                            .orbitCard()
+                    }
                 }
-                .refreshable { loadData() }
+                .padding()
             }
+            .refreshable { loadData() }
             .navigationTitle("数据")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear(perform: loadData)

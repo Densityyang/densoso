@@ -30,6 +30,17 @@ architecture and all confirmation boundaries.
 - Onboarding, conversation, dashboard, history, workout planning, settings, and
   confirmation cards consume the shared design system while retaining native
   `NavigationStack`, `TabView`, `Form`, `List`, and `Chart` semantics.
+- `ContentView` owns the only full-screen `OrbitPage` background in the main
+  application hierarchy. Child screens remain transparent and respect the safe
+  area while `OrbitBackground` alone extends under system bars.
+- `LaunchScreen.storyboard` is the explicit native launch surface and is wired
+  through `UILaunchStoryboardName`; it does not use a fixed device height or a
+  simulated aspect ratio.
+- `scripts/validate_gate0_ui.py` keeps the launch-screen wiring, the single
+  `OrbitPage` root, and the background-only safe-area exception under CI. It is
+  intentionally not a substitute for the required iPhone 17 screenshots.
+- The macOS job also inspects the built simulator app to require both the
+  generated `UILaunchStoryboardName` value and `LaunchScreen.storyboardc`.
 
 ## Platform privacy boundary
 

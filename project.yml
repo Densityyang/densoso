@@ -29,6 +29,7 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
         INFOPLIST_KEY_CFBundleDisplayName: densoso
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchStoryboardName: LaunchScreen
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "densoso 需要麦克风权限来采集语音输入。"
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "densoso 需要语音识别权限来语音录入饮食和运动记录。"

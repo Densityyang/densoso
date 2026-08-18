@@ -20,8 +20,7 @@ struct WorkoutPlanScreen: View {
 
     var body: some View {
         NavigationStack {
-            OrbitPage {
-                Form {
+            Form {
                     Section {
                         OrbitScreenHeader(
                             eyebrow: "Plan on phone, act on wrist",
@@ -101,9 +100,8 @@ struct WorkoutPlanScreen: View {
                                 .font(.caption)
                         }
                     }
-                }
-                .orbitScrollBackground()
             }
+            .orbitScrollBackground()
             .navigationTitle("计划")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {

@@ -27,8 +27,7 @@ struct OnboardingView: View {
 
     var body: some View {
         NavigationStack {
-            OrbitPage {
-                Form {
+            Form {
                     Section {
                         VStack(alignment: .leading, spacing: 18) {
                             HStack {
@@ -95,9 +94,8 @@ struct OnboardingView: View {
                                 || isSaving
                         )
                     }
-                }
-                .orbitScrollBackground()
             }
+            .orbitScrollBackground()
             .navigationTitle("欢迎使用 densoso")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

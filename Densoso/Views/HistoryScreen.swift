@@ -26,48 +26,46 @@ struct HistoryScreen: View {
 
     var body: some View {
         NavigationStack {
-            OrbitPage {
-                List {
-                    Section {
-                        OrbitScreenHeader(
-                            eyebrow: "Records stay inspectable",
-                            title: "按时间回看每一次确认。",
-                            subtitle: "餐食和运动分别浏览；筛选只改变显示范围，不修改记录。"
-                        )
-                        .padding(.vertical, 8)
-                    }
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+            List {
+                Section {
+                    OrbitScreenHeader(
+                        eyebrow: "Records stay inspectable",
+                        title: "按时间回看每一次确认。",
+                        subtitle: "餐食和运动分别浏览；筛选只改变显示范围，不修改记录。"
+                    )
+                    .padding(.vertical, 8)
+                }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
 
-                    Section {
-                        Picker("记录类型", selection: $selectedKind) {
-                            ForEach(RecordKind.allCases) { kind in
-                                Text(kind.rawValue).tag(kind)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        Picker("日期范围", selection: $dateScope) {
-                            ForEach(DateScope.allCases) { scope in
-                                Text(scope.rawValue).tag(scope)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        if dateScope == .day {
-                            DatePicker("选择日期", selection: $selectedDate, displayedComponents: .date)
+                Section {
+                    Picker("记录类型", selection: $selectedKind) {
+                        ForEach(RecordKind.allCases) { kind in
+                            Text(kind.rawValue).tag(kind)
                         }
                     }
+                    .pickerStyle(.segmented)
 
-                    if selectedKind == .meals {
-                        mealSection
-                    } else {
-                        workoutSection
+                    Picker("日期范围", selection: $dateScope) {
+                        ForEach(DateScope.allCases) { scope in
+                            Text(scope.rawValue).tag(scope)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if dateScope == .day {
+                        DatePicker("选择日期", selection: $selectedDate, displayedComponents: .date)
                     }
                 }
-                .listStyle(.plain)
-                .orbitScrollBackground()
+
+                if selectedKind == .meals {
+                    mealSection
+                } else {
+                    workoutSection
+                }
             }
+            .listStyle(.plain)
+            .orbitScrollBackground()
             .navigationTitle("历史")
             .navigationBarTitleDisplayMode(.inline)
         }

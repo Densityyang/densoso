@@ -22,8 +22,7 @@ struct SettingsScreen: View {
 
     var body: some View {
         NavigationStack {
-            OrbitPage {
-                Form {
+            Form {
                     Section {
                         OrbitScreenHeader(
                             eyebrow: "Explain the boundary",
@@ -62,9 +61,8 @@ struct SettingsScreen: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                }
-                .orbitScrollBackground()
             }
+            .orbitScrollBackground()
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .task {
@@ -82,6 +80,9 @@ struct SettingsScreen: View {
             .sheet(isPresented: $isEditingProfile) {
                 if let profile = profiles.first {
                     ProfileEditorSheet(profile: profile)
+                        .presentationBackground {
+                            OrbitBackground()
+                        }
                 }
             }
         }
@@ -359,8 +360,7 @@ private struct ProfileEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            OrbitPage {
-                Form {
+            Form {
                     Section("基础资料") {
                         TextField("称呼", text: $name)
                         Picker("性别", selection: $sex) {
@@ -394,9 +394,8 @@ private struct ProfileEditorSheet: View {
                                 .foregroundStyle(OrbitPalette.coral)
                         }
                     }
-                }
-                .orbitScrollBackground()
             }
+            .orbitScrollBackground()
             .navigationTitle("编辑个人资料")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
