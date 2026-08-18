@@ -11,11 +11,12 @@ jobs:
   build:
     runs-on: macos-latest
     timeout-minutes: 20
-    env:
-      DERIVED_DATA_PATH: ${{ runner.temp }}/DensosoDerivedData
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set DerivedData path
+        run: echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoDerivedData" >> "$GITHUB_ENV"
 
       - name: Validate bundled food database
         run: python3 scripts/validate_food_db.py
