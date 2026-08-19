@@ -39,6 +39,7 @@ jobs:
             scripts/validate_food_db.py \
             scripts/validate_gate0_ui.py \
             scripts/validate_phase1_foundation.py \
+            scripts/validate_phase2_domain_persistence.py \
             scripts/validate_voice_goldens.py
 
       - name: Validate bundled food database
@@ -163,4 +164,91 @@ jobs:
             Gate01Screenshots
             gate01-*.log
           if-no-files-found: warn
+          retention-days: 14
+
+  domain-persistence:
+    name: gate-02-domain-persistence
+    needs: foundation
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 2 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate02DerivedData" >> "$GITHUB_ENV"
+          echo "GATE02_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate02PersistenceTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 2 static contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase2_domain_persistence.py
+          python3 scripts/validate_phase2_domain_persistence.py
+
+      - name: Test Phase 2 domain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate02-domain.log
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Prepare iOS 26 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test migration and confirmation transactions
+        run: |
+          set -o pipefail
+          rm -rf "$GATE02_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests \
+            -only-testing:DensosoTests/ConversationPersistenceTests \
+            -only-testing:DensosoTests/DensosoMigrationTests \
+            -only-testing:DensosoTests/MigrationBackupManagerTests \
+            -only-testing:DensosoTests/AgentPersistenceBoundaryTests \
+            -only-testing:DensosoTests/HealthRepositoryTests \
+            -resultBundlePath "$GATE02_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate02-persistence-tests.log
+
+      - name: Export Gate 2 reports
+        run: |
+          set -euo pipefail
+          rm -rf Gate02Reports
+          mkdir -p Gate02Reports
+          xcrun xcresulttool export attachments \
+            --path "$GATE02_RESULT_BUNDLE" \
+            --output-path Gate02Reports
+          test -f Gate02Reports/manifest.json
+          grep -q "gate02-v1-migration-report.json" Gate02Reports/manifest.json
+          grep -q "gate02-v2-migration-report.json" Gate02Reports/manifest.json
+          grep -q "gate02-recovery-report.json" Gate02Reports/manifest.json
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE02_RESULT_BUNDLE" > gate02-test-summary.json
+
+      - name: Upload Gate 2 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-02-domain-persistence-results
+          path: |
+            Gate02PersistenceTests.xcresult
+            Gate02Reports
+            gate02-domain.log
+            gate02-persistence-tests.log
+            gate02-test-summary.json
+          if-no-files-found: error
           retention-days: 14

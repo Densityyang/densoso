@@ -1,4 +1,5 @@
 import SwiftUI
+import DensosoDomain
 
 /// 食物热量估算确认卡片
 struct FoodConfirmationCard: View {

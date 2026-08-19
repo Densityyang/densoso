@@ -1,5 +1,4 @@
 import Foundation
-import SwiftData
 
 struct GetWeeklyDeficitTool: AgentTool {
     var definition: DeepSeekClient.ToolDef { .make(
@@ -10,7 +9,7 @@ struct GetWeeklyDeficitTool: AgentTool {
         ]
     )}
 
-    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
+    func execute(argumentsJSON: String, context: AgentSession, clientRequestID: UUID) async throws -> String {
         guard let data = argumentsJSON.data(using: .utf8),
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return #"{"error": "参数解析失败"}"#
@@ -25,26 +24,23 @@ struct GetWeeklyDeficitTool: AgentTool {
         let monday = calendar.date(byAdding: .day, value: mondayOffset + offset * 7, to: today)!
         let sunday = calendar.date(byAdding: .day, value: 6, to: monday)!
 
-        let predicate = #Predicate<DailyMetrics> { m in
-            m.date >= monday && m.date <= sunday
-        }
-        let descriptor = FetchDescriptor<DailyMetrics>(predicate: predicate)
-        let metricsList = (try? modelContext.fetch(descriptor)) ?? []
-
-        let summary = CaloricEngine.weeklySummary(dailyMetrics: metricsList)
+        let metricsList = try await context.dailyMetrics(from: monday, through: sunday)
+        let totalDeficit = metricsList.reduce(0) { $0 + $1.deficitKcal }
+        let daysWithData = metricsList.count
+        let average = daysWithData == 0 ? 0 : Double(totalDeficit) / Double(daysWithData)
 
         let formatter = ISO8601DateFormatter()
         let resp: [String: Any] = [
             "weekStart": formatter.string(from: monday),
             "weekEnd": formatter.string(from: sunday),
-            "totalDeficitKcal": summary.totalDeficitKcal,
-            "avgDailyDeficitKcal": summary.avgDailyDeficitKcal,
-            "projectedWeightLossKg": summary.projectedWeightLossKg,
-            "daysWithData": summary.daysWithData,
-            "totalMeals": summary.totalMeals,
-            "totalWorkouts": summary.totalWorkouts,
-            "bestDayDeficit": summary.bestDay?.deficitKcal ?? 0,
-            "worstDayDeficit": summary.worstDay?.deficitKcal ?? 0,
+            "totalDeficitKcal": totalDeficit,
+            "avgDailyDeficitKcal": average,
+            "projectedWeightLossKg": Double(totalDeficit) / 7_700,
+            "daysWithData": daysWithData,
+            "totalMeals": metricsList.reduce(0) { $0 + $1.mealCount },
+            "totalWorkouts": metricsList.reduce(0) { $0 + $1.workoutCount },
+            "bestDayDeficit": metricsList.map(\.deficitKcal).max() ?? 0,
+            "worstDayDeficit": metricsList.map(\.deficitKcal).min() ?? 0,
         ]
         let respData = try JSONSerialization.data(withJSONObject: resp)
         return String(data: respData, encoding: .utf8) ?? "{}"

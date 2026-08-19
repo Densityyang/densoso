@@ -9,11 +9,16 @@ struct DensosoApp: App {
 
     init() {
         let launchConfiguration = AppLaunchConfiguration.current
+        let persistence = PersistenceBootstrap.make(inMemory: launchConfiguration.isUITesting)
         self.launchConfiguration = launchConfiguration
+        self.persistence = persistence
         self._dependencies = State(
-            initialValue: Dependencies(automaticallyLoadFoodDatabase: !launchConfiguration.isUITesting)
+            initialValue: Dependencies(
+                automaticallyLoadFoodDatabase: !launchConfiguration.isUITesting,
+                modelContainer: persistence.container,
+                persistenceState: persistence.state
+            )
         )
-        self.persistence = PersistenceBootstrap.make(inMemory: launchConfiguration.isUITesting)
         AppState.shared.startupWarning = persistence.warning
     }
 
@@ -23,48 +28,6 @@ struct DensosoApp: App {
                 .modelContainer(persistence.container)
                 .environment(dependencies)
                 .environment(AppState.shared)
-        }
-    }
-}
-
-private struct PersistenceBootstrap {
-    let container: ModelContainer
-    let warning: String?
-
-    static func make(inMemory: Bool = false) -> PersistenceBootstrap {
-        let schema = Schema(versionedSchema: DensosoSchemaV2.self)
-        if inMemory {
-            let configuration = ModelConfiguration(
-                "DensosoUITests",
-                schema: schema,
-                isStoredInMemoryOnly: true
-            )
-            do {
-                return PersistenceBootstrap(
-                    container: try ModelContainer(for: schema, configurations: [configuration]),
-                    warning: nil
-                )
-            } catch {
-                fatalError("Unable to create the UI test model container: \(error.localizedDescription)")
-            }
-        }
-        do {
-            return PersistenceBootstrap(
-                container: try ModelContainer(for: schema, migrationPlan: DensosoMigrationPlan.self),
-                warning: nil
-            )
-        } catch {
-            // Preserve an incompatible store and keep the app launchable. The recovery
-            // configuration uses a separate on-disk store; it does not delete user data.
-            let recoveryConfiguration = ModelConfiguration("DensosoRecovery", schema: schema)
-            do {
-                return PersistenceBootstrap(
-                    container: try ModelContainer(for: schema, configurations: [recoveryConfiguration]),
-                    warning: "原本地数据暂时无法迁移，已启用新的本地存储。原数据未被删除。"
-                )
-            } catch {
-                fatalError("Unable to create a SwiftData container: \(error.localizedDescription)")
-            }
         }
     }
 }
@@ -82,6 +45,7 @@ struct AppRoot: View {
         ContentView()
             .task {
                 await dependencies.setupFoodDB()
+                await dependencies.restorePersistenceState()
                 if launchConfiguration.isUITesting {
                     prepareUITestState()
                     return
@@ -89,8 +53,10 @@ struct AppRoot: View {
                 appState.pendingWorkoutPlan = AppIntentInbox.consumeWorkoutPlan()
                 appState.pendingMealText = AppIntentInbox.consumeMealText()
                 checkOnboarding()
-                healthKitWorkoutImporter.importChanges(in: modelContext)
-                workoutRouteImporter.importPendingRoutes(in: modelContext)
+                if dependencies.persistenceWriteGate.state.allowsWrites {
+                    healthKitWorkoutImporter.importChanges(in: modelContext)
+                    workoutRouteImporter.importPendingRoutes(in: modelContext)
+                }
             }
     }
 

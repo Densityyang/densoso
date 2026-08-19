@@ -22,9 +22,9 @@ densoso 是一个面向 iPhone 与 Apple Watch 的个人健康记录应用：语
         ↓
 本地校验、食物匹配、区间估算
         ↓
-PendingActionStore + 用户确认
+持久化 PendingAction + 用户确认
         ↓
-幂等写入 SwiftData
+ConfirmationCoordinator 原子写入 record / projection / receipt / outbox
         ↓
 DailyMetricsProjector / WeeklyAnalyticsService
         ↓
@@ -35,7 +35,8 @@ DailyMetricsProjector / WeeklyAnalyticsService
 
 - Agent 只负责意图提取、草稿生成和澄清问题。
 - 营养计算、权限判断、确认状态、幂等写入和日指标重算由本地领域代码负责。
-- `PendingActionStore` 是所有餐食和训练写入的确认边界，模型输出不能直接成为健康事实。
+- `ConfirmationCoordinator` 与 SwiftData repository 是餐食/体重的确认边界；
+  已完成运动事实只由 HealthKit 导入，模型输出不能直接写入。
 - `IntelligenceRoutingPolicy` 统一选择本地模型、Speech 路径或显式云端路径。
 - `DailyMetrics` 是日指标和周分析的唯一聚合来源。
 
@@ -91,6 +92,7 @@ python scripts/validate_voice_goldens.py --input evals/voice-zh-CN.jsonl
 python -m py_compile scripts/evaluate_voice_transcripts.py scripts/generate_voice_goldens.py \
   scripts/import_exercise_catalog.py scripts/import_food_db.py scripts/validate_food_db.py \
   scripts/validate_gate0_ui.py scripts/validate_phase1_foundation.py \
+  scripts/validate_phase2_domain_persistence.py \
   scripts/validate_voice_goldens.py
 ```
 

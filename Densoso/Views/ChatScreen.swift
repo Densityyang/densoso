@@ -1,16 +1,15 @@
 import DensosoDomain
-import SwiftData
 import SwiftUI
 
 struct ChatScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(AppState.self) private var appState
-    @Environment(\.modelContext) private var modelContext
 
     @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
     @State private var isProcessing = false
     @State private var voiceDraftSummary: String?
+    @State private var didHydratePersistedMessages = false
 
     var body: some View {
         NavigationStack {
@@ -26,6 +25,9 @@ struct ChatScreen: View {
                 }
             }
             .onAppear(perform: prepareInitialState)
+            .onChange(of: dependencies.agentSession.restoredVisibleMessages.count) { _, _ in
+                hydratePersistedMessagesIfNeeded()
+            }
             .onChange(of: dependencies.speechService.transcribedText) { _, newValue in
                 inputText = newValue
             }
@@ -55,8 +57,14 @@ struct ChatScreen: View {
                             PendingActionConfirmationCard(action: action) {
                                 confirm(action)
                             } onReject: {
-                                dependencies.agentSession.rejectPendingAction(id: action.id)
-                                addMessage(text: "已拒绝该记录草稿，未保存任何健康数据。", isUser: false)
+                                Task {
+                                    do {
+                                        try await dependencies.agentSession.rejectPendingAction(id: action.id)
+                                        addMessage(text: "已拒绝该记录草稿，未保存任何健康数据。", isUser: false)
+                                    } catch {
+                                        addMessage(text: "无法拒绝草稿：\(error.localizedDescription)", isUser: false)
+                                    }
+                                }
                             }
                         }
                     }
@@ -160,6 +168,7 @@ struct ChatScreen: View {
     }
 
     private func prepareInitialState() {
+        hydratePersistedMessagesIfNeeded()
         if messages.isEmpty {
             addMessage(text: "你好，我是 densoso。使用语音或文字告诉我你吃了什么、练了什么。", isUser: false)
         }
@@ -169,6 +178,17 @@ struct ChatScreen: View {
             addMessage(text: "已收到系统语音转写草稿，请检查后再发送；尚未保存任何餐食记录。", isUser: false)
         }
         Task { await dependencies.speechService.refreshRuntime() }
+    }
+
+    private func hydratePersistedMessagesIfNeeded() {
+        guard !didHydratePersistedMessages,
+              !dependencies.agentSession.restoredVisibleMessages.isEmpty else {
+            return
+        }
+        messages = dependencies.agentSession.restoredVisibleMessages.map {
+            ChatMessage(text: $0.text, isUser: $0.isUser)
+        }
+        didHydratePersistedMessages = true
     }
 
     private func toggleVoice() async {
@@ -227,10 +247,7 @@ struct ChatScreen: View {
                     )
                 }
             case .cloudDeepSeek:
-                let response = try await dependencies.agentSession.send(
-                    userText: userText,
-                    modelContext: modelContext
-                )
+                let response = try await dependencies.agentSession.send(userText: userText)
                 addMessage(text: response.text, isUser: false)
             case .manual:
                 addMessage(text: "本地智能当前不可用；你的输入尚未保存。可在设置中选择 DeepSeek 云端处理，或继续手动编辑。", isUser: false)
@@ -247,10 +264,7 @@ struct ChatScreen: View {
     private func confirm(_ action: PendingAction) {
         Task {
             do {
-                let message = try dependencies.agentSession.confirmPendingAction(
-                    id: action.id,
-                    modelContext: modelContext
-                )
+                let message = try await dependencies.agentSession.confirmPendingAction(id: action.id)
                 addMessage(text: message, isUser: false)
             } catch {
                 addMessage(text: "未能保存：\(error.localizedDescription)", isUser: false)

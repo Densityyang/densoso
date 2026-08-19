@@ -1,4 +1,5 @@
 import Foundation
+import DensosoDomain
 
 struct LogMealTool: ConfirmationRequiredTool {
     var definition: DeepSeekClient.ToolDef { .make(
@@ -11,7 +12,7 @@ struct LogMealTool: ConfirmationRequiredTool {
         ]
     ) }
 
-    func prepare(argumentsJSON: String, context: AgentSession) async throws -> PendingActionPreparation {
+    func prepare(argumentsJSON: String, context: AgentSession) async throws -> ActionPayload {
         guard let data = argumentsJSON.data(using: .utf8),
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let mealType = json["mealType"] as? String,
@@ -51,14 +52,54 @@ struct LogMealTool: ConfirmationRequiredTool {
                 ?? .inferred(grams: table[cookingMethod].defaultOilG)
             let estimate = CalorieEstimator.estimate(ingredients: ingredients, oil: oil, oilCaloriesPerGram: table.oilPerGramKcal)
             let lowConfidence = rawDish["lowConfidence"] as? Bool ?? false
-            return MealDishDraft(dishName: name, cookingMethod: cookingMethod, ingredients: estimate.ingredientEstimates,
-                                 caloriesKcal: estimate.calories.likely, proteinG: estimate.proteinG, fatG: estimate.fatG,
-                                 carbsG: estimate.carbsG, confidence: lowConfidence ? min(estimate.confidence, 0.5) : estimate.confidence,
-                                 calorieRange: estimate.calories, evidence: estimate.evidence)
+            let confidence = lowConfidence ? min(estimate.confidence, 0.5) : estimate.confidence
+            let domainIngredients = try estimate.ingredientEstimates.map { ingredient in
+                MealIngredientDraft(
+                    foodID: String(ingredient.foodItemId),
+                    name: ingredient.name,
+                    amountGrams: try EstimateRange.point(ingredient.amountG),
+                    nutrients: NutrientEstimate(
+                        energyKcal: try EstimateRange.point(ingredient.adjustedCaloriesKcal)
+                    ),
+                    evidence: [
+                        EvidenceSnapshot(
+                            grade: .databaseMatch,
+                            sourceID: "food-db:\(ingredient.foodItemId)",
+                            sourceVersion: "food-composition-6",
+                            summary: ingredient.name,
+                            confidence: confidence
+                        )
+                    ]
+                )
+            }
+            let evidence = estimate.evidence.map {
+                EvidenceSnapshot(
+                    grade: $0.source == "food_database" ? .databaseMatch : .estimated,
+                    sourceID: $0.source,
+                    summary: $0.detail,
+                    confidence: confidence
+                )
+            }
+            return MealDishDraft(
+                name: name,
+                cookingMethod: cookingMethod,
+                portionGrams: try EstimateRange.sum(domainIngredients.map(\.amountGrams)),
+                nutrients: NutrientEstimate(
+                    energyKcal: try EstimateRange(
+                        low: Double(estimate.calories.low),
+                        likely: Double(estimate.calories.likely),
+                        high: Double(estimate.calories.high)
+                    ),
+                    proteinGrams: try EstimateRange.point(estimate.proteinG),
+                    fatGrams: try EstimateRange.point(estimate.fatG),
+                    carbohydrateGrams: try EstimateRange.point(estimate.carbsG)
+                ),
+                ingredients: domainIngredients,
+                evidence: evidence,
+                algorithmVersion: "v3"
+            )
         }
-        let draft = MealDraft(date: date, mealType: mealType, dishes: drafts)
-        return PendingActionPreparation(payload: .meal(draft),
-                                        idempotencyKey: PendingActionStore.idempotencyKey(for: argumentsJSON, toolName: definition.name))
+        return .meal(MealDraft(occurredAt: date, mealType: mealType, dishes: drafts))
     }
 
     private func massBasis(for item: FoodItem, requestedName: String) -> CalorieEstimator.MassBasis {

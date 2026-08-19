@@ -2,15 +2,15 @@ import Foundation
 
 /// An editable workout plan. It remains app-owned data until the user confirms
 /// that Densoso may open or schedule an Apple Workout plan.
-struct WorkoutPlanDraft: Codable, Equatable, Identifiable, Sendable {
-    enum Activity: String, CaseIterable, Codable, Sendable {
+public struct WorkoutPlanDraft: Codable, Equatable, Identifiable, Sendable {
+    public enum Activity: String, CaseIterable, Codable, Sendable {
         case walking
         case running
         case cycling
         case strength
         case hiit
 
-        var displayName: String {
+        public var displayName: String {
             switch self {
             case .walking: "步行"
             case .running: "跑步"
@@ -21,18 +21,18 @@ struct WorkoutPlanDraft: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    enum Location: String, CaseIterable, Codable, Sendable {
+    public enum Location: String, CaseIterable, Codable, Sendable {
         case indoor
         case outdoor
 
-        var displayName: String { self == .indoor ? "室内" : "户外" }
+        public var displayName: String { self == .indoor ? "室内" : "户外" }
     }
 
-    enum Goal: Codable, Equatable, Sendable {
+    public enum Goal: Codable, Equatable, Sendable {
         case open
         case timeMinutes(Int)
 
-        var displayName: String {
+        public var displayName: String {
             switch self {
             case .open: "开放训练"
             case .timeMinutes(let minutes): "\(minutes) 分钟"
@@ -40,15 +40,15 @@ struct WorkoutPlanDraft: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    struct StrengthSet: Codable, Equatable, Identifiable, Sendable {
-        let id: UUID
-        var exerciseID: String?
-        var exerciseName: String
-        var setCount: Int
-        var repetitions: Int
-        var loadKilograms: Double?
+    public struct StrengthSet: Codable, Equatable, Identifiable, Sendable {
+        public let id: UUID
+        public var exerciseID: String?
+        public var exerciseName: String
+        public var setCount: Int
+        public var repetitions: Int
+        public var loadKilograms: Double?
 
-        init(
+        public init(
             id: UUID = UUID(),
             exerciseID: String? = nil,
             exerciseName: String,
@@ -65,15 +65,15 @@ struct WorkoutPlanDraft: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    let id: UUID
-    var name: String
-    var activity: Activity
-    var location: Location
-    var goal: Goal
-    var scheduledAt: Date?
-    var strengthSets: [StrengthSet]
+    public let id: UUID
+    public var name: String
+    public var activity: Activity
+    public var location: Location
+    public var goal: Goal
+    public var scheduledAt: Date?
+    public var strengthSets: [StrengthSet]
 
-    init(
+    public init(
         id: UUID = UUID(),
         name: String,
         activity: Activity,
@@ -91,7 +91,7 @@ struct WorkoutPlanDraft: Codable, Equatable, Identifiable, Sendable {
         self.strengthSets = strengthSets
     }
 
-    static let squatFiveByFive = WorkoutPlanDraft(
+    public static let squatFiveByFive = WorkoutPlanDraft(
         name: "5×5 深蹲",
         activity: .strength,
         goal: .timeMinutes(45),

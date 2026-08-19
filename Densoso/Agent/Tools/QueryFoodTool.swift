@@ -1,5 +1,4 @@
 import Foundation
-import SwiftData
 
 struct QueryFoodTool: AgentTool {
     var definition: DeepSeekClient.ToolDef { .make(
@@ -11,7 +10,7 @@ struct QueryFoodTool: AgentTool {
         ]
     )}
 
-    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
+    func execute(argumentsJSON: String, context: AgentSession, clientRequestID: UUID) async throws -> String {
         guard let data = argumentsJSON.data(using: .utf8),
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return #"{"error": "参数解析失败"}"#

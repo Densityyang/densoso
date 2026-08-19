@@ -1,6 +1,6 @@
 # Gate 01 — Foundation
 
-Status: automated gate passed; awaiting user review
+Status: approved by user on 2026-08-18; Phase 2 authorized
 
 This is the first gate in the single staged V3 core Draft PR. A green Gate 1
 does not authorize Phase 2; the user must review the recorded CI evidence first.
@@ -9,9 +9,10 @@ does not authorize Phase 2; the user must review the recorded CI evidence first.
 
 - Implementation commit: `b970ab9dabc23fb44d6cb9ca36f984ff4c21aa24`
 - Draft PR: [#14](https://github.com/Densityyang/densoso/pull/14)
-- CI run: [32095852595](https://github.com/Densityyang/densoso/actions/runs/32095852595)
+- Final evidence commit: `89e09023d82c0da3f4d88f53a8cad387c8af4625`
+- CI run: [32097245734](https://github.com/Densityyang/densoso/actions/runs/32097245734)
   — `gate-01-foundation` SUCCESS.
-- Artifact: `gate-01-foundation-results`, artifact ID `9310216099`.
+- Artifact: `gate-01-foundation-results`, artifact ID `9310532291`.
 - Artifact contents: `Gate01UnitTests.xcresult`, `Gate01UITests.xcresult`, six
   `gate01-*.log` files, six PNG screenshots, and `manifest.json`.
 - DensosoDomain tests: 27 passed, 0 failures.
@@ -24,7 +25,8 @@ does not authorize Phase 2; the user must review the recorded CI evidence first.
   black bands or cropping.
 - Signing remains blocked. Unsigned Simulator HealthKit/CoreData warnings are
   not device-signing evidence.
-- User decision: pending; do not enter Phase 2.
+- User decision: Gate 1 approved on 2026-08-18; Phase 2 authorized on the same
+  Draft PR. Phase 3 remains prohibited until Gate 2 review.
 
 ## Scope
 
@@ -83,15 +85,15 @@ swift test --package-path Packages/DensosoDomain
 
 | Evidence | Required result | Current result |
 | --- | --- | --- |
-| PR head | Phase 1 commit on the core Draft PR | `b970ab9dabc23fb44d6cb9ca36f984ff4c21aa24` on Draft PR #14 |
-| GitHub Actions | `foundation` succeeds | SUCCESS: run `32095852595` |
+| PR head | Phase 1 evidence on the core Draft PR | Implementation `b970ab9d…`; final evidence `89e09023…` on Draft PR #14 |
+| GitHub Actions | `foundation` succeeds | SUCCESS: final run `32097245734` |
 | Domain tests | All tests pass | 27 passed, 0 failures |
 | iOS deployment build | iOS 18 target compiles | `BUILD SUCCEEDED` |
 | iOS Simulator tests | Unit and UI suites pass on iPhone 17 Pro | Unit 49 passed; UI 2 passed |
 | Watch build | App and extension compile at watchOS 11 target | Successful |
 | UI evidence | Onboarding and five baseline-tab screenshots retained | 6 iPhone 17 Pro portrait PNGs reviewed; no bands/cropping |
 | Signing | Explicitly blocked and not inferred from Simulator | `blocked-by-signing` |
-| User decision | Approve or reject entry to Phase 2 | Pending review; Phase 2 prohibited |
+| User decision | Approve or reject entry to Phase 2 | Approved 2026-08-18; Phase 2 authorized |
 
 Later gate jobs must be added only with implemented production code and tests,
 using the dependency order documented in `PLAN_v3.md`; empty placeholder jobs do

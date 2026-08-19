@@ -1,5 +1,4 @@
 import Foundation
-import SwiftData
 
 struct GetScheduleTool: AgentTool {
     var definition: DeepSeekClient.ToolDef { .make(
@@ -10,7 +9,7 @@ struct GetScheduleTool: AgentTool {
         ]
     )}
 
-    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
+    func execute(argumentsJSON: String, context: AgentSession, clientRequestID: UUID) async throws -> String {
         guard let data = argumentsJSON.data(using: .utf8),
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let dateStr = json["date"] as? String else {
@@ -22,15 +21,7 @@ struct GetScheduleTool: AgentTool {
             return #"{"error": "日期格式错误"}"#
         }
 
-        let calendar = Calendar.current
-        let startDay = calendar.startOfDay(for: targetDate)
-        let endDay = calendar.date(byAdding: .day, value: 1, to: startDay)!
-
-        let predicate = #Predicate<ScheduleEvent> { e in
-            e.date >= startDay && e.date < endDay
-        }
-        let descriptor = FetchDescriptor<ScheduleEvent>(predicate: predicate)
-        let events = (try? modelContext.fetch(descriptor)) ?? []
+        let events = try await context.schedule(on: targetDate)
 
         let eventList = events.map { e -> [String: Any] in
             [

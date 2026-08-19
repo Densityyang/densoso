@@ -1,4 +1,5 @@
 import XCTest
+import DensosoDomain
 @testable import Densoso
 
 final class WorkoutPlanCompilerTests: XCTestCase {

@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "mealID": "00000000-0000-0000-0000-000000000301",
+  "workoutID": "00000000-0000-0000-0000-000000000302",
+  "recordedAt": 1700000000,
+  "mealCalories": 520,
+  "mealAlgorithmVersion": "v1",
+  "workoutCalories": 180
+}
