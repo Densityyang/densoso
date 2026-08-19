@@ -278,6 +278,7 @@ private struct TemporaryConfirmationStore {
     }
 }
 
+@MainActor
 private func XCTAssertThrowsErrorAsync<T>(
     _ expression: @autoclosure () async throws -> T,
     _ errorHandler: (Error) -> Void
