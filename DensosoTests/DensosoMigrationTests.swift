@@ -90,7 +90,7 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(workout.estimatedCaloriesBurned, seed.workoutCalories)
         XCTAssertEqual(workout.workoutOrigin, "externalHealthKit")
         XCTAssertEqual(workout.energySource, "measured")
-        XCTAssertEqual(cursor.anchorData, seed.cursorBytes.map(Data.init))
+        XCTAssertEqual(cursor.anchorData, seed.cursorBytes.map { Data($0) })
         XCTAssertEqual(outbox.attemptCount, expected.outboxAttemptCount)
         XCTAssertEqual(outbox.state, expected.outboxState)
         XCTAssertFalse(outbox.idempotencyKey.isEmpty)
@@ -259,7 +259,7 @@ final class DensosoMigrationTests: XCTestCase {
         context!.insert(
             DensosoSchemaV2.HealthKitImportCursor(
                 stream: "workouts",
-                anchorData: seed.cursorBytes.map(Data.init)
+                anchorData: seed.cursorBytes.map { Data($0) }
             )
         )
         try context!.save()
