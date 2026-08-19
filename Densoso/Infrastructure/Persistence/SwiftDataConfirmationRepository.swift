@@ -134,11 +134,13 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         try modelContext.save()
 
         do {
-            let committedReceipt = try modelContext.transaction {
+            var committedReceipt: CommitReceipt?
+            try modelContext.transaction {
                 if let existingReceipt = try receipt(actionID: id) {
                     action.stateRaw = PendingActionState.committed.rawValue
                     action.updatedAt = now
-                    return try map(existingReceipt)
+                    committedReceipt = try map(existingReceipt)
+                    return
                 }
 
                 let localRecordID: UUID
@@ -199,7 +201,10 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
 
                 action.stateRaw = PendingActionState.committed.rawValue
                 action.updatedAt = now
-                return try map(receipt)
+                committedReceipt = try map(receipt)
+            }
+            guard let committedReceipt else {
+                throw ConfirmationError.invariantViolation("transaction completed without a receipt")
             }
             try injectFailure(.afterTransactionCommitted)
             return committedReceipt
