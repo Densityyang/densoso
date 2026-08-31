@@ -1,6 +1,6 @@
 # Gate 02 — Domain and Persistence
 
-Status: awaiting CI evidence and user review
+Status: automated gate passed; awaiting user review
 
 Gate 2 extends the same staged V3 core Draft PR. It may run only after
 `gate-01-foundation` succeeds on the same commit, and a green automated result
@@ -86,12 +86,14 @@ swift test --package-path Packages/DensosoDomain
 
 | Evidence | Required result | Current result |
 | --- | --- | --- |
-| PR head | Phase 2 commit on Draft PR #14 | Pending publish |
-| Dependency | `foundation` succeeds on the same head | Pending CI |
-| Domain tests | Range and canonical payload suites pass | Pending CI |
-| Persistence tests | Concurrency, TTL, rejection, crash and outbox suites pass | Pending CI |
-| Migration tests | V1/V2 disk fixtures migrate and reopen once | Pending CI |
-| Recovery tests | Original/backup restored; write attempt fails | Pending CI |
-| Artifact | `.xcresult`, logs and JSON attachments retained | Pending CI |
+| PR head | Phase 2 commit on Draft PR #14 | `799737713cbb23e16e6eb4e7d7ff66a2005af557` on Draft PR #14 |
+| CI run | Same-head `foundation → domain-persistence` succeeds | Run `33355916259` — `SUCCESS` |
+| Dependency | `foundation` succeeds on the same head | `gate-01-foundation`: passed |
+| Domain tests | Range and canonical payload suites pass | `foundation`: 38/38; `domain-persistence`: 38/38 |
+| Persistence tests | Concurrency, TTL, rejection, crash and outbox suites pass | Persistence/migration selected tests: 20/20 |
+| Runtime | Gate 2 Simulator evidence is captured on the required device | iPhone 17 Pro, iOS 26.2 Simulator |
+| Migration tests | V1/V2 disk fixtures migrate and reopen once | V1: `migrated`; V2: `migrated-and-reopened` |
+| Recovery tests | Original/backup restored; write attempt fails | `read-only-recovery`; `originalRestored=true`; `backupFileCount=3` |
+| Artifact | `.xcresult`, logs and JSON attachments retained | ID `9745496727` (261,326 bytes): `.xcresult`, manifest, 3 JSON reports, 2 logs, and test summary |
 | Signing | Remains separate from Simulator evidence | `blocked-by-signing` |
-| User decision | Approve or reject entry to Phase 3 | Pending review |
+| User decision | Approve or reject entry to Phase 3 | Pending review; Phase 3 remains prohibited |
