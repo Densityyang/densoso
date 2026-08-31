@@ -23,9 +23,10 @@ does not authorize Phase 3 without explicit user approval.
   to a retryable state without duplicating health records.
 - Back up the store before migration; migration failure restores it and enters a
   write-disabled diagnostic mode instead of creating a new writable user store.
-- Detect legacy store versions through read-only Core Data metadata and model
-  hashes; never probe the user store by opening a SwiftData container that may
-  migrate it.
+- Detect legacy store versions by copying the complete store/WAL/SHM family to
+  an isolated temporary directory, then reading Core Data metadata and model
+  hashes with the read-only store option. Never hand the user store itself to a
+  Core Data or SwiftData inspector that may mutate or migrate it.
 - Use an isolated in-memory diagnostic container after recovery failure. Product
   writes are rejected by `PersistenceWriteGate`, and the app exposes only the
   recovery diagnostic view rather than normal record/import/settings flows.

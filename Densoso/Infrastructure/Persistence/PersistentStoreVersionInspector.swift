@@ -8,7 +8,7 @@ enum PersistentStoreVersionInspectorError: Error, Equatable {
 
 enum PersistentStoreVersionInspector {
     static func version(at storeURL: URL) -> String? {
-        guard let sourceHashes = try? modelVersionHashes(at: storeURL) else {
+        guard let sourceHashes = try? modelVersionHashesFromIsolatedCopy(of: storeURL) else {
             return nil
         }
         if let v2Hashes = referenceHashes(for: DensosoSchemaV2.self),
@@ -26,7 +26,7 @@ enum PersistentStoreVersionInspector {
         let metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(
             type: .sqlite,
             at: storeURL,
-            options: nil
+            options: [NSReadOnlyPersistentStoreOption: true]
         )
         return try modelVersionHashes(from: metadata)
     }
@@ -45,6 +45,40 @@ enum PersistentStoreVersionInspector {
             return hashes.mapValues { Data(referencing: $0) }
         }
         throw PersistentStoreVersionInspectorError.missingModelVersionHashes
+    }
+
+    private static func modelVersionHashesFromIsolatedCopy(
+        of storeURL: URL
+    ) throws -> [String: Data] {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "densoso-store-metadata-\(UUID().uuidString.lowercased())",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let sourceURLs = [
+            storeURL,
+            URL(fileURLWithPath: storeURL.path + "-wal"),
+            URL(fileURLWithPath: storeURL.path + "-shm"),
+        ].filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard sourceURLs.contains(where: { $0.path == storeURL.path }) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        for sourceURL in sourceURLs {
+            try FileManager.default.copyItem(
+                at: sourceURL,
+                to: directoryURL.appendingPathComponent(sourceURL.lastPathComponent)
+            )
+        }
+
+        return try modelVersionHashes(
+            at: directoryURL.appendingPathComponent(storeURL.lastPathComponent)
+        )
     }
 
     private static func referenceHashes<Version: VersionedSchema>(

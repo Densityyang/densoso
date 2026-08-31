@@ -133,9 +133,13 @@ def main() -> int:
         ROOT / "Densoso" / "Infrastructure" / "Persistence" / "PersistentStoreVersionInspector.swift",
         [
             "metadataForPersistentStore",
+            "NSReadOnlyPersistentStoreOption",
             "NSStoreModelVersionHashesKey",
             "missingModelVersionHashes",
             "!hashes.isEmpty",
+            "densoso-store-metadata-",
+            'storeURL.path + "-wal"',
+            'storeURL.path + "-shm"',
             "DensosoSchemaV1.self",
             "DensosoSchemaV2.self",
         ],
