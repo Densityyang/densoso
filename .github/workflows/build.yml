@@ -233,9 +233,9 @@ jobs:
             --path "$GATE02_RESULT_BUNDLE" \
             --output-path Gate02Reports
           test -f Gate02Reports/manifest.json
-          find Gate02Reports -type f -name 'gate02-v1-migration-report_*.json' -print -quit | grep -q .
-          find Gate02Reports -type f -name 'gate02-v2-migration-report_*.json' -print -quit | grep -q .
-          find Gate02Reports -type f -name 'gate02-recovery-report_*.json' -print -quit | grep -q .
+          grep -q 'gate02-v1-migration-report_' Gate02Reports/manifest.json
+          grep -q 'gate02-v2-migration-report_' Gate02Reports/manifest.json
+          grep -q 'gate02-recovery-report_' Gate02Reports/manifest.json
           xcrun xcresulttool get test-results summary \
             --path "$GATE02_RESULT_BUNDLE" > gate02-test-summary.json
 
