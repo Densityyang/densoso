@@ -115,11 +115,12 @@ final class DensosoMigrationTests: XCTestCase {
         )
     }
 
-    func testFaultingMigrationRestoresOriginalAndEntersReadOnlyRecovery() throws {
+    func testFaultingMigrationRestoresOriginalAndEntersReadOnlyRecovery() async throws {
         let seed = try Gate02FixtureLoader.load("v2-seed", as: Gate02Seed.self)
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
         try createV2Store(seed: seed, at: location.storeURL)
+        let sourceBefore = try storeFamilySnapshot(at: location.storeURL)
 
         let bootstrap = PersistenceBootstrap.make(
             storeURL: location.storeURL,
@@ -131,22 +132,30 @@ final class DensosoMigrationTests: XCTestCase {
         let manifest = try XCTUnwrap(bootstrap.backupManifest)
         let backupDirectory = manifest.backupStoreURL.deletingLastPathComponent()
         let sourceDirectory = manifest.sourceStoreURL.deletingLastPathComponent()
+        XCTAssertEqual(try storeFamilySnapshot(at: location.storeURL), sourceBefore)
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "2.0.0")
         for entry in manifest.files {
             XCTAssertEqual(
                 try Data(contentsOf: backupDirectory.appendingPathComponent(entry.name)),
                 try Data(contentsOf: sourceDirectory.appendingPathComponent(entry.name))
             )
         }
-        let restoredContainer = try makeContainer(version: DensosoSchemaV2.self, url: location.storeURL)
-        let restoredContext = ModelContext(restoredContainer)
+        var restoredContainer: ModelContainer? = try makeContainer(
+            version: DensosoSchemaV2.self,
+            url: location.storeURL
+        )
+        var restoredContext: ModelContext? = ModelContext(restoredContainer!)
         XCTAssertEqual(
-            try restoredContext.fetch(FetchDescriptor<DensosoSchemaV2.MealRecord>()).first?.totalCaloriesKcal,
+            try restoredContext!
+                .fetch(FetchDescriptor<DensosoSchemaV2.MealRecord>())
+                .first?.totalCaloriesKcal,
             seed.mealCalories
         )
+        restoredContext = nil
+        restoredContainer = nil
 
-        let recoveryContext = ModelContext(bootstrap.container)
-        recoveryContext.insert(UserProfile(name: "must-not-save"))
-        XCTAssertThrowsError(try recoveryContext.save())
+        try assertRecoveryWritesRejected(by: bootstrap)
+        try await assertConfirmationWritesRejected(by: bootstrap)
         XCTAssertFalse(
             FileManager.default.fileExists(
                 atPath: sourceDirectory.appendingPathComponent("DensosoRecovery.store").path
@@ -178,11 +187,12 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: location.storeURL), originalStore)
     }
 
-    func testBackupFailurePreventsMigrationFromStarting() throws {
+    func testBackupFailurePreventsMigrationFromStarting() async throws {
         let seed = try Gate02FixtureLoader.load("v2-seed", as: Gate02Seed.self)
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
         try createV2Store(seed: seed, at: location.storeURL)
+        let sourceBefore = try storeFamilySnapshot(at: location.storeURL)
 
         let bootstrap = PersistenceBootstrap.make(
             storeURL: location.storeURL,
@@ -192,13 +202,56 @@ final class DensosoMigrationTests: XCTestCase {
 
         XCTAssertFalse(bootstrap.state.allowsWrites)
         XCTAssertNil(bootstrap.backupManifest)
-        let untouchedContainer = try makeContainer(version: DensosoSchemaV2.self, url: location.storeURL)
+        if case .diagnosticOnly = bootstrap.state {
+            // Expected: no verified backup means no migration attempt is permitted.
+        } else {
+            XCTFail("Backup failure must enter diagnostic-only mode")
+        }
+        XCTAssertEqual(try storeFamilySnapshot(at: location.storeURL), sourceBefore)
+        try assertRecoveryWritesRejected(by: bootstrap)
+        try await assertConfirmationWritesRejected(by: bootstrap)
+        var untouchedContainer: ModelContainer? = try makeContainer(
+            version: DensosoSchemaV2.self,
+            url: location.storeURL
+        )
+        var untouchedContext: ModelContext? = ModelContext(untouchedContainer!)
         XCTAssertEqual(
-            try ModelContext(untouchedContainer)
+            try untouchedContext!
                 .fetch(FetchDescriptor<DensosoSchemaV2.MealRecord>())
                 .first?.totalCaloriesKcal,
             seed.mealCalories
         )
+        untouchedContext = nil
+        untouchedContainer = nil
+    }
+
+    func testMetadataInspectorIdentifiesV1AndV2WithoutChangingStoreFamily() throws {
+        let v1Seed = try Gate02FixtureLoader.load("v1-seed", as: Gate02Seed.self)
+        let v1Location = try TemporaryStoreLocation()
+        defer { v1Location.remove() }
+        try createV1Store(seed: v1Seed, at: v1Location.storeURL)
+        let v1Before = try storeFamilySnapshot(at: v1Location.storeURL)
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: v1Location.storeURL), "1.0.0")
+        XCTAssertEqual(try storeFamilySnapshot(at: v1Location.storeURL), v1Before)
+
+        let v2Seed = try Gate02FixtureLoader.load("v2-seed", as: Gate02Seed.self)
+        let v2Location = try TemporaryStoreLocation()
+        defer { v2Location.remove() }
+        try createV2Store(seed: v2Seed, at: v2Location.storeURL)
+        let v2Before = try storeFamilySnapshot(at: v2Location.storeURL)
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: v2Location.storeURL), "2.0.0")
+        XCTAssertEqual(try storeFamilySnapshot(at: v2Location.storeURL), v2Before)
+    }
+
+    func testMetadataInspectorFailsClosedWhenModelHashesAreMissing() {
+        XCTAssertThrowsError(
+            try PersistentStoreVersionInspector.modelVersionHashes(from: [:])
+        ) { error in
+            XCTAssertEqual(
+                error as? PersistentStoreVersionInspectorError,
+                .missingModelVersionHashes
+            )
+        }
     }
 
     private func createV1Store(seed: Gate02Seed, at url: URL) throws {
@@ -284,6 +337,55 @@ final class DensosoMigrationTests: XCTestCase {
             migrationPlan: DensosoMigrationPlan.self,
             configurations: [configuration]
         )
+    }
+
+    private func assertRecoveryWritesRejected(by bootstrap: PersistenceBootstrap) throws {
+        XCTAssertThrowsError(
+            try PersistenceWriteGate(state: bootstrap.state).requireWritable()
+        ) { error in
+            XCTAssertEqual(
+                error as? PersistenceWriteError,
+                .recoveryReadOnly(diagnosticID: bootstrap.state.diagnosticID ?? "unknown")
+            )
+        }
+    }
+
+    private func assertConfirmationWritesRejected(
+        by bootstrap: PersistenceBootstrap
+    ) async throws {
+        let repository = SwiftDataConfirmationRepository(modelContainer: bootstrap.container)
+        let coordinator = ConfirmationCoordinator(
+            repository: repository,
+            writeGate: PersistenceWriteGate(state: bootstrap.state)
+        )
+        do {
+            _ = try await coordinator.stage(
+                payload: .weight(
+                    WeightDraft(
+                        measuredAt: Date(timeIntervalSince1970: 1_700_000_000),
+                        kilograms: 62.5
+                    )
+                ),
+                clientRequestID: UUID()
+            )
+            XCTFail("Recovery mode must reject confirmation staging")
+        } catch {
+            XCTAssertEqual(
+                error as? ConfirmationError,
+                .persistenceReadOnly(diagnosticID: bootstrap.state.diagnosticID ?? "unknown")
+            )
+        }
+    }
+
+    private func storeFamilySnapshot(at storeURL: URL) throws -> [String: Data] {
+        let urls = [
+            storeURL,
+            URL(fileURLWithPath: storeURL.path + "-wal"),
+            URL(fileURLWithPath: storeURL.path + "-shm"),
+        ].filter { FileManager.default.fileExists(atPath: $0.path) }
+        return try Dictionary(uniqueKeysWithValues: urls.map { url in
+            (url.lastPathComponent, try Data(contentsOf: url, options: .mappedIfSafe))
+        })
     }
 
     private func attachJSONReport(named name: String, values: [String: String]) throws {

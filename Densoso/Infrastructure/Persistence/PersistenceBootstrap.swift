@@ -68,7 +68,7 @@ struct PersistenceBootstrap {
         let configuration = ModelConfiguration("Densoso", schema: schema, url: storeURL)
         let fileManager = FileManager.default
         let hasStore = fileManager.fileExists(atPath: storeURL.path)
-        let legacyVersion = hasStore ? RecoveryStoreProbe.version(at: storeURL) : nil
+        let legacyVersion = hasStore ? PersistentStoreVersionInspector.version(at: storeURL) : nil
 
         if legacyVersion == nil {
             do {
@@ -135,7 +135,9 @@ struct PersistenceBootstrap {
                 restoreError = error
             }
         }
-        let sourceVersion = backupManifest.flatMap { RecoveryStoreProbe.version(at: $0.backupStoreURL) }
+        let sourceVersion = backupManifest.flatMap {
+            PersistentStoreVersionInspector.version(at: $0.backupStoreURL)
+        }
         let recoveryState: PersistenceRuntimeState
         if restoreError == nil,
            let backupStoreURL = backupManifest?.backupStoreURL,
@@ -155,8 +157,7 @@ struct PersistenceBootstrap {
         let diagnosticConfiguration = ModelConfiguration(
             "DensosoDiagnostic",
             schema: schema,
-            isStoredInMemoryOnly: true,
-            allowsSave: false
+            isStoredInMemoryOnly: true
         )
         do {
             let container = try ModelContainer(for: schema, configurations: [diagnosticConfiguration])
@@ -177,27 +178,5 @@ struct PersistenceBootstrap {
         } catch {
             fatalError("Unable to create the in-memory diagnostic container: \(error.localizedDescription)")
         }
-    }
-}
-
-private enum RecoveryStoreProbe {
-    static func version(at storeURL: URL) -> String? {
-        if canOpen(storeURL: storeURL, version: DensosoSchemaV2.self) { return "2.0.0" }
-        if canOpen(storeURL: storeURL, version: DensosoSchemaV1.self) { return "1.0.0" }
-        return nil
-    }
-
-    private static func canOpen<Version: VersionedSchema>(
-        storeURL: URL,
-        version: Version.Type
-    ) -> Bool {
-        let schema = Schema(versionedSchema: version)
-        let configuration = ModelConfiguration(
-            "DensosoRecoveryProbe",
-            schema: schema,
-            url: storeURL,
-            allowsSave: false
-        )
-        return (try? ModelContainer(for: schema, configurations: [configuration])) != nil
     }
 }

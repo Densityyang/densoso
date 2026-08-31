@@ -120,7 +120,25 @@ def main() -> int:
     )
     require_text(
         ROOT / "Densoso" / "Infrastructure" / "Persistence" / "PersistenceBootstrap.swift",
-        ["allowsSave: false", "MigrationBackupManager.restore", "backupProvider", "DensosoDiagnostic"],
+        [
+            "PersistentStoreVersionInspector.version",
+            "MigrationBackupManager.restore",
+            "backupProvider",
+            "DensosoDiagnostic",
+            "isStoredInMemoryOnly: true",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "PersistentStoreVersionInspector.swift",
+        [
+            "metadataForPersistentStore",
+            "NSStoreModelVersionHashesKey",
+            "missingModelVersionHashes",
+            "!hashes.isEmpty",
+            "DensosoSchemaV1.self",
+            "DensosoSchemaV2.self",
+        ],
         errors,
     )
     require_text(
@@ -129,8 +147,19 @@ def main() -> int:
         errors,
     )
     bootstrap_text = (ROOT / "Densoso" / "Infrastructure" / "Persistence" / "PersistenceBootstrap.swift").read_text(encoding="utf-8")
+    if "allowsSave: false" in bootstrap_text:
+        errors.append("Diagnostic in-memory container must not use the invalid read-only /dev/null combination")
     if 'ModelConfiguration("DensosoRecovery"' in bootstrap_text:
         errors.append("PersistenceBootstrap must not create a writable DensosoRecovery store")
+
+    require_text(
+        ROOT / "Densoso" / "App" / "DensosoApp.swift",
+        [
+            "PersistenceRecoveryView",
+            "if dependencies.persistenceWriteGate.state.allowsWrites",
+        ],
+        errors,
+    )
 
     fixture_root = ROOT / "DensosoTests" / "Fixtures" / "Gate02"
     fixture_names = ["v1-seed.json", "v2-seed.json", "expected-migration.json"]

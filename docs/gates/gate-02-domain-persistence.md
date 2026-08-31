@@ -23,6 +23,12 @@ does not authorize Phase 3 without explicit user approval.
   to a retryable state without duplicating health records.
 - Back up the store before migration; migration failure restores it and enters a
   write-disabled diagnostic mode instead of creating a new writable user store.
+- Detect legacy store versions through read-only Core Data metadata and model
+  hashes; never probe the user store by opening a SwiftData container that may
+  migrate it.
+- Use an isolated in-memory diagnostic container after recovery failure. Product
+  writes are rejected by `PersistenceWriteGate`, and the app exposes only the
+  recovery diagnostic view rather than normal record/import/settings flows.
 - Remove `ModelContext` and direct Workout writes from the model-facing Agent
   and tool boundary.
 
@@ -55,8 +61,10 @@ to domain/persistence behavior and have a dedicated evidence artifact.
 8. conversation and pending-action state survive repository recreation;
 9. V1 and V2 disk stores migrate to V3 while preserving IDs, relationships,
    values, cursors, and historical algorithm versions; and
-10. an injected migration failure restores the store and rejects writes in
-    recovery mode.
+10. an injected migration failure restores the store, leaves store/WAL/SHM
+    unchanged, and causes the write gate and ConfirmationCoordinator to reject
+    writes in recovery mode; and
+11. metadata-only V1/V2 version inspection does not change the store family.
 
 The restore routine verifies store/WAL/SHM checksums, stages replacement files,
 and rolls back ordinary file-operation errors. The immutable migration backup is

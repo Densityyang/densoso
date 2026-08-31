@@ -41,23 +41,29 @@ struct AppRoot: View {
     @State private var healthKitWorkoutImporter = HealthKitWorkoutImporter()
     @State private var workoutRouteImporter = WorkoutRouteImporter()
 
+    @ViewBuilder
     var body: some View {
-        ContentView()
-            .task {
-                await dependencies.setupFoodDB()
-                await dependencies.restorePersistenceState()
-                if launchConfiguration.isUITesting {
-                    prepareUITestState()
-                    return
-                }
-                appState.pendingWorkoutPlan = AppIntentInbox.consumeWorkoutPlan()
-                appState.pendingMealText = AppIntentInbox.consumeMealText()
-                checkOnboarding()
-                if dependencies.persistenceWriteGate.state.allowsWrites {
+        if dependencies.persistenceWriteGate.state.allowsWrites {
+            ContentView()
+                .task {
+                    await dependencies.setupFoodDB()
+                    await dependencies.restorePersistenceState()
+                    if launchConfiguration.isUITesting {
+                        prepareUITestState()
+                        return
+                    }
+                    appState.pendingWorkoutPlan = AppIntentInbox.consumeWorkoutPlan()
+                    appState.pendingMealText = AppIntentInbox.consumeMealText()
+                    checkOnboarding()
                     healthKitWorkoutImporter.importChanges(in: modelContext)
                     workoutRouteImporter.importPendingRoutes(in: modelContext)
                 }
-            }
+        } else {
+            PersistenceRecoveryView(
+                state: dependencies.persistenceWriteGate.state,
+                warning: appState.startupWarning
+            )
+        }
     }
 
     private func prepareUITestState() {
@@ -99,6 +105,46 @@ struct AppRoot: View {
             appState.userProfile = profile
         } else {
             appState.isOnboarded = false
+        }
+    }
+}
+
+private struct PersistenceRecoveryView: View {
+    let state: PersistenceRuntimeState
+    let warning: String?
+
+    var body: some View {
+        OrbitPage {
+            VStack(alignment: .leading, spacing: 20) {
+                Image(systemName: "externaldrive.badge.exclamationmark")
+                    .font(.system(size: 46, weight: .semibold))
+                    .foregroundStyle(OrbitPalette.coral)
+
+                OrbitScreenHeader(
+                    eyebrow: "Read-only recovery",
+                    title: "本地数据已进入只读保护。",
+                    subtitle: "迁移没有完成，因此当前不会开放记录、导入、确认或设置写入。"
+                )
+
+                if let warning {
+                    Text(warning)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                LabeledContent("诊断编号", value: state.diagnosticID ?? "unknown")
+                    .font(.footnote.monospaced())
+
+                Label(
+                    "原用户 store 与迁移前备份保持独立；请保留此编号用于恢复诊断。",
+                    systemImage: "lock.shield"
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            }
+            .padding()
+            .frame(maxWidth: 640, alignment: .leading)
         }
     }
 }
