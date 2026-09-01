@@ -116,11 +116,15 @@ struct ProviderRequestExecutor: Sendable {
         let remaining = deadline.timeIntervalSince(clock.now())
         guard remaining > 0 else { throw ProviderError.timeout }
 
-        var boundedRequest = request
-        boundedRequest.timeoutInterval = max(remaining, 0.001)
+        let boundedRequest: URLRequest = {
+            var snapshot = request
+            snapshot.timeoutInterval = max(remaining, 0.001)
+            return snapshot
+        }()
+        let transport = self.transport
 
         return try await withThrowingTaskGroup(of: DeadlineRaceResult.self) { group in
-            group.addTask {
+            group.addTask { [boundedRequest, transport] in
                 let (data, response) = try await transport.data(for: boundedRequest)
                 return .response(data, response)
             }
