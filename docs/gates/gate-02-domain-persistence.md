@@ -1,6 +1,6 @@
 # Gate 02 — Domain and Persistence
 
-Status: automated gate passed; awaiting user review
+Status: approved by user on 2026-08-31; Phase 3 authorized
 
 Gate 2 extends the same staged V3 core Draft PR. It may run only after
 `gate-01-foundation` succeeds on the same commit, and a green automated result
@@ -86,14 +86,14 @@ swift test --package-path Packages/DensosoDomain
 
 | Evidence | Required result | Current result |
 | --- | --- | --- |
-| PR head | Phase 2 commit on Draft PR #14 | `799737713cbb23e16e6eb4e7d7ff66a2005af557` on Draft PR #14 |
-| CI run | Same-head `foundation → domain-persistence` succeeds | Run `33355916259` — `SUCCESS` |
+| PR head | Phase 2 evidence on Draft PR #14 | Implementation `799737713cbb23e16e6eb4e7d7ff66a2005af557`; evidence head `8978b376704456675b4b95d0dabf9ff9bcecdf6d` |
+| CI run | Same-head `foundation → domain-persistence` succeeds | Final run `33357491207` — `SUCCESS` |
 | Dependency | `foundation` succeeds on the same head | `gate-01-foundation`: passed |
 | Domain tests | Range and canonical payload suites pass | `foundation`: 38/38; `domain-persistence`: 38/38 |
 | Persistence tests | Concurrency, TTL, rejection, crash and outbox suites pass | Persistence/migration selected tests: 20/20 |
 | Runtime | Gate 2 Simulator evidence is captured on the required device | iPhone 17 Pro, iOS 26.2 Simulator |
 | Migration tests | V1/V2 disk fixtures migrate and reopen once | V1: `migrated`; V2: `migrated-and-reopened` |
 | Recovery tests | Original/backup restored; write attempt fails | `read-only-recovery`; `originalRestored=true`; `backupFileCount=3` |
-| Artifact | `.xcresult`, logs and JSON attachments retained | ID `9745496727` (261,326 bytes): `.xcresult`, manifest, 3 JSON reports, 2 logs, and test summary |
+| Artifact | `.xcresult`, logs and JSON attachments retained | ID `9745960033` (259,612 bytes): `.xcresult`, manifest, 3 JSON reports, 2 logs, and test summary |
 | Signing | Remains separate from Simulator evidence | `blocked-by-signing` |
-| User decision | Approve or reject entry to Phase 3 | Pending review; Phase 3 remains prohibited |
+| User decision | Approve or reject entry to Phase 3 | Approved 2026-08-31; Phase 3 authorized |

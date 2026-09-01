@@ -16,12 +16,14 @@ final class ConversationPersistenceTests: XCTestCase {
             conversationID: conversationID,
             role: "user",
             contentData: Data("first".utf8),
+            toolSummaryData: nil,
             requestID: UUID()
         )
         try await firstRepository.appendMessage(
             conversationID: conversationID,
             role: "assistant",
             contentData: Data("second".utf8),
+            toolSummaryData: nil,
             requestID: nil
         )
 
@@ -43,19 +45,27 @@ final class ConversationPersistenceTests: XCTestCase {
         let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
         let agentRepository = SwiftDataAgentRepository(modelContainer: container)
         for message in [
-            DeepSeekClient.Message(role: "user", text: "记录午餐"),
-            DeepSeekClient.Message(role: "assistant", text: "请确认草稿"),
+            ModelMessage(role: .user, text: "记录午餐"),
+            ModelMessage(role: .assistant, text: "请确认草稿"),
         ] {
             try await agentRepository.appendMessage(
                 conversationID: conversationID,
-                role: message.role,
+                role: message.role.rawValue,
                 contentData: JSONEncoder().encode(message),
+                toolSummaryData: nil,
                 requestID: UUID()
             )
         }
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: container)
+        let governance = InMemoryProviderGovernanceRepository(granted: [(.deepSeek, .healthText)])
+        let preferences = IntelligencePreferences()
+        preferences.mode = .cloudDeepSeek
         let session = AgentSession(
-            client: DeepSeekClient(),
+            providerSelector: TestProviderSelector(ScriptedTextProvider(scripts: [])),
+            intelligencePreferences: preferences,
+            providerConfiguration: ProviderConfigurationPreferences(),
+            governanceRepository: governance,
+            usageLedger: ProviderUsageLedger(repository: governance),
             registry: ToolRegistry(),
             confirmationCoordinator: ConfirmationCoordinator(
                 repository: confirmationRepository,

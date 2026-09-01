@@ -52,6 +52,15 @@ struct ChatScreen: View {
                             .id(message.id)
                     }
 
+                    if isProcessing, !dependencies.agentSession.streamedText.isEmpty {
+                        MessageBubble(
+                            message: ChatMessage(
+                                text: dependencies.agentSession.streamedText,
+                                isUser: false
+                            )
+                        )
+                    }
+
                     if !dependencies.agentSession.pendingActions.isEmpty {
                         ForEach(dependencies.agentSession.pendingActions) { action in
                             PendingActionConfirmationCard(action: action) {
@@ -92,7 +101,7 @@ struct ChatScreen: View {
             .onChange(of: messages.count) { _, _ in
                 scrollToBottom(proxy: proxy)
             }
-            .onChange(of: appState.agentStreamedText) { _, _ in
+            .onChange(of: dependencies.agentSession.streamedText) { _, _ in
                 scrollToBottom(proxy: proxy)
             }
         }
@@ -140,15 +149,19 @@ struct ChatScreen: View {
                 }
 
             Button {
-                Task { await send(text: inputText) }
+                if isProcessing {
+                    dependencies.agentSession.cancelActiveRequest()
+                } else {
+                    Task { await send(text: inputText) }
+                }
             } label: {
-                Image(systemName: "arrow.up")
+                Image(systemName: isProcessing ? "xmark" : "arrow.up")
             }
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.circle)
             .controlSize(.large)
-            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessing)
-            .accessibilityLabel("发送")
+            .disabled(!isProcessing && inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel(isProcessing ? "取消请求" : "发送")
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
@@ -246,7 +259,7 @@ struct ChatScreen: View {
                         isUser: false
                     )
                 }
-            case .cloudDeepSeek:
+            case .cloudDeepSeek, .cloudQwen:
                 let response = try await dependencies.agentSession.send(userText: userText)
                 addMessage(text: response.text, isUser: false)
             case .manual:
@@ -304,7 +317,13 @@ struct MessageBubble: View {
         HStack {
             if message.isUser { Spacer(minLength: 44) }
 
-            Text(message.text)
+            Group {
+                if message.isUser {
+                    Text(message.text)
+                } else {
+                    AssistantBlockView(document: RestrictedMarkdownRenderer.parse(message.text))
+                }
+            }
                 .font(.body)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)

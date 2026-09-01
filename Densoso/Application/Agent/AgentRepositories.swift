@@ -27,6 +27,7 @@ protocol ConversationRepository: Sendable {
         conversationID: UUID,
         role: String,
         contentData: Data,
+        toolSummaryData: Data?,
         requestID: UUID?
     ) async throws
     func messageData(conversationID: UUID) async throws -> [Data]

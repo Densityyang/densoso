@@ -1,13 +1,14 @@
 import Foundation
 
 struct GetMetricsTool: AgentTool {
-    var definition: DeepSeekClient.ToolDef { .make(
+    var definition: ToolSchema { .strictObject(
         name: "get_metrics",
         description: "获取任意日期范围内的热量指标：总消耗、摄入、缺口、营养素。",
         properties: [
-            ("startDate", "string", "开始日期 ISO8601", true),
-            ("endDate", "string", "结束日期 ISO8601", true),
-        ]
+            "startDate": .string(format: "date-time", description: "开始日期 ISO8601"),
+            "endDate": .string(format: "date-time", description: "结束日期 ISO8601"),
+        ],
+        required: ["startDate", "endDate"]
     )}
 
     func execute(argumentsJSON: String, context: AgentSession, clientRequestID: UUID) async throws -> String {

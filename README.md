@@ -93,6 +93,7 @@ python -m py_compile scripts/evaluate_voice_transcripts.py scripts/generate_voic
   scripts/import_exercise_catalog.py scripts/import_food_db.py scripts/validate_food_db.py \
   scripts/validate_gate0_ui.py scripts/validate_phase1_foundation.py \
   scripts/validate_phase2_domain_persistence.py \
+  scripts/validate_phase3_agent_provider.py \
   scripts/validate_voice_goldens.py
 ```
 
@@ -100,7 +101,8 @@ GitHub Actions 工作流位于 `.github/workflows/`：
 
 - `build.yml`：`gate-01-foundation` 执行纯 `DensosoDomain` 测试、确定性 XcodeGen、
   iOS 18 deployment 构建、iOS 26 Simulator 单测/UI 截图与 Watch 编译，
-  并上传 `.xcresult` 和日志证据。
+  并上传 `.xcresult` 和日志证据；后续依次运行 `gate-02-domain-persistence`
+  和 `gate-03-agent-provider`，其中 Provider 测试只使用本地 fixture/fake transport。
 - `build-ipa.yml`：手动触发 Release device build、IPA 打包和 artifact 上传。
 
 ## 文档索引

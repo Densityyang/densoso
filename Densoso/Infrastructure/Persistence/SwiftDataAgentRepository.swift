@@ -47,6 +47,7 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         conversationID: UUID,
         role: String,
         contentData: Data,
+        toolSummaryData: Data?,
         requestID: UUID?
     ) throws {
         try ensureConversation(id: conversationID)
@@ -58,6 +59,7 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
                 conversationID: conversationID,
                 roleRaw: role,
                 contentData: contentData,
+                toolSummaryData: toolSummaryData,
                 ordinal: ordinal,
                 requestID: requestID
             )

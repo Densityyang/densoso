@@ -40,6 +40,7 @@ jobs:
             scripts/validate_gate0_ui.py \
             scripts/validate_phase1_foundation.py \
             scripts/validate_phase2_domain_persistence.py \
+            scripts/validate_phase3_agent_provider.py \
             scripts/validate_voice_goldens.py
 
       - name: Validate bundled food database
@@ -250,5 +251,92 @@ jobs:
             gate02-domain.log
             gate02-persistence-tests.log
             gate02-test-summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+  agent-provider:
+    name: gate-03-agent-provider
+    needs: domain-persistence
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 3 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate03DerivedData" >> "$GITHUB_ENV"
+          echo "GATE03_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate03AgentProviderTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 3 contracts and fixtures
+        run: |
+          python3 -m py_compile scripts/validate_phase3_agent_provider.py
+          python3 scripts/validate_phase3_agent_provider.py \
+            --report gate03-fixture-summary.json
+
+      - name: Test cumulative domain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate03-domain.log
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Prepare iOS 26 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test Agent Provider Markdown and privacy contracts
+        run: |
+          set -o pipefail
+          rm -rf "$GATE03_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/DeepSeekProviderContractTests \
+            -only-testing:DensosoTests/QwenProviderContractTests \
+            -only-testing:DensosoTests/ProviderRetryPolicyTests \
+            -only-testing:DensosoTests/AgentCoordinatorTests \
+            -only-testing:DensosoTests/PromptInjectionEvalTests \
+            -only-testing:DensosoTests/AgentBudgetTests \
+            -only-testing:DensosoTests/ToolSchemaTests \
+            -only-testing:DensosoTests/ProviderUsageLedgerTests \
+            -only-testing:DensosoTests/RestrictedMarkdownRendererTests \
+            -only-testing:DensosoTests/ProviderLogRedactionTests \
+            -only-testing:DensosoTests/AgentPersistenceBoundaryTests \
+            -only-testing:DensosoTests/IntelligenceRoutingPolicyTests \
+            -only-testing:DensosoTests/ConversationPersistenceTests \
+            -resultBundlePath "$GATE03_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate03-agent-provider-tests.log
+
+      - name: Export Gate 3 test summary
+        run: |
+          set -euo pipefail
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE03_RESULT_BUNDLE" > gate03-test-summary.json
+          grep -q '"result" : "Passed"' gate03-test-summary.json
+
+      - name: Upload Gate 3 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-03-agent-provider-results
+          path: |
+            Gate03AgentProviderTests.xcresult
+            gate03-domain.log
+            gate03-agent-provider-tests.log
+            gate03-test-summary.json
+            gate03-fixture-summary.json
           if-no-files-found: error
           retention-days: 14

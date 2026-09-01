@@ -1,12 +1,13 @@
 import Foundation
 
 struct GetWeeklyDeficitTool: AgentTool {
-    var definition: DeepSeekClient.ToolDef { .make(
+    var definition: ToolSchema { .strictObject(
         name: "get_weekly_deficit",
         description: "获取本周（或指定周）的热量缺口汇总。weekOffset=0为本週，-1为上週。",
         properties: [
-            ("weekOffset", "integer", "周偏移: 0=本周, -1=上周", false),
-        ]
+            "weekOffset": .integer(minimum: -52, maximum: 0, description: "周偏移: 0=本周, -1=上周")
+        ],
+        required: []
     )}
 
     func execute(argumentsJSON: String, context: AgentSession, clientRequestID: UUID) async throws -> String {

@@ -105,6 +105,10 @@ targets:
     platform: iOS
     sources:
       - path: DensosoTests
+    resources:
+      # JSON is a valid YAML 1.2 document; keeping the plan-mandated .yaml name
+      # lets Swift and Python execute the same eval cases without a YAML runtime.
+      - path: evals/prompt-injection-phase3.yaml
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.tests

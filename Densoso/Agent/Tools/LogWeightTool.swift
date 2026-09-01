@@ -2,14 +2,19 @@ import DensosoDomain
 import Foundation
 
 struct LogWeightTool: ConfirmationRequiredTool {
-    var definition: DeepSeekClient.ToolDef {
-        .make(
+    var definition: ToolSchema {
+        .strictObject(
             name: "log_weight",
             description: "准备一条体重草稿，不会保存数据，必须等待用户确认。",
+            effect: .stagesAction,
             properties: [
-                ("kilograms", "number", "体重千克数，20 到 500", true),
-                ("measuredAt", "string", "测量时间 ISO8601，缺省为当前", false),
-            ]
+                "kilograms": .number(minimum: 20, maximum: 500, description: "体重千克数"),
+                "measuredAt": .anyOf(
+                    [.string(format: "date-time"), .null],
+                    description: "测量时间 ISO8601，null 表示当前"
+                ),
+            ],
+            required: ["kilograms", "measuredAt"]
         )
     }
 

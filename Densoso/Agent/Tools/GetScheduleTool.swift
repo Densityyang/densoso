@@ -1,12 +1,11 @@
 import Foundation
 
 struct GetScheduleTool: AgentTool {
-    var definition: DeepSeekClient.ToolDef { .make(
+    var definition: ToolSchema { .strictObject(
         name: "get_schedule",
         description: "获取某日的日程安排。",
-        properties: [
-            ("date", "string", "日期 ISO8601", true),
-        ]
+        properties: ["date": .string(format: "date-time", description: "日期 ISO8601")],
+        required: ["date"]
     )}
 
     func execute(argumentsJSON: String, context: AgentSession, clientRequestID: UUID) async throws -> String {

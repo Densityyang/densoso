@@ -2,57 +2,108 @@ import Foundation
 import DensosoDomain
 
 struct LogMealTool: ConfirmationRequiredTool {
-    var definition: DeepSeekClient.ToolDef { .make(
-        name: "log_meal",
-        description: "准备一餐的结构化草稿，不会保存数据。dishes 是数组 JSON；烹饪方式只用于推断油量，绝不能乘食材热量。",
-        properties: [
-            ("mealType", "string", "进餐类型: breakfast/lunch/dinner/snack", true),
-            ("dishes", "string", "菜品数组 JSON；每项含 dishName、cookingMethod、ingredientNames、ingredientAmounts、notedOilG、lowConfidence", true),
-            ("datetime", "string", "用餐时间 ISO8601，默认当前", false),
-        ]
-    ) }
+    var definition: ToolSchema {
+        .strictObject(
+            name: "log_meal",
+            description: "准备一餐的结构化草稿，不会保存数据；烹饪方式只用于推断油量，不能乘食材热量。",
+            effect: .stagesAction,
+            properties: [
+                "mealType": .string(
+                    allowedValues: ["breakfast", "lunch", "dinner", "snack"],
+                    description: "进餐类型"
+                ),
+                "occurredAt": .anyOf(
+                    [.string(format: "date-time"), .null],
+                    description: "用餐时间；null 表示当前"
+                ),
+                "dishes": .array(
+                    items: .object(
+                        properties: [
+                            "dishName": .string(minimumLength: 1, maximumLength: 120),
+                            "cookingMethod": .string(
+                                allowedValues: [
+                                    "steam", "boil", "coldDress", "stirFry", "braise",
+                                    "dryFry", "deepFry", "roast", "stew", "unknown",
+                                ]
+                            ),
+                            "ingredients": .array(
+                                items: .object(
+                                    properties: [
+                                        "name": .string(minimumLength: 1, maximumLength: 120),
+                                        "amountGrams": .number(minimum: 0.1, maximum: 5_000),
+                                    ],
+                                    required: ["name", "amountGrams"],
+                                    additionalProperties: false
+                                ),
+                                minimumItems: 1,
+                                maximumItems: 20
+                            ),
+                            "notedOilG": .anyOf([.number(minimum: 0, maximum: 500), .null]),
+                            "lowConfidence": .boolean(),
+                        ],
+                        required: [
+                            "dishName", "cookingMethod", "ingredients", "notedOilG", "lowConfidence",
+                        ],
+                        additionalProperties: false
+                    ),
+                    minimumItems: 1,
+                    maximumItems: 20
+                ),
+                "note": .anyOf([.string(maximumLength: 1_000), .null]),
+            ],
+            required: ["mealType", "occurredAt", "dishes", "note"]
+        )
+    }
 
     func prepare(argumentsJSON: String, context: AgentSession) async throws -> ActionPayload {
         guard let data = argumentsJSON.data(using: .utf8),
-              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let mealType = json["mealType"] as? String,
-              Set(["breakfast", "lunch", "dinner", "snack"]).contains(mealType),
-              let dishesJSON = json["dishes"] as? String,
-              let dishesData = dishesJSON.data(using: .utf8),
-              let rawDishes = try JSONSerialization.jsonObject(with: dishesData) as? [[String: Any]],
-              !rawDishes.isEmpty, rawDishes.count <= 20 else { throw DraftError.invalidMeal }
+              let arguments = try? JSONDecoder().decode(LogMealArguments.self, from: data),
+              Set(["breakfast", "lunch", "dinner", "snack"]).contains(arguments.mealType),
+              !arguments.dishes.isEmpty,
+              arguments.dishes.count <= 20 else {
+            throw DraftError.invalidMeal
+        }
 
         let date: Date
-        if let datetime = json["datetime"] as? String {
-            guard let parsed = ISO8601DateFormatter().date(from: datetime) else { throw DraftError.invalidMeal }
+        if let occurredAt = arguments.occurredAt {
+            guard let parsed = ISO8601DateFormatter().date(from: occurredAt) else {
+                throw DraftError.invalidMeal
+            }
             date = parsed
         } else { date = Date() }
 
         let table = CookingCoefficientTable.shared
-        let drafts = try rawDishes.map { rawDish -> MealDishDraft in
-            guard let name = rawDish["dishName"] as? String,
-                  !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  let cookingMethod = rawDish["cookingMethod"] as? String,
-                  let ingredientNames = rawDish["ingredientNames"] as? [String],
-                  let ingredientAmounts = rawDish["ingredientAmounts"] as? [Double],
-                  !ingredientNames.isEmpty, ingredientNames.count == ingredientAmounts.count,
-                  ingredientNames.count <= 20,
-                  ingredientAmounts.allSatisfy({ $0 > 0 && $0 <= 5_000 }) else { throw DraftError.invalidMeal }
-
-            let explicitOil = rawDish["notedOilG"] as? Double
-            guard explicitOil == nil || (explicitOil! >= 0 && explicitOil! <= 500) else { throw DraftError.invalidMeal }
-            guard let database = context.foodDatabase else { throw DraftError.invalidMeal }
-            let ingredients = try zip(ingredientNames, ingredientAmounts).compactMap { pair -> CalorieEstimator.Ingredient? in
-                guard let candidate = try database.rankedSearch(query: pair.0, limit: 3).first else { return nil }
-                return CalorieEstimator.Ingredient(item: candidate.item, amountG: pair.1,
-                                                   massBasis: massBasis(for: candidate.item, requestedName: pair.0), matchScore: candidate.score)
+        let drafts = try arguments.dishes.map { rawDish -> MealDishDraft in
+            let name = rawDish.dishName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty,
+                  !rawDish.ingredients.isEmpty,
+                  rawDish.ingredients.count <= 20,
+                  rawDish.ingredients.allSatisfy({
+                      !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          && $0.amountGrams.isFinite
+                          && (0.1...5_000).contains($0.amountGrams)
+                  }),
+                  rawDish.notedOilG == nil
+                    || (rawDish.notedOilG!.isFinite && (0...500).contains(rawDish.notedOilG!)) else {
+                throw DraftError.invalidMeal
             }
-            guard ingredients.count == ingredientNames.count else { throw DraftError.invalidMeal }
-            let oil: CalorieEstimator.OilSource = explicitOil.map(CalorieEstimator.OilSource.provided)
-                ?? .inferred(grams: table[cookingMethod].defaultOilG)
+            guard let database = context.foodDatabase else { throw DraftError.invalidMeal }
+            let ingredients = try rawDish.ingredients.compactMap { ingredient -> CalorieEstimator.Ingredient? in
+                guard let candidate = try database.rankedSearch(query: ingredient.name, limit: 3).first else {
+                    return nil
+                }
+                return CalorieEstimator.Ingredient(
+                    item: candidate.item,
+                    amountG: ingredient.amountGrams,
+                    massBasis: massBasis(for: candidate.item, requestedName: ingredient.name),
+                    matchScore: candidate.score
+                )
+            }
+            guard ingredients.count == rawDish.ingredients.count else { throw DraftError.invalidMeal }
+            let oil: CalorieEstimator.OilSource = rawDish.notedOilG.map(CalorieEstimator.OilSource.provided)
+                ?? .inferred(grams: table[rawDish.cookingMethod].defaultOilG)
             let estimate = CalorieEstimator.estimate(ingredients: ingredients, oil: oil, oilCaloriesPerGram: table.oilPerGramKcal)
-            let lowConfidence = rawDish["lowConfidence"] as? Bool ?? false
-            let confidence = lowConfidence ? min(estimate.confidence, 0.5) : estimate.confidence
+            let confidence = rawDish.lowConfidence ? min(estimate.confidence, 0.5) : estimate.confidence
             let domainIngredients = try estimate.ingredientEstimates.map { ingredient in
                 MealIngredientDraft(
                     foodID: String(ingredient.foodItemId),
@@ -82,7 +133,7 @@ struct LogMealTool: ConfirmationRequiredTool {
             }
             return MealDishDraft(
                 name: name,
-                cookingMethod: cookingMethod,
+                cookingMethod: rawDish.cookingMethod,
                 portionGrams: try EstimateRange.sum(domainIngredients.map(\.amountGrams)),
                 nutrients: NutrientEstimate(
                     energyKcal: try EstimateRange(
@@ -99,12 +150,39 @@ struct LogMealTool: ConfirmationRequiredTool {
                 algorithmVersion: "v3"
             )
         }
-        return .meal(MealDraft(occurredAt: date, mealType: mealType, dishes: drafts))
+        return .meal(
+            MealDraft(
+                occurredAt: date,
+                mealType: arguments.mealType,
+                dishes: drafts,
+                note: arguments.note
+            )
+        )
     }
 
     private func massBasis(for item: FoodItem, requestedName: String) -> CalorieEstimator.MassBasis {
         let requested = requestedName.lowercased()
         if item.name.contains("米饭") || requested.contains("熟") { return .cooked }
         return .grossRaw
+    }
+}
+
+private struct LogMealArguments: Decodable {
+    let mealType: String
+    let occurredAt: String?
+    let dishes: [Dish]
+    let note: String?
+
+    struct Dish: Decodable {
+        let dishName: String
+        let cookingMethod: String
+        let ingredients: [Ingredient]
+        let notedOilG: Double?
+        let lowConfidence: Bool
+    }
+
+    struct Ingredient: Decodable {
+        let name: String
+        let amountGrams: Double
     }
 }
