@@ -1,6 +1,6 @@
 # Gate 04 — Speech Capture
 
-Status: implementation candidate; awaiting macOS CI and user review
+Status: awaiting user Gate 4 approval
 
 Gate 4 extends Draft PR #14 after the user approved Gate 3 on 2026-09-02.
 It repairs speech capture only and does not authorize Phase 5 meal/photo work.
@@ -67,12 +67,17 @@ zero `OSStatus -50` and zero recording failures.
 
 | Evidence | Required result | Current result |
 | --- | --- | --- |
-| PR head | Phase 4 implementation on Draft PR #14 | Pending publish |
-| Dependencies | Gates 1–3 succeed on the same head | Pending CI |
-| State/session | Failure stages, repeat/cancel/events/tap tests pass | Pending CI |
-| Routing | SpeechAnalyzer → legacy → Qwen → manual tests pass | Pending CI |
-| Qwen contract | Audio request/response/usage fixtures pass | Pending CI |
-| Privacy | WAV cleanup/protection and diagnostics redaction pass | Pending CI |
-| Artifact | `.xcresult`, logs and JSON matrices retained | Pending CI |
+| PR head | Phase 4 implementation on Draft PR #14 | `7f1bc02eb10c32f4f4a168004e1758dc251eada4` |
+| Implementation/fix commits | Phase 4 implementation plus SDK/Swift 6/test fixes | `e0cdec46b7ae94d832ce5ad15372195080f83964`, `210f054078ba82f4805c46a02b33bbd3a3bb6cc2`, `c44098cb78d8a497de0e60342ca85f63849a0d9f`, `7f1bc02eb10c32f4f4a168004e1758dc251eada4` |
+| Chained CI | Gates 1–4 succeed on the same head | [run 33601854099](https://github.com/Densityyang/densoso/actions/runs/33601854099) — all four jobs passed |
+| Gate 1 job | `gate-01-foundation` | [job 100157076743](https://github.com/Densityyang/densoso/actions/runs/33601854099/job/100157076743) — passed |
+| Gate 2 job | `gate-02-domain-persistence` | [job 100161955859](https://github.com/Densityyang/densoso/actions/runs/33601854099/job/100161955859) — passed |
+| Gate 3 job | `gate-03-agent-provider` | [job 100164733999](https://github.com/Densityyang/densoso/actions/runs/33601854099/job/100164733999) — passed |
+| Gate 4 job | `gate-04-speech` | [job 100167613953](https://github.com/Densityyang/densoso/actions/runs/33601854099/job/100167613953) — passed |
+| State/session | Failure stages, repeat/cancel/events/tap tests pass | Passed in Gate 4 job |
+| Routing | SpeechAnalyzer → legacy → Qwen → manual tests pass | Passed in Gate 4 job |
+| Qwen contract | Audio request/response/usage fixtures pass | Passed in Gate 4 job |
+| Privacy | WAV cleanup/protection and diagnostics redaction pass | Passed in Gate 4 job; Simulator protection mapping is documented below |
+| Artifact | `.xcresult`, logs and JSON matrices retained | `gate-04-speech-results` — artifact ID `9837055363` |
 | Device | 20 physical cycles | Provisional; blocked by signing |
-| User decision | Approve or reject entry to Phase 5 | Pending review |
+| User decision | Approve or reject entry to Phase 5 | Awaiting user Gate 4 approval |
