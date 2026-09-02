@@ -125,7 +125,10 @@ final class SpeechService {
         error = nil
 
         state = .requestingPermission
-        guard isAuthorized || await audioSession.requestRecordPermission() else {
+        if !isAuthorized {
+            isAuthorized = await audioSession.requestRecordPermission()
+        }
+        guard isAuthorized else {
             isAuthorized = false
             let failure = makeFailure(
                 kind: .permissionDenied,

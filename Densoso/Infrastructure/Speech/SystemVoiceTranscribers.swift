@@ -374,16 +374,10 @@ private final class SpeechAnalyzerPCMConverter {
         ) else {
             throw SpeechTranscriberFactoryError.invalidFrame
         }
-        var suppliedInput = false
+        let inputBox = SpeechConverterInputBox(buffer: input)
         var conversionError: NSError?
         let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
-            guard !suppliedInput else {
-                inputStatus.pointee = .noDataNow
-                return nil
-            }
-            suppliedInput = true
-            inputStatus.pointee = .haveData
-            return input
+            inputBox.next(status: inputStatus)
         }
         if let conversionError { throw conversionError }
         guard status != .error else { throw SpeechTranscriberFactoryError.invalidFrame }
@@ -410,5 +404,29 @@ private final class SpeechAnalyzerPCMConverter {
             if status == .endOfStream || output.frameLength == 0 { break }
         }
         return outputs
+    }
+}
+
+private final class SpeechConverterInputBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private let buffer: AVAudioPCMBuffer
+    private var supplied = false
+
+    init(buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func next(
+        status: UnsafeMutablePointer<AVAudioConverterInputStatus>
+    ) -> AVAudioBuffer? {
+        lock.withLock {
+            guard !supplied else {
+                status.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            status.pointee = .haveData
+            return buffer
+        }
     }
 }

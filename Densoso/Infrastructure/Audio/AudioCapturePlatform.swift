@@ -292,16 +292,10 @@ private final class SpeechPCM16Converter: @unchecked Sendable {
                 frameCapacity: capacity
             ) else { return nil }
 
-            var suppliedInput = false
+            let inputBox = AudioConverterInputBox(buffer: source)
             var conversionError: NSError?
             let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
-                guard !suppliedInput else {
-                    inputStatus.pointee = .noDataNow
-                    return nil
-                }
-                suppliedInput = true
-                inputStatus.pointee = .haveData
-                return source
+                inputBox.next(status: inputStatus)
             }
             guard status != .error,
                   conversionError == nil,
@@ -315,6 +309,30 @@ private final class SpeechPCM16Converter: @unchecked Sendable {
                 frameCount: Int(output.frameLength),
                 presentationTimeSeconds: presentationTimeSeconds
             )
+        }
+    }
+}
+
+private final class AudioConverterInputBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private let buffer: AVAudioPCMBuffer
+    private var supplied = false
+
+    init(buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func next(
+        status: UnsafeMutablePointer<AVAudioConverterInputStatus>
+    ) -> AVAudioBuffer? {
+        lock.withLock {
+            guard !supplied else {
+                status.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            status.pointee = .haveData
+            return buffer
         }
     }
 }
