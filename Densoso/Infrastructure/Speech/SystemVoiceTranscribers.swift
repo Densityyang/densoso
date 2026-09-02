@@ -161,7 +161,7 @@ private final class SpeechAnalyzerVoiceTranscriber: VoiceTranscribing {
     private let resultContinuation: AsyncThrowingStream<SpeechTranscriptUpdate, Error>.Continuation
     private let analyzer: SpeechAnalyzer
     private let transcriber: SpeechTranscriber
-    private let converter: AnalyzerInputConverter
+    private let converter: SpeechAnalyzerPCMConverter
     private let inputContinuation: AsyncStream<AnalyzerInput>.Continuation
     private var resultsTask: Task<Void, Never>?
     private var terminalError: Error?
@@ -169,7 +169,7 @@ private final class SpeechAnalyzerVoiceTranscriber: VoiceTranscribing {
     private init(
         analyzer: SpeechAnalyzer,
         transcriber: SpeechTranscriber,
-        converter: AnalyzerInputConverter,
+        converter: SpeechAnalyzerPCMConverter,
         inputContinuation: AsyncStream<AnalyzerInput>.Continuation
     ) {
         self.analyzer = analyzer
@@ -199,9 +199,15 @@ private final class SpeechAnalyzerVoiceTranscriber: VoiceTranscribing {
         }
 
         let analyzer = SpeechAnalyzer(modules: [transcriber])
-        let converter = try await AnalyzerInputConverter.converter(
+        guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
             compatibleWith: [transcriber]
-        )
+        ), let canonicalInputFormat = SpeechPCMBufferFactory.canonicalFormat,
+           let converter = SpeechAnalyzerPCMConverter(
+               inputFormat: canonicalInputFormat,
+               analyzerFormat: analyzerFormat
+           ) else {
+            throw SpeechTranscriberFactoryError.invalidFrame
+        }
         let (inputSequence, inputContinuation) = AsyncStream<AnalyzerInput>.makeStream(
             bufferingPolicy: .bufferingNewest(8)
         )
@@ -220,11 +226,8 @@ private final class SpeechAnalyzerVoiceTranscriber: VoiceTranscribing {
             return
         }
         do {
-            for input in try converter.convert(
-                buffer,
-                at: SpeechPCMBufferFactory.audioTime(for: frame)
-            ) {
-                try yieldInput(input)
+            for converted in try converter.convert(buffer) {
+                try yieldInput(AnalyzerInput(buffer: converted))
             }
         } catch {
             terminalError = error
@@ -234,7 +237,9 @@ private final class SpeechAnalyzerVoiceTranscriber: VoiceTranscribing {
 
     func finish() async throws {
         do {
-            for input in try converter.flush() { try yieldInput(input) }
+            for converted in try converter.flush() {
+                try yieldInput(AnalyzerInput(buffer: converted))
+            }
             inputContinuation.finish()
             try await analyzer.finalizeAndFinishThroughEndOfInput()
             await resultsTask?.value
@@ -304,15 +309,19 @@ private final class SpeechAnalyzerVoiceTranscriber: VoiceTranscribing {
 }
 
 private enum SpeechPCMBufferFactory {
+    static var canonicalFormat: AVAudioFormat? {
+        AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: SpeechAudioFrame.canonicalSampleRate,
+            channels: AVAudioChannelCount(SpeechAudioFrame.canonicalChannelCount),
+            interleaved: false
+        )
+    }
+
     static func buffer(from frame: SpeechAudioFrame) -> AVAudioPCMBuffer? {
         guard frame.frameCount > 0,
               frame.pcm16LittleEndian.count >= frame.frameCount * MemoryLayout<Int16>.size,
-              let format = AVAudioFormat(
-                  commonFormat: .pcmFormatInt16,
-                  sampleRate: SpeechAudioFrame.canonicalSampleRate,
-                  channels: AVAudioChannelCount(SpeechAudioFrame.canonicalChannelCount),
-                  interleaved: false
-              ),
+              let format = canonicalFormat,
               let buffer = AVAudioPCMBuffer(
                   pcmFormat: format,
                   frameCapacity: AVAudioFrameCount(frame.frameCount)
@@ -338,5 +347,68 @@ private enum SpeechPCMBufferFactory {
             sampleTime: AVAudioFramePosition(seconds * SpeechAudioFrame.canonicalSampleRate),
             atRate: SpeechAudioFrame.canonicalSampleRate
         )
+    }
+}
+
+@available(iOS 26.0, *)
+private final class SpeechAnalyzerPCMConverter {
+    private let converter: AVAudioConverter
+    private let analyzerFormat: AVAudioFormat
+
+    init?(inputFormat: AVAudioFormat, analyzerFormat: AVAudioFormat) {
+        guard let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat) else {
+            return nil
+        }
+        self.converter = converter
+        self.analyzerFormat = analyzerFormat
+    }
+
+    func convert(_ input: AVAudioPCMBuffer) throws -> [AVAudioPCMBuffer] {
+        let ratio = analyzerFormat.sampleRate / max(input.format.sampleRate, 1)
+        let capacity = AVAudioFrameCount(
+            max(1, Int((Double(input.frameLength) * ratio).rounded(.up)) + 1)
+        )
+        guard let output = AVAudioPCMBuffer(
+            pcmFormat: analyzerFormat,
+            frameCapacity: capacity
+        ) else {
+            throw SpeechTranscriberFactoryError.invalidFrame
+        }
+        var suppliedInput = false
+        var conversionError: NSError?
+        let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+            guard !suppliedInput else {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            suppliedInput = true
+            inputStatus.pointee = .haveData
+            return input
+        }
+        if let conversionError { throw conversionError }
+        guard status != .error else { throw SpeechTranscriberFactoryError.invalidFrame }
+        return output.frameLength > 0 ? [output] : []
+    }
+
+    func flush() throws -> [AVAudioPCMBuffer] {
+        var outputs: [AVAudioPCMBuffer] = []
+        for _ in 0..<8 {
+            guard let output = AVAudioPCMBuffer(
+                pcmFormat: analyzerFormat,
+                frameCapacity: 4_096
+            ) else {
+                throw SpeechTranscriberFactoryError.invalidFrame
+            }
+            var conversionError: NSError?
+            let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            if let conversionError { throw conversionError }
+            guard status != .error else { throw SpeechTranscriberFactoryError.invalidFrame }
+            if output.frameLength > 0 { outputs.append(output) }
+            if status == .endOfStream || output.frameLength == 0 { break }
+        }
+        return outputs
     }
 }

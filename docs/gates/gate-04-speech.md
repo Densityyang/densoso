@@ -23,6 +23,10 @@ It repairs speech capture only and does not authorize Phase 5 meal/photo work.
 - Delete temporary WAV data after success, failure, cancellation and cold launch.
 - Export redacted diagnostics containing stage, route type, format, backend,
   engine state and numeric errors, never keys, audio or transcript text.
+- Xcode 26.6 does not expose the online-documented `AnalyzerInputConverter` symbol;
+  the production adapter therefore uses a bounded `AVAudioConverter` compatible
+  with the SDK, explicitly drains it before SpeechAnalyzer finalization, and
+  treats any conversion/input drop as a failed local path.
 
 ## Non-goals
 

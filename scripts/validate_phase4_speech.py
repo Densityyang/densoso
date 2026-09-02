@@ -67,7 +67,7 @@ def main() -> int:
     require_text(
         ROOT / "Densoso/Infrastructure/Speech/SystemVoiceTranscribers.swift",
         [
-            "AnalyzerInputConverter.converter", "converter.flush()",
+            "SpeechAnalyzerPCMConverter", "converter.flush()",
             "finalizeAndFinishThroughEndOfInput", "await resultsTask?.value",
             "makeLegacyTranscriber",
         ],
