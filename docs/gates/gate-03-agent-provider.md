@@ -1,6 +1,6 @@
 # Gate 03 — Agent and Provider
 
-Status: awaiting CI evidence and user review
+Status: awaiting user Gate 3 approval
 
 Gate 3 extends the same V3 core Draft PR. It runs only after foundation and
 domain-persistence pass on the same head, and does not authorize Speech work.
@@ -69,13 +69,16 @@ The `agent-provider` job has `needs: domain-persistence` and must prove:
 
 | Evidence | Required result | Current result |
 | --- | --- | --- |
-| PR head | Phase 3 implementation on Draft PR #14 | Pending publish |
-| Dependencies | foundation and domain-persistence succeed | Pending CI |
-| Provider contracts | DeepSeek/Qwen fixtures pass | Pending CI |
-| Agent governance | 5/8/45, consent and injection tests pass | Pending CI |
-| Tool schemas | Closed schemas and typed meal arrays pass | Pending CI |
-| Usage/privacy | Ledger, budget and redaction tests pass | Pending CI |
-| Markdown | Restricted renderer tests pass | Pending CI |
-| Artifact | `.xcresult`, logs and JSON summaries retained | Pending CI |
+| PR head | Phase 3 implementation on Draft PR #14 | `b5766cc70c247f980f9c5c7bb59f3c5b3dc9de26` (`fix: preserve provider cancellation contracts`) |
+| CI run | Same head completes the cumulative chain | [Run 33577727374](https://github.com/Densityyang/densoso/actions/runs/33577727374) — success |
+| Foundation | gate-01-foundation succeeds | [Job 100085250453](https://github.com/Densityyang/densoso/actions/runs/33577727374/job/100085250453) — success |
+| Dependencies | foundation and domain-persistence succeed | [Job 100090437216](https://github.com/Densityyang/densoso/actions/runs/33577727374/job/100090437216) — success |
+| Provider contracts | DeepSeek/Qwen fixtures pass | [Job 100092358853](https://github.com/Densityyang/densoso/actions/runs/33577727374/job/100092358853) — success |
+| Agent governance | 5/8/45, consent and injection tests pass | Gate3 selected tests — success |
+| Tool schemas | Closed schemas and typed meal arrays pass | Gate3 selected tests — success |
+| Usage/privacy | Ledger, budget and redaction tests pass | Gate3 selected tests — success |
+| Markdown | Restricted renderer tests pass | Gate3 selected tests — success |
+| Fixture packaging | Prompt-injection fixture is in the test bundle | `CpResource .../prompt-injection-phase3.yaml .../DensosoTests.xctest` observed in Gate3 build log |
+| Artifact | `.xcresult`, logs and JSON summaries retained | `gate-03-agent-provider-results` — artifact ID `9828254631` |
 | Signing | Simulator evidence only | `blocked-by-signing` |
-| User decision | Approve or reject entry to Phase 4 | Pending review |
+| User decision | Approve or reject entry to Phase 4 | Awaiting user Gate 3 approval |
