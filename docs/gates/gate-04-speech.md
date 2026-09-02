@@ -57,6 +57,9 @@ The `speech` job has `needs: agent-provider` and must prove:
 The required iPhone 17 / iOS 26.6 built-in-microphone 20-cycle run remains
 provisional because the local app cannot currently be signed. The checked-in
 `gate-04-device-matrix.json` records zero executed cycles and makes no pass claim.
+Simulator tests accept either Complete or CompleteUntilFirstUserAuthentication
+because iOS 26 Simulator maps the requested protected class to the latter; the
+signed physical-device matrix must still verify the exact Complete class.
 The existing `blocked-by-signing` label must remain until signed evidence shows
 zero `OSStatus -50` and zero recording failures.
 

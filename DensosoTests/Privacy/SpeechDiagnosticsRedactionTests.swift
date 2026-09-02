@@ -42,6 +42,9 @@ final class SpeechDiagnosticsRedactionTests: XCTestCase {
         XCTAssertFalse(exported.localizedCaseInsensitiveContains("audioData"))
         XCTAssertTrue(exported.contains("-50"))
         XCTAssertTrue(exported.contains("redacted"))
-        XCTAssertEqual(protection, .complete)
+        XCTAssertTrue(
+            protection == .complete || protection == .completeUntilFirstUserAuthentication,
+            "Simulator must retain a protected file class"
+        )
     }
 }

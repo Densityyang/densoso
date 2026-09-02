@@ -7,6 +7,11 @@
   "executedStartStopCycles": 0,
   "observedOSStatusMinus50": null,
   "observedRecordingFailures": null,
+  "requiredPhysicalDeviceFileProtection": "complete",
+  "simulatorAcceptedProtectedClasses": [
+    "complete",
+    "completeUntilFirstUserAuthentication"
+  ],
   "reason": "The local iOS app is currently unsigned. Simulator CI cannot prove physical microphone or driver behavior.",
   "claimBoundary": "No real-device pass is claimed. Keep blocked-by-signing until the signed 20-cycle matrix is attached."
 }

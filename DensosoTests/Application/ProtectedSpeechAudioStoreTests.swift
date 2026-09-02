@@ -26,7 +26,10 @@ final class ProtectedSpeechAudioStoreTests: XCTestCase {
         )
         let wav = try XCTUnwrap(filesBeforeDiscard.first { $0.pathExtension == "wav" })
         let protection = try wav.resourceValues(forKeys: [.fileProtectionKey]).fileProtection
-        XCTAssertEqual(protection, .complete)
+        XCTAssertTrue(
+            protection == .complete || protection == .completeUntilFirstUserAuthentication,
+            "Simulator must retain a protected file class"
+        )
 
         await store.discard()
         let filesAfterDiscard = try FileManager.default.contentsOfDirectory(
