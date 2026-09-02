@@ -1,5 +1,5 @@
 import SwiftUI
-import DensosoWorkoutDomain
+import DensosoDomain
 
 @main
 struct DensosoWatchWorkoutApp: App {

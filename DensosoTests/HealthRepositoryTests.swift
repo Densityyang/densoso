@@ -1,7 +1,7 @@
 import SwiftData
 import XCTest
 @testable import Densoso
-import DensosoWorkoutDomain
+import DensosoDomain
 
 @MainActor
 final class HealthRepositoryTests: XCTestCase {

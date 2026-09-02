@@ -1,5 +1,5 @@
 import Foundation
-import DensosoWorkoutDomain
+import DensosoDomain
 
 struct ExerciseCatalog: Decodable, Sendable {
     struct Entry: Decodable, Equatable, Identifiable, Sendable {

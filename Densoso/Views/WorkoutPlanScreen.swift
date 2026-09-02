@@ -1,4 +1,5 @@
 import SwiftUI
+import DensosoDomain
 
 /// A confirmation-first editor for WorkoutKit plans. No WorkoutKit call happens
 /// while this view is being edited.

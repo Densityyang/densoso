@@ -1,17 +1,17 @@
 import Foundation
-import SwiftData
 
 struct GetMetricsTool: AgentTool {
-    var definition: DeepSeekClient.ToolDef { .make(
+    var definition: ToolSchema { .strictObject(
         name: "get_metrics",
         description: "获取任意日期范围内的热量指标：总消耗、摄入、缺口、营养素。",
         properties: [
-            ("startDate", "string", "开始日期 ISO8601", true),
-            ("endDate", "string", "结束日期 ISO8601", true),
-        ]
+            "startDate": .string(format: "date-time", description: "开始日期 ISO8601"),
+            "endDate": .string(format: "date-time", description: "结束日期 ISO8601"),
+        ],
+        required: ["startDate", "endDate"]
     )}
 
-    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
+    func execute(argumentsJSON: String, context: AgentSession, clientRequestID: UUID) async throws -> String {
         guard let data = argumentsJSON.data(using: .utf8),
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let startStr = json["startDate"] as? String,
@@ -29,15 +29,11 @@ struct GetMetricsTool: AgentTool {
         let startDay = calendar.startOfDay(for: startDate)
         let endDay = calendar.startOfDay(for: endDate)
 
-        let predicate = #Predicate<DailyMetrics> { metrics in
-            metrics.date >= startDay && metrics.date <= endDay
-        }
-        let descriptor = FetchDescriptor<DailyMetrics>(predicate: predicate)
-        let metricsList = (try? modelContext.fetch(descriptor)) ?? []
+        let metricsList = try await context.dailyMetrics(from: startDay, through: endDay)
 
         let totalDeficit = metricsList.map(\.deficitKcal).reduce(0, +)
-        let totalIntake = metricsList.map(\.totalIntakeKcal).reduce(0, +)
-        let totalExpenditure = metricsList.map(\.totalExpenditureKcal).reduce(0, +)
+        let totalIntake = metricsList.map(\.intakeKcal).reduce(0, +)
+        let totalExpenditure = metricsList.map(\.expenditureKcal).reduce(0, +)
         let days = metricsList.count
 
         let resp: [String: Any] = [
@@ -50,8 +46,8 @@ struct GetMetricsTool: AgentTool {
             "dailyBreakdown": metricsList.map { m in
                 ["date": ISO8601DateFormatter().string(from: m.date),
                  "deficit": m.deficitKcal,
-                 "intake": m.totalIntakeKcal,
-                 "expenditure": m.totalExpenditureKcal]
+                 "intake": m.intakeKcal,
+                 "expenditure": m.expenditureKcal]
             },
         ]
         let respData = try JSONSerialization.data(withJSONObject: resp)

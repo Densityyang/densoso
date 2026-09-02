@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import DensosoDomain
 
 /// A small inbox is sufficient for handoff from a system App Intent to the app.
 /// The data is always a draft; no HealthKit or SwiftData write occurs here.

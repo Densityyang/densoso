@@ -1,0 +1,16 @@
+{
+  "id": "msg_fixture_deepseek",
+  "model": "deepseek-v4-flash",
+  "role": "assistant",
+  "content": [
+    {"type": "text", "text": "我会先生成可检查的草稿。"},
+    {
+      "type": "tool_use",
+      "id": "tool_1",
+      "name": "log_weight",
+      "input": {"kilograms": 62.5, "measuredAt": null}
+    }
+  ],
+  "stop_reason": "tool_use",
+  "usage": {"input_tokens": 120, "output_tokens": 32}
+}

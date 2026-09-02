@@ -2,6 +2,7 @@ import Foundation
 import HealthKit
 import Observation
 import WorkoutKit
+import DensosoDomain
 
 enum WorkoutPlanCompileError: LocalizedError, Equatable {
     case emptyName

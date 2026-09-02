@@ -15,6 +15,10 @@ struct OnboardingView: View {
 
     @State private var step: Step = .intelligence
     @State private var apiKey = ""
+    @State private var qwenAPIKey = ""
+    @State private var qwenWorkspaceID = ""
+    @State private var cloudTextConsent = false
+    @State private var qwenSpeechConsent = false
     @State private var name = ""
     @State private var sex = "male"
     @State private var height = "170"
@@ -90,7 +94,7 @@ struct OnboardingView: View {
                             }
                         }
                         .disabled(
-                            (step == .intelligence && intelligenceMode == .cloudDeepSeek && apiKey.isEmpty)
+                            (step == .intelligence && !cloudConfigurationIsValid)
                                 || isSaving
                         )
                     }
@@ -116,6 +120,7 @@ struct OnboardingView: View {
             Picker("处理方式", selection: $intelligenceMode) {
                 Text("设备端").tag(IntelligenceMode.localOnly)
                 Text("DeepSeek").tag(IntelligenceMode.cloudDeepSeek)
+                Text("Qwen").tag(IntelligenceMode.cloudQwen)
             }
             .pickerStyle(.segmented)
 
@@ -137,6 +142,28 @@ struct OnboardingView: View {
                 Text("密钥保存在 iOS Keychain，只在你主动提交云端请求时用于认证。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+            Section("云端同意") {
+                Toggle("同意上传我主动提交的健康文字", isOn: $cloudTextConsent)
+                Text("只包含当前主动提交的文字；不会自动上传图片、音频或后台健康数据。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } else if intelligenceMode == .cloudQwen {
+            Section("Qwen Model Studio") {
+                SecureField("输入 Model Studio Key", text: $qwenAPIKey)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Workspace ID", text: $qwenWorkspaceID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Text("北京区域可选文本工具调用和单次 Qwen ASR 兜底；图片仍不会上传。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Section("云端同意") {
+                Toggle("同意上传我主动提交的健康文字", isOn: $cloudTextConsent)
+                Toggle("同意在本地转写失败时上传单次临时音频", isOn: $qwenSpeechConsent)
             }
         }
     }
@@ -175,6 +202,21 @@ struct OnboardingView: View {
             "餐食与训练文字保留在本机。设备端能力不可用时会安全回退，输入不会自动上传或保存。"
         case .cloudDeepSeek:
             "仅把你主动提交的文字发送给 DeepSeek；写入健康数据仍需再次确认。"
+        case .cloudQwen:
+            "仅把你主动提交的文字发送给显式选择的 Qwen；不会静默切换到其他供应商。"
+        }
+    }
+
+    private var cloudConfigurationIsValid: Bool {
+        switch intelligenceMode {
+        case .localOnly:
+            true
+        case .cloudDeepSeek:
+            !apiKey.isEmpty && cloudTextConsent
+        case .cloudQwen:
+            !qwenAPIKey.isEmpty
+                && !qwenWorkspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && cloudTextConsent
         }
     }
 
@@ -186,6 +228,28 @@ struct OnboardingView: View {
         do {
             if intelligenceMode == .cloudDeepSeek {
                 try KeychainStore.shared.saveAPIKey(apiKey)
+                try await dependencies.providerGovernanceRepository.setConsent(
+                    provider: .deepSeek,
+                    dataClass: .healthText,
+                    granted: true,
+                    policyVersion: "cloud-health-text-v1"
+                )
+            } else if intelligenceMode == .cloudQwen {
+                try KeychainStore.shared.saveModelStudioAPIKey(qwenAPIKey)
+                dependencies.providerConfiguration.qwenWorkspaceID = qwenWorkspaceID
+                dependencies.providerConfiguration.qwenSpeechFallbackEnabled = qwenSpeechConsent
+                try await dependencies.providerGovernanceRepository.setConsent(
+                    provider: .qwen,
+                    dataClass: .healthText,
+                    granted: true,
+                    policyVersion: "cloud-health-text-v1"
+                )
+                try await dependencies.providerGovernanceRepository.setConsent(
+                    provider: .qwen,
+                    dataClass: .speechAudio,
+                    granted: qwenSpeechConsent,
+                    policyVersion: "qwen-single-audio-v1"
+                )
             }
             dependencies.intelligencePreferences.mode = intelligenceMode
 

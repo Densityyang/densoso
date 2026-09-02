@@ -1,24 +1,24 @@
 import Foundation
-import SwiftData
 
 struct QueryFoodTool: AgentTool {
-    var definition: DeepSeekClient.ToolDef { .make(
+    var definition: ToolSchema { .strictObject(
         name: "query_food",
         description: "查询本地食材库，按食材名模糊搜索，返回匹配食材的热量/营养数据。",
         properties: [
-            ("query", "string", "食材搜索词，如'猪五花肉'", true),
-            ("limit", "integer", "返回条数上限，默认5", false),
-        ]
+            "query": .string(minimumLength: 1, maximumLength: 80, description: "食材搜索词，如猪五花肉"),
+            "limit": .integer(minimum: 1, maximum: 10, description: "返回条数上限，默认5"),
+        ],
+        required: ["query"]
     )}
 
-    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
+    func execute(argumentsJSON: String, context: AgentSession, clientRequestID: UUID) async throws -> String {
         guard let data = argumentsJSON.data(using: .utf8),
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return #"{"error": "参数解析失败"}"#
         }
 
         let query = json["query"] as? String ?? ""
-        let limit = json["limit"] as? Int ?? 5
+        let limit = min(max(json["limit"] as? Int ?? 5, 1), 10)
 
         guard let db = context.foodDatabase else {
             return #"{"error": "食材库未初始化", "results": []}"#

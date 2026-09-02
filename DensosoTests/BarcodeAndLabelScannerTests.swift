@@ -1,6 +1,6 @@
 import XCTest
 @testable import Densoso
-@testable import DensosoWorkoutDomain
+@testable import DensosoDomain
 
 final class BarcodeAndLabelScannerTests: XCTestCase {
     func testExactFoodBarcodeIsPreferredAndNormalized() {

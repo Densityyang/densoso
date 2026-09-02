@@ -2,7 +2,7 @@ name: Densoso
 options:
   bundleIdPrefix: com.densoso
   deploymentTarget:
-    iOS: "26.0"
+    iOS: "18.0"
   createIntermediateGroups: true
 
 targets:
@@ -19,7 +19,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1"
-        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
         # The final brand icon is intentionally not part of the approved UI
         # prototype yet. Compile the color catalog without inventing an AppIcon.
         ASSETCATALOG_COMPILER_APPICON_NAME: ""
@@ -47,7 +47,7 @@ targets:
         embed: true
       - sdk: AppIntents.framework
       - sdk: WorkoutKit.framework
-      - package: DensosoWorkoutDomain
+      - package: DensosoDomain
       - package: GRDB
     preBuildScripts:
       - name: "Generate Food DB"
@@ -98,19 +98,40 @@ targets:
       properties:
         com.apple.developer.healthkit: true
     dependencies:
-      - package: DensosoWorkoutDomain
+      - package: DensosoDomain
 
   DensosoTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: DensosoTests
+      # JSON is a valid YAML 1.2 document; keeping the plan-mandated .yaml name
+      # lets Swift and Python execute the same eval cases without a YAML runtime.
+      - path: evals/prompt-injection-phase3.yaml
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.tests
         SWIFT_VERSION: "6.0"
-        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
         GENERATE_INFOPLIST_FILE: "YES"
+    dependencies:
+      - target: Densoso
+      - package: DensosoDomain
+
+  DensosoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: DensosoUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.uitests
+        SWIFT_VERSION: "6.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_TARGET_NAME: Densoso
     dependencies:
       - target: Densoso
 
@@ -122,10 +143,17 @@ schemes:
     test:
       targets:
         - name: DensosoTests
+        - name: DensosoUITests
+
+  DensosoWatch:
+    build:
+      targets:
+        DensosoWatchApp: all
+        DensosoWatchExtension: all
 
 packages:
-  DensosoWorkoutDomain:
-    path: Packages/DensosoWorkoutDomain
+  DensosoDomain:
+    path: Packages/DensosoDomain
   GRDB:
     url: https://github.com/groue/GRDB.swift
     from: "6.29.0"

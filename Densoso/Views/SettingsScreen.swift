@@ -11,6 +11,13 @@ struct SettingsScreen: View {
 
     @State private var apiKey = ""
     @State private var hasSavedAPIKey = false
+    @State private var qwenAPIKey = ""
+    @State private var hasSavedQwenAPIKey = false
+    @State private var deepSeekTextConsent = false
+    @State private var qwenTextConsent = false
+    @State private var qwenSpeechConsent = false
+    @State private var deepSeekUsage = "尚无用量"
+    @State private var qwenUsage = "尚无用量"
     @State private var statusMessage: String?
     @State private var exportURL: URL?
     @State private var showShareSheet = false
@@ -66,8 +73,12 @@ struct SettingsScreen: View {
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .task {
-                hasSavedAPIKey = (try? KeychainStore.shared.readAPIKey()) != nil
-                await refreshDiagnostics()
+                if !AppLaunchConfiguration.current.isUITesting {
+                    hasSavedAPIKey = (try? KeychainStore.shared.readAPIKey()) != nil
+                    hasSavedQwenAPIKey = (try? KeychainStore.shared.readModelStudioAPIKey()) != nil
+                    await refreshProviderGovernance()
+                    await refreshDiagnostics()
+                }
             }
             .onChange(of: healthImportCursors.first?.updatedAt) { _, _ in
                 Task { await refreshDiagnostics() }
@@ -97,10 +108,11 @@ struct SettingsScreen: View {
                 )) {
                     Text("设备端").tag(IntelligenceMode.localOnly)
                     Text("DeepSeek").tag(IntelligenceMode.cloudDeepSeek)
+                    Text("Qwen").tag(IntelligenceMode.cloudQwen)
                 }
                 .pickerStyle(.segmented)
 
-                Text("设备端模式不会把餐食和训练文字发送给 DeepSeek；云端模式只发送你主动提交的文字。")
+                Text("设备端模式不上传文字；DeepSeek/Qwen 仅在你显式选择并同意文字上传后调用，不会静默切换供应商。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -110,10 +122,87 @@ struct SettingsScreen: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 Button("保存到 Keychain", systemImage: "key.fill") {
-                    Task { await saveKey() }
+                    Task { await saveDeepSeekKey() }
                 }
                 .disabled(apiKey.isEmpty)
                 Text("密钥保存在本机 Keychain，仅用于你选择的 DeepSeek 请求。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Toggle("同意向 DeepSeek 上传主动提交的健康文字", isOn: $deepSeekTextConsent)
+                    .onChange(of: deepSeekTextConsent) { _, value in
+                        Task { await saveConsent(provider: .deepSeek, granted: value) }
+                }
+                LabeledContent("本月用量", value: deepSeekUsage)
+                TextField(
+                    "软提醒预算 USD/月",
+                    value: Binding(
+                        get: { Double(dependencies.providerConfiguration.deepSeekMonthlyBudgetMicros) / 1_000_000 },
+                        set: {
+                            guard $0.isFinite,
+                                  $0 >= 0,
+                                  $0 < Double(Int64.max) / 1_000_000 else { return }
+                            dependencies.providerConfiguration.deepSeekMonthlyBudgetMicros =
+                                Int64($0 * 1_000_000)
+                        }
+                    ),
+                    format: .number.precision(.fractionLength(0...2))
+                )
+                .keyboardType(.decimalPad)
+            }
+
+            Section("Qwen Model Studio") {
+                SecureField(hasSavedQwenAPIKey ? "输入新 Key 以替换" : "输入 Model Studio Key", text: $qwenAPIKey)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Workspace ID", text: Binding(
+                    get: { dependencies.providerConfiguration.qwenWorkspaceID },
+                    set: { dependencies.providerConfiguration.qwenWorkspaceID = $0 }
+                ))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                LabeledContent("区域", value: "北京")
+                Button("保存到 Keychain", systemImage: "key.fill") {
+                    Task { await saveQwenKey() }
+                }
+                .disabled(qwenAPIKey.isEmpty)
+                Toggle("同意向 Qwen 上传主动提交的健康文字", isOn: $qwenTextConsent)
+                    .onChange(of: qwenTextConsent) { _, value in
+                        Task { await saveConsent(provider: .qwen, granted: value) }
+                }
+                Toggle(
+                    "本地转写失败时启用 Qwen 单次语音兜底",
+                    isOn: Binding(
+                        get: { dependencies.providerConfiguration.qwenSpeechFallbackEnabled },
+                        set: { dependencies.providerConfiguration.qwenSpeechFallbackEnabled = $0 }
+                    )
+                )
+                Toggle("同意向 Qwen 上传单次临时音频", isOn: $qwenSpeechConsent)
+                    .onChange(of: qwenSpeechConsent) { _, value in
+                        Task {
+                            await saveConsent(
+                                provider: .qwen,
+                                dataClass: .speechAudio,
+                                granted: value
+                            )
+                        }
+                    }
+                LabeledContent("本月用量", value: qwenUsage)
+                TextField(
+                    "软提醒预算 CNY/月",
+                    value: Binding(
+                        get: { Double(dependencies.providerConfiguration.qwenMonthlyBudgetMicros) / 1_000_000 },
+                        set: {
+                            guard $0.isFinite,
+                                  $0 >= 0,
+                                  $0 < Double(Int64.max) / 1_000_000 else { return }
+                            dependencies.providerConfiguration.qwenMonthlyBudgetMicros =
+                                Int64($0 * 1_000_000)
+                        }
+                    ),
+                    format: .number.precision(.fractionLength(0...2))
+                )
+                .keyboardType(.decimalPad)
+                Text("文本工具调用和 qwen3-asr-flash 均固定北京区域；语音仅在本地失败、已采到音频且单独同意时上传一次，图片仍关闭。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -207,7 +296,7 @@ struct SettingsScreen: View {
                 )
                 CapabilityRow(
                     title: "语音识别",
-                    detail: "兼容路径的 Speech 授权状态",
+                    detail: "兼容 Speech 授权；设备不支持本地识别时可能使用 Apple 语音服务",
                     state: snapshot.speechRecognitionPermission
                 )
                 CapabilityRow(
@@ -231,13 +320,17 @@ struct SettingsScreen: View {
             }
             .disabled(dependencies.exportService.isExporting)
 
+            Button("导出脱敏语音诊断", systemImage: "waveform.badge.magnifyingglass") {
+                Task { await exportSpeechDiagnostics() }
+            }
+
             if dependencies.exportService.isExporting {
                 ProgressView("正在生成备份")
             }
         }
     }
 
-    private func saveKey() async {
+    private func saveDeepSeekKey() async {
         guard !apiKey.isEmpty else { return }
         do {
             try KeychainStore.shared.saveAPIKey(apiKey)
@@ -250,6 +343,69 @@ struct SettingsScreen: View {
         }
     }
 
+    private func saveQwenKey() async {
+        guard !qwenAPIKey.isEmpty else { return }
+        do {
+            try KeychainStore.shared.saveModelStudioAPIKey(qwenAPIKey)
+            qwenAPIKey = ""
+            hasSavedQwenAPIKey = true
+            statusMessage = "Model Studio Key 已保存到 Keychain。"
+        } catch {
+            statusMessage = nil
+            healthAuthorizationError = "无法保存 Model Studio Key：\(error.localizedDescription)"
+        }
+    }
+
+    private func saveConsent(
+        provider: ProviderID,
+        dataClass: ProviderDataClass = .healthText,
+        granted: Bool
+    ) async {
+        do {
+            try await dependencies.providerGovernanceRepository.setConsent(
+                provider: provider,
+                dataClass: dataClass,
+                granted: granted,
+                policyVersion: dataClass == .speechAudio
+                    ? "qwen-single-audio-v1"
+                    : "cloud-health-text-v1"
+            )
+        } catch {
+            healthAuthorizationError = "无法保存云端同意状态：\(error.localizedDescription)"
+        }
+    }
+
+    private func refreshProviderGovernance() async {
+        deepSeekTextConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+            provider: .deepSeek,
+            dataClass: .healthText
+        )) == true
+        qwenTextConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+            provider: .qwen,
+            dataClass: .healthText
+        )) == true
+        qwenSpeechConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+            provider: .qwen,
+            dataClass: .speechAudio
+        )) == true
+        deepSeekUsage = await usageText(provider: .deepSeek)
+        qwenUsage = await usageText(provider: .qwen)
+    }
+
+    private func usageText(provider: ProviderID) async -> String {
+        guard let summary = try? await dependencies.providerUsageLedger.monthlySummary(provider: provider) else {
+            return "暂不可用"
+        }
+        let tokens = summary.inputTokens + summary.outputTokens
+        let audio = summary.audioSeconds > 0
+            ? " · \(summary.audioSeconds.formatted(.number.precision(.fractionLength(0...1)))) 秒音频"
+            : ""
+        guard let cost = summary.estimatedCostMicros, let currency = summary.currency else {
+            return "\(tokens) tokens\(audio) · 费用暂不可估"
+        }
+        return "\(tokens) tokens\(audio) · 保守估算 \(String(format: "%.2f", Double(cost) / 1_000_000)) \(currency)"
+    }
+
     private func exportData() async {
         do {
             let url = try await dependencies.exportService.exportJSON(context: modelContext)
@@ -257,6 +413,15 @@ struct SettingsScreen: View {
             showShareSheet = true
         } catch {
             dependencies.exportService.lastError = error.localizedDescription
+        }
+    }
+
+    private func exportSpeechDiagnostics() async {
+        do {
+            exportURL = try await dependencies.speechService.exportDiagnostics()
+            showShareSheet = true
+        } catch {
+            healthAuthorizationError = "无法导出语音诊断：\(error.localizedDescription)"
         }
     }
 

@@ -1,16 +1,16 @@
-import DensosoWorkoutDomain
-import SwiftData
+import DensosoDomain
 import SwiftUI
 
 struct ChatScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(AppState.self) private var appState
-    @Environment(\.modelContext) private var modelContext
 
     @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
+    @State private var inputSource: VoiceCommandEnvelope.Source = .manualText
     @State private var isProcessing = false
     @State private var voiceDraftSummary: String?
+    @State private var didHydratePersistedMessages = false
 
     var body: some View {
         NavigationStack {
@@ -26,8 +26,12 @@ struct ChatScreen: View {
                 }
             }
             .onAppear(perform: prepareInitialState)
+            .onChange(of: dependencies.agentSession.restoredVisibleMessages.count) { _, _ in
+                hydratePersistedMessagesIfNeeded()
+            }
             .onChange(of: dependencies.speechService.transcribedText) { _, newValue in
                 inputText = newValue
+                inputSource = dependencies.speechService.envelopeSource
             }
         }
     }
@@ -50,13 +54,28 @@ struct ChatScreen: View {
                             .id(message.id)
                     }
 
+                    if isProcessing, !dependencies.agentSession.streamedText.isEmpty {
+                        MessageBubble(
+                            message: ChatMessage(
+                                text: dependencies.agentSession.streamedText,
+                                isUser: false
+                            )
+                        )
+                    }
+
                     if !dependencies.agentSession.pendingActions.isEmpty {
                         ForEach(dependencies.agentSession.pendingActions) { action in
                             PendingActionConfirmationCard(action: action) {
                                 confirm(action)
                             } onReject: {
-                                dependencies.agentSession.rejectPendingAction(id: action.id)
-                                addMessage(text: "已拒绝该记录草稿，未保存任何健康数据。", isUser: false)
+                                Task {
+                                    do {
+                                        try await dependencies.agentSession.rejectPendingAction(id: action.id)
+                                        addMessage(text: "已拒绝该记录草稿，未保存任何健康数据。", isUser: false)
+                                    } catch {
+                                        addMessage(text: "无法拒绝草稿：\(error.localizedDescription)", isUser: false)
+                                    }
+                                }
                             }
                         }
                     }
@@ -84,7 +103,7 @@ struct ChatScreen: View {
             .onChange(of: messages.count) { _, _ in
                 scrollToBottom(proxy: proxy)
             }
-            .onChange(of: appState.agentStreamedText) { _, _ in
+            .onChange(of: dependencies.agentSession.streamedText) { _, _ in
                 scrollToBottom(proxy: proxy)
             }
         }
@@ -104,6 +123,7 @@ struct ChatScreen: View {
     private func promptButton(_ title: String, systemImage: String, text: String) -> some View {
         Button(title, systemImage: systemImage) {
             inputText = text
+            inputSource = .manualText
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -132,15 +152,19 @@ struct ChatScreen: View {
                 }
 
             Button {
-                Task { await send(text: inputText) }
+                if isProcessing {
+                    dependencies.agentSession.cancelActiveRequest()
+                } else {
+                    Task { await send(text: inputText) }
+                }
             } label: {
-                Image(systemName: "arrow.up")
+                Image(systemName: isProcessing ? "xmark" : "arrow.up")
             }
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.circle)
             .controlSize(.large)
-            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessing)
-            .accessibilityLabel("发送")
+            .disabled(!isProcessing && inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel(isProcessing ? "取消请求" : "发送")
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
@@ -154,12 +178,15 @@ struct ChatScreen: View {
             OrbitStatusBadge(text: "设备端语音", tone: .success)
         case .legacySpeech:
             OrbitStatusBadge(text: "兼容语音", tone: .blue)
+        case .qwenASR:
+            OrbitStatusBadge(text: "Qwen 语音兜底", tone: .gold)
         case .manualEntry:
             OrbitStatusBadge(text: "手动输入")
         }
     }
 
     private func prepareInitialState() {
+        hydratePersistedMessagesIfNeeded()
         if messages.isEmpty {
             addMessage(text: "你好，我是 densoso。使用语音或文字告诉我你吃了什么、练了什么。", isUser: false)
         }
@@ -171,12 +198,28 @@ struct ChatScreen: View {
         Task { await dependencies.speechService.refreshRuntime() }
     }
 
+    private func hydratePersistedMessagesIfNeeded() {
+        guard !didHydratePersistedMessages,
+              !dependencies.agentSession.restoredVisibleMessages.isEmpty else {
+            return
+        }
+        messages = dependencies.agentSession.restoredVisibleMessages.map {
+            ChatMessage(text: $0.text, isUser: $0.isUser)
+        }
+        didHydratePersistedMessages = true
+    }
+
     private func toggleVoice() async {
         let speech = dependencies.speechService
         if speech.isRecording {
             await speech.stopRecording()
-            if !inputText.isEmpty {
-                let envelope = VoiceCommandEnvelope(text: inputText, source: speech.envelopeSource)
+            inputText = speech.transcribedText
+            inputSource = speech.envelopeSource
+            if !speech.transcribedText.isEmpty {
+                let envelope = VoiceCommandEnvelope(
+                    text: speech.transcribedText,
+                    source: speech.envelopeSource
+                )
                 let kind = VoiceCommandRouter().route(envelope)
                 voiceDraftSummary = "已生成\(kind.displayName)草稿，请检查文字后点击发送；尚未保存任何记录。"
             }
@@ -198,8 +241,11 @@ struct ChatScreen: View {
     private func send(text: String) async {
         let userText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !userText.isEmpty else { return }
-        let route = VoiceCommandRouter().route(VoiceCommandEnvelope(text: userText, source: .manualText))
+        let route = VoiceCommandRouter().route(
+            VoiceCommandEnvelope(text: userText, source: inputSource)
+        )
         inputText = ""
+        inputSource = .manualText
         voiceDraftSummary = "正在处理\(route.displayName)草稿；涉及写入时仍需在确认卡片中确认。"
         addMessage(text: userText, isUser: true)
 
@@ -226,11 +272,8 @@ struct ChatScreen: View {
                         isUser: false
                     )
                 }
-            case .cloudDeepSeek:
-                let response = try await dependencies.agentSession.send(
-                    userText: userText,
-                    modelContext: modelContext
-                )
+            case .cloudDeepSeek, .cloudQwen:
+                let response = try await dependencies.agentSession.send(userText: userText)
                 addMessage(text: response.text, isUser: false)
             case .manual:
                 addMessage(text: "本地智能当前不可用；你的输入尚未保存。可在设置中选择 DeepSeek 云端处理，或继续手动编辑。", isUser: false)
@@ -247,10 +290,7 @@ struct ChatScreen: View {
     private func confirm(_ action: PendingAction) {
         Task {
             do {
-                let message = try dependencies.agentSession.confirmPendingAction(
-                    id: action.id,
-                    modelContext: modelContext
-                )
+                let message = try await dependencies.agentSession.confirmPendingAction(id: action.id)
                 addMessage(text: message, isUser: false)
             } catch {
                 addMessage(text: "未能保存：\(error.localizedDescription)", isUser: false)
@@ -290,7 +330,13 @@ struct MessageBubble: View {
         HStack {
             if message.isUser { Spacer(minLength: 44) }
 
-            Text(message.text)
+            Group {
+                if message.isUser {
+                    Text(message.text)
+                } else {
+                    AssistantBlockView(document: RestrictedMarkdownRenderer.parse(message.text))
+                }
+            }
                 .font(.body)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
