@@ -182,7 +182,7 @@ def main() -> int:
 
     require_text(
         ROOT / "project.yml",
-        ["evals/prompt-injection-phase3.yaml"],
+        ["evals/prompt-injection-phase3.yaml", "buildPhase: resources"],
         errors,
     )
 

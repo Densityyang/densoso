@@ -31,6 +31,7 @@ actor ScriptedProviderHTTPTransport: ProviderHTTPTransport {
 
     private var steps: [Step]
     private var requests: [URLRequest] = []
+    private var cancellationCount = 0
 
     init(steps: [Step]) {
         self.steps = steps
@@ -52,12 +53,18 @@ actor ScriptedProviderHTTPTransport: ProviderHTTPTransport {
         case .urlError(let code):
             throw URLError(code)
         case .delay:
-            try await Task.sleep(for: .seconds(60))
-            throw URLError(.timedOut)
+            do {
+                try await Task.sleep(for: .seconds(60))
+                throw URLError(.timedOut)
+            } catch is CancellationError {
+                cancellationCount += 1
+                throw CancellationError()
+            }
         }
     }
 
     func recordedRequests() -> [URLRequest] { requests }
+    func recordedCancellationCount() -> Int { cancellationCount }
 }
 
 final class TestProviderRetryClock: ProviderRetryClock, @unchecked Sendable {

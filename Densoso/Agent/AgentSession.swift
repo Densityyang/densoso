@@ -389,6 +389,10 @@ final class AgentSession {
                     break
                 }
             }
+            // AsyncThrowingStream may end normally when its consumer task is
+            // cancelled. Re-check here so cancellation cannot become an empty
+            // successful Provider round.
+            try Task.checkCancellation()
             return ProviderRoundResult(text: text, toolCalls: toolCalls)
         }
         activeProviderTask = task

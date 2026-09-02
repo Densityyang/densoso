@@ -168,15 +168,35 @@ final class ProviderRetryPolicyTests: XCTestCase {
             deadline: Date().addingTimeInterval(45)
         )
         let task = Task { try await collect(provider.stream(request)) }
-        await Task.yield()
+        let clock = ContinuousClock()
+        let startTimeout = clock.now.advanced(by: .seconds(1))
+        while (await transport.recordedRequests()).isEmpty {
+            guard clock.now < startTimeout else {
+                task.cancel()
+                return XCTFail("Transport task did not start")
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
         task.cancel()
 
         do {
             _ = try await task.value
             XCTFail("Expected cancellation")
+        } catch is CancellationError {
+            // AsyncThrowingStream cancellation may surface at the consumer.
         } catch {
             XCTAssertEqual(error as? ProviderError, .cancelled)
         }
+
+        let timeout = clock.now.advanced(by: .seconds(1))
+        while await transport.recordedCancellationCount() == 0 {
+            guard clock.now < timeout else {
+                return XCTFail("Transport task did not receive cancellation")
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let cancellationCount = await transport.recordedCancellationCount()
+        XCTAssertEqual(cancellationCount, 1)
     }
 
     private func request() -> URLRequest {

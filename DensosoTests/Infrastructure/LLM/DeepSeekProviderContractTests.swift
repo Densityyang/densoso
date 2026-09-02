@@ -68,5 +68,6 @@ func collect(
 ) async throws -> [ProviderEvent] {
     var events: [ProviderEvent] = []
     for try await event in stream { events.append(event) }
+    try Task.checkCancellation()
     return events
 }
