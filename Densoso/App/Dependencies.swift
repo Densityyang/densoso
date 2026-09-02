@@ -42,7 +42,6 @@ final class Dependencies {
             repository: confirmationRepository,
             writeGate: writeGate
         )
-        self.speechService = SpeechService()
         self.localIntelligence = LocalIntelligenceService()
         let intelligencePreferences = IntelligencePreferences()
         let providerConfiguration = ProviderConfigurationPreferences()
@@ -63,6 +62,12 @@ final class Dependencies {
         self.providerGovernanceRepository = governanceRepository
         let usageLedger = ProviderUsageLedger(repository: governanceRepository)
         self.providerUsageLedger = usageLedger
+        self.speechService = SpeechService(
+            cloudProvider: ConfiguredQwenASRProvider(),
+            governanceRepository: governanceRepository,
+            usageLedger: usageLedger,
+            providerConfiguration: providerConfiguration
+        )
 
         self.agentSession = AgentSession(
             providerSelector: providerRegistry,
@@ -87,6 +92,7 @@ final class Dependencies {
             try? await confirmationCoordinator.recoverInterruptedCommits()
         }
         try? await agentSession.restore()
+        await speechService.cleanupStaleTemporaryAudio()
     }
 
     /// 加载食材库（优先 SQLite，fallback 种子 JSON）

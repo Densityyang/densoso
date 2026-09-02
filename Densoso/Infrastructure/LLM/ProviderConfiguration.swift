@@ -57,6 +57,7 @@ final class ProviderConfigurationPreferences {
         static let qwenRegion = "provider.qwen.region"
         static let deepSeekMonthlyBudgetMicros = "provider.deepseek.monthlyBudgetMicros"
         static let qwenMonthlyBudgetMicros = "provider.qwen.monthlyBudgetMicros"
+        static let qwenSpeechFallbackEnabled = "provider.qwen.speechFallbackEnabled"
     }
 
     var qwenWorkspaceID: String {
@@ -70,6 +71,9 @@ final class ProviderConfigurationPreferences {
     }
     var qwenMonthlyBudgetMicros: Int64 {
         didSet { UserDefaults.standard.set(qwenMonthlyBudgetMicros, forKey: Key.qwenMonthlyBudgetMicros) }
+    }
+    var qwenSpeechFallbackEnabled: Bool {
+        didSet { UserDefaults.standard.set(qwenSpeechFallbackEnabled, forKey: Key.qwenSpeechFallbackEnabled) }
     }
 
     init() {
@@ -86,6 +90,7 @@ final class ProviderConfigurationPreferences {
         let qwenStored = UserDefaults.standard.object(forKey: Key.qwenMonthlyBudgetMicros) as? NSNumber
         deepSeekMonthlyBudgetMicros = deepSeekStored?.int64Value ?? 2_000_000
         qwenMonthlyBudgetMicros = qwenStored?.int64Value ?? 10_000_000
+        qwenSpeechFallbackEnabled = UserDefaults.standard.bool(forKey: Key.qwenSpeechFallbackEnabled)
     }
 
     func qwenEndpoint() throws -> URL {
@@ -99,6 +104,23 @@ final class ProviderConfigurationPreferences {
         }
         guard let url = URL(
             string: "https://\(workspaceID).\(qwenRegion.domain)/compatible-mode/v1/chat/completions"
+        ) else {
+            throw ProviderError.configurationMissing(provider: .qwen)
+        }
+        return url
+    }
+
+    func qwenASREndpoint() throws -> URL {
+        guard qwenRegion == .beijing else {
+            throw ProviderError.unsupportedCapability(.speech)
+        }
+        let workspaceID = qwenWorkspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !workspaceID.isEmpty,
+              workspaceID.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }) else {
+            throw ProviderError.configurationMissing(provider: .qwen)
+        }
+        guard let url = URL(
+            string: "https://\(workspaceID).cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
         ) else {
             throw ProviderError.configurationMissing(provider: .qwen)
         }

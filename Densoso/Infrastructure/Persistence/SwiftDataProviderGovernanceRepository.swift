@@ -83,6 +83,7 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
             provider: provider,
             inputTokens: records.reduce(0) { $0 + $1.inputTokens },
             outputTokens: records.reduce(0) { $0 + $1.outputTokens },
+            audioSeconds: records.reduce(0) { $0 + $1.audioSeconds },
             estimatedCostMicros: cost,
             currency: cost == nil ? nil : currencies.first
         )

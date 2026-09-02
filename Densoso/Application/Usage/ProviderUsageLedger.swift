@@ -3,7 +3,20 @@ import Foundation
 struct ProviderTokenRate: Equatable, Sendable {
     let inputMicrosPerMillionTokens: Int64
     let outputMicrosPerMillionTokens: Int64
+    let audioMicrosPerSecond: Int64?
     let currency: String
+
+    init(
+        inputMicrosPerMillionTokens: Int64,
+        outputMicrosPerMillionTokens: Int64,
+        audioMicrosPerSecond: Int64? = nil,
+        currency: String
+    ) {
+        self.inputMicrosPerMillionTokens = inputMicrosPerMillionTokens
+        self.outputMicrosPerMillionTokens = outputMicrosPerMillionTokens
+        self.audioMicrosPerSecond = audioMicrosPerSecond
+        self.currency = currency
+    }
 }
 
 struct ProviderRateTable: Sendable {
@@ -15,7 +28,7 @@ struct ProviderRateTable: Sendable {
     /// DeepSeek uses the peak, cache-miss V4 Flash price; Qwen uses Beijing's
     /// standard, non-cached <=128k tier. These are estimates, not invoice totals.
     static let phase3Conservative = ProviderRateTable(
-        version: "phase3-conservative-2026-09-01",
+        version: "phase4-conservative-2026-09-02",
         rates: [
             .deepSeek: ProviderTokenRate(
                 inputMicrosPerMillionTokens: 440_000,
@@ -25,13 +38,24 @@ struct ProviderRateTable: Sendable {
             .qwen: ProviderTokenRate(
                 inputMicrosPerMillionTokens: 150_000,
                 outputMicrosPerMillionTokens: 1_500_000,
+                audioMicrosPerSecond: 220,
                 currency: "CNY"
             ),
         ]
     )
 
     func estimate(_ usage: ProviderUsage) -> (micros: Int64, currency: String)? {
-        guard let rate = rates[usage.provider],
+        guard let rate = rates[usage.provider] else { return nil }
+        if usage.capability == .speech {
+            guard let audioRate = rate.audioMicrosPerSecond,
+                  audioRate >= 0,
+                  usage.audioSeconds.isFinite,
+                  usage.audioSeconds >= 0 else { return nil }
+            let rawCost = usage.audioSeconds * Double(audioRate)
+            guard rawCost.isFinite, rawCost <= Double(Int64.max) else { return nil }
+            return (Int64(rawCost.rounded(.up)), rate.currency)
+        }
+        guard
               usage.inputTokens >= 0,
               usage.outputTokens >= 0,
               let input = scaledCost(
@@ -59,6 +83,7 @@ struct ProviderUsageSummary: Equatable, Sendable {
     let provider: ProviderID
     let inputTokens: Int
     let outputTokens: Int
+    let audioSeconds: Double
     let estimatedCostMicros: Int64?
     let currency: String?
 }

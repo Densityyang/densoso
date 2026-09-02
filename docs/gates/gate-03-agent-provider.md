@@ -1,6 +1,6 @@
 # Gate 03 — Agent and Provider
 
-Status: awaiting user Gate 3 approval
+Status: approved by user on 2026-09-02
 
 Gate 3 extends the same V3 core Draft PR. It runs only after foundation and
 domain-persistence pass on the same head, and does not authorize Speech work.
@@ -81,4 +81,4 @@ The `agent-provider` job has `needs: domain-persistence` and must prove:
 | Fixture packaging | Prompt-injection fixture is in the test bundle | `CpResource .../prompt-injection-phase3.yaml .../DensosoTests.xctest` observed in Gate3 build log |
 | Artifact | `.xcresult`, logs and JSON summaries retained | `gate-03-agent-provider-results` — artifact ID `9828254631` |
 | Signing | Simulator evidence only | `blocked-by-signing` |
-| User decision | Approve or reject entry to Phase 4 | Awaiting user Gate 3 approval |
+| User decision | Approve or reject entry to Phase 4 | Approved 2026-09-02 |

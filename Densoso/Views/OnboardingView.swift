@@ -18,6 +18,7 @@ struct OnboardingView: View {
     @State private var qwenAPIKey = ""
     @State private var qwenWorkspaceID = ""
     @State private var cloudTextConsent = false
+    @State private var qwenSpeechConsent = false
     @State private var name = ""
     @State private var sex = "male"
     @State private var height = "170"
@@ -156,12 +157,13 @@ struct OnboardingView: View {
                 TextField("Workspace ID", text: $qwenWorkspaceID)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Text("本阶段仅启用北京区域的 Qwen 文本工具调用；VL 与 ASR 不会被调用。")
+                Text("北京区域可选文本工具调用和单次 Qwen ASR 兜底；图片仍不会上传。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
             Section("云端同意") {
                 Toggle("同意上传我主动提交的健康文字", isOn: $cloudTextConsent)
+                Toggle("同意在本地转写失败时上传单次临时音频", isOn: $qwenSpeechConsent)
             }
         }
     }
@@ -235,11 +237,18 @@ struct OnboardingView: View {
             } else if intelligenceMode == .cloudQwen {
                 try KeychainStore.shared.saveModelStudioAPIKey(qwenAPIKey)
                 dependencies.providerConfiguration.qwenWorkspaceID = qwenWorkspaceID
+                dependencies.providerConfiguration.qwenSpeechFallbackEnabled = qwenSpeechConsent
                 try await dependencies.providerGovernanceRepository.setConsent(
                     provider: .qwen,
                     dataClass: .healthText,
                     granted: true,
                     policyVersion: "cloud-health-text-v1"
+                )
+                try await dependencies.providerGovernanceRepository.setConsent(
+                    provider: .qwen,
+                    dataClass: .speechAudio,
+                    granted: qwenSpeechConsent,
+                    policyVersion: "qwen-single-audio-v1"
                 )
             }
             dependencies.intelligencePreferences.mode = intelligenceMode

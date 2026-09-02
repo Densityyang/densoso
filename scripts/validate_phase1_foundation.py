@@ -107,7 +107,11 @@ def main() -> int:
     speech_text = (ROOT / "Densoso" / "Services" / "SpeechService.swift").read_text(encoding="utf-8")
     if "private var analyzer: SpeechAnalyzer?" in speech_text:
         errors.append("SpeechService stores an unguarded iOS 26 SpeechAnalyzer")
-    if "@available(iOS 26.0, *)\n@MainActor\nprivate final class SpeechAnalyzerRecognitionBackend" not in speech_text:
+    speech_adapter = (
+        ROOT / "Densoso" / "Infrastructure" / "Speech" / "SystemVoiceTranscribers.swift"
+    )
+    speech_adapter_text = speech_adapter.read_text(encoding="utf-8") if speech_adapter.is_file() else ""
+    if "@available(iOS 26.0, *)\n@MainActor\nprivate final class SpeechAnalyzerVoiceTranscriber" not in speech_adapter_text:
         errors.append("SpeechAnalyzer backend is not isolated behind iOS 26 availability")
 
     launch_fixture = UI_FIXTURES / "launch-config.json"

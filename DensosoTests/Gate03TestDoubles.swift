@@ -211,6 +211,7 @@ actor InMemoryProviderGovernanceRepository: ProviderGovernanceRepository {
             provider: provider,
             inputTokens: matching.reduce(0) { $0 + $1.0.inputTokens },
             outputTokens: matching.reduce(0) { $0 + $1.0.outputTokens },
+            audioSeconds: matching.reduce(0) { $0 + $1.0.audioSeconds },
             estimatedCostMicros: costs.count == matching.count ? costs.reduce(0, +) : nil,
             currency: matching.compactMap { $0.2 }.first
         )

@@ -1,0 +1,12 @@
+{
+  "status": "provisional-blocked-by-signing",
+  "device": "iPhone 17",
+  "os": "iOS 26.6",
+  "route": "built-in microphone",
+  "requiredStartStopCycles": 20,
+  "executedStartStopCycles": 0,
+  "observedOSStatusMinus50": null,
+  "observedRecordingFailures": null,
+  "reason": "The local iOS app is currently unsigned. Simulator CI cannot prove physical microphone or driver behavior.",
+  "claimBoundary": "No real-device pass is claimed. Keep blocked-by-signing until the signed 20-cycle matrix is attached."
+}

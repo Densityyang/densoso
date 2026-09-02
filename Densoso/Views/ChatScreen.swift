@@ -7,6 +7,7 @@ struct ChatScreen: View {
 
     @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
+    @State private var inputSource: VoiceCommandEnvelope.Source = .manualText
     @State private var isProcessing = false
     @State private var voiceDraftSummary: String?
     @State private var didHydratePersistedMessages = false
@@ -30,6 +31,7 @@ struct ChatScreen: View {
             }
             .onChange(of: dependencies.speechService.transcribedText) { _, newValue in
                 inputText = newValue
+                inputSource = dependencies.speechService.envelopeSource
             }
         }
     }
@@ -121,6 +123,7 @@ struct ChatScreen: View {
     private func promptButton(_ title: String, systemImage: String, text: String) -> some View {
         Button(title, systemImage: systemImage) {
             inputText = text
+            inputSource = .manualText
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -175,6 +178,8 @@ struct ChatScreen: View {
             OrbitStatusBadge(text: "设备端语音", tone: .success)
         case .legacySpeech:
             OrbitStatusBadge(text: "兼容语音", tone: .blue)
+        case .qwenASR:
+            OrbitStatusBadge(text: "Qwen 语音兜底", tone: .gold)
         case .manualEntry:
             OrbitStatusBadge(text: "手动输入")
         }
@@ -208,8 +213,13 @@ struct ChatScreen: View {
         let speech = dependencies.speechService
         if speech.isRecording {
             await speech.stopRecording()
-            if !inputText.isEmpty {
-                let envelope = VoiceCommandEnvelope(text: inputText, source: speech.envelopeSource)
+            inputText = speech.transcribedText
+            inputSource = speech.envelopeSource
+            if !speech.transcribedText.isEmpty {
+                let envelope = VoiceCommandEnvelope(
+                    text: speech.transcribedText,
+                    source: speech.envelopeSource
+                )
                 let kind = VoiceCommandRouter().route(envelope)
                 voiceDraftSummary = "已生成\(kind.displayName)草稿，请检查文字后点击发送；尚未保存任何记录。"
             }
@@ -231,8 +241,11 @@ struct ChatScreen: View {
     private func send(text: String) async {
         let userText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !userText.isEmpty else { return }
-        let route = VoiceCommandRouter().route(VoiceCommandEnvelope(text: userText, source: .manualText))
+        let route = VoiceCommandRouter().route(
+            VoiceCommandEnvelope(text: userText, source: inputSource)
+        )
         inputText = ""
+        inputSource = .manualText
         voiceDraftSummary = "正在处理\(route.displayName)草稿；涉及写入时仍需在确认卡片中确认。"
         addMessage(text: userText, isUser: true)
 

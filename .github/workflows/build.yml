@@ -41,6 +41,7 @@ jobs:
             scripts/validate_phase1_foundation.py \
             scripts/validate_phase2_domain_persistence.py \
             scripts/validate_phase3_agent_provider.py \
+            scripts/validate_phase4_speech.py \
             scripts/validate_voice_goldens.py
 
       - name: Validate bundled food database
@@ -338,5 +339,88 @@ jobs:
             gate03-agent-provider-tests.log
             gate03-test-summary.json
             gate03-fixture-summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+  speech:
+    name: gate-04-speech
+    needs: agent-provider
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 4 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate04DerivedData" >> "$GITHUB_ENV"
+          echo "GATE04_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate04SpeechTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 4 speech contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase4_speech.py
+          python3 scripts/validate_phase4_speech.py \
+            --report gate04-fixture-summary.json
+
+      - name: Test cumulative domain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate04-domain.log
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Prepare iOS 26 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test speech capture routing privacy and cleanup contracts
+        run: |
+          set -o pipefail
+          rm -rf "$GATE04_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/SpeechCaptureStateMachineTests \
+            -only-testing:DensosoTests/ProtectedSpeechAudioStoreTests \
+            -only-testing:DensosoTests/QwenASRProviderContractTests \
+            -only-testing:DensosoTests/SpeechDiagnosticsRedactionTests \
+            -only-testing:DensosoTests/SpeechBenchmarkEvaluatorTests \
+            -only-testing:DensosoTests/SpeechGoldenSetTests \
+            -only-testing:DensosoTests/ProviderUsageLedgerTests \
+            -resultBundlePath "$GATE04_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate04-speech-tests.log
+
+      - name: Export Gate 4 test summary
+        run: |
+          set -euo pipefail
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE04_RESULT_BUNDLE" > gate04-test-summary.json
+          grep -q '"result" : "Passed"' gate04-test-summary.json
+
+      - name: Upload Gate 4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-04-speech-results
+          path: |
+            Gate04SpeechTests.xcresult
+            gate04-domain.log
+            gate04-speech-tests.log
+            gate04-test-summary.json
+            gate04-fixture-summary.json
+            docs/gates/gate-04-routing-matrix.json
+            docs/gates/gate-04-device-matrix.json
           if-no-files-found: error
           retention-days: 14

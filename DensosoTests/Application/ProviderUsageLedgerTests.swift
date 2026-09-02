@@ -86,6 +86,29 @@ final class ProviderUsageLedgerTests: XCTestCase {
         XCTAssertEqual(qwenEstimate?.currency, "CNY")
     }
 
+    func testQwenSpeechUsageUsesBilledSecondsRatherThanTextTokenRate() async throws {
+        let repository = InMemoryProviderGovernanceRepository()
+        let ledger = ProviderUsageLedger(repository: repository)
+        try await ledger.record(
+            ProviderUsage(
+                provider: .qwen,
+                model: "qwen3-asr-flash",
+                capability: .speech,
+                inputTokens: 999_999,
+                outputTokens: 999_999,
+                audioSeconds: 1.25,
+                attempt: 1
+            ),
+            requestID: UUID()
+        )
+
+        let summary = try await ledger.monthlySummary(provider: .qwen)
+
+        XCTAssertEqual(summary.audioSeconds, 1.25, accuracy: 0.0001)
+        XCTAssertEqual(summary.estimatedCostMicros, 275)
+        XCTAssertEqual(summary.currency, "CNY")
+    }
+
     func testProductionRateTableProvidesConservativeSoftBudgetEstimates() async throws {
         let repository = InMemoryProviderGovernanceRepository()
         let ledger = ProviderUsageLedger(repository: repository)

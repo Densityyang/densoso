@@ -15,6 +15,7 @@ struct SettingsScreen: View {
     @State private var hasSavedQwenAPIKey = false
     @State private var deepSeekTextConsent = false
     @State private var qwenTextConsent = false
+    @State private var qwenSpeechConsent = false
     @State private var deepSeekUsage = "尚无用量"
     @State private var qwenUsage = "尚无用量"
     @State private var statusMessage: String?
@@ -168,6 +169,23 @@ struct SettingsScreen: View {
                     .onChange(of: qwenTextConsent) { _, value in
                         Task { await saveConsent(provider: .qwen, granted: value) }
                 }
+                Toggle(
+                    "本地转写失败时启用 Qwen 单次语音兜底",
+                    isOn: Binding(
+                        get: { dependencies.providerConfiguration.qwenSpeechFallbackEnabled },
+                        set: { dependencies.providerConfiguration.qwenSpeechFallbackEnabled = $0 }
+                    )
+                )
+                Toggle("同意向 Qwen 上传单次临时音频", isOn: $qwenSpeechConsent)
+                    .onChange(of: qwenSpeechConsent) { _, value in
+                        Task {
+                            await saveConsent(
+                                provider: .qwen,
+                                dataClass: .speechAudio,
+                                granted: value
+                            )
+                        }
+                    }
                 LabeledContent("本月用量", value: qwenUsage)
                 TextField(
                     "软提醒预算 CNY/月",
@@ -184,7 +202,7 @@ struct SettingsScreen: View {
                     format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.decimalPad)
-                Text("本阶段 qwen-flash 工具调用仅开放北京区域；图片与音频仍保持关闭。")
+                Text("文本工具调用和 qwen3-asr-flash 均固定北京区域；语音仅在本地失败、已采到音频且单独同意时上传一次，图片仍关闭。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -278,7 +296,7 @@ struct SettingsScreen: View {
                 )
                 CapabilityRow(
                     title: "语音识别",
-                    detail: "兼容路径的 Speech 授权状态",
+                    detail: "兼容 Speech 授权；设备不支持本地识别时可能使用 Apple 语音服务",
                     state: snapshot.speechRecognitionPermission
                 )
                 CapabilityRow(
@@ -301,6 +319,10 @@ struct SettingsScreen: View {
                 Task { await exportData() }
             }
             .disabled(dependencies.exportService.isExporting)
+
+            Button("导出脱敏语音诊断", systemImage: "waveform.badge.magnifyingglass") {
+                Task { await exportSpeechDiagnostics() }
+            }
 
             if dependencies.exportService.isExporting {
                 ProgressView("正在生成备份")
@@ -334,13 +356,19 @@ struct SettingsScreen: View {
         }
     }
 
-    private func saveConsent(provider: ProviderID, granted: Bool) async {
+    private func saveConsent(
+        provider: ProviderID,
+        dataClass: ProviderDataClass = .healthText,
+        granted: Bool
+    ) async {
         do {
             try await dependencies.providerGovernanceRepository.setConsent(
                 provider: provider,
-                dataClass: .healthText,
+                dataClass: dataClass,
                 granted: granted,
-                policyVersion: "cloud-health-text-v1"
+                policyVersion: dataClass == .speechAudio
+                    ? "qwen-single-audio-v1"
+                    : "cloud-health-text-v1"
             )
         } catch {
             healthAuthorizationError = "无法保存云端同意状态：\(error.localizedDescription)"
@@ -356,6 +384,10 @@ struct SettingsScreen: View {
             provider: .qwen,
             dataClass: .healthText
         )) == true
+        qwenSpeechConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+            provider: .qwen,
+            dataClass: .speechAudio
+        )) == true
         deepSeekUsage = await usageText(provider: .deepSeek)
         qwenUsage = await usageText(provider: .qwen)
     }
@@ -365,10 +397,13 @@ struct SettingsScreen: View {
             return "暂不可用"
         }
         let tokens = summary.inputTokens + summary.outputTokens
+        let audio = summary.audioSeconds > 0
+            ? " · \(summary.audioSeconds.formatted(.number.precision(.fractionLength(0...1)))) 秒音频"
+            : ""
         guard let cost = summary.estimatedCostMicros, let currency = summary.currency else {
-            return "\(tokens) tokens · 费用暂不可估"
+            return "\(tokens) tokens\(audio) · 费用暂不可估"
         }
-        return "\(tokens) tokens · 保守估算 \(String(format: "%.2f", Double(cost) / 1_000_000)) \(currency)"
+        return "\(tokens) tokens\(audio) · 保守估算 \(String(format: "%.2f", Double(cost) / 1_000_000)) \(currency)"
     }
 
     private func exportData() async {
@@ -378,6 +413,15 @@ struct SettingsScreen: View {
             showShareSheet = true
         } catch {
             dependencies.exportService.lastError = error.localizedDescription
+        }
+    }
+
+    private func exportSpeechDiagnostics() async {
+        do {
+            exportURL = try await dependencies.speechService.exportDiagnostics()
+            showShareSheet = true
+        } catch {
+            healthAuthorizationError = "无法导出语音诊断：\(error.localizedDescription)"
         }
     }
 

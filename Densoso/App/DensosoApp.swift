@@ -63,6 +63,9 @@ struct AppRoot: View {
                 state: dependencies.persistenceWriteGate.state,
                 warning: appState.startupWarning
             )
+            .task {
+                await dependencies.speechService.cleanupStaleTemporaryAudio()
+            }
         }
     }
 

@@ -7,6 +7,7 @@ public struct VoiceCommandEnvelope: Codable, Equatable, Sendable {
     public enum Source: String, Codable, Sendable {
         case iPhoneSpeechAnalyzer
         case iPhoneLegacySpeech
+        case qwenASR
         case watchDictation
         case appIntent
         case manualText
