@@ -131,8 +131,8 @@ final class Dependencies {
     func makeMealCaptureService() -> MealCaptureApplicationService {
         return MealCaptureApplicationService(
             foodDatabase: foodDatabase,
-            confirmedFoodHistory: confirmedFoodHistoryRepository,
             packagedFoodProvider: packagedFoodProvider,
+            confirmedFoodHistory: confirmedFoodHistoryRepository,
             visionProvider: ConfiguredQwenMealVisionProvider(),
             governanceRepository: providerGovernanceRepository,
             providerConfiguration: providerConfiguration,
