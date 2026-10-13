@@ -248,20 +248,20 @@ struct MealCaptureSheet: View {
 
     private func routeName(_ route: MealCaptureReview.Route) -> String {
         switch route {
-        case .packagedBarcode: "本地条码"
-        case .nutritionLabel: "本地营养标签"
-        case .qwenVision: "Qwen 菜品观察"
-        case .manualDescription: "语音补充"
+        case .packagedBarcode: return "本地条码"
+        case .nutritionLabel: return "本地营养标签"
+        case .qwenVision: return "Qwen 菜品观察"
+        case .manualDescription: return "语音补充"
         }
     }
 
     private static func defaultMealType(now: Date = Date()) -> String {
         let hour = Calendar.current.component(.hour, from: now)
         switch hour {
-        case 5..<10: "breakfast"
-        case 10..<15: "lunch"
-        case 17..<22: "dinner"
-        default: "snack"
+        case 5..<10: return "breakfast"
+        case 10..<15: return "lunch"
+        case 17..<22: return "dinner"
+        default: return "snack"
         }
     }
 }
