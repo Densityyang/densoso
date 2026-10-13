@@ -10,6 +10,11 @@ final class PhotoEvidenceSanitizerTests: XCTestCase {
         let original = try jpegWithLocationMetadata()
         let sourceProperties = try imageProperties(for: original)
         let sourceExif = sourceProperties[kCGImagePropertyExifDictionary] as? [CFString: Any]
+        XCTAssertNotNil(sourceProperties[kCGImagePropertyGPSDictionary])
+        XCTAssertEqual(
+            sourceExif?[kCGImagePropertyExifDateTimeOriginal] as? String,
+            "2026:07:26 16:00:00"
+        )
         XCTAssertEqual(sourceExif?[kCGImagePropertyExifMakerNote] as? Data, Data("gate05-maker-note".utf8))
         XCTAssertNotNil(try xmpTagValue(in: original))
 
@@ -104,21 +109,23 @@ final class PhotoEvidenceSanitizerTests: XCTestCase {
             throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 2)
         }
         if includeLocation {
+            let exif: [CFString: Any] = [
+                kCGImagePropertyExifDateTimeOriginal: "2026:07:26 16:00:00" as CFString,
+                kCGImagePropertyExifMakerNote: Data("gate05-maker-note".utf8) as CFData,
+            ]
             let properties: [CFString: Any] = [
                 kCGImagePropertyGPSDictionary: [
-                    kCGImagePropertyGPSLatitude: 31.2304,
-                    kCGImagePropertyGPSLongitude: 121.4737
+                    kCGImagePropertyGPSLatitude: NSNumber(value: 31.2304),
+                    kCGImagePropertyGPSLongitude: NSNumber(value: 121.4737),
                 ],
-                kCGImagePropertyExifDictionary: [
-                    kCGImagePropertyExifDateTimeOriginal: "2026:07:26 16:00:00",
-                    kCGImagePropertyExifMakerNote: Data("gate05-maker-note".utf8),
-                ],
+                kCGImagePropertyExifDictionary: exif,
             ]
+            CGImageDestinationSetProperties(destination, properties as CFDictionary)
             CGImageDestinationAddImageAndMetadata(
                 destination,
                 image,
                 try fixtureXMPMetadata(),
-                properties as CFDictionary
+                nil
             )
         } else {
             CGImageDestinationAddImage(destination, image, nil)
