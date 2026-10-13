@@ -86,7 +86,8 @@ struct PendingActionConfirmationCard: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            ForEach(dish.evidence) { evidence in
+                            ForEach(dish.evidence.indices, id: \.self) { index in
+                                let evidence = dish.evidence[index]
                                 Text("\(evidence.grade.rawValue)：\(evidence.summary)")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
