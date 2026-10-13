@@ -122,20 +122,39 @@ final class PhotoEvidenceSanitizerTests: XCTestCase {
                 ],
                 kCGImagePropertyExifDictionary: exif,
             ]
-            CGImageDestinationSetProperties(destination, properties as CFDictionary)
-            CGImageDestinationAddImageAndMetadata(
-                destination,
-                image,
-                try fixtureXMPMetadata(),
-                nil
-            )
+            CGImageDestinationAddImage(destination, image, properties as CFDictionary)
         } else {
             CGImageDestinationAddImage(destination, image, nil)
         }
         guard CGImageDestinationFinalize(destination) else {
             throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 3)
         }
-        return data as Data
+        let encoded = data as Data
+        return includeLocation ? try addingXMPMetadata(to: encoded) : encoded
+    }
+
+    private func addingXMPMetadata(to imageData: Data) throws -> Data {
+        guard let source = CGImageSourceCreateWithData(imageData as CFData, nil) else {
+            throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 8)
+        }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output,
+            UTType.jpeg.identifier as CFString,
+            1,
+            nil
+        ) else {
+            throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 9)
+        }
+        let options: [CFString: Any] = [
+            kCGImageDestinationMetadata: try fixtureXMPMetadata(),
+            kCGImageDestinationMergeMetadata: kCFBooleanTrue as Any,
+        ]
+        CGImageDestinationAddImageFromSource(destination, source, 0, options as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 10)
+        }
+        return output as Data
     }
 
     private func fixtureXMPMetadata() throws -> CGMutableImageMetadata {
