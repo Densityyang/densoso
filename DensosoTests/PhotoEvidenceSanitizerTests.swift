@@ -115,7 +115,9 @@ final class PhotoEvidenceSanitizerTests: XCTestCase {
             ]
             let properties: [CFString: Any] = [
                 kCGImagePropertyGPSDictionary: [
+                    kCGImagePropertyGPSLatitudeRef: "N" as CFString,
                     kCGImagePropertyGPSLatitude: NSNumber(value: 31.2304),
+                    kCGImagePropertyGPSLongitudeRef: "E" as CFString,
                     kCGImagePropertyGPSLongitude: NSNumber(value: 121.4737),
                 ],
                 kCGImagePropertyExifDictionary: exif,
