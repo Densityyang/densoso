@@ -1,3 +1,4 @@
+import DensosoDomain
 import SwiftUI
 import SwiftData
 import Observation
