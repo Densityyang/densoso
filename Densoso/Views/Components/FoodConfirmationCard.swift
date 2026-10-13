@@ -74,7 +74,28 @@ struct PendingActionConfirmationCard: View {
             Text(action.payload.summary)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            if case .meal = action.payload {
+            if case .meal(let meal) = action.payload {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("热量范围：\(rangeText(meal.totalNutrients?.energyKcal, unit: "kcal"))")
+                    Text("蛋白质：\(rangeText(meal.totalNutrients?.proteinGrams, unit: "g")) · 脂肪：\(rangeText(meal.totalNutrients?.fatGrams, unit: "g")) · 碳水：\(rangeText(meal.totalNutrients?.carbohydrateGrams, unit: "g"))")
+                    ForEach(meal.dishes) { dish in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(dish.name).font(.subheadline.weight(.semibold))
+                            if let portion = dish.portionGrams {
+                                Text("份量约 \(rangeText(portion, unit: "g"))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            ForEach(dish.evidence) { evidence in
+                                Text("\(evidence.grade.rawValue)：\(evidence.summary)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+                }
+                .font(.caption)
                 Label(
                     "估算可信度：\(Int(action.payload.confidence * 100))%",
                     systemImage: "checkmark.seal"
@@ -92,6 +113,11 @@ struct PendingActionConfirmationCard: View {
             }
         }
         .orbitCard(emphasized: true)
+    }
+
+    private func rangeText(_ range: EstimateRange?, unit: String) -> String {
+        guard let range else { return "未估算" }
+        return "\(Int(range.likely.rounded()))\(unit)（\(Int(range.low.rounded()))–\(Int(range.high.rounded()))\(unit)）"
     }
 }
 

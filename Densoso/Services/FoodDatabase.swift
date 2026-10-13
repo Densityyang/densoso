@@ -36,12 +36,14 @@ final class FoodDatabase {
                 t.primaryKey("id", .integer)
                 t.column("name", .text).notNull()
                 t.column("alias", .text)
+                t.column("preparation", .text)
+                t.column("isCookedComposite", .integer)
                 t.column("category", .text).notNull()
                 t.column("edible", .integer).notNull().defaults(to: 100)
                 t.column("energyKcal", .integer).notNull()
-                t.column("proteinG", .double).notNull().defaults(to: 0)
-                t.column("fatG", .double).notNull().defaults(to: 0)
-                t.column("carbohydrateG", .double).notNull().defaults(to: 0)
+                t.column("proteinG", .double)
+                t.column("fatG", .double)
+                t.column("carbohydrateG", .double)
                 t.column("fiberG", .double)
             }
             try db.create(index: "idx_food_name", on: "food_items", columns: ["name"])
@@ -155,6 +157,31 @@ final class FoodDatabase {
     func allCategories() throws -> [String] {
         try dbQueue.read { db in
             try String.fetchAll(db, sql: "SELECT DISTINCT category FROM food_items ORDER BY category")
+        }
+    }
+
+    func catalogEntries() throws -> [FoodCatalogEntry] {
+        let items = try dbQueue.read { db in try FoodItem.order(Column("id")).fetchAll(db) }
+        return items.map { item in
+            FoodCatalogEntry(
+                id: "food:\(item.id)",
+                localFoodID: String(item.id),
+                name: item.name,
+                aliases: (item.alias ?? "")
+                    .split(separator: "|")
+                    .map(String.init),
+                preparation: FoodPreparation(rawValue: item.preparation ?? "") ?? .unknown,
+                category: item.category,
+                edibleFraction: Double(item.edible) / 100,
+                nutrients: FoodNutrientProfile(
+                    energyKcalPer100Grams: Double(item.energyKcal),
+                    proteinGramsPer100Grams: item.proteinG,
+                    fatGramsPer100Grams: item.fatG,
+                    carbohydrateGramsPer100Grams: item.carbohydrateG
+                ),
+                isCookedComposite: item.isCookedComposite == true,
+                sourceVersion: "food-composition-6"
+            )
         }
     }
 

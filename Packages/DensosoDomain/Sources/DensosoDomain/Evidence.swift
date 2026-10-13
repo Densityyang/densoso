@@ -2,6 +2,9 @@ import Foundation
 
 public enum EvidenceGrade: String, Codable, CaseIterable, Sendable {
     case measured
+    case strong
+    case moderate
+    case weak
     case label
     case databaseMatch
     case userReported

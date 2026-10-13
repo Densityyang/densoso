@@ -16,6 +16,7 @@ struct SettingsScreen: View {
     @State private var deepSeekTextConsent = false
     @State private var qwenTextConsent = false
     @State private var qwenSpeechConsent = false
+    @State private var qwenMealImageConsent = false
     @State private var deepSeekUsage = "尚无用量"
     @State private var qwenUsage = "尚无用量"
     @State private var statusMessage: String?
@@ -186,6 +187,24 @@ struct SettingsScreen: View {
                             )
                         }
                     }
+                Toggle(
+                    "启用 Qwen 开放式餐食照片观察",
+                    isOn: .constant(false)
+                )
+                .disabled(true)
+                Toggle("同意向 Qwen 上传处理后的餐食照片", isOn: $qwenMealImageConsent)
+                    .onChange(of: qwenMealImageConsent) { _, value in
+                        Task {
+                            await saveConsent(
+                                provider: .qwen,
+                                dataClass: .mealImage,
+                                granted: value
+                            )
+                        }
+                    }
+                Text("开放式照片在真实照片质量门禁完成前保持关闭；本地条码、营养标签、语音和文字不受影响。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 LabeledContent("本月用量", value: qwenUsage)
                 TextField(
                     "软提醒预算 CNY/月",
@@ -202,7 +221,7 @@ struct SettingsScreen: View {
                     format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.decimalPad)
-                Text("文本工具调用和 qwen3-asr-flash 均固定北京区域；语音仅在本地失败、已采到音频且单独同意时上传一次，图片仍关闭。")
+                Text("文本、qwen3-asr-flash 与 qwen3-vl-flash 均固定北京区域；音频和处理后照片分别取得同意，原图不会保存。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -368,7 +387,9 @@ struct SettingsScreen: View {
                 granted: granted,
                 policyVersion: dataClass == .speechAudio
                     ? "qwen-single-audio-v1"
-                    : "cloud-health-text-v1"
+                    : dataClass == .mealImage
+                        ? "qwen-sanitized-meal-image-v1"
+                        : "cloud-health-text-v1"
             )
         } catch {
             healthAuthorizationError = "无法保存云端同意状态：\(error.localizedDescription)"
@@ -387,6 +408,10 @@ struct SettingsScreen: View {
         qwenSpeechConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
             provider: .qwen,
             dataClass: .speechAudio
+        )) == true
+        qwenMealImageConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+            provider: .qwen,
+            dataClass: .mealImage
         )) == true
         deepSeekUsage = await usageText(provider: .deepSeek)
         qwenUsage = await usageText(provider: .qwen)

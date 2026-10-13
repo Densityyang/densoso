@@ -46,9 +46,9 @@ enum CalorieEstimator {
 
     struct Result {
         let calories: Range
-        let proteinG: Double
-        let fatG: Double
-        let carbsG: Double
+        let proteinG: Double?
+        let fatG: Double?
+        let carbsG: Double?
         let ingredientEstimates: [IngredientEstimate]
         let evidence: [Evidence]
         let confidence: Double
@@ -56,9 +56,9 @@ enum CalorieEstimator {
 
     static func estimate(ingredients: [Ingredient], oil: OilSource, oilCaloriesPerGram: Double = 9) -> Result {
         var likelyCalories = 0.0
-        var protein = 0.0
-        var fat = 0.0
-        var carbs = 0.0
+        var protein: Double? = 0
+        var fat: Double? = 0
+        var carbs: Double? = 0
         var estimates: [IngredientEstimate] = []
         var evidence: [Evidence] = []
 
@@ -66,9 +66,9 @@ enum CalorieEstimator {
             let amount = ingredient.normalizedAmountG
             let calories = Double(ingredient.item.energyKcal) * amount / 100
             likelyCalories += calories
-            protein += ingredient.item.proteinG * amount / 100
-            fat += ingredient.item.fatG * amount / 100
-            carbs += ingredient.item.carbohydrateG * amount / 100
+            protein = sumKnown(protein, ingredient.item.proteinG.map { $0 * amount / 100 })
+            fat = sumKnown(fat, ingredient.item.fatG.map { $0 * amount / 100 })
+            carbs = sumKnown(carbs, ingredient.item.carbohydrateG.map { $0 * amount / 100 })
             estimates.append(IngredientEstimate(foodItemId: ingredient.item.id, name: ingredient.item.name, amountG: amount,
                                                 baseCaloriesKcal: calories, oilCoefficient: 1, adjustedCaloriesKcal: calories))
             evidence.append(Evidence(source: "food_database", detail: "\(ingredient.item.name), \(ingredient.massBasis.rawValue), match \(Int(ingredient.matchScore * 100))%"))
@@ -86,7 +86,7 @@ enum CalorieEstimator {
             evidence.append(Evidence(source: "inference", detail: "oil estimate \(Int(grams))g; range shown"))
         }
         likelyCalories += oilGrams * oilCaloriesPerGram
-        fat += oilGrams
+        fat = fat.map { $0 + oilGrams }
 
         let range: Range
         switch oil {
@@ -101,5 +101,10 @@ enum CalorieEstimator {
         let confidence = min(1, averageMatch * (oilLow == oilHigh ? 1 : 0.8))
         return Result(calories: range, proteinG: protein, fatG: fat, carbsG: carbs, ingredientEstimates: estimates,
                       evidence: evidence, confidence: confidence)
+    }
+
+    private static func sumKnown(_ lhs: Double?, _ rhs: Double?) -> Double? {
+        guard let lhs, let rhs else { return nil }
+        return lhs + rhs
     }
 }

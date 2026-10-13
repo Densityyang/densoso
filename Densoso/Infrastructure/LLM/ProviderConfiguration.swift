@@ -58,6 +58,7 @@ final class ProviderConfigurationPreferences {
         static let deepSeekMonthlyBudgetMicros = "provider.deepseek.monthlyBudgetMicros"
         static let qwenMonthlyBudgetMicros = "provider.qwen.monthlyBudgetMicros"
         static let qwenSpeechFallbackEnabled = "provider.qwen.speechFallbackEnabled"
+        static let qwenMealVisionEnabled = "provider.qwen.mealVisionEnabled"
     }
 
     var qwenWorkspaceID: String {
@@ -75,6 +76,9 @@ final class ProviderConfigurationPreferences {
     var qwenSpeechFallbackEnabled: Bool {
         didSet { UserDefaults.standard.set(qwenSpeechFallbackEnabled, forKey: Key.qwenSpeechFallbackEnabled) }
     }
+    var qwenMealVisionEnabled: Bool {
+        didSet { UserDefaults.standard.set(qwenMealVisionEnabled, forKey: Key.qwenMealVisionEnabled) }
+    }
 
     init() {
         qwenWorkspaceID = UserDefaults.standard.string(forKey: Key.qwenWorkspaceID) ?? ""
@@ -91,6 +95,7 @@ final class ProviderConfigurationPreferences {
         deepSeekMonthlyBudgetMicros = deepSeekStored?.int64Value ?? 2_000_000
         qwenMonthlyBudgetMicros = qwenStored?.int64Value ?? 10_000_000
         qwenSpeechFallbackEnabled = UserDefaults.standard.bool(forKey: Key.qwenSpeechFallbackEnabled)
+        qwenMealVisionEnabled = UserDefaults.standard.bool(forKey: Key.qwenMealVisionEnabled)
     }
 
     func qwenEndpoint() throws -> URL {

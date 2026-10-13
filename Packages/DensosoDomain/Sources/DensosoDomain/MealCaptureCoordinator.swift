@@ -9,6 +9,9 @@ public struct MultimodalMealDraft: Codable, Equatable, Sendable {
     public let portion: PortionEstimate?
     public let cookingMethod: String?
     public let nextClarification: MealClarification?
+    public let clarificationQuestion: ClarificationQuestion?
+    public let resolutions: [FoodResolution]
+    public let estimatedDish: MealDishDraft?
     public let confirmationState: ConfirmationState
 
     public init(
@@ -16,12 +19,18 @@ public struct MultimodalMealDraft: Codable, Equatable, Sendable {
         portion: PortionEstimate?,
         cookingMethod: String?,
         nextClarification: MealClarification?,
+        clarificationQuestion: ClarificationQuestion? = nil,
+        resolutions: [FoodResolution] = [],
+        estimatedDish: MealDishDraft? = nil,
         confirmationState: ConfirmationState = .requiresUserConfirmation
     ) {
         self.evidence = evidence
         self.portion = portion
         self.cookingMethod = cookingMethod
         self.nextClarification = nextClarification
+        self.clarificationQuestion = clarificationQuestion
+        self.resolutions = resolutions
+        self.estimatedDish = estimatedDish
         self.confirmationState = confirmationState
     }
 }
@@ -49,6 +58,26 @@ public struct MealCaptureCoordinator: Sendable {
                 portion: portion,
                 cookingMethod: cookingMethod
             )
+        )
+    }
+
+    public func makeResolvedDraft(
+        evidence: [MealEvidence],
+        resolutions: [FoodResolution],
+        portion: PortionEstimate,
+        cookingMethod: String?,
+        estimatedDish: MealDishDraft,
+        clarificationContext: ClarificationContext
+    ) -> MultimodalMealDraft {
+        let question = clarificationSelector.selectOne(from: clarificationContext)
+        return MultimodalMealDraft(
+            evidence: evidence,
+            portion: portion,
+            cookingMethod: cookingMethod,
+            nextClarification: question?.kind,
+            clarificationQuestion: question,
+            resolutions: resolutions,
+            estimatedDish: estimatedDish
         )
     }
 }

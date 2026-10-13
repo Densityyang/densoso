@@ -6,6 +6,7 @@ import Observation
 @MainActor
 @Observable
 final class Dependencies {
+    let modelContainer: ModelContainer
     var foodDatabase: FoodDatabase?
     let speechService: SpeechService
     let localIntelligence: LocalIntelligenceService
@@ -22,8 +23,10 @@ final class Dependencies {
     let confirmationRepository: SwiftDataConfirmationRepository
     let confirmationCoordinator: ConfirmationCoordinator
     let agentRepository: SwiftDataAgentRepository
+    let confirmedFoodHistoryRepository: SwiftDataConfirmedFoodHistoryRepository
     let providerGovernanceRepository: SwiftDataProviderGovernanceRepository
     let providerUsageLedger: ProviderUsageLedger
+    let packagedFoodProvider: (any PackagedFoodProvider)?
 
     /// 食材库是否已初始化
     var isFoodDBReady: Bool { foodDatabase != nil }
@@ -34,8 +37,10 @@ final class Dependencies {
         persistenceState: PersistenceRuntimeState = .writable
     ) {
         let modelContainer = modelContainer ?? PersistenceBootstrap.make(inMemory: true).container
+        self.modelContainer = modelContainer
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: modelContainer)
         let agentRepository = SwiftDataAgentRepository(modelContainer: modelContainer)
+        let confirmedFoodHistory = SwiftDataConfirmedFoodHistoryRepository(modelContainer: modelContainer)
         let governanceRepository = SwiftDataProviderGovernanceRepository(modelContainer: modelContainer)
         let writeGate = PersistenceWriteGate(state: persistenceState)
         let confirmationCoordinator = ConfirmationCoordinator(
@@ -46,6 +51,14 @@ final class Dependencies {
         let intelligencePreferences = IntelligencePreferences()
         let providerConfiguration = ProviderConfigurationPreferences()
         let providerRegistry = ProviderRegistry(configuration: providerConfiguration)
+        let packagedFoodProvider: (any PackagedFoodProvider)?
+        if let openFoodFacts = try? OpenFoodFactsPackagedFoodProvider(
+            userAgent: "densoso/1.0 (iOS; meal barcode lookup)"
+        ) {
+            packagedFoodProvider = CachedPackagedFoodProvider(upstream: openFoodFacts)
+        } else {
+            packagedFoodProvider = nil
+        }
         let toolRegistry = ToolRegistry()
         self.intelligencePreferences = intelligencePreferences
         self.providerConfiguration = providerConfiguration
@@ -59,9 +72,11 @@ final class Dependencies {
         self.confirmationRepository = confirmationRepository
         self.confirmationCoordinator = confirmationCoordinator
         self.agentRepository = agentRepository
+        self.confirmedFoodHistoryRepository = confirmedFoodHistory
         self.providerGovernanceRepository = governanceRepository
         let usageLedger = ProviderUsageLedger(repository: governanceRepository)
         self.providerUsageLedger = usageLedger
+        self.packagedFoodProvider = packagedFoodProvider
         self.speechService = SpeechService(
             cloudProvider: ConfiguredQwenASRProvider(),
             governanceRepository: governanceRepository,
@@ -78,7 +93,8 @@ final class Dependencies {
             registry: toolRegistry,
             confirmationCoordinator: confirmationCoordinator,
             readRepository: agentRepository,
-            conversationRepository: agentRepository
+            conversationRepository: agentRepository,
+            confirmedFoodHistory: confirmedFoodHistory
         )
 
         // 尝试加载食材库
@@ -109,5 +125,18 @@ final class Dependencies {
         }
         // 注入到 AgentSession
         agentSession.foodDatabase = foodDatabase
+    }
+
+    func makeMealCaptureService() -> MealCaptureApplicationService {
+        return MealCaptureApplicationService(
+            foodDatabase: foodDatabase,
+            confirmedFoodHistory: confirmedFoodHistoryRepository,
+            packagedFoodProvider: packagedFoodProvider,
+            visionProvider: ConfiguredQwenMealVisionProvider(),
+            governanceRepository: providerGovernanceRepository,
+            providerConfiguration: providerConfiguration,
+            usageLedger: providerUsageLedger,
+            confirmationCoordinator: confirmationCoordinator
+        )
     }
 }

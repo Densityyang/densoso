@@ -245,6 +245,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     private func makeMeal(from draft: MealDraft, sourceActionKey: String) throws -> MealRecord {
         guard let total = draft.totalNutrients else { throw ConfirmationError.payloadCorrupt }
         let evidenceData = try JSONEncoder().encode(draft.dishes.flatMap(\.evidence))
+        // V3 scalar macros are non-optional compatibility mirrors; nil means
+        // unknown, not zero. Optional range fields and evidenceData are canonical.
         let meal = MealRecord(
             date: draft.occurredAt,
             mealType: draft.mealType,

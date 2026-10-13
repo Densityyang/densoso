@@ -1,21 +1,17 @@
-import Foundation
 import DensosoDomain
+import Foundation
 
 struct LogMealTool: ConfirmationRequiredTool {
     var definition: ToolSchema {
         .strictObject(
             name: "log_meal",
-            description: "准备一餐的结构化草稿，不会保存数据；烹饪方式只用于推断油量，不能乘食材热量。",
+            description: "准备一餐草稿，不会保存；食材候选、生熟和区间必须通过本地解析与确认。",
             effect: .stagesAction,
             properties: [
                 "mealType": .string(
-                    allowedValues: ["breakfast", "lunch", "dinner", "snack"],
-                    description: "进餐类型"
+                    allowedValues: ["breakfast", "lunch", "dinner", "snack"]
                 ),
-                "occurredAt": .anyOf(
-                    [.string(format: "date-time"), .null],
-                    description: "用餐时间；null 表示当前"
-                ),
+                "occurredAt": .anyOf([.string(format: "date-time"), .null]),
                 "dishes": .array(
                     items: .object(
                         properties: [
@@ -31,6 +27,14 @@ struct LogMealTool: ConfirmationRequiredTool {
                                     properties: [
                                         "name": .string(minimumLength: 1, maximumLength: 120),
                                         "amountGrams": .number(minimum: 0.1, maximum: 5_000),
+                                        "preparation": .anyOf([
+                                            .string(allowedValues: ["raw", "cooked", "unknown"]),
+                                            .null,
+                                        ]),
+                                        "massBasis": .anyOf([
+                                            .string(allowedValues: ["asPurchased", "edibleRaw", "cooked"]),
+                                            .null,
+                                        ]),
                                     ],
                                     required: ["name", "amountGrams"],
                                     additionalProperties: false
@@ -60,7 +64,8 @@ struct LogMealTool: ConfirmationRequiredTool {
               let arguments = try? JSONDecoder().decode(LogMealArguments.self, from: data),
               Set(["breakfast", "lunch", "dinner", "snack"]).contains(arguments.mealType),
               !arguments.dishes.isEmpty,
-              arguments.dishes.count <= 20 else {
+              arguments.dishes.count <= 20,
+              let database = context.foodDatabase else {
             throw DraftError.invalidMeal
         }
 
@@ -70,9 +75,14 @@ struct LogMealTool: ConfirmationRequiredTool {
                 throw DraftError.invalidMeal
             }
             date = parsed
-        } else { date = Date() }
+        } else {
+            date = Date()
+        }
 
-        let table = CookingCoefficientTable.shared
+        let resolver = FoodResolver(catalog: try database.catalogEntries())
+        let portionEstimator = PortionEstimator()
+        let mealEstimator = MealEstimator()
+        let oilPriors = CookingOilPriorTable()
         let drafts = try arguments.dishes.map { rawDish -> MealDishDraft in
             let name = rawDish.dishName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty,
@@ -87,69 +97,52 @@ struct LogMealTool: ConfirmationRequiredTool {
                     || (rawDish.notedOilG!.isFinite && (0...500).contains(rawDish.notedOilG!)) else {
                 throw DraftError.invalidMeal
             }
-            guard let database = context.foodDatabase else { throw DraftError.invalidMeal }
-            let ingredients = try rawDish.ingredients.compactMap { ingredient -> CalorieEstimator.Ingredient? in
-                guard let candidate = try database.rankedSearch(query: ingredient.name, limit: 3).first else {
-                    return nil
+
+            var ingredients: [MealIngredientEstimationInput] = []
+            for ingredient in rawDish.ingredients {
+                let preparation = FoodPreparation(rawValue: ingredient.preparation ?? "") ?? .unknown
+                let confirmedHistory = await context.confirmedFoodIDs(matching: ingredient.name)
+                let resolution = resolver.resolve(
+                    FoodResolutionQuery(
+                        label: ingredient.name,
+                        preparation: preparation,
+                        sourceQuality: rawDish.lowConfidence ? 0.7 : 1,
+                        confirmedHistoryFoodIDs: confirmedHistory
+                    )
+                )
+                guard !resolution.candidates.isEmpty else { throw DraftError.invalidMeal }
+                guard resolution.autoPreselect != nil else {
+                    throw DraftError.ambiguousFood(
+                        name: ingredient.name,
+                        candidates: resolution.candidates.map { $0.entry.name }
+                    )
                 }
-                return CalorieEstimator.Ingredient(
-                    item: candidate.item,
-                    amountG: ingredient.amountGrams,
-                    massBasis: massBasis(for: candidate.item, requestedName: ingredient.name),
-                    matchScore: candidate.score
+                let massBasis = FoodMassBasis(rawValue: ingredient.massBasis ?? "")
+                    ?? (preparation == .cooked ? .cooked : .edibleRaw)
+                ingredients.append(
+                    MealIngredientEstimationInput(
+                        label: ingredient.name,
+                        resolution: resolution,
+                        portion: try portionEstimator.estimate(
+                        evidence: [.exactGrams(grams: ingredient.amountGrams)],
+                        food: resolution.autoPreselect
+                        ),
+                        massBasis: massBasis
+                    )
                 )
             }
-            guard ingredients.count == rawDish.ingredients.count else { throw DraftError.invalidMeal }
-            let oil: CalorieEstimator.OilSource = rawDish.notedOilG.map(CalorieEstimator.OilSource.provided)
-                ?? .inferred(grams: table[rawDish.cookingMethod].defaultOilG)
-            let estimate = CalorieEstimator.estimate(ingredients: ingredients, oil: oil, oilCaloriesPerGram: table.oilPerGramKcal)
-            let confidence = rawDish.lowConfidence ? min(estimate.confidence, 0.5) : estimate.confidence
-            let domainIngredients = try estimate.ingredientEstimates.map { ingredient in
-                MealIngredientDraft(
-                    foodID: String(ingredient.foodItemId),
-                    name: ingredient.name,
-                    amountGrams: try EstimateRange.point(ingredient.amountG),
-                    nutrients: NutrientEstimate(
-                        energyKcal: try EstimateRange.point(ingredient.adjustedCaloriesKcal)
-                    ),
-                    evidence: [
-                        EvidenceSnapshot(
-                            grade: .databaseMatch,
-                            sourceID: "food-db:\(ingredient.foodItemId)",
-                            sourceVersion: "food-composition-6",
-                            summary: ingredient.name,
-                            confidence: confidence
-                        )
-                    ]
+            let oilRange = try rawDish.notedOilG.map(EstimateRange.point)
+                ?? oilPriors.range(for: rawDish.cookingMethod)
+            return try mealEstimator.estimateDish(
+                MealDishEstimationInput(
+                    name: name,
+                    cookingMethod: rawDish.cookingMethod,
+                    ingredients: ingredients,
+                    inferredOilGrams: oilRange
                 )
-            }
-            let evidence = estimate.evidence.map {
-                EvidenceSnapshot(
-                    grade: $0.source == "food_database" ? .databaseMatch : .estimated,
-                    sourceID: $0.source,
-                    summary: $0.detail,
-                    confidence: confidence
-                )
-            }
-            return MealDishDraft(
-                name: name,
-                cookingMethod: rawDish.cookingMethod,
-                portionGrams: try EstimateRange.sum(domainIngredients.map(\.amountGrams)),
-                nutrients: NutrientEstimate(
-                    energyKcal: try EstimateRange(
-                        low: Double(estimate.calories.low),
-                        likely: Double(estimate.calories.likely),
-                        high: Double(estimate.calories.high)
-                    ),
-                    proteinGrams: try EstimateRange.point(estimate.proteinG),
-                    fatGrams: try EstimateRange.point(estimate.fatG),
-                    carbohydrateGrams: try EstimateRange.point(estimate.carbsG)
-                ),
-                ingredients: domainIngredients,
-                evidence: evidence,
-                algorithmVersion: "v3"
             )
         }
+
         return .meal(
             MealDraft(
                 occurredAt: date,
@@ -158,12 +151,6 @@ struct LogMealTool: ConfirmationRequiredTool {
                 note: arguments.note
             )
         )
-    }
-
-    private func massBasis(for item: FoodItem, requestedName: String) -> CalorieEstimator.MassBasis {
-        let requested = requestedName.lowercased()
-        if item.name.contains("米饭") || requested.contains("熟") { return .cooked }
-        return .grossRaw
     }
 }
 
@@ -184,5 +171,7 @@ private struct LogMealArguments: Decodable {
     struct Ingredient: Decodable {
         let name: String
         let amountGrams: Double
+        let preparation: String?
+        let massBasis: String?
     }
 }

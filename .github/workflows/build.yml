@@ -42,6 +42,7 @@ jobs:
             scripts/validate_phase2_domain_persistence.py \
             scripts/validate_phase3_agent_provider.py \
             scripts/validate_phase4_speech.py \
+            scripts/validate_phase5_meal_capture.py \
             scripts/validate_voice_goldens.py
 
       - name: Validate bundled food database
@@ -422,5 +423,94 @@ jobs:
             gate04-fixture-summary.json
             docs/gates/gate-04-routing-matrix.json
             docs/gates/gate-04-device-matrix.json
+          if-no-files-found: error
+          retention-days: 14
+
+  meal-capture:
+    name: gate-05-meal-capture
+    needs: speech
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 5 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate05DerivedData" >> "$GITHUB_ENV"
+          echo "GATE05_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate05MealCaptureTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 5 fixtures and contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase5_meal_capture.py
+          python3 scripts/validate_phase5_meal_capture.py \
+            --report gate05-fixture-summary.json
+
+      - name: Test cumulative domain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate05-domain.log
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Prepare iOS 26 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test meal capture evaluation privacy and confirmation contracts
+        run: |
+          set -o pipefail
+          rm -rf "$GATE05_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 1200 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/Gate05EvaluationTests \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests \
+            -only-testing:DensosoTests/QwenMealVisionProviderContractTests \
+            -only-testing:DensosoTests/PhotoEvidenceSanitizerTests \
+            -only-testing:DensosoTests/BarcodeAndLabelScannerTests \
+            -only-testing:DensosoTests/CalorieEstimatorTests \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests \
+            -only-testing:DensosoTests/DensosoMigrationTests \
+            -only-testing:DensosoTests/ExportServiceTests \
+            -resultBundlePath "$GATE05_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate05-meal-capture-tests.log
+
+      - name: Export Gate 5 test summary
+        run: |
+          set -euo pipefail
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE05_RESULT_BUNDLE" > gate05-test-summary.json
+          grep -q '"result" : "Passed"' gate05-test-summary.json
+
+      - name: Upload Gate 5 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-05-meal-capture-results
+          path: |
+            Gate05MealCaptureTests.xcresult
+            gate05-domain.log
+            gate05-meal-capture-tests.log
+            gate05-test-summary.json
+            gate05-fixture-summary.json
+            docs/gates/gate-05-meal-capture.md
+            evals/gate05/manifest.json
+            evals/gate05/food-catalog.json
+            evals/gate05/food-resolution.json
+            evals/gate05/portion-reference.json
+            DensosoTests/Fixtures/Gate05/Providers/Qwen
           if-no-files-found: error
           retention-days: 14

@@ -32,9 +32,9 @@ struct QueryFoodTool: AgentTool {
                 "alias": item.alias ?? "",
                 "category": item.category,
                 "energyKcal": item.energyKcal,
-                "proteinG": item.proteinG,
-                "fatG": item.fatG,
-                "carbohydrateG": item.carbohydrateG,
+                "proteinG": item.proteinG.map { $0 as Any } ?? NSNull(),
+                "fatG": item.fatG.map { $0 as Any } ?? NSNull(),
+                "carbohydrateG": item.carbohydrateG.map { $0 as Any } ?? NSNull(),
                 "edible": item.edible,
             ]
         }

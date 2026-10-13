@@ -138,6 +138,8 @@ enum CaloricEngine {
         let dayWorkouts = workouts.filter { calendar.isDate($0.date, inSameDayAs: startOfDay) }
 
         let totalIntake = dayMeals.map(\.totalCaloriesKcal).reduce(0, +)
+        // V3 DailyMetrics macros are compatibility aggregates. A meal's zero
+        // mirror can mean unknown; use the optional meal ranges for evidence.
         let totalProtein = dayMeals.map(\.proteinG).reduce(0, +)
         let totalFat = dayMeals.map(\.fatG).reduce(0, +)
         let totalCarbs = dayMeals.map(\.carbsG).reduce(0, +)

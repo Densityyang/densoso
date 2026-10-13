@@ -9,7 +9,8 @@ final class ExportService {
     var isExporting = false
     var lastError: String?
 
-    private static let formatVersion = 2
+    private static let formatVersion = 3
+    private static let supportedFormatVersions: Set<Int> = [2, 3]
 
     struct BackupDocument: Codable {
         let formatVersion: Int
@@ -48,7 +49,116 @@ final class ExportService {
             let confidence: String
             let algorithmVersion: String
             let createdAt: Date
+            let sourceActionKey: String?
+            let energyLowKcal: Double?
+            let energyLikelyKcal: Double?
+            let energyHighKcal: Double?
+            let proteinLowG: Double?
+            let proteinLikelyG: Double?
+            let proteinHighG: Double?
+            let fatLowG: Double?
+            let fatLikelyG: Double?
+            let fatHighG: Double?
+            let carbsLowG: Double?
+            let carbsLikelyG: Double?
+            let carbsHighG: Double?
+            let evidenceData: Data?
             let dishes: [DishExport]
+
+            private enum CodingKeys: String, CodingKey {
+                case id, date, mealType, totalCaloriesKcal, proteinG, fatG, carbsG
+                case notes, confidence, algorithmVersion, createdAt, sourceActionKey
+                case energyLowKcal, energyLikelyKcal, energyHighKcal
+                case proteinLowG, proteinLikelyG, proteinHighG
+                case fatLowG, fatLikelyG, fatHighG
+                case carbsLowG, carbsLikelyG, carbsHighG, evidenceData, dishes
+            }
+
+            init(
+                id: UUID,
+                date: Date,
+                mealType: String,
+                totalCaloriesKcal: Int,
+                proteinG: Double,
+                fatG: Double,
+                carbsG: Double,
+                notes: String?,
+                confidence: String,
+                algorithmVersion: String,
+                createdAt: Date,
+                sourceActionKey: String? = nil,
+                energyLowKcal: Double? = nil,
+                energyLikelyKcal: Double? = nil,
+                energyHighKcal: Double? = nil,
+                proteinLowG: Double? = nil,
+                proteinLikelyG: Double? = nil,
+                proteinHighG: Double? = nil,
+                fatLowG: Double? = nil,
+                fatLikelyG: Double? = nil,
+                fatHighG: Double? = nil,
+                carbsLowG: Double? = nil,
+                carbsLikelyG: Double? = nil,
+                carbsHighG: Double? = nil,
+                evidenceData: Data? = nil,
+                dishes: [DishExport]
+            ) {
+                self.id = id
+                self.date = date
+                self.mealType = mealType
+                self.totalCaloriesKcal = totalCaloriesKcal
+                self.proteinG = proteinG
+                self.fatG = fatG
+                self.carbsG = carbsG
+                self.notes = notes
+                self.confidence = confidence
+                self.algorithmVersion = algorithmVersion
+                self.createdAt = createdAt
+                self.sourceActionKey = sourceActionKey
+                self.energyLowKcal = energyLowKcal
+                self.energyLikelyKcal = energyLikelyKcal
+                self.energyHighKcal = energyHighKcal
+                self.proteinLowG = proteinLowG
+                self.proteinLikelyG = proteinLikelyG
+                self.proteinHighG = proteinHighG
+                self.fatLowG = fatLowG
+                self.fatLikelyG = fatLikelyG
+                self.fatHighG = fatHighG
+                self.carbsLowG = carbsLowG
+                self.carbsLikelyG = carbsLikelyG
+                self.carbsHighG = carbsHighG
+                self.evidenceData = evidenceData
+                self.dishes = dishes
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                id = try container.decode(UUID.self, forKey: .id)
+                date = try container.decode(Date.self, forKey: .date)
+                mealType = try container.decode(String.self, forKey: .mealType)
+                totalCaloriesKcal = try container.decode(Int.self, forKey: .totalCaloriesKcal)
+                proteinG = try container.decode(Double.self, forKey: .proteinG)
+                fatG = try container.decode(Double.self, forKey: .fatG)
+                carbsG = try container.decode(Double.self, forKey: .carbsG)
+                notes = try container.decodeIfPresent(String.self, forKey: .notes)
+                confidence = try container.decode(String.self, forKey: .confidence)
+                algorithmVersion = try container.decode(String.self, forKey: .algorithmVersion)
+                createdAt = try container.decode(Date.self, forKey: .createdAt)
+                sourceActionKey = try container.decodeIfPresent(String.self, forKey: .sourceActionKey)
+                energyLowKcal = try container.decodeIfPresent(Double.self, forKey: .energyLowKcal)
+                energyLikelyKcal = try container.decodeIfPresent(Double.self, forKey: .energyLikelyKcal)
+                energyHighKcal = try container.decodeIfPresent(Double.self, forKey: .energyHighKcal)
+                proteinLowG = try container.decodeIfPresent(Double.self, forKey: .proteinLowG)
+                proteinLikelyG = try container.decodeIfPresent(Double.self, forKey: .proteinLikelyG)
+                proteinHighG = try container.decodeIfPresent(Double.self, forKey: .proteinHighG)
+                fatLowG = try container.decodeIfPresent(Double.self, forKey: .fatLowG)
+                fatLikelyG = try container.decodeIfPresent(Double.self, forKey: .fatLikelyG)
+                fatHighG = try container.decodeIfPresent(Double.self, forKey: .fatHighG)
+                carbsLowG = try container.decodeIfPresent(Double.self, forKey: .carbsLowG)
+                carbsLikelyG = try container.decodeIfPresent(Double.self, forKey: .carbsLikelyG)
+                carbsHighG = try container.decodeIfPresent(Double.self, forKey: .carbsHighG)
+                evidenceData = try container.decodeIfPresent(Data.self, forKey: .evidenceData)
+                dishes = try container.decode([DishExport].self, forKey: .dishes)
+            }
         }
 
         struct DishExport: Codable {
@@ -62,6 +172,125 @@ final class ExportService {
             let confidenceScore: Double
             let userCorrectionFactor: Double?
             let createdAt: Date
+            let id: UUID?
+            let energyLowKcal: Double?
+            let energyLikelyKcal: Double?
+            let energyHighKcal: Double?
+            let proteinLowG: Double?
+            let proteinLikelyG: Double?
+            let proteinHighG: Double?
+            let fatLowG: Double?
+            let fatLikelyG: Double?
+            let fatHighG: Double?
+            let carbsLowG: Double?
+            let carbsLikelyG: Double?
+            let carbsHighG: Double?
+            let portionLowG: Double?
+            let portionLikelyG: Double?
+            let portionHighG: Double?
+            let evidenceData: Data?
+            let algorithmVersion: String?
+
+            init(
+                dishName: String,
+                cookingMethod: String?,
+                ingredientJSON: String,
+                estimatedCaloriesKcal: Int,
+                estimatedProteinG: Double,
+                estimatedFatG: Double,
+                estimatedCarbsG: Double,
+                confidenceScore: Double,
+                userCorrectionFactor: Double?,
+                createdAt: Date,
+                id: UUID? = nil,
+                energyLowKcal: Double? = nil,
+                energyLikelyKcal: Double? = nil,
+                energyHighKcal: Double? = nil,
+                proteinLowG: Double? = nil,
+                proteinLikelyG: Double? = nil,
+                proteinHighG: Double? = nil,
+                fatLowG: Double? = nil,
+                fatLikelyG: Double? = nil,
+                fatHighG: Double? = nil,
+                carbsLowG: Double? = nil,
+                carbsLikelyG: Double? = nil,
+                carbsHighG: Double? = nil,
+                portionLowG: Double? = nil,
+                portionLikelyG: Double? = nil,
+                portionHighG: Double? = nil,
+                evidenceData: Data? = nil,
+                algorithmVersion: String? = nil
+            ) {
+                self.dishName = dishName
+                self.cookingMethod = cookingMethod
+                self.ingredientJSON = ingredientJSON
+                self.estimatedCaloriesKcal = estimatedCaloriesKcal
+                self.estimatedProteinG = estimatedProteinG
+                self.estimatedFatG = estimatedFatG
+                self.estimatedCarbsG = estimatedCarbsG
+                self.confidenceScore = confidenceScore
+                self.userCorrectionFactor = userCorrectionFactor
+                self.createdAt = createdAt
+                self.id = id
+                self.energyLowKcal = energyLowKcal
+                self.energyLikelyKcal = energyLikelyKcal
+                self.energyHighKcal = energyHighKcal
+                self.proteinLowG = proteinLowG
+                self.proteinLikelyG = proteinLikelyG
+                self.proteinHighG = proteinHighG
+                self.fatLowG = fatLowG
+                self.fatLikelyG = fatLikelyG
+                self.fatHighG = fatHighG
+                self.carbsLowG = carbsLowG
+                self.carbsLikelyG = carbsLikelyG
+                self.carbsHighG = carbsHighG
+                self.portionLowG = portionLowG
+                self.portionLikelyG = portionLikelyG
+                self.portionHighG = portionHighG
+                self.evidenceData = evidenceData
+                self.algorithmVersion = algorithmVersion
+            }
+
+            private enum CodingKeys: String, CodingKey {
+                case dishName, cookingMethod, ingredientJSON, estimatedCaloriesKcal
+                case estimatedProteinG, estimatedFatG, estimatedCarbsG, confidenceScore
+                case userCorrectionFactor, createdAt, id, energyLowKcal, energyLikelyKcal
+                case energyHighKcal, proteinLowG, proteinLikelyG, proteinHighG
+                case fatLowG, fatLikelyG, fatHighG, carbsLowG, carbsLikelyG, carbsHighG
+                case portionLowG, portionLikelyG, portionHighG, evidenceData, algorithmVersion
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                dishName = try container.decode(String.self, forKey: .dishName)
+                cookingMethod = try container.decodeIfPresent(String.self, forKey: .cookingMethod)
+                ingredientJSON = try container.decode(String.self, forKey: .ingredientJSON)
+                estimatedCaloriesKcal = try container.decode(Int.self, forKey: .estimatedCaloriesKcal)
+                estimatedProteinG = try container.decode(Double.self, forKey: .estimatedProteinG)
+                estimatedFatG = try container.decode(Double.self, forKey: .estimatedFatG)
+                estimatedCarbsG = try container.decode(Double.self, forKey: .estimatedCarbsG)
+                confidenceScore = try container.decode(Double.self, forKey: .confidenceScore)
+                userCorrectionFactor = try container.decodeIfPresent(Double.self, forKey: .userCorrectionFactor)
+                createdAt = try container.decode(Date.self, forKey: .createdAt)
+                id = try container.decodeIfPresent(UUID.self, forKey: .id)
+                energyLowKcal = try container.decodeIfPresent(Double.self, forKey: .energyLowKcal)
+                energyLikelyKcal = try container.decodeIfPresent(Double.self, forKey: .energyLikelyKcal)
+                energyHighKcal = try container.decodeIfPresent(Double.self, forKey: .energyHighKcal)
+                proteinLowG = try container.decodeIfPresent(Double.self, forKey: .proteinLowG)
+                proteinLikelyG = try container.decodeIfPresent(Double.self, forKey: .proteinLikelyG)
+                proteinHighG = try container.decodeIfPresent(Double.self, forKey: .proteinHighG)
+                fatLowG = try container.decodeIfPresent(Double.self, forKey: .fatLowG)
+                fatLikelyG = try container.decodeIfPresent(Double.self, forKey: .fatLikelyG)
+                fatHighG = try container.decodeIfPresent(Double.self, forKey: .fatHighG)
+                carbsLowG = try container.decodeIfPresent(Double.self, forKey: .carbsLowG)
+                carbsLikelyG = try container.decodeIfPresent(Double.self, forKey: .carbsLikelyG)
+                carbsHighG = try container.decodeIfPresent(Double.self, forKey: .carbsHighG)
+                portionLowG = try container.decodeIfPresent(Double.self, forKey: .portionLowG)
+                portionLikelyG = try container.decodeIfPresent(Double.self, forKey: .portionLikelyG)
+                portionHighG = try container.decodeIfPresent(Double.self, forKey: .portionHighG)
+                evidenceData = try container.decodeIfPresent(Data.self, forKey: .evidenceData)
+                algorithmVersion = try container.decodeIfPresent(String.self, forKey: .algorithmVersion)
+            }
         }
 
         struct WorkoutRecordExport: Codable {
@@ -128,7 +357,7 @@ final class ExportService {
     func restoreJSON(url: URL, context: ModelContext) async throws -> ImportSummary {
         let data = try Data(contentsOf: url)
         let document = try JSONDecoder().decode(BackupDocument.self, from: data)
-        guard document.formatVersion == Self.formatVersion else {
+        guard Self.supportedFormatVersions.contains(document.formatVersion) else {
             throw BackupError.unsupportedVersion(document.formatVersion)
         }
         guard try checksum(for: document.payload) == document.checksum else {
@@ -170,12 +399,27 @@ final class ExportService {
                     carbsG: source.carbsG,
                     notes: source.notes,
                     confidence: source.confidence,
-                    algorithmVersion: source.algorithmVersion
+                    algorithmVersion: source.algorithmVersion,
+                    sourceActionKey: source.sourceActionKey,
+                    energyLowKcal: source.energyLowKcal,
+                    energyLikelyKcal: source.energyLikelyKcal,
+                    energyHighKcal: source.energyHighKcal,
+                    proteinLowG: source.proteinLowG,
+                    proteinLikelyG: source.proteinLikelyG,
+                    proteinHighG: source.proteinHighG,
+                    fatLowG: source.fatLowG,
+                    fatLikelyG: source.fatLikelyG,
+                    fatHighG: source.fatHighG,
+                    carbsLowG: source.carbsLowG,
+                    carbsLikelyG: source.carbsLikelyG,
+                    carbsHighG: source.carbsHighG,
+                    evidenceData: source.evidenceData
                 )
                 meal.id = source.id
                 meal.createdAt = source.createdAt
                 meal.dishes = source.dishes.map { dishSource in
                     let dish = DishEntry(
+                        id: dishSource.id ?? UUID(),
                         dishName: dishSource.dishName,
                         cookingMethod: dishSource.cookingMethod,
                         ingredientJSON: dishSource.ingredientJSON,
@@ -184,7 +428,24 @@ final class ExportService {
                         estimatedFatG: dishSource.estimatedFatG,
                         estimatedCarbsG: dishSource.estimatedCarbsG,
                         confidenceScore: dishSource.confidenceScore,
-                        userCorrectionFactor: dishSource.userCorrectionFactor
+                        userCorrectionFactor: dishSource.userCorrectionFactor,
+                        energyLowKcal: dishSource.energyLowKcal,
+                        energyLikelyKcal: dishSource.energyLikelyKcal,
+                        energyHighKcal: dishSource.energyHighKcal,
+                        proteinLowG: dishSource.proteinLowG,
+                        proteinLikelyG: dishSource.proteinLikelyG,
+                        proteinHighG: dishSource.proteinHighG,
+                        fatLowG: dishSource.fatLowG,
+                        fatLikelyG: dishSource.fatLikelyG,
+                        fatHighG: dishSource.fatHighG,
+                        carbsLowG: dishSource.carbsLowG,
+                        carbsLikelyG: dishSource.carbsLikelyG,
+                        carbsHighG: dishSource.carbsHighG,
+                        portionLowG: dishSource.portionLowG,
+                        portionLikelyG: dishSource.portionLikelyG,
+                        portionHighG: dishSource.portionHighG,
+                        evidenceData: dishSource.evidenceData,
+                        algorithmVersion: dishSource.algorithmVersion ?? source.algorithmVersion
                     )
                     dish.createdAt = dishSource.createdAt
                     return dish
@@ -275,6 +536,20 @@ final class ExportService {
                     confidence: source.confidence,
                     algorithmVersion: source.algorithmVersion,
                     createdAt: source.createdAt,
+                    sourceActionKey: source.sourceActionKey,
+                    energyLowKcal: source.energyLowKcal,
+                    energyLikelyKcal: source.energyLikelyKcal,
+                    energyHighKcal: source.energyHighKcal,
+                    proteinLowG: source.proteinLowG,
+                    proteinLikelyG: source.proteinLikelyG,
+                    proteinHighG: source.proteinHighG,
+                    fatLowG: source.fatLowG,
+                    fatLikelyG: source.fatLikelyG,
+                    fatHighG: source.fatHighG,
+                    carbsLowG: source.carbsLowG,
+                    carbsLikelyG: source.carbsLikelyG,
+                    carbsHighG: source.carbsHighG,
+                    evidenceData: source.evidenceData,
                     dishes: source.dishes.map { dish in
                         .init(
                             dishName: dish.dishName,
@@ -286,7 +561,25 @@ final class ExportService {
                             estimatedCarbsG: dish.estimatedCarbsG,
                             confidenceScore: dish.confidenceScore,
                             userCorrectionFactor: dish.userCorrectionFactor,
-                            createdAt: dish.createdAt
+                            createdAt: dish.createdAt,
+                            id: dish.id,
+                            energyLowKcal: dish.energyLowKcal,
+                            energyLikelyKcal: dish.energyLikelyKcal,
+                            energyHighKcal: dish.energyHighKcal,
+                            proteinLowG: dish.proteinLowG,
+                            proteinLikelyG: dish.proteinLikelyG,
+                            proteinHighG: dish.proteinHighG,
+                            fatLowG: dish.fatLowG,
+                            fatLikelyG: dish.fatLikelyG,
+                            fatHighG: dish.fatHighG,
+                            carbsLowG: dish.carbsLowG,
+                            carbsLikelyG: dish.carbsLikelyG,
+                            carbsHighG: dish.carbsHighG,
+                            portionLowG: dish.portionLowG,
+                            portionLikelyG: dish.portionLikelyG,
+                            portionHighG: dish.portionHighG,
+                            evidenceData: dish.evidenceData,
+                            algorithmVersion: dish.algorithmVersion
                         )
                     }
                 )
@@ -319,7 +612,7 @@ final class ExportService {
         )
     }
 
-    private func checksum(for payload: BackupPayload) throws -> String {
+    func checksum(for payload: BackupPayload) throws -> String {
         let digest = SHA256.hash(data: try encoder.encode(payload))
         return digest.map { String(format: "%02x", $0) }.joined()
     }

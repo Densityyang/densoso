@@ -1,6 +1,6 @@
 # Gate 04 — Speech Capture
 
-Status: awaiting user Gate 4 approval
+Status: approved by user on 2026-09-08
 
 Gate 4 extends Draft PR #14 after the user approved Gate 3 on 2026-09-02.
 It repairs speech capture only and does not authorize Phase 5 meal/photo work.
@@ -80,4 +80,4 @@ zero `OSStatus -50` and zero recording failures.
 | Privacy | WAV cleanup/protection and diagnostics redaction pass | Passed in Gate 4 job; Simulator protection mapping is documented below |
 | Artifact | `.xcresult`, logs and JSON matrices retained | `gate-04-speech-results` — artifact ID `9837055363` |
 | Device | 20 physical cycles | Provisional; blocked by signing |
-| User decision | Approve or reject entry to Phase 5 | Awaiting user Gate 4 approval |
+| User decision | Approve or reject entry to Phase 5 | Approved 2026-09-08 |

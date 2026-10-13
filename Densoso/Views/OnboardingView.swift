@@ -157,7 +157,7 @@ struct OnboardingView: View {
                 TextField("Workspace ID", text: $qwenWorkspaceID)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Text("北京区域可选文本工具调用和单次 Qwen ASR 兜底；图片仍不会上传。")
+                Text("北京区域可选文本和单次 Qwen ASR；开放式照片在真实质量门禁完成前保持关闭。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

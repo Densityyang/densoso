@@ -11,6 +11,7 @@ struct ChatScreen: View {
     @State private var isProcessing = false
     @State private var voiceDraftSummary: String?
     @State private var didHydratePersistedMessages = false
+    @State private var showMealCapture = false
 
     var body: some View {
         NavigationStack {
@@ -106,6 +107,15 @@ struct ChatScreen: View {
             .onChange(of: dependencies.agentSession.streamedText) { _, _ in
                 scrollToBottom(proxy: proxy)
             }
+            .sheet(isPresented: $showMealCapture) {
+                MealCaptureSheet { action in
+                    Task {
+                        try? await dependencies.agentSession.reloadPendingActions()
+                        voiceDraftSummary = "照片餐食草稿已生成：\(action.payload.summary)；确认前不会保存。"
+                    }
+                }
+                .presentationBackground { OrbitBackground() }
+            }
         }
     }
 
@@ -131,6 +141,16 @@ struct ChatScreen: View {
 
     private var composer: some View {
         HStack(spacing: 10) {
+            Button {
+                showMealCapture = true
+            } label: {
+                Image(systemName: "camera.fill")
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .controlSize(.large)
+            .accessibilityLabel("照片记餐")
+
             Button {
                 Task { await toggleVoice() }
             } label: {
