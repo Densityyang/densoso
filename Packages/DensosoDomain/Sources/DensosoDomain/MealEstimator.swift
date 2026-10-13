@@ -80,7 +80,7 @@ public struct MealEstimator: Sendable {
         let hasExplicitOil = selectedEntries.contains {
             FoodResolver.normalize($0.category).contains("oil") || $0.name.contains("油")
         }
-        let isCookedComposite = selectedEntries.contains(\.isCookedComposite)
+        let isCookedComposite = selectedEntries.contains(where: \.isCookedComposite)
         if allIngredientsResolved,
            !hasExplicitOil,
            !isCookedComposite,
@@ -219,7 +219,7 @@ public struct MealEstimator: Sendable {
         guard values.count == candidates.count else { return nil }
         let ranges = try zip(candidates, values).map { pair in
             let (candidate, value) = pair
-            try nutrientRange(
+            return try nutrientRange(
                 per100: value,
                 portion: portion,
                 edibleMultiplier: edibleMultiplier(candidate.entry)
