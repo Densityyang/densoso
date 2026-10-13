@@ -83,7 +83,8 @@ struct LogMealTool: ConfirmationRequiredTool {
         let portionEstimator = PortionEstimator()
         let mealEstimator = MealEstimator()
         let oilPriors = CookingOilPriorTable()
-        let drafts = try arguments.dishes.map { rawDish -> MealDishDraft in
+        var drafts: [MealDishDraft] = []
+        for rawDish in arguments.dishes {
             let name = rawDish.dishName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty,
                   !rawDish.ingredients.isEmpty,
@@ -133,12 +134,14 @@ struct LogMealTool: ConfirmationRequiredTool {
             }
             let oilRange = try rawDish.notedOilG.map(EstimateRange.point)
                 ?? oilPriors.range(for: rawDish.cookingMethod)
-            return try mealEstimator.estimateDish(
-                MealDishEstimationInput(
-                    name: name,
-                    cookingMethod: rawDish.cookingMethod,
-                    ingredients: ingredients,
-                    inferredOilGrams: oilRange
+            drafts.append(
+                try mealEstimator.estimateDish(
+                    MealDishEstimationInput(
+                        name: name,
+                        cookingMethod: rawDish.cookingMethod,
+                        ingredients: ingredients,
+                        inferredOilGrams: oilRange
+                    )
                 )
             )
         }
