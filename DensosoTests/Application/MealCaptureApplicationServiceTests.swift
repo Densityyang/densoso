@@ -173,15 +173,15 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
             XCTAssertEqual(error as? MealCaptureApplicationError, .candidateSelectionRequired)
         }
 
-        let selectedID = try XCTUnwrap(review.resolution?.candidates.first?.id)
+        let selectedCandidate = try XCTUnwrap(review.resolution?.candidates.first)
         let action = try await harness.service.stageMeal(
             review: review,
-            selectedFoodID: selectedID
+            selectedFoodID: selectedCandidate.id
         )
         guard case .meal(let draft) = action.payload else {
             return XCTFail("Expected meal payload")
         }
-        XCTAssertEqual(draft.dishes.first?.ingredients.first?.foodID, selectedID)
+        XCTAssertEqual(draft.dishes.first?.ingredients.first?.foodID, selectedCandidate.entry.localFoodID)
     }
 
     func testPortionClarificationMustBeAnsweredAndIsPersistedAsUserEvidence() async throws {
