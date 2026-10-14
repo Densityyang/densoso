@@ -130,22 +130,47 @@ public struct DailyHealthSnapshot: Codable, Equatable, Sendable {
     public let timezoneIdentifier: String
     public let energyIntakeKcal: EstimateRange?
     public let activeEnergyKcal: Double?
+    public let restingEnergyKcal: Double?
+    public let stepCount: Double?
+    public let exerciseMinutes: Double?
     public let weightKilograms: Double?
+    public let healthKitSamples: [HealthSampleSnapshot]?
+    public let healthReadStates: [String: HealthReadState]?
     public let algorithmVersion: String
+
+    public var activeEnergyForProjection: Double? {
+        guard healthReadStates?[HealthMetricID.activeEnergy.rawValue] == .available else { return nil }
+        return activeEnergyKcal
+    }
+
+    public var restingEnergyForProjection: Double? {
+        guard healthReadStates?[HealthMetricID.restingEnergy.rawValue] == .available else { return nil }
+        return restingEnergyKcal
+    }
 
     public init(
         dayStart: Date,
         timezoneIdentifier: String,
         energyIntakeKcal: EstimateRange? = nil,
         activeEnergyKcal: Double? = nil,
+        restingEnergyKcal: Double? = nil,
+        stepCount: Double? = nil,
+        exerciseMinutes: Double? = nil,
         weightKilograms: Double? = nil,
+        healthKitSamples: [HealthSampleSnapshot]? = nil,
+        healthReadStates: [String: HealthReadState]? = nil,
         algorithmVersion: String
     ) {
         self.dayStart = dayStart
         self.timezoneIdentifier = timezoneIdentifier
         self.energyIntakeKcal = energyIntakeKcal
         self.activeEnergyKcal = activeEnergyKcal
+        self.restingEnergyKcal = restingEnergyKcal
+        self.stepCount = stepCount
+        self.exerciseMinutes = exerciseMinutes
         self.weightKilograms = weightKilograms
+        self.healthKitSamples = healthKitSamples
+        self.healthReadStates = healthReadStates
         self.algorithmVersion = algorithmVersion
     }
 }

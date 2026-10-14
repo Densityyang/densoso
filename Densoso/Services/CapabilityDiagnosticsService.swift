@@ -116,18 +116,29 @@ final class CapabilityDiagnosticsService {
     private func authorizationRequestState() async -> HealthAuthorizationRequestState {
         guard let bodyMass = HKObjectType.quantityType(forIdentifier: .bodyMass),
               let height = HKObjectType.quantityType(forIdentifier: .height),
-              let dietaryEnergy = HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed) else {
+              let dietaryEnergy = HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed),
+              let dietaryProtein = HKObjectType.quantityType(forIdentifier: .dietaryProtein),
+              let dietaryFat = HKObjectType.quantityType(forIdentifier: .dietaryFatTotal),
+              let dietaryCarbohydrates = HKObjectType.quantityType(forIdentifier: .dietaryCarbohydrates) else {
             return .unknown
         }
 
-        let readTypes: Set<HKObjectType> = [
-            bodyMass,
-            height,
-            HKObjectType.workoutType(),
-            HKSeriesType.workoutRoute(),
+        var readTypes: Set<HKObjectType> = [bodyMass, height, HKObjectType.workoutType()]
+        let quantityIdentifiers: [HKQuantityTypeIdentifier] = [
+            .workoutEffortScore, .stepCount, .activeEnergyBurned, .basalEnergyBurned,
+            .appleExerciseTime, .appleSleepingWristTemperature, .bodyFatPercentage,
+            .heartRate, .restingHeartRate, .heartRateVariabilitySDNN, .respiratoryRate,
         ]
+        for identifier in quantityIdentifiers {
+            if let type = HKObjectType.quantityType(forIdentifier: identifier) { readTypes.insert(type) }
+        }
+        if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) { readTypes.insert(sleep) }
         let writeTypes: Set<HKSampleType> = [
             dietaryEnergy,
+            dietaryProtein,
+            dietaryFat,
+            dietaryCarbohydrates,
+            bodyMass,
         ]
 
         return await withCheckedContinuation { continuation in

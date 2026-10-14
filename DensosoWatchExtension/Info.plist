@@ -18,10 +18,6 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
-    <key>NSHealthShareUsageDescription</key>
-    <string>densoso needs HealthKit access to record workouts.</string>
-    <key>NSHealthUpdateUsageDescription</key>
-    <string>densoso needs HealthKit access to save workouts.</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionAttributes</key>

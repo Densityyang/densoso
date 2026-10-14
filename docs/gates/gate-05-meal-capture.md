@@ -1,6 +1,6 @@
 # Gate 05 — Meal Capture
 
-Status: implementation candidate; awaiting macOS CI and user review
+Status: approved by user after successful macOS CI
 
 Gate 5 extends Draft PR #14 after Gate 4 approval on 2026-09-08. It implements
 meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
@@ -97,13 +97,13 @@ barcode, OCR, voice and text paths may continue.
 
 | Evidence | Required result | Current result |
 | --- | --- | --- |
-| PR head | Phase 5 implementation on Draft PR #14 | Pending publish |
-| Dependencies | Gates 1–4 succeed on the same head | Pending CI |
-| Resolver | alias/raw-cooked/top-1/top-3 thresholds | Pending CI |
-| Portion | 50-case coverage/outside thresholds | Pending CI |
-| Vision | orientation, GPS/EXIF/XMP/MakerNote, GTIN/UPC-E, OCR and Qwen fixture contracts | Pending CI |
-| Confirmation | zero pre-confirm writes; atomic Meal/receipt/outbox | Pending CI |
-| Privacy | no raw image or protected OCR source use | Pending CI |
-| Artifact | `.xcresult`, logs, fixture summary and eval manifest | Pending CI |
+| PR head | Phase 5 implementation on Draft PR #14 | `e67a444c30640da34c23becdc1f63f5f4023c5b8` |
+| Dependencies | Gates 1–4 succeed on the same head | [run 38504626897](https://github.com/Densityyang/densoso/actions/runs/38504626897) — Gates 1–5 passed |
+| Resolver | alias/raw-cooked/top-1/top-3 thresholds | Passed in Gate 5 tests |
+| Portion | 50-case coverage/outside thresholds | Passed in Gate 5 tests |
+| Vision | orientation, GPS/EXIF/XMP/MakerNote, GTIN/UPC-E, OCR and Qwen fixture contracts | Passed in Gate 5 tests |
+| Confirmation | zero pre-confirm writes; atomic Meal/receipt/outbox | Passed in Gate 5 tests |
+| Privacy | no raw image or protected OCR source use | Passed in Gate 5 tests; protected local OCR files were not read |
+| Artifact | `.xcresult`, logs, fixture summary and eval manifest | [gate-05-meal-capture-results, artifact 11869028384](https://github.com/Densityyang/densoso/actions/runs/38504626897/artifacts/11869028384) |
 | Field evidence | real photos and kitchen-scale samples | Not claimed |
-| User decision | Approve or reject entry to Phase 6 | Pending review |
+| User decision | Approve or reject entry to Phase 6 | Approved by user; Phase 6 may proceed |

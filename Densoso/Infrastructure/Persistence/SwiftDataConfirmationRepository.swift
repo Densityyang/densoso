@@ -326,7 +326,23 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let meals = try modelContext.fetch(FetchDescriptor<MealRecord>()).filter { $0.date >= day && $0.date < nextDay }
         let workouts = try modelContext.fetch(FetchDescriptor<WorkoutRecord>()).filter { $0.date >= day && $0.date < nextDay }
         let profile = try modelContext.fetch(FetchDescriptor<UserProfile>()).first ?? UserProfile()
-        let projected = CaloricEngine.computeDailyMetrics(date: day, meals: meals, workouts: workouts, userProfile: profile)
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
+        let dayKey = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        let snapshotRecord = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .first(where: { $0.dayKey == dayKey })
+        let snapshotDecoder = JSONDecoder()
+        snapshotDecoder.dateDecodingStrategy = .millisecondsSince1970
+        let healthSnapshot = try snapshotRecord.map {
+            try snapshotDecoder.decode(DailyHealthSnapshot.self, from: $0.payloadData)
+        }
+        let projected = CaloricEngine.computeDailyMetrics(
+            date: day,
+            meals: meals,
+            workouts: workouts,
+            userProfile: profile,
+            healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
+            healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection
+        )
         if let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>()).first(where: { $0.date == day }) {
             existing.bmrKcal = projected.bmrKcal
             existing.activeCaloriesKcal = projected.activeCaloriesKcal
@@ -383,8 +399,18 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let weights = try modelContext.fetch(FetchDescriptor<WeightRecord>())
             .filter { $0.measuredAt >= day && $0.measuredAt < nextDay }
             .sorted { $0.measuredAt < $1.measuredAt }
-        let metrics = try modelContext.fetch(FetchDescriptor<DailyMetrics>())
-            .first(where: { $0.date == day })
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
+        let dayKey = String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
+        let existingRecord = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .first(where: { $0.dayKey == dayKey })
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let existingSnapshot = try existingRecord.map { try decoder.decode(DailyHealthSnapshot.self, from: $0.payloadData) }
 
         let intakeRange: EstimateRange?
         if meals.isEmpty {
@@ -404,8 +430,13 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             dayStart: day,
             timezoneIdentifier: calendar.timeZone.identifier,
             energyIntakeKcal: intakeRange,
-            activeEnergyKcal: metrics.map { Double($0.activeCaloriesKcal) },
-            weightKilograms: weights.last?.kilograms,
+            activeEnergyKcal: existingSnapshot?.activeEnergyKcal,
+            restingEnergyKcal: existingSnapshot?.restingEnergyKcal,
+            stepCount: existingSnapshot?.stepCount,
+            exerciseMinutes: existingSnapshot?.exerciseMinutes,
+            weightKilograms: weights.last?.kilograms ?? existingSnapshot?.weightKilograms,
+            healthKitSamples: existingSnapshot?.healthKitSamples,
+            healthReadStates: existingSnapshot?.healthReadStates,
             algorithmVersion: "v3"
         )
         let encoder = JSONEncoder()
@@ -415,13 +446,6 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let snapshotHash = SHA256.hash(data: payloadData)
             .map { String(format: "%02x", $0) }
             .joined()
-        let components = calendar.dateComponents([.year, .month, .day], from: day)
-        let dayKey = String(
-            format: "%04d-%02d-%02d",
-            components.year ?? 0,
-            components.month ?? 0,
-            components.day ?? 0
-        )
         if let existing = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
             .first(where: { $0.dayKey == dayKey }) {
             existing.timezoneID = calendar.timeZone.identifier

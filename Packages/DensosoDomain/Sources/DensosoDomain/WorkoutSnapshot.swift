@@ -57,7 +57,7 @@ public struct WorkoutSnapshot: Codable, Sendable, Equatable {
         deviceName: String? = nil,
         deviceModel: String? = nil,
         dataQuality: WorkoutDataQuality,
-        routeStatus: WorkoutRouteStatus = .pending
+        routeStatus: WorkoutRouteStatus = .unavailable
     ) throws {
         guard duration.isFinite, duration >= 0 else {
             throw WorkoutSnapshotError.invalidDuration

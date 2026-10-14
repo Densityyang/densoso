@@ -43,6 +43,7 @@ jobs:
             scripts/validate_phase3_agent_provider.py \
             scripts/validate_phase4_speech.py \
             scripts/validate_phase5_meal_capture.py \
+            scripts/validate_phase6_healthkit.py \
             scripts/validate_voice_goldens.py
 
       - name: Validate bundled food database
@@ -512,5 +513,86 @@ jobs:
             evals/gate05/food-resolution.json
             evals/gate05/portion-reference.json
             DensosoTests/Fixtures/Gate05/Providers/Qwen
+          if-no-files-found: error
+          retention-days: 14
+
+  healthkit:
+    name: gate-06-healthkit
+    needs: meal-capture
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 6 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate06DerivedData" >> "$GITHUB_ENV"
+          echo "GATE06_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate06HealthKitTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 6 HealthKit contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase6_healthkit.py
+          python3 scripts/validate_phase6_healthkit.py \
+            --report gate06-contract-summary.json
+
+      - name: Test cumulative DensosoDomain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate06-domain.log
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Prepare iOS 26 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test cumulative iOS unit suite
+        run: |
+          set -o pipefail
+          rm -rf "$GATE06_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 1200 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests \
+            -enableCodeCoverage YES \
+            -resultBundlePath "$GATE06_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate06-healthkit-tests.log
+
+      - name: Export Gate 6 test summary
+        run: |
+          set -euo pipefail
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE06_RESULT_BUNDLE" > gate06-test-summary.json
+          grep -q '"result" : "Passed"' gate06-test-summary.json
+
+      - name: Upload Gate 6 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-06-healthkit-results
+          path: |
+            Gate06HealthKitTests.xcresult
+            gate06-domain.log
+            gate06-healthkit-tests.log
+            gate06-test-summary.json
+            gate06-contract-summary.json
+            docs/gates/gate-06-healthkit.md
+            DensosoTests/FakeHealthStoreClient.swift
+            DensosoTests/HealthKitSyncCoordinatorTests.swift
+            DensosoTests/HealthSyncOutboxWorkerTests.swift
+            DensosoTests/ConfirmationCoordinatorTests.swift
           if-no-files-found: error
           retention-days: 14

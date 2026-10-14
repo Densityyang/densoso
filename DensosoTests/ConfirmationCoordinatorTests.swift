@@ -29,6 +29,54 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 1)
     }
 
+    func testMealConfirmationPreservesMeasuredHealthKitEnergyProjection() async throws {
+        let harness = try Harness()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let day = Calendar.current.startOfDay(for: date)
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: day)
+        let dayKey = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: Calendar.current.timeZone.identifier,
+            activeEnergyKcal: 640,
+            restingEnergyKcal: 1_410,
+            healthReadStates: [
+                HealthMetricID.activeEnergy.rawValue: .available,
+                HealthMetricID.restingEnergy.rawValue: .available,
+            ],
+            algorithmVersion: "v3"
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        let data = try encoder.encode(snapshot)
+        let context = ModelContext(harness.container)
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey,
+            timezoneID: Calendar.current.timeZone.identifier,
+            payloadData: data,
+            snapshotHash: "fixture",
+            algorithmVersion: "v3"
+        ))
+        try context.save()
+
+        let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
+        _ = try await harness.coordinator.confirm(id: action.id)
+
+        let resultContext = ModelContext(harness.container)
+        let metrics = try XCTUnwrap(resultContext.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(metrics.activeCaloriesKcal, 640)
+        XCTAssertEqual(metrics.bmrKcal, 1_410)
+        XCTAssertEqual(metrics.totalExpenditureKcal, 2_050)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let savedSnapshot = try decoder.decode(
+            DailyHealthSnapshot.self,
+            from: XCTUnwrap(resultContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first).payloadData
+        )
+        XCTAssertEqual(savedSnapshot.activeEnergyKcal, 640)
+        XCTAssertEqual(savedSnapshot.restingEnergyKcal, 1_410)
+    }
+
     func testRejectAndExpiryNeverWriteHealthRecords() async throws {
         let rejectedHarness = try Harness()
         let rejected = try await rejectedHarness.coordinator.stage(

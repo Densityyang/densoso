@@ -38,8 +38,6 @@ struct AppRoot: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AppState.self) private var appState
     @Environment(Dependencies.self) private var dependencies
-    @State private var healthKitWorkoutImporter = HealthKitWorkoutImporter()
-    @State private var workoutRouteImporter = WorkoutRouteImporter()
 
     @ViewBuilder
     var body: some View {
@@ -52,11 +50,15 @@ struct AppRoot: View {
                         prepareUITestState()
                         return
                     }
+                    if dependencies.healthKitService.hasRequestedAuthorization {
+                        let healthRepository = HealthRepository(modelContext: modelContext)
+                        try? await dependencies.healthKitSyncCoordinator.startBackgroundObservers(using: healthRepository)
+                        _ = try? await dependencies.healthKitSyncCoordinator.syncAvailableData(using: healthRepository)
+                    }
+                    await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
                     appState.pendingWorkoutPlan = AppIntentInbox.consumeWorkoutPlan()
                     appState.pendingMealText = AppIntentInbox.consumeMealText()
                     checkOnboarding()
-                    healthKitWorkoutImporter.importChanges(in: modelContext)
-                    workoutRouteImporter.importPendingRoutes(in: modelContext)
                 }
         } else {
             PersistenceRecoveryView(

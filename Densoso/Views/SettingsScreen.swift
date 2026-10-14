@@ -25,8 +25,6 @@ struct SettingsScreen: View {
     @State private var isAuthorizingHealth = false
     @State private var healthAuthorizationError: String?
     @State private var isEditingProfile = false
-    @State private var healthKitWorkoutImporter = HealthKitWorkoutImporter()
-    @State private var workoutRouteImporter = WorkoutRouteImporter()
 
     var body: some View {
         NavigationStack {
@@ -291,7 +289,7 @@ struct SettingsScreen: View {
                 }
 
                 Button(
-                    dependencies.healthKitService.isAuthorized ? "同步训练记录" : "连接 Apple Health",
+                    dependencies.healthKitService.hasRequestedAuthorization ? "同步 Apple Health" : "连接 Apple Health",
                     systemImage: "heart.fill"
                 ) {
                     Task { await authorizeAndImportHealthData() }
@@ -463,9 +461,21 @@ struct SettingsScreen: View {
 
         do {
             try await dependencies.healthKitService.requestAuthorization()
-            healthKitWorkoutImporter.importChanges(in: modelContext)
-            workoutRouteImporter.importPendingRoutes(in: modelContext)
-            statusMessage = "已请求 HealthKit 导入；完成后会更新最近导入时间。"
+            let healthRepository = HealthRepository(modelContext: modelContext)
+            let backgroundDeliveryEnabled = try await dependencies.healthKitSyncCoordinator
+                .startBackgroundObservers(using: healthRepository)
+            let syncResult = try await dependencies.healthKitSyncCoordinator.syncAvailableData(
+                using: healthRepository,
+                forceRebaseline: true
+            )
+            await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
+            if syncResult.hasFailures {
+                statusMessage = "HealthKit 已部分同步；失败流的未完成页不前移游标，其他数据仍已更新。读取范围由系统保护，无数据不代表已拒绝授权。"
+            } else {
+                statusMessage = backgroundDeliveryEnabled
+                    ? "已完成本次 HealthKit 同步；读取范围由系统保护，无数据不代表已拒绝授权。"
+                    : "前台同步已完成；系统未确认后台投递可用（可能受签名 entitlement 限制）。读取范围由系统保护，无数据不代表已拒绝授权。"
+            }
             await refreshDiagnostics()
         } catch {
             healthAuthorizationError = "Apple Health 授权失败：\(error.localizedDescription)"

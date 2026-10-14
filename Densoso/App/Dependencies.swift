@@ -15,8 +15,9 @@ final class Dependencies {
     let providerConfiguration: ProviderConfigurationPreferences
     let providerRegistry: ProviderRegistry
     let healthKitService: HealthKitService
+    let healthKitSyncCoordinator: HealthKitSyncCoordinator
+    let healthSyncOutboxWorker: HealthSyncOutboxWorker
     let capabilityDiagnostics: CapabilityDiagnosticsService
-    let workoutSessionMirroringService: WorkoutSessionMirroringService
     let exportService: ExportService
     let toolRegistry: ToolRegistry
     let agentSession: AgentSession
@@ -44,9 +45,19 @@ final class Dependencies {
         let confirmedFoodHistory = SwiftDataConfirmedFoodHistoryRepository(modelContainer: modelContainer)
         let governanceRepository = SwiftDataProviderGovernanceRepository(modelContainer: modelContainer)
         let writeGate = PersistenceWriteGate(state: persistenceState)
+        let healthKitService = HealthKitService()
+        let healthKitSyncCoordinator = HealthKitSyncCoordinator(
+            healthStore: healthKitService.client,
+            observer: healthKitService.client
+        )
+        let healthSyncOutboxWorker = HealthSyncOutboxWorker(
+            healthStore: healthKitService.client,
+            modelContainer: modelContainer
+        )
         let confirmationCoordinator = ConfirmationCoordinator(
             repository: confirmationRepository,
-            writeGate: writeGate
+            writeGate: writeGate,
+            healthSyncOutbox: healthSyncOutboxWorker
         )
         self.localIntelligence = LocalIntelligenceService()
         let intelligencePreferences = IntelligencePreferences()
@@ -64,9 +75,10 @@ final class Dependencies {
         self.intelligencePreferences = intelligencePreferences
         self.providerConfiguration = providerConfiguration
         self.providerRegistry = providerRegistry
-        self.healthKitService = HealthKitService()
+        self.healthKitService = healthKitService
+        self.healthKitSyncCoordinator = healthKitSyncCoordinator
+        self.healthSyncOutboxWorker = healthSyncOutboxWorker
         self.capabilityDiagnostics = CapabilityDiagnosticsService()
-        self.workoutSessionMirroringService = WorkoutSessionMirroringService()
         self.exportService = ExportService()
         self.toolRegistry = toolRegistry
         self.persistenceWriteGate = writeGate

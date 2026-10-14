@@ -1,25 +1,33 @@
 import DensosoDomain
 import Foundation
 
+@MainActor
+protocol HealthSyncOutboxProcessing: Sendable {
+    func processPending() async
+}
+
 actor ConfirmationCoordinator {
     private let repository: any ConfirmationRepository
     private let writeGate: PersistenceWriteGate
     private let idempotencyKeyFactory: ActionIdempotencyKeyFactory
     private let now: @Sendable () -> Date
     private let timeToLive: TimeInterval
+    private let healthSyncOutbox: (any HealthSyncOutboxProcessing)?
 
     init(
         repository: any ConfirmationRepository,
         writeGate: PersistenceWriteGate,
         idempotencyKeyFactory: ActionIdempotencyKeyFactory = .init(),
         timeToLive: TimeInterval = 24 * 60 * 60,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        healthSyncOutbox: (any HealthSyncOutboxProcessing)? = nil
     ) {
         self.repository = repository
         self.writeGate = writeGate
         self.idempotencyKeyFactory = idempotencyKeyFactory
         self.timeToLive = timeToLive
         self.now = now
+        self.healthSyncOutbox = healthSyncOutbox
     }
 
     func stage(payload: ActionPayload, clientRequestID: UUID) async throws -> PendingAction {
@@ -52,7 +60,9 @@ actor ConfirmationCoordinator {
 
     func confirm(id: UUID) async throws -> CommitReceipt {
         try requireWritable()
-        return try await repository.confirm(id: id, now: now())
+        let receipt = try await repository.confirm(id: id, now: now())
+        await healthSyncOutbox?.processPending()
+        return receipt
     }
 
     func reject(id: UUID) async throws {
