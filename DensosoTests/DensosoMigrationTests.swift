@@ -173,18 +173,30 @@ final class DensosoMigrationTests: XCTestCase {
     }
 
     func testCorruptBackupIsRejectedBeforeOriginalStoreIsReplaced() throws {
-        let seed = try Gate02FixtureLoader.load("v2-seed", as: Gate02Seed.self)
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
-        try createV2Store(seed: seed, at: location.storeURL)
-        let originalStore = try Data(contentsOf: location.storeURL)
+
+        // This test targets the backup manager's file boundary. Other tests cover
+        // real SwiftData migrations; synthetic store-family files avoid racing a
+        // live SQLite/WAL checkpoint during a byte-for-byte preservation check.
+        let originalFiles = [
+            location.storeURL.lastPathComponent: Data("original-store".utf8),
+            "\(location.storeURL.lastPathComponent)-wal": Data("original-wal".utf8),
+            "\(location.storeURL.lastPathComponent)-shm": Data("original-shm".utf8),
+        ]
+        for (name, data) in originalFiles {
+            try data.write(to: location.directoryURL.appendingPathComponent(name), options: .atomic)
+        }
+        let originalStoreFamily = try storeFamilySnapshot(at: location.storeURL)
         let manifest = try XCTUnwrap(
             MigrationBackupManager.createBackupIfPresent(storeURL: location.storeURL)
         )
         try Data("corrupt".utf8).write(to: manifest.backupStoreURL, options: .atomic)
 
-        XCTAssertThrowsError(try MigrationBackupManager.restore(manifest: manifest))
-        XCTAssertEqual(try Data(contentsOf: location.storeURL), originalStore)
+        XCTAssertThrowsError(try MigrationBackupManager.restore(manifest: manifest)) { error in
+            XCTAssertEqual(error as? MigrationBackupError, .byteCountMismatch(location.storeURL.lastPathComponent))
+        }
+        XCTAssertEqual(try storeFamilySnapshot(at: location.storeURL), originalStoreFamily)
     }
 
     func testBackupFailurePreventsMigrationFromStarting() async throws {
