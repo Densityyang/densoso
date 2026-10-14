@@ -14,7 +14,7 @@ public enum WorkoutDataQuality: String, Codable, Sendable, Equatable {
     case unavailable
 }
 
-/// Routes can arrive after their parent workout, so their state is modeled independently.
+/// Legacy compatibility value retained for persisted V3 records; Phase 6 has no route import path.
 public enum WorkoutRouteStatus: String, Codable, Sendable, Equatable {
     case pending
     case available

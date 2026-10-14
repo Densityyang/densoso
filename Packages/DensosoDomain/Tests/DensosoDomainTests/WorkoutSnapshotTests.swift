@@ -24,7 +24,7 @@ final class WorkoutSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.healthKitUUID, workoutID)
         XCTAssertEqual(snapshot.logicalSessionID, logicalID)
         XCTAssertEqual(snapshot.resolvedEnergy, .init(kilocalories: 310, source: .measured))
-        XCTAssertEqual(snapshot.routeStatus, .pending)
+        XCTAssertEqual(snapshot.routeStatus, .unavailable)
     }
 
     func testSnapshotRejectsInvalidDuration() {
