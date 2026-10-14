@@ -226,7 +226,10 @@ final class HealthRepository: HealthSyncRepository {
             let localWeight = try modelContext.fetch(FetchDescriptor<WeightRecord>())
                 .filter { $0.measuredAt >= day && $0.measuredAt < endOfDay }
                 .max { $0.measuredAt < $1.measuredAt }?.kilograms
-            snapshotsByDay[day] = Self.replacing(snapshot, weightKilograms: localWeight ?? healthKitWeight)
+            // Double?? distinguishes "leave unchanged" from "clear the projection".
+            // Wrap the computed optional explicitly so a missing local value still
+            // updates the projection from imported HealthKit samples (or clears it).
+            snapshotsByDay[day] = Self.replacing(snapshot, weightKilograms: .some(localWeight ?? healthKitWeight))
         }
 
         try write(affecting: Array(affectedDays)) { _ in
@@ -384,7 +387,7 @@ final class HealthRepository: HealthSyncRepository {
         let importedWeight = (snapshot.healthKitSamples ?? [])
             .filter { $0.metric == .bodyMass }
             .max { $0.endDate < $1.endDate }?.value
-        snapshot = Self.replacing(snapshot, weightKilograms: localWeight ?? importedWeight)
+        snapshot = Self.replacing(snapshot, weightKilograms: .some(localWeight ?? importedWeight))
         try upsertHealthSnapshot(snapshot, for: day)
     }
 

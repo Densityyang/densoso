@@ -147,6 +147,8 @@ final class HealthRepositoryTests: XCTestCase {
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: stored.payloadData)
         XCTAssertEqual(snapshot.healthKitSamples?.count, 1)
+        XCTAssertEqual(snapshot.healthKitSamples?.first?.metric, .bodyMass)
+        XCTAssertEqual(snapshot.healthKitSamples?.first?.value, 71)
         XCTAssertEqual(snapshot.weightKilograms, 71)
         XCTAssertEqual(try repository.cursor(for: "bodyMass")?.anchorData, Data([2]))
 
@@ -210,6 +212,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertTrue(originalDay.healthKitSamples?.isEmpty ?? true)
         XCTAssertNil(originalDay.weightKilograms)
         XCTAssertEqual(movedDay.healthKitSamples?.map(\.id), [sampleID])
+        XCTAssertEqual(movedDay.healthKitSamples?.first?.value, 72)
         XCTAssertEqual(movedDay.weightKilograms, 72)
     }
 

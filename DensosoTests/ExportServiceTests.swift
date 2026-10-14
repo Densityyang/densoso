@@ -8,7 +8,8 @@ final class ExportServiceTests: XCTestCase {
         let (sourceContainer, source) = try makeContext()
         _ = sourceContainer
         let date = Date(timeIntervalSince1970: 1_700_000_000)
-        source.insert(UserProfile())
+        let profile = UserProfile(dateOfBirth: Calendar.current.date(byAdding: .year, value: -30, to: Date())!)
+        source.insert(profile)
         let evidence = Data("gate05-evidence".utf8)
         let meal = MealRecord(
             date: date,
@@ -82,7 +83,9 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(meals[0].dishes.first?.algorithmVersion, "meal-estimator-v1")
         XCTAssertEqual(metrics.count, 1)
         XCTAssertEqual(metrics[0].totalIntakeKcal, 640)
-        XCTAssertEqual(metrics[0].activeCaloriesKcal, 130)
+        // Workout energy is descriptive in Phase 6; it is not daily active energy.
+        // With this fixed 30-year-old default profile, projection uses the TDEE-BMR fallback.
+        XCTAssertEqual(metrics[0].activeCaloriesKcal, 324)
         let workouts = try target.fetch(FetchDescriptor<WorkoutRecord>())
         XCTAssertEqual(workouts.count, 1)
         XCTAssertEqual(workouts[0].healthKitUUID, healthKitUUID)
