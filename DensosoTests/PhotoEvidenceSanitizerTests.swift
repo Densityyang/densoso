@@ -15,7 +15,7 @@ final class PhotoEvidenceSanitizerTests: XCTestCase {
             sourceExif?[kCGImagePropertyExifDateTimeOriginal] as? String,
             "2026:07:26 16:00:00"
         )
-        XCTAssertEqual(sourceExif?[kCGImagePropertyExifMakerNote] as? Data, Data("gate05-maker-note".utf8))
+        XCTAssertNotNil(original.range(of: Data("gate05-maker-note".utf8)))
         XCTAssertNotNil(original.range(of: Data("gate05-xmp-marker".utf8)))
 
         let sanitized = try PhotoEvidenceSanitizer.sanitizedJPEG(from: original)
@@ -27,6 +27,7 @@ final class PhotoEvidenceSanitizerTests: XCTestCase {
         let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any]
         XCTAssertNil(exif?[kCGImagePropertyExifDateTimeOriginal])
         XCTAssertNil(exif?[kCGImagePropertyExifMakerNote])
+        XCTAssertNil(sanitized.range(of: Data("gate05-maker-note".utf8)))
         XCTAssertNil(sanitized.range(of: Data("gate05-xmp-marker".utf8)))
     }
 
