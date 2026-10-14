@@ -16,7 +16,7 @@ final class PhotoEvidenceSanitizerTests: XCTestCase {
             "2026:07:26 16:00:00"
         )
         XCTAssertEqual(sourceExif?[kCGImagePropertyExifMakerNote] as? Data, Data("gate05-maker-note".utf8))
-        XCTAssertNotNil(try xmpTagValue(in: original))
+        XCTAssertNotNil(original.range(of: Data("gate05-xmp-marker".utf8)))
 
         let sanitized = try PhotoEvidenceSanitizer.sanitizedJPEG(from: original)
 
@@ -27,7 +27,7 @@ final class PhotoEvidenceSanitizerTests: XCTestCase {
         let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any]
         XCTAssertNil(exif?[kCGImagePropertyExifDateTimeOriginal])
         XCTAssertNil(exif?[kCGImagePropertyExifMakerNote])
-        XCTAssertNil(try xmpTagValue(in: sanitized))
+        XCTAssertNil(sanitized.range(of: Data("gate05-xmp-marker".utf8)))
     }
 
     func testUnreadableDataIsRejected() {
@@ -87,10 +87,15 @@ final class PhotoEvidenceSanitizerTests: XCTestCase {
     }
 
     private func jpegWithLocationMetadata() throws -> Data {
-        try jpeg(width: 1, height: 1, includeLocation: true)
+        let image = try jpeg(width: 1, height: 1)
+        var output = Data(image.prefix(2))
+        output.append(try app1Segment(payload: exifPayload()))
+        output.append(try app1Segment(payload: xmpPayload()))
+        output.append(contentsOf: image.dropFirst(2))
+        return output
     }
 
-    private func jpeg(width: Int, height: Int, includeLocation: Bool = false) throws -> Data {
+    private func jpeg(width: Int, height: Int) throws -> Data {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         guard let context = CGContext(
             data: nil,
@@ -108,80 +113,97 @@ final class PhotoEvidenceSanitizerTests: XCTestCase {
         guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else {
             throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 2)
         }
-        if includeLocation {
-            let exif: [CFString: Any] = [
-                kCGImagePropertyExifDateTimeOriginal: "2026:07:26 16:00:00" as CFString,
-                kCGImagePropertyExifMakerNote: Data("gate05-maker-note".utf8) as CFData,
-            ]
-            let properties: [CFString: Any] = [
-                kCGImagePropertyGPSDictionary: [
-                    kCGImagePropertyGPSLatitudeRef: "N" as CFString,
-                    kCGImagePropertyGPSLatitude: NSNumber(value: 31.2304),
-                    kCGImagePropertyGPSLongitudeRef: "E" as CFString,
-                    kCGImagePropertyGPSLongitude: NSNumber(value: 121.4737),
-                ],
-                kCGImagePropertyExifDictionary: exif,
-            ]
-            CGImageDestinationAddImage(destination, image, properties as CFDictionary)
-        } else {
-            CGImageDestinationAddImage(destination, image, nil)
-        }
+        CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else {
             throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 3)
         }
-        let encoded = data as Data
-        return includeLocation ? try addingXMPMetadata(to: encoded) : encoded
+        return data as Data
     }
 
-    private func addingXMPMetadata(to imageData: Data) throws -> Data {
-        guard let source = CGImageSourceCreateWithData(imageData as CFData, nil) else {
-            throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 8)
+    private func app1Segment(payload: Data) throws -> Data {
+        let segmentLength = payload.count + 2
+        guard segmentLength <= Int(UInt16.max) else {
+            throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 5)
         }
-        let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(
-            output,
-            UTType.jpeg.identifier as CFString,
-            1,
-            nil
-        ) else {
-            throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 9)
-        }
-        let options: [CFString: Any] = [
-            kCGImageDestinationMetadata: try fixtureXMPMetadata(),
-            kCGImageDestinationMergeMetadata: kCFBooleanTrue as Any,
-        ]
-        CGImageDestinationAddImageFromSource(destination, source, 0, options as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else {
-            throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 10)
-        }
-        return output as Data
+        var segment = Data([0xFF, 0xE1])
+        appendUInt16BigEndian(UInt16(segmentLength), to: &segment)
+        segment.append(payload)
+        return segment
     }
 
-    private func fixtureXMPMetadata() throws -> CGMutableImageMetadata {
-        let metadata = CGImageMetadataCreateMutable()
-        let namespace = "https://densoso.example/meal/1.0/" as CFString
-        let prefix = "densoso" as CFString
-        guard CGImageMetadataRegisterNamespaceForPrefix(metadata, namespace, prefix, nil),
-              let tag = CGImageMetadataTagCreate(
-                namespace,
-                prefix,
-                "marker" as CFString,
-                .string,
-                "gate05-xmp-marker" as CFString
-              ),
-              CGImageMetadataSetTagWithPath(metadata, nil, "densoso:marker" as CFString, tag) else {
-            throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 6)
+    private func exifPayload() -> Data {
+        var tiff = Data([0x49, 0x49])
+        appendUInt16LittleEndian(42, to: &tiff)
+        appendUInt32LittleEndian(8, to: &tiff)
+
+        // IFD0 at offset 8: EXIF IFD at 38 and GPS IFD at 105.
+        appendUInt16LittleEndian(2, to: &tiff)
+        appendTIFFEntry(tag: 0x8769, type: 4, count: 1, value: 38, to: &tiff)
+        appendTIFFEntry(tag: 0x8825, type: 4, count: 1, value: 105, to: &tiff)
+        appendUInt32LittleEndian(0, to: &tiff)
+
+        // EXIF IFD at offset 38: date at 68 and MakerNote at 88.
+        appendUInt16LittleEndian(2, to: &tiff)
+        appendTIFFEntry(tag: 0x9003, type: 2, count: 20, value: 68, to: &tiff)
+        appendTIFFEntry(tag: 0x927C, type: 7, count: 17, value: 88, to: &tiff)
+        appendUInt32LittleEndian(0, to: &tiff)
+        tiff.append(contentsOf: "2026:07:26 16:00:00\0".utf8)
+        tiff.append(contentsOf: "gate05-maker-note".utf8)
+
+        // GPS IFD at offset 105 with valid hemisphere refs and coordinates.
+        appendUInt16LittleEndian(5, to: &tiff)
+        appendTIFFEntry(tag: 0x0000, type: 1, count: 4, value: 0x00000302, to: &tiff)
+        appendTIFFEntry(tag: 0x0001, type: 2, count: 2, value: 0x4E, to: &tiff) // N
+        appendTIFFEntry(tag: 0x0002, type: 5, count: 3, value: 171, to: &tiff)
+        appendTIFFEntry(tag: 0x0003, type: 2, count: 2, value: 0x45, to: &tiff) // E
+        appendTIFFEntry(tag: 0x0004, type: 5, count: 3, value: 195, to: &tiff)
+        appendUInt32LittleEndian(0, to: &tiff)
+        for component: UInt32 in [31, 13, 49, 121, 28, 24] {
+            appendUInt32LittleEndian(component, to: &tiff)
+            appendUInt32LittleEndian(1, to: &tiff)
         }
-        return metadata
+
+        var payload = Data("Exif\0\0".utf8)
+        payload.append(tiff)
+        return payload
     }
 
-    private func xmpTagValue(in data: Data) throws -> String? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
-            throw NSError(domain: "PhotoEvidenceSanitizerTests", code: 7)
-        }
-        guard let metadata = CGImageSourceCopyMetadataAtIndex(source, 0, nil) else { return nil }
-        let tag = CGImageMetadataCopyTagWithPath(metadata, nil, "densoso:marker" as CFString)
-        return tag.flatMap { CGImageMetadataTagCopyValue($0) as? String }
+    private func xmpPayload() -> Data {
+        let header = Data("http://ns.adobe.com/xap/1.0/\0".utf8)
+        let packet = Data(
+            #"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:densoso="https://densoso.example/meal/1.0/" densoso:marker="gate05-xmp-marker"/></rdf:RDF></x:xmpmeta>"#.utf8
+        )
+        return header + packet
+    }
+
+    private func appendTIFFEntry(
+        tag: UInt16,
+        type: UInt16,
+        count: UInt32,
+        value: UInt32,
+        to data: inout Data
+    ) {
+        appendUInt16LittleEndian(tag, to: &data)
+        appendUInt16LittleEndian(type, to: &data)
+        appendUInt32LittleEndian(count, to: &data)
+        appendUInt32LittleEndian(value, to: &data)
+    }
+
+    private func appendUInt16LittleEndian(_ value: UInt16, to data: inout Data) {
+        data.append(UInt8(value & 0x00FF))
+        data.append(UInt8((value >> 8) & 0x00FF))
+    }
+
+    private func appendUInt32LittleEndian(_ value: UInt32, to data: inout Data) {
+        data.append(UInt8(value & 0x000000FF))
+        data.append(UInt8((value >> 8) & 0x000000FF))
+        data.append(UInt8((value >> 16) & 0x000000FF))
+        data.append(UInt8((value >> 24) & 0x000000FF))
+    }
+
+    private func appendUInt16BigEndian(_ value: UInt16, to data: inout Data) {
+        data.append(UInt8((value >> 8) & 0x00FF))
+        data.append(UInt8(value & 0x00FF))
     }
 
     private func imageProperties(for data: Data) throws -> [CFString: Any] {

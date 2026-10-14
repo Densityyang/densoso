@@ -241,7 +241,9 @@ def main() -> int:
             "testCameraImageOrientationIsAppliedBeforeSanitizing",
             "testConfiguredJPEGQualitiesProduceDecodableBoundedImages",
             "kCGImagePropertyExifMakerNote",
-            "xmpTagValue(in:",
+            "private func exifPayload()",
+            "gate05-xmp-marker",
+            "appendUInt16LittleEndian",
         ],
         errors,
     )
