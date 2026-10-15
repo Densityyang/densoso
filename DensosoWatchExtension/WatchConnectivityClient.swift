@@ -195,7 +195,7 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
         }
     }
 
-    nonisolated func session(_ session: WCSession, didFinishUserInfoTransfer userInfoTransfer: WCSessionUserInfoTransfer, error: Error?) {
+    nonisolated func session(_ session: WCSession, didFinish userInfoTransfer: WCSessionUserInfoTransfer, error: Error?) {
         Task { @MainActor [weak self] in
             guard let self else { return }
             if let error {

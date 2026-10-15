@@ -53,7 +53,10 @@ def main() -> int:
     )
     watch = require_text(
         "DensosoWatchExtension/WatchConnectivityClient.swift",
-        ("session.sendMessage", "session.transferUserInfo", "didReceiveApplicationContext", "sendTranscript"),
+        (
+            "session.sendMessage", "session.transferUserInfo", "didReceiveApplicationContext",
+            "didFinish userInfoTransfer: WCSessionUserInfoTransfer", "sendTranscript",
+        ),
         errors,
     )
 
