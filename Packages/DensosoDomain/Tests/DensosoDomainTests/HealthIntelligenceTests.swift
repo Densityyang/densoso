@@ -179,7 +179,7 @@ final class HealthIntelligenceTests: XCTestCase {
         )
         XCTAssertEqual(immature.readiness, .learning)
         XCTAssertNil(immature.ratio)
-        XCTAssertEqual(immature.estimatedWorkoutCount, 1)
+        XCTAssertEqual(immature.estimatedWorkoutCount, 2)
         XCTAssertEqual(immature.unavailableEffortCount, 1)
     }
 
@@ -243,7 +243,7 @@ final class HealthIntelligenceTests: XCTestCase {
         XCTAssertNil(priorLoad.ratio)
         XCTAssertNil(priorLoad.priorTwentyEightDayAverage)
         XCTAssertEqual(priorLoad.band, .unavailable)
-        XCTAssertEqual(priorLoad.unavailableEffortCount, 1)
+        XCTAssertEqual(priorLoad.unavailableEffortCount, 2)
     }
 
     func testBriefUsesFourIndependentDomainsTwoRecommendationsAndAggregatedCloudContext() throws {
