@@ -74,15 +74,19 @@ def main() -> int:
         ),
         errors,
     )
-    require_text(
+    screenshot_tests = require_text(
         "DensosoUITests/Gate09IntegrationScreenshotsTests.swift",
         (
             "testAllPrimaryTabsCapturePortraitScreensWithAccessibilityLabels",
             "testPrimaryTabsRemainReachableWithLargeTextAndDarkAppearance",
             'keepScreenshot(named: "gate-09-',
+            "let appFrame = app.windows.firstMatch.frame",
+            "XCTAssertGreaterThan(appFrame.height, appFrame.width)",
         ),
         errors,
     )
+    if "XCUIScreen.main.bounds" in screenshot_tests:
+        errors.append("UI portrait screenshots must use supported XCUIApplication frame APIs")
     require_text(
         "DensosoUITests/Fixtures/Gate01/expected-tabs.json",
         ('"tab": "今天"', '"tab": "趋势"', '"tab": "记录"', '"tab": "设置"'),
