@@ -1,6 +1,6 @@
 # Gate 06 — HealthKit Synchronization and Energy Semantics
 
-Status: implementation candidate; awaiting macOS CI and user review
+Status: macOS CI passed; awaiting user Gate 6 review
 
 Gate 6 extends Draft PR #14 after the user approved Gate 5. It adds the HealthKit
 boundary, query/sync path, outbox worker and energy projection rules. It does not
@@ -83,14 +83,15 @@ change the V3 persistent schema.
 
 | Evidence | Required result | Current result |
 | --- | --- | --- |
-| PR head | Phase 6 implementation on Draft PR #14 | Pending review/CI publish |
-| Prior dependency | Gate 5 succeeds on the same head | Verified before Phase 6 entry; Gate 5 record above |
-| Domain package | Foundation-only HealthKit contracts pass | Pending macOS CI |
-| iOS tests | Repository, coordinator, outbox and energy semantics pass | Pending macOS CI |
-| Static contract | HealthKit boundary, route removal and no Workout writes | Pending macOS CI |
-| Artifact | `.xcresult`, summary and logs retained | Pending CI |
+| Phase 6 implementation commit | Phase 6 implementation on Draft PR #14 | `b4230aee2961e4aa1e784428935616feba77e42c`; PR #14 remains OPEN, Draft, and `blocked-by-signing` |
+| Workflow | Gates 1–6 pass on the same head | [Run 38661937756](https://github.com/Densityyang/densoso/actions/runs/38661937756) — success |
+| Prior dependency | Gate 5 succeeds on the same head | 49 domain tests + 44 meal-capture tests, 0 failures; [Gate 5 artifact 11942720241](https://github.com/Densityyang/densoso/actions/runs/38661937756/artifacts/11942720241) |
+| Domain package | Foundation-only HealthKit contracts pass | 49 tests, 0 failures |
+| iOS tests | Repository, coordinator, outbox and energy semantics pass | 167 cumulative iOS unit tests, 0 failures |
+| Static contract | HealthKit boundary, route removal and no Workout writes | Passed in Gate 6 |
+| Artifact | `.xcresult`, summary, logs and contract report retained | [gate-06-healthkit-results, artifact 11942416503](https://github.com/Densityyang/densoso/actions/runs/38661937756/artifacts/11942416503) |
 | Device background delivery | Signed-device observer/background matrix | Not claimed; signing remains blocked |
-| User decision | Approve or reject entry to Phase 7 | Pending review |
+| User decision | Approve or reject entry to Phase 7 | Awaiting Phase 6 review; Phase 7 has not started |
 
 ## Gate boundary
 
