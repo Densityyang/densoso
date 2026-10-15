@@ -1,0 +1,23 @@
+{
+  "version": "gate05-synthetic-v1",
+  "source": "synthetic-public",
+  "protectedOCRSourceUsed": false,
+  "fieldMeasurementClaimed": false,
+  "resolutionCaseCount": 100,
+  "portionReferenceCount": 50,
+  "sha256": {
+    "food-catalog.json": "a7ee29526f2e88f715d7f79cfd0b96bd12040a93ad9b4a8f4ef6ce95cd97a413",
+    "food-resolution.json": "6fc1e9d0b82f679d0ec376f4ad7c9b32e3f1c0c66db36d87c9617f1e26e34a35",
+    "portion-reference.json": "f179460c3ba796c216f662782946fd8cf919c365f3467ce2fb62798e3685aef0"
+  },
+  "thresholds": {
+    "exactAliasAccuracy": 1.0,
+    "rawCookedAccuracy": 1.0,
+    "minimumTop1Accuracy": 0.8,
+    "minimumTop3Accuracy": 0.9,
+    "minimumPortionCoverage": 0.8,
+    "maximumOutsideRate": 0.2
+  },
+  "openPhotoFeatureGate": "enabled only when runtime consent, configuration, and all synthetic gates pass",
+  "boundary": "These are deterministic public synthetic algorithm checks, not claims of field photo accuracy or real kitchen-scale collection."
+}

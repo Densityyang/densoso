@@ -32,16 +32,13 @@ struct MainTabView: View {
     var body: some View {
         TabView {
             ChatScreen()
-                .tabItem { Label("对话", systemImage: "bubble.left.fill") }
+                .tabItem { Label("今天", systemImage: "sun.max.fill") }
 
             DashboardScreen()
-                .tabItem { Label("数据", systemImage: "chart.bar.fill") }
+                .tabItem { Label("趋势", systemImage: "chart.xyaxis.line") }
 
             HistoryScreen()
-                .tabItem { Label("历史", systemImage: "clock.fill") }
-
-            WorkoutPlanScreen()
-                .tabItem { Label("计划", systemImage: "figure.strengthtraining.traditional") }
+                .tabItem { Label("记录", systemImage: "list.bullet.rectangle") }
 
             SettingsScreen()
                 .tabItem { Label("设置", systemImage: "gearshape.fill") }

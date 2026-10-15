@@ -1,19 +1,15 @@
+import DensosoDomain
 import Foundation
-import SwiftData
 
-/// 工具注册中心
 @MainActor
 final class ToolRegistry {
-    weak var foodDatabase: FoodDatabase?
-
-    var toolDefinitions: [DeepSeekClient.ToolDef] {
-        allTools.map { $0.definition }
-    }
+    var toolDefinitions: [ToolSchema] { allTools.map(\.definition) }
 
     private var allTools: [any AgentTool] {
         [
             LogMealTool(),
-            LogWorkoutTool(),
+            LogWeightTool(),
+            CreateWorkoutPlanTool(),
             QueryFoodTool(),
             GetMetricsTool(),
             GetWeeklyDeficitTool(),
@@ -22,74 +18,97 @@ final class ToolRegistry {
         ]
     }
 
-    @MainActor
-    func execute(name: String, argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
+    func execute(
+        name: String,
+        arguments: JSONValue,
+        context: AgentSession,
+        clientRequestID: UUID
+    ) async throws -> String {
         guard let tool = allTools.first(where: { $0.definition.name == name }) else {
             throw ToolError.unknownTool(name)
         }
-        return try await tool.execute(argumentsJSON: argumentsJSON, context: context, modelContext: modelContext)
+        try ToolSchemaValidator.validate(arguments, against: tool.definition.parameters)
+        let data = try arguments.encodedData()
+        guard let argumentsJSON = String(data: data, encoding: .utf8) else {
+            throw ToolError.invalidArguments
+        }
+        let output = try await tool.execute(
+            argumentsJSON: argumentsJSON,
+            context: context,
+            clientRequestID: clientRequestID
+        )
+        return String(output.prefix(8_192))
+    }
+
+    func effect(for name: String) -> ToolEffect? {
+        allTools.first(where: { $0.definition.name == name })?.definition.effect
     }
 }
 
 enum ToolError: Error, LocalizedError {
     case unknownTool(String)
+    case invalidArguments
+
     var errorDescription: String? {
         switch self {
-        case .unknownTool(let n): "未知工具: \(n)"
+        case .unknownTool(let name): "未知工具: \(name)"
+        case .invalidArguments: "工具参数无法编码"
         }
     }
 }
 
-@MainActor protocol AgentTool {
-    var definition: DeepSeekClient.ToolDef { get }
-    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String
+@MainActor
+protocol AgentTool {
+    var definition: ToolSchema { get }
+    func execute(
+        argumentsJSON: String,
+        context: AgentSession,
+        clientRequestID: UUID
+    ) async throws -> String
 }
 
-extension AgentTool {
-    var effect: ToolEffect { .readOnly }
-}
-
-/// 写入类工具只能准备待确认操作；它们不接收持久化上下文。
-@MainActor protocol ConfirmationRequiredTool: AgentTool {
-    func prepare(argumentsJSON: String, context: AgentSession) async throws -> PendingActionPreparation
+@MainActor
+protocol ConfirmationRequiredTool: AgentTool {
+    func prepare(argumentsJSON: String, context: AgentSession) async throws -> ActionPayload
 }
 
 extension ConfirmationRequiredTool {
-    var effect: ToolEffect { .requiresConfirmation }
-
-    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
-        let action = try context.enqueuePendingAction(try await prepare(argumentsJSON: argumentsJSON, context: context))
-        let response: [String: Any] = [
-            "actionId": action.id.uuidString,
-            "effect": ToolEffect.requiresConfirmation.rawValue,
-            "expiresAt": ISO8601DateFormatter().string(from: action.expiresAt),
-            "summary": action.payload.summary,
-            "saved": false,
-        ]
-        let data = try JSONSerialization.data(withJSONObject: response)
-        return String(data: data, encoding: .utf8) ?? #"{"error":"确认草稿编码失败"}"#
+    func execute(
+        argumentsJSON: String,
+        context: AgentSession,
+        clientRequestID: UUID
+    ) async throws -> String {
+        let action = try await context.stageAction(
+            try await prepare(argumentsJSON: argumentsJSON, context: context),
+            clientRequestID: clientRequestID
+        )
+        let response: JSONValue = .object([
+            "actionId": .string(action.id.uuidString.lowercased()),
+            "effect": .string(ToolEffect.stagesAction.rawValue),
+            "expiresAt": .string(ISO8601DateFormatter().string(from: action.expiresAt)),
+            "summary": .string(action.payload.summary),
+            "saved": .boolean(false),
+        ])
+        return String(data: try response.encodedData(), encoding: .utf8) ?? "{}"
     }
 }
 
-extension DeepSeekClient.ToolDef {
-    static func make(
+extension ToolSchema {
+    static func strictObject(
         name: String,
         description: String,
-        properties: [(String, String, String, Bool)]
-    ) -> DeepSeekClient.ToolDef {
-        var props: [String: DeepSeekClient.PropertySchema] = [:]
-        var required: [String] = []
-        for (key, type, desc, req) in properties {
-            props[key] = DeepSeekClient.PropertySchema(type: type, description: desc)
-            if req { required.append(key) }
-        }
-        return DeepSeekClient.ToolDef(
+        effect: ToolEffect = .readOnly,
+        properties: [String: JSONSchemaNode],
+        required: [String]
+    ) -> ToolSchema {
+        ToolSchema(
             name: name,
             description: description,
-            inputSchema: DeepSeekClient.JSONSchema(
-                type: "object",
-                properties: props,
-                required: required.isEmpty ? nil : required
+            effect: effect,
+            parameters: .object(
+                properties: properties,
+                required: required,
+                additionalProperties: false
             )
         )
     }

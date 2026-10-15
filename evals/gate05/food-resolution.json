@@ -1,0 +1,16 @@
+{
+  "version": "gate05-synthetic-v1",
+  "source": "synthetic-public-no-protected-ocr",
+  "groups": [
+    {"expectedFoodID":"synthetic:rice:cooked","preparation":"cooked","categoryHint":"staple","subset":"rawCooked","queries":["熟米饭","白米饭","米饭","一碗米饭","蒸米饭","白饭","熟白米","米饭熟","软米饭","家常米饭"]},
+    {"expectedFoodID":"synthetic:rice:raw","preparation":"raw","categoryHint":"staple","subset":"rawCooked","queries":["生大米","大米","未煮大米","生米","白米生重","大米生","干大米","生白米","称重大米","大米原料"]},
+    {"expectedFoodID":"synthetic:chicken:raw","preparation":"raw","categoryHint":"protein","subset":"rawCooked","queries":["生鸡胸","鸡胸生肉","未熟鸡胸","鸡胸肉生重","生鸡胸肉","鸡胸原料","鲜鸡胸","生的鸡胸","鸡胸肉原重","白肉鸡胸生"]},
+    {"expectedFoodID":"synthetic:chicken:cooked","preparation":"cooked","categoryHint":"protein","subset":"rawCooked","queries":["熟鸡胸","煮鸡胸","烤鸡胸","鸡胸熟肉","熟鸡胸肉","即食鸡胸","水煮鸡胸","煎鸡胸","鸡胸肉熟重","已熟鸡胸"]},
+    {"expectedFoodID":"synthetic:tofu:plain","preparation":"unknown","categoryHint":"protein","subset":"alias","queries":["豆腐","老豆腐","白豆腐","北方豆腐","硬豆腐","原味豆腐","豆腐块","鲜豆腐","普通豆腐","豆制品豆腐"]},
+    {"expectedFoodID":"synthetic:tofu:braised","preparation":"cooked","categoryHint":"preparedDish","subset":"alias","queries":["烧豆腐","家常红烧豆腐","红烧豆腐块","酱烧豆腐","熟红烧豆腐","红烧老豆腐","红烧北豆腐","豆腐红烧","红烧豆腐成菜","一盘红烧豆腐"]},
+    {"expectedFoodID":"synthetic:apple","preparation":"raw","categoryHint":"fruit","subset":"alias","queries":["红苹果","青苹果","鲜苹果","苹果果肉","一个苹果","切片苹果","水果苹果","脆苹果","甜苹果","去核苹果"]},
+    {"expectedFoodID":"synthetic:banana","preparation":"raw","categoryHint":"fruit","subset":"alias","queries":["一根香蕉","鲜香蕉","香蕉果肉","黄香蕉","水果香蕉","熟香蕉","去皮香蕉","甜香蕉","香蕉一根","普通香蕉"]},
+    {"expectedFoodID":"synthetic:noodles:cooked","preparation":"cooked","categoryHint":"staple","subset":"alias","queries":["熟面条","煮面","一碗面","白面条","汤面面条","面条熟重","水煮面条","普通熟面","熟挂面","面条成品"]},
+    {"expectedFoodID":"synthetic:oil","preparation":"unknown","categoryHint":"oil","subset":"alias","queries":["花生油","植物油","炒菜油","烹饪油","菜籽油","大豆油","调和油","油脂","食用植物油","厨房用油"]}
+  ]
+}

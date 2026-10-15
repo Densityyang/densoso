@@ -17,6 +17,7 @@ final class IntelligenceRoutingPolicyTests: XCTestCase {
     func testCloudRequiresExplicitCloudMode() {
         let capabilities = PlatformCapabilities(onDeviceLanguageModelAvailable: true, modernSpeechAvailable: true)
         XCTAssertEqual(policy.path(for: .cloudDeepSeek, capabilities: capabilities), .cloudDeepSeek)
+        XCTAssertEqual(policy.path(for: .cloudQwen, capabilities: capabilities), .cloudQwen)
     }
 
     func testSpeechUsesLegacyBackendWhenModernSpeechIsUnavailable() {
@@ -25,5 +26,15 @@ final class IntelligenceRoutingPolicyTests: XCTestCase {
 
     func testSpeechUsesAnalyzerWhenModernSpeechIsAvailable() {
         XCTAssertEqual(SpeechRoutingPolicy().backend(modernSpeechAvailable: true), .speechAnalyzer)
+    }
+
+    func testPhase3QwenEnablesTextButNotVisionOrSpeech() {
+        XCTAssertTrue(ProviderCapabilityCatalog.qwenAvailable.contains(.vision))
+        XCTAssertTrue(ProviderCapabilityCatalog.qwenAvailable.contains(.speech))
+        XCTAssertFalse(ProviderCapabilityCatalog.phase3Enabled.contains(.vision))
+        XCTAssertFalse(ProviderCapabilityCatalog.phase3Enabled.contains(.speech))
+        XCTAssertTrue(ProviderCapabilityCatalog.phase3Enabled.contains(.text))
+        XCTAssertTrue(ModelStudioRegion.beijing.phase3Capabilities.contains(.toolCalling))
+        XCTAssertFalse(ModelStudioRegion.singapore.phase3Capabilities.contains(.toolCalling))
     }
 }

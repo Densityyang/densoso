@@ -6,12 +6,14 @@ struct FoodItem: Codable, FetchableRecord, PersistableRecord {
     var id: Int64
     var name: String
     var alias: String?
+    var preparation: String?
+    var isCookedComposite: Bool?
     var category: String
     var edible: Int                // 食部 (%)
     var energyKcal: Int            // kcal / 100g
-    var proteinG: Double
-    var fatG: Double
-    var carbohydrateG: Double
+    var proteinG: Double?
+    var fatG: Double?
+    var carbohydrateG: Double?
     var fiberG: Double?
 
     static let databaseTableName = "food_items"

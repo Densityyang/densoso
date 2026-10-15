@@ -1,0 +1,24 @@
+{
+  "screens": [
+    {
+      "id": "today",
+      "tab": "今天",
+      "marker": "今天，想记录什么？"
+    },
+    {
+      "id": "trends",
+      "tab": "趋势",
+      "marker": "看见自己的长期节奏"
+    },
+    {
+      "id": "records",
+      "tab": "记录",
+      "marker": "按时间回看每一次确认。"
+    },
+    {
+      "id": "settings",
+      "tab": "设置",
+      "marker": "权限和数据状态，都给出下一步。"
+    }
+  ]
+}

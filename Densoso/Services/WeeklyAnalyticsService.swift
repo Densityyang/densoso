@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import DensosoDomain
 
 struct WeeklyTrendPoint: Identifiable, Equatable {
     let date: Date
@@ -28,6 +29,7 @@ struct WeeklyAnalyticsService {
     func load(
         referenceDate: Date = Date(),
         profile: UserProfile?,
+        goal: GoalProfile? = nil,
         in modelContext: ModelContext
     ) throws -> WeeklyAnalyticsSnapshot {
         let today = calendar.startOfDay(for: referenceDate)
@@ -43,7 +45,7 @@ struct WeeklyAnalyticsService {
         var descriptor = FetchDescriptor<DailyMetrics>(predicate: predicate)
         descriptor.sortBy = [SortDescriptor(\DailyMetrics.date)]
         let metrics = try modelContext.fetch(descriptor)
-        let target = max(profile?.dailyDeficitTarget ?? 500, 0)
+        let target = max(goal?.dailyDeficitKcal ?? profile?.dailyDeficitTarget ?? 500, 0)
 
         var metricsByDay: [Date: DailyMetrics] = [:]
         for metric in metrics {

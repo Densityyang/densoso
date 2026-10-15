@@ -1,0 +1,13 @@
+{
+  "model": "qwen3-vl-flash",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"labels\":[\"米饭\"],\"isOccluded\":false,\"foodID\":\"food:2\"}"
+      }
+    }
+  ]
+}

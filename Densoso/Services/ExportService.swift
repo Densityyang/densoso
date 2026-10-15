@@ -1,4 +1,5 @@
 import CryptoKit
+import DensosoDomain
 import Foundation
 import SwiftData
 
@@ -9,7 +10,8 @@ final class ExportService {
     var isExporting = false
     var lastError: String?
 
-    private static let formatVersion = 2
+    private static let formatVersion = 4
+    private static let supportedFormatVersions: Set<Int> = [2, 3, 4]
 
     struct BackupDocument: Codable {
         let formatVersion: Int
@@ -22,6 +24,13 @@ final class ExportService {
         let userProfile: UserProfileExport?
         let mealRecords: [MealRecordExport]
         let workoutRecords: [WorkoutRecordExport]
+        let weightRecords: [WeightRecordExport]?
+        let goalProfiles: [GoalProfileExport]?
+        let dailyHealthSnapshots: [DailyHealthSnapshotExport]?
+        let scheduleEvents: [ScheduleEventExport]?
+        let dailyBriefs: [DailyBriefExport]?
+        let weeklyBriefs: [WeeklyBriefExport]?
+        let weeklyReports: [WeeklyReportExport]?
 
         struct UserProfileExport: Codable {
             let name: String
@@ -48,7 +57,116 @@ final class ExportService {
             let confidence: String
             let algorithmVersion: String
             let createdAt: Date
+            let sourceActionKey: String?
+            let energyLowKcal: Double?
+            let energyLikelyKcal: Double?
+            let energyHighKcal: Double?
+            let proteinLowG: Double?
+            let proteinLikelyG: Double?
+            let proteinHighG: Double?
+            let fatLowG: Double?
+            let fatLikelyG: Double?
+            let fatHighG: Double?
+            let carbsLowG: Double?
+            let carbsLikelyG: Double?
+            let carbsHighG: Double?
+            let evidenceData: Data?
             let dishes: [DishExport]
+
+            private enum CodingKeys: String, CodingKey {
+                case id, date, mealType, totalCaloriesKcal, proteinG, fatG, carbsG
+                case notes, confidence, algorithmVersion, createdAt, sourceActionKey
+                case energyLowKcal, energyLikelyKcal, energyHighKcal
+                case proteinLowG, proteinLikelyG, proteinHighG
+                case fatLowG, fatLikelyG, fatHighG
+                case carbsLowG, carbsLikelyG, carbsHighG, evidenceData, dishes
+            }
+
+            init(
+                id: UUID,
+                date: Date,
+                mealType: String,
+                totalCaloriesKcal: Int,
+                proteinG: Double,
+                fatG: Double,
+                carbsG: Double,
+                notes: String?,
+                confidence: String,
+                algorithmVersion: String,
+                createdAt: Date,
+                sourceActionKey: String? = nil,
+                energyLowKcal: Double? = nil,
+                energyLikelyKcal: Double? = nil,
+                energyHighKcal: Double? = nil,
+                proteinLowG: Double? = nil,
+                proteinLikelyG: Double? = nil,
+                proteinHighG: Double? = nil,
+                fatLowG: Double? = nil,
+                fatLikelyG: Double? = nil,
+                fatHighG: Double? = nil,
+                carbsLowG: Double? = nil,
+                carbsLikelyG: Double? = nil,
+                carbsHighG: Double? = nil,
+                evidenceData: Data? = nil,
+                dishes: [DishExport]
+            ) {
+                self.id = id
+                self.date = date
+                self.mealType = mealType
+                self.totalCaloriesKcal = totalCaloriesKcal
+                self.proteinG = proteinG
+                self.fatG = fatG
+                self.carbsG = carbsG
+                self.notes = notes
+                self.confidence = confidence
+                self.algorithmVersion = algorithmVersion
+                self.createdAt = createdAt
+                self.sourceActionKey = sourceActionKey
+                self.energyLowKcal = energyLowKcal
+                self.energyLikelyKcal = energyLikelyKcal
+                self.energyHighKcal = energyHighKcal
+                self.proteinLowG = proteinLowG
+                self.proteinLikelyG = proteinLikelyG
+                self.proteinHighG = proteinHighG
+                self.fatLowG = fatLowG
+                self.fatLikelyG = fatLikelyG
+                self.fatHighG = fatHighG
+                self.carbsLowG = carbsLowG
+                self.carbsLikelyG = carbsLikelyG
+                self.carbsHighG = carbsHighG
+                self.evidenceData = evidenceData
+                self.dishes = dishes
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                id = try container.decode(UUID.self, forKey: .id)
+                date = try container.decode(Date.self, forKey: .date)
+                mealType = try container.decode(String.self, forKey: .mealType)
+                totalCaloriesKcal = try container.decode(Int.self, forKey: .totalCaloriesKcal)
+                proteinG = try container.decode(Double.self, forKey: .proteinG)
+                fatG = try container.decode(Double.self, forKey: .fatG)
+                carbsG = try container.decode(Double.self, forKey: .carbsG)
+                notes = try container.decodeIfPresent(String.self, forKey: .notes)
+                confidence = try container.decode(String.self, forKey: .confidence)
+                algorithmVersion = try container.decode(String.self, forKey: .algorithmVersion)
+                createdAt = try container.decode(Date.self, forKey: .createdAt)
+                sourceActionKey = try container.decodeIfPresent(String.self, forKey: .sourceActionKey)
+                energyLowKcal = try container.decodeIfPresent(Double.self, forKey: .energyLowKcal)
+                energyLikelyKcal = try container.decodeIfPresent(Double.self, forKey: .energyLikelyKcal)
+                energyHighKcal = try container.decodeIfPresent(Double.self, forKey: .energyHighKcal)
+                proteinLowG = try container.decodeIfPresent(Double.self, forKey: .proteinLowG)
+                proteinLikelyG = try container.decodeIfPresent(Double.self, forKey: .proteinLikelyG)
+                proteinHighG = try container.decodeIfPresent(Double.self, forKey: .proteinHighG)
+                fatLowG = try container.decodeIfPresent(Double.self, forKey: .fatLowG)
+                fatLikelyG = try container.decodeIfPresent(Double.self, forKey: .fatLikelyG)
+                fatHighG = try container.decodeIfPresent(Double.self, forKey: .fatHighG)
+                carbsLowG = try container.decodeIfPresent(Double.self, forKey: .carbsLowG)
+                carbsLikelyG = try container.decodeIfPresent(Double.self, forKey: .carbsLikelyG)
+                carbsHighG = try container.decodeIfPresent(Double.self, forKey: .carbsHighG)
+                evidenceData = try container.decodeIfPresent(Data.self, forKey: .evidenceData)
+                dishes = try container.decode([DishExport].self, forKey: .dishes)
+            }
         }
 
         struct DishExport: Codable {
@@ -62,6 +180,125 @@ final class ExportService {
             let confidenceScore: Double
             let userCorrectionFactor: Double?
             let createdAt: Date
+            let id: UUID?
+            let energyLowKcal: Double?
+            let energyLikelyKcal: Double?
+            let energyHighKcal: Double?
+            let proteinLowG: Double?
+            let proteinLikelyG: Double?
+            let proteinHighG: Double?
+            let fatLowG: Double?
+            let fatLikelyG: Double?
+            let fatHighG: Double?
+            let carbsLowG: Double?
+            let carbsLikelyG: Double?
+            let carbsHighG: Double?
+            let portionLowG: Double?
+            let portionLikelyG: Double?
+            let portionHighG: Double?
+            let evidenceData: Data?
+            let algorithmVersion: String?
+
+            init(
+                dishName: String,
+                cookingMethod: String?,
+                ingredientJSON: String,
+                estimatedCaloriesKcal: Int,
+                estimatedProteinG: Double,
+                estimatedFatG: Double,
+                estimatedCarbsG: Double,
+                confidenceScore: Double,
+                userCorrectionFactor: Double?,
+                createdAt: Date,
+                id: UUID? = nil,
+                energyLowKcal: Double? = nil,
+                energyLikelyKcal: Double? = nil,
+                energyHighKcal: Double? = nil,
+                proteinLowG: Double? = nil,
+                proteinLikelyG: Double? = nil,
+                proteinHighG: Double? = nil,
+                fatLowG: Double? = nil,
+                fatLikelyG: Double? = nil,
+                fatHighG: Double? = nil,
+                carbsLowG: Double? = nil,
+                carbsLikelyG: Double? = nil,
+                carbsHighG: Double? = nil,
+                portionLowG: Double? = nil,
+                portionLikelyG: Double? = nil,
+                portionHighG: Double? = nil,
+                evidenceData: Data? = nil,
+                algorithmVersion: String? = nil
+            ) {
+                self.dishName = dishName
+                self.cookingMethod = cookingMethod
+                self.ingredientJSON = ingredientJSON
+                self.estimatedCaloriesKcal = estimatedCaloriesKcal
+                self.estimatedProteinG = estimatedProteinG
+                self.estimatedFatG = estimatedFatG
+                self.estimatedCarbsG = estimatedCarbsG
+                self.confidenceScore = confidenceScore
+                self.userCorrectionFactor = userCorrectionFactor
+                self.createdAt = createdAt
+                self.id = id
+                self.energyLowKcal = energyLowKcal
+                self.energyLikelyKcal = energyLikelyKcal
+                self.energyHighKcal = energyHighKcal
+                self.proteinLowG = proteinLowG
+                self.proteinLikelyG = proteinLikelyG
+                self.proteinHighG = proteinHighG
+                self.fatLowG = fatLowG
+                self.fatLikelyG = fatLikelyG
+                self.fatHighG = fatHighG
+                self.carbsLowG = carbsLowG
+                self.carbsLikelyG = carbsLikelyG
+                self.carbsHighG = carbsHighG
+                self.portionLowG = portionLowG
+                self.portionLikelyG = portionLikelyG
+                self.portionHighG = portionHighG
+                self.evidenceData = evidenceData
+                self.algorithmVersion = algorithmVersion
+            }
+
+            private enum CodingKeys: String, CodingKey {
+                case dishName, cookingMethod, ingredientJSON, estimatedCaloriesKcal
+                case estimatedProteinG, estimatedFatG, estimatedCarbsG, confidenceScore
+                case userCorrectionFactor, createdAt, id, energyLowKcal, energyLikelyKcal
+                case energyHighKcal, proteinLowG, proteinLikelyG, proteinHighG
+                case fatLowG, fatLikelyG, fatHighG, carbsLowG, carbsLikelyG, carbsHighG
+                case portionLowG, portionLikelyG, portionHighG, evidenceData, algorithmVersion
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                dishName = try container.decode(String.self, forKey: .dishName)
+                cookingMethod = try container.decodeIfPresent(String.self, forKey: .cookingMethod)
+                ingredientJSON = try container.decode(String.self, forKey: .ingredientJSON)
+                estimatedCaloriesKcal = try container.decode(Int.self, forKey: .estimatedCaloriesKcal)
+                estimatedProteinG = try container.decode(Double.self, forKey: .estimatedProteinG)
+                estimatedFatG = try container.decode(Double.self, forKey: .estimatedFatG)
+                estimatedCarbsG = try container.decode(Double.self, forKey: .estimatedCarbsG)
+                confidenceScore = try container.decode(Double.self, forKey: .confidenceScore)
+                userCorrectionFactor = try container.decodeIfPresent(Double.self, forKey: .userCorrectionFactor)
+                createdAt = try container.decode(Date.self, forKey: .createdAt)
+                id = try container.decodeIfPresent(UUID.self, forKey: .id)
+                energyLowKcal = try container.decodeIfPresent(Double.self, forKey: .energyLowKcal)
+                energyLikelyKcal = try container.decodeIfPresent(Double.self, forKey: .energyLikelyKcal)
+                energyHighKcal = try container.decodeIfPresent(Double.self, forKey: .energyHighKcal)
+                proteinLowG = try container.decodeIfPresent(Double.self, forKey: .proteinLowG)
+                proteinLikelyG = try container.decodeIfPresent(Double.self, forKey: .proteinLikelyG)
+                proteinHighG = try container.decodeIfPresent(Double.self, forKey: .proteinHighG)
+                fatLowG = try container.decodeIfPresent(Double.self, forKey: .fatLowG)
+                fatLikelyG = try container.decodeIfPresent(Double.self, forKey: .fatLikelyG)
+                fatHighG = try container.decodeIfPresent(Double.self, forKey: .fatHighG)
+                carbsLowG = try container.decodeIfPresent(Double.self, forKey: .carbsLowG)
+                carbsLikelyG = try container.decodeIfPresent(Double.self, forKey: .carbsLikelyG)
+                carbsHighG = try container.decodeIfPresent(Double.self, forKey: .carbsHighG)
+                portionLowG = try container.decodeIfPresent(Double.self, forKey: .portionLowG)
+                portionLikelyG = try container.decodeIfPresent(Double.self, forKey: .portionLikelyG)
+                portionHighG = try container.decodeIfPresent(Double.self, forKey: .portionHighG)
+                evidenceData = try container.decodeIfPresent(Data.self, forKey: .evidenceData)
+                algorithmVersion = try container.decodeIfPresent(String.self, forKey: .algorithmVersion)
+            }
         }
 
         struct WorkoutRecordExport: Codable {
@@ -86,6 +323,82 @@ final class ExportService {
             let dataQuality: String?
             let routeStatus: String?
             let routePointCount: Int?
+        }
+
+        struct WeightRecordExport: Codable {
+            let id: UUID
+            let sourceActionKey: String
+            let measuredAt: Date
+            let kilograms: Double
+            let source: String
+            let algorithmVersion: String
+            let createdAt: Date
+        }
+
+        struct GoalProfileExport: Codable {
+            let id: UUID
+            let profileKey: String
+            let targetWeightKilograms: Double?
+            let dailyDeficitKcal: Int?
+            let dailyProteinGrams: Double?
+            let effectiveFrom: Date
+            let updatedAt: Date
+        }
+
+        struct DailyHealthSnapshotExport: Codable {
+            let id: UUID
+            let dayKey: String
+            let timezoneID: String
+            let payloadData: Data
+            let snapshotHash: String
+            let algorithmVersion: String
+            let createdAt: Date
+        }
+
+        struct ScheduleEventExport: Codable {
+            let date: Date
+            let title: String
+            let notes: String?
+            let startTime: Date
+            let endTime: Date?
+            let createdAt: Date
+        }
+
+        struct DailyBriefExport: Codable {
+            let id: UUID
+            let cacheKey: String
+            let dayKey: String
+            let snapshotHash: String
+            let algorithmVersion: String
+            let payloadData: Data
+            let generatedAt: Date
+        }
+
+        struct WeeklyBriefExport: Codable {
+            let id: UUID
+            let cacheKey: String
+            let weekKey: String
+            let snapshotHash: String
+            let algorithmVersion: String
+            let payloadData: Data
+            let generatedAt: Date
+        }
+
+        struct WeeklyReportExport: Codable {
+            let weekStartDate: Date
+            let weekEndDate: Date
+            let totalDeficitKcal: Int
+            let avgDailyDeficitKcal: Double
+            let projectedWeightLossKg: Double
+            let avgProteinG: Double
+            let avgFatG: Double
+            let avgCarbsG: Double
+            let bestDay: Date?
+            let worstDay: Date?
+            let mealsCount: Int
+            let workoutsCount: Int
+            let compliance: Double
+            let generatedAt: Date
         }
     }
 
@@ -128,7 +441,7 @@ final class ExportService {
     func restoreJSON(url: URL, context: ModelContext) async throws -> ImportSummary {
         let data = try Data(contentsOf: url)
         let document = try JSONDecoder().decode(BackupDocument.self, from: data)
-        guard document.formatVersion == Self.formatVersion else {
+        guard Self.supportedFormatVersions.contains(document.formatVersion) else {
             throw BackupError.unsupportedVersion(document.formatVersion)
         }
         guard try checksum(for: document.payload) == document.checksum else {
@@ -139,7 +452,14 @@ final class ExportService {
             try context.delete(model: UserProfile.self)
             try context.delete(model: MealRecord.self)
             try context.delete(model: WorkoutRecord.self)
+            try context.delete(model: WeightRecord.self)
+            try context.delete(model: GoalProfileRecord.self)
+            try context.delete(model: DailyHealthSnapshotRecord.self)
+            try context.delete(model: DailyBriefRecord.self)
+            try context.delete(model: WeeklyBriefRecord.self)
+            try context.delete(model: ScheduleEvent.self)
             try context.delete(model: DailyMetrics.self)
+            try context.delete(model: WeeklyReport.self)
             try context.delete(model: HealthSyncOutboxEntry.self)
             try context.delete(model: HealthKitImportCursor.self)
 
@@ -159,7 +479,19 @@ final class ExportService {
                 context.insert(profile)
             }
 
-            let affectedDays = Set(document.payload.mealRecords.map(\.date) + document.payload.workoutRecords.map(\.date))
+            let snapshots = document.payload.dailyHealthSnapshots ?? []
+            let snapshotDecoder = JSONDecoder()
+            snapshotDecoder.dateDecodingStrategy = .millisecondsSince1970
+            let snapshotDates = snapshots.compactMap {
+                try? snapshotDecoder.decode(DailyHealthSnapshot.self, from: $0.payloadData).dayStart
+            }
+            let weights = document.payload.weightRecords ?? []
+            let affectedDays = Set(
+                document.payload.mealRecords.map(\.date)
+                    + document.payload.workoutRecords.map(\.date)
+                    + weights.map(\.measuredAt)
+                    + snapshotDates
+            )
             for source in document.payload.mealRecords {
                 let meal = MealRecord(
                     date: source.date,
@@ -170,12 +502,27 @@ final class ExportService {
                     carbsG: source.carbsG,
                     notes: source.notes,
                     confidence: source.confidence,
-                    algorithmVersion: source.algorithmVersion
+                    algorithmVersion: source.algorithmVersion,
+                    sourceActionKey: source.sourceActionKey,
+                    energyLowKcal: source.energyLowKcal,
+                    energyLikelyKcal: source.energyLikelyKcal,
+                    energyHighKcal: source.energyHighKcal,
+                    proteinLowG: source.proteinLowG,
+                    proteinLikelyG: source.proteinLikelyG,
+                    proteinHighG: source.proteinHighG,
+                    fatLowG: source.fatLowG,
+                    fatLikelyG: source.fatLikelyG,
+                    fatHighG: source.fatHighG,
+                    carbsLowG: source.carbsLowG,
+                    carbsLikelyG: source.carbsLikelyG,
+                    carbsHighG: source.carbsHighG,
+                    evidenceData: source.evidenceData
                 )
                 meal.id = source.id
                 meal.createdAt = source.createdAt
                 meal.dishes = source.dishes.map { dishSource in
                     let dish = DishEntry(
+                        id: dishSource.id ?? UUID(),
                         dishName: dishSource.dishName,
                         cookingMethod: dishSource.cookingMethod,
                         ingredientJSON: dishSource.ingredientJSON,
@@ -184,7 +531,24 @@ final class ExportService {
                         estimatedFatG: dishSource.estimatedFatG,
                         estimatedCarbsG: dishSource.estimatedCarbsG,
                         confidenceScore: dishSource.confidenceScore,
-                        userCorrectionFactor: dishSource.userCorrectionFactor
+                        userCorrectionFactor: dishSource.userCorrectionFactor,
+                        energyLowKcal: dishSource.energyLowKcal,
+                        energyLikelyKcal: dishSource.energyLikelyKcal,
+                        energyHighKcal: dishSource.energyHighKcal,
+                        proteinLowG: dishSource.proteinLowG,
+                        proteinLikelyG: dishSource.proteinLikelyG,
+                        proteinHighG: dishSource.proteinHighG,
+                        fatLowG: dishSource.fatLowG,
+                        fatLikelyG: dishSource.fatLikelyG,
+                        fatHighG: dishSource.fatHighG,
+                        carbsLowG: dishSource.carbsLowG,
+                        carbsLikelyG: dishSource.carbsLikelyG,
+                        carbsHighG: dishSource.carbsHighG,
+                        portionLowG: dishSource.portionLowG,
+                        portionLikelyG: dishSource.portionLikelyG,
+                        portionHighG: dishSource.portionHighG,
+                        evidenceData: dishSource.evidenceData,
+                        algorithmVersion: dishSource.algorithmVersion ?? source.algorithmVersion
                     )
                     dish.createdAt = dishSource.createdAt
                     return dish
@@ -219,15 +583,115 @@ final class ExportService {
                 context.insert(workout)
             }
 
+            for source in weights {
+                let weight = WeightRecord(
+                    id: source.id,
+                    sourceActionKey: source.sourceActionKey,
+                    measuredAt: source.measuredAt,
+                    kilograms: source.kilograms,
+                    source: source.source,
+                    algorithmVersion: source.algorithmVersion
+                )
+                weight.createdAt = source.createdAt
+                context.insert(weight)
+            }
+
+            for source in document.payload.goalProfiles ?? [] {
+                let goal = GoalProfileRecord(
+                    id: source.id,
+                    profileKey: source.profileKey,
+                    targetWeightKilograms: source.targetWeightKilograms,
+                    dailyDeficitKcal: source.dailyDeficitKcal,
+                    dailyProteinGrams: source.dailyProteinGrams,
+                    effectiveFrom: source.effectiveFrom
+                )
+                goal.updatedAt = source.updatedAt
+                context.insert(goal)
+            }
+
+            for source in snapshots {
+                let snapshot = DailyHealthSnapshotRecord(
+                    id: source.id,
+                    dayKey: source.dayKey,
+                    timezoneID: source.timezoneID,
+                    payloadData: source.payloadData,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion
+                )
+                snapshot.createdAt = source.createdAt
+                context.insert(snapshot)
+            }
+
+            for source in document.payload.scheduleEvents ?? [] {
+                let event = ScheduleEvent(
+                    date: source.date,
+                    title: source.title,
+                    notes: source.notes,
+                    startTime: source.startTime,
+                    endTime: source.endTime
+                )
+                event.createdAt = source.createdAt
+                context.insert(event)
+            }
+
             for date in affectedDays {
                 try DailyMetricsProjector.reproject(on: date, in: context)
+            }
+
+            for source in document.payload.dailyBriefs ?? [] {
+                let brief = DailyBriefRecord(
+                    id: source.id,
+                    cacheKey: source.cacheKey,
+                    dayKey: source.dayKey,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion,
+                    payloadData: source.payloadData
+                )
+                brief.generatedAt = source.generatedAt
+                context.insert(brief)
+            }
+            for source in document.payload.weeklyBriefs ?? [] {
+                let brief = WeeklyBriefRecord(
+                    id: source.id,
+                    cacheKey: source.cacheKey,
+                    weekKey: source.weekKey,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion,
+                    payloadData: source.payloadData
+                )
+                brief.generatedAt = source.generatedAt
+                context.insert(brief)
+            }
+            for source in document.payload.weeklyReports ?? [] {
+                let report = WeeklyReport(
+                    weekStartDate: source.weekStartDate,
+                    weekEndDate: source.weekEndDate,
+                    totalDeficitKcal: source.totalDeficitKcal,
+                    avgDailyDeficitKcal: source.avgDailyDeficitKcal,
+                    projectedWeightLossKg: source.projectedWeightLossKg,
+                    avgProteinG: source.avgProteinG,
+                    avgFatG: source.avgFatG,
+                    avgCarbsG: source.avgCarbsG,
+                    bestDay: source.bestDay,
+                    worstDay: source.worstDay,
+                    mealsCount: source.mealsCount,
+                    workoutsCount: source.workoutsCount,
+                    compliance: source.compliance
+                )
+                report.generatedAt = source.generatedAt
+                context.insert(report)
             }
             try context.save()
 
             return ImportSummary(
                 meals: document.payload.mealRecords.count,
                 workouts: document.payload.workoutRecords.count,
-                dailyMetrics: affectedDays.count
+                dailyMetrics: affectedDays.count,
+                weights: weights.count,
+                healthDays: snapshots.count,
+                scheduledPlans: (document.payload.scheduleEvents ?? []).filter {
+                    ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) != nil
+                }.count
             )
         } catch {
             context.rollback()
@@ -239,12 +703,31 @@ final class ExportService {
         let meals: Int
         let workouts: Int
         let dailyMetrics: Int
+        let weights: Int
+        let healthDays: Int
+        let scheduledPlans: Int
     }
 
     private func makePayload(context: ModelContext) throws -> BackupPayload {
         let profile = try context.fetch(FetchDescriptor<UserProfile>()).first
         let meals = try context.fetch(FetchDescriptor<MealRecord>())
+            .sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }
         let workouts = try context.fetch(FetchDescriptor<WorkoutRecord>())
+            .sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }
+        let weights = try context.fetch(FetchDescriptor<WeightRecord>())
+            .sorted { $0.measuredAt == $1.measuredAt ? $0.id.uuidString < $1.id.uuidString : $0.measuredAt < $1.measuredAt }
+        let goals = try context.fetch(FetchDescriptor<GoalProfileRecord>())
+            .sorted { $0.effectiveFrom < $1.effectiveFrom }
+        let healthSnapshots = try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .sorted { $0.dayKey < $1.dayKey }
+        let scheduleEvents = try context.fetch(FetchDescriptor<ScheduleEvent>())
+            .sorted { $0.startTime == $1.startTime ? $0.title < $1.title : $0.startTime < $1.startTime }
+        let dailyBriefs = try context.fetch(FetchDescriptor<DailyBriefRecord>())
+            .sorted { $0.dayKey < $1.dayKey }
+        let weeklyBriefs = try context.fetch(FetchDescriptor<WeeklyBriefRecord>())
+            .sorted { $0.weekKey < $1.weekKey }
+        let weeklyReports = try context.fetch(FetchDescriptor<WeeklyReport>())
+            .sorted { $0.weekStartDate < $1.weekStartDate }
 
         return BackupPayload(
             exportedAt: Date(),
@@ -275,6 +758,20 @@ final class ExportService {
                     confidence: source.confidence,
                     algorithmVersion: source.algorithmVersion,
                     createdAt: source.createdAt,
+                    sourceActionKey: source.sourceActionKey,
+                    energyLowKcal: source.energyLowKcal,
+                    energyLikelyKcal: source.energyLikelyKcal,
+                    energyHighKcal: source.energyHighKcal,
+                    proteinLowG: source.proteinLowG,
+                    proteinLikelyG: source.proteinLikelyG,
+                    proteinHighG: source.proteinHighG,
+                    fatLowG: source.fatLowG,
+                    fatLikelyG: source.fatLikelyG,
+                    fatHighG: source.fatHighG,
+                    carbsLowG: source.carbsLowG,
+                    carbsLikelyG: source.carbsLikelyG,
+                    carbsHighG: source.carbsHighG,
+                    evidenceData: source.evidenceData,
                     dishes: source.dishes.map { dish in
                         .init(
                             dishName: dish.dishName,
@@ -286,7 +783,25 @@ final class ExportService {
                             estimatedCarbsG: dish.estimatedCarbsG,
                             confidenceScore: dish.confidenceScore,
                             userCorrectionFactor: dish.userCorrectionFactor,
-                            createdAt: dish.createdAt
+                            createdAt: dish.createdAt,
+                            id: dish.id,
+                            energyLowKcal: dish.energyLowKcal,
+                            energyLikelyKcal: dish.energyLikelyKcal,
+                            energyHighKcal: dish.energyHighKcal,
+                            proteinLowG: dish.proteinLowG,
+                            proteinLikelyG: dish.proteinLikelyG,
+                            proteinHighG: dish.proteinHighG,
+                            fatLowG: dish.fatLowG,
+                            fatLikelyG: dish.fatLikelyG,
+                            fatHighG: dish.fatHighG,
+                            carbsLowG: dish.carbsLowG,
+                            carbsLikelyG: dish.carbsLikelyG,
+                            carbsHighG: dish.carbsHighG,
+                            portionLowG: dish.portionLowG,
+                            portionLikelyG: dish.portionLikelyG,
+                            portionHighG: dish.portionHighG,
+                            evidenceData: dish.evidenceData,
+                            algorithmVersion: dish.algorithmVersion
                         )
                     }
                 )
@@ -315,11 +830,94 @@ final class ExportService {
                     routeStatus: source.routeStatus,
                     routePointCount: source.routePointCount
                 )
+            },
+            weightRecords: weights.map { source in
+                .init(
+                    id: source.id,
+                    sourceActionKey: source.sourceActionKey,
+                    measuredAt: source.measuredAt,
+                    kilograms: source.kilograms,
+                    source: source.source,
+                    algorithmVersion: source.algorithmVersion,
+                    createdAt: source.createdAt
+                )
+            },
+            goalProfiles: goals.map { source in
+                .init(
+                    id: source.id,
+                    profileKey: source.profileKey,
+                    targetWeightKilograms: source.targetWeightKilograms,
+                    dailyDeficitKcal: source.dailyDeficitKcal,
+                    dailyProteinGrams: source.dailyProteinGrams,
+                    effectiveFrom: source.effectiveFrom,
+                    updatedAt: source.updatedAt
+                )
+            },
+            dailyHealthSnapshots: healthSnapshots.map { source in
+                .init(
+                    id: source.id,
+                    dayKey: source.dayKey,
+                    timezoneID: source.timezoneID,
+                    payloadData: source.payloadData,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion,
+                    createdAt: source.createdAt
+                )
+            },
+            scheduleEvents: scheduleEvents.map { source in
+                .init(
+                    date: source.date,
+                    title: source.title,
+                    notes: source.notes,
+                    startTime: source.startTime,
+                    endTime: source.endTime,
+                    createdAt: source.createdAt
+                )
+            },
+            dailyBriefs: dailyBriefs.map { source in
+                .init(
+                    id: source.id,
+                    cacheKey: source.cacheKey,
+                    dayKey: source.dayKey,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion,
+                    payloadData: source.payloadData,
+                    generatedAt: source.generatedAt
+                )
+            },
+            weeklyBriefs: weeklyBriefs.map { source in
+                .init(
+                    id: source.id,
+                    cacheKey: source.cacheKey,
+                    weekKey: source.weekKey,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion,
+                    payloadData: source.payloadData,
+                    generatedAt: source.generatedAt
+                )
+            },
+            weeklyReports: weeklyReports.map { source in
+                .init(
+                    weekStartDate: source.weekStartDate,
+                    weekEndDate: source.weekEndDate,
+                    totalDeficitKcal: source.totalDeficitKcal,
+                    avgDailyDeficitKcal: source.avgDailyDeficitKcal,
+                    projectedWeightLossKg: source.projectedWeightLossKg,
+                    avgProteinG: source.avgProteinG,
+                    avgFatG: source.avgFatG,
+                    avgCarbsG: source.avgCarbsG,
+                    bestDay: source.bestDay,
+                    worstDay: source.worstDay,
+                    mealsCount: source.mealsCount,
+                    workoutsCount: source.workoutsCount,
+                    compliance: source.compliance,
+                    generatedAt: source.generatedAt
+                )
             }
         )
     }
 
-    private func checksum(for payload: BackupPayload) throws -> String {
+    func checksum(for payload: BackupPayload) throws -> String {
         let digest = SHA256.hash(data: try encoder.encode(payload))
         return digest.map { String(format: "%02x", $0) }.joined()
     }

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import DensosoDomain
 
 /// The sole projection path from health records to their daily aggregate.
 @MainActor
@@ -14,7 +15,15 @@ enum DailyMetricsProjector {
         let meals = try modelContext.fetch(FetchDescriptor<MealRecord>(predicate: mealPredicate))
         let workouts = try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: workoutPredicate))
         let profile = try modelContext.fetch(FetchDescriptor<UserProfile>()).first ?? UserProfile()
-        let projected = CaloricEngine.computeDailyMetrics(date: day, meals: meals, workouts: workouts, userProfile: profile)
+        let healthSnapshot = try healthSnapshot(for: day, in: modelContext)
+        let projected = CaloricEngine.computeDailyMetrics(
+            date: day,
+            meals: meals,
+            workouts: workouts,
+            userProfile: profile,
+            healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
+            healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection
+        )
 
         let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
         if let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first {
@@ -22,6 +31,17 @@ enum DailyMetricsProjector {
         } else {
             modelContext.insert(projected)
         }
+    }
+
+    private static func healthSnapshot(for day: Date, in modelContext: ModelContext) throws -> DailyHealthSnapshot? {
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
+        let dayKey = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        guard let record = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .first(where: { $0.dayKey == dayKey }) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        return try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
     }
 
     private static func copy(_ source: DailyMetrics, to destination: DailyMetrics) {

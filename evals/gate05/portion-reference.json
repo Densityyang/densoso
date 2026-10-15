@@ -1,0 +1,57 @@
+{
+  "version": "gate05-synthetic-v1",
+  "source": "synthetic-calibration-reference-not-field-measurement",
+  "groups": [
+    {
+      "kind": "approximateGrams",
+      "samples": [
+        {"id":"approx-01","likely":100,"reference":94},{"id":"approx-02","likely":120,"reference":125},
+        {"id":"approx-03","likely":150,"reference":142},{"id":"approx-04","likely":180,"reference":190},
+        {"id":"approx-05","likely":200,"reference":198},{"id":"approx-06","likely":220,"reference":235},
+        {"id":"approx-07","likely":250,"reference":230},{"id":"approx-08","likely":300,"reference":315},
+        {"id":"approx-09","likely":350,"reference":340},{"id":"approx-10","likely":400,"reference":430}
+      ]
+    },
+    {
+      "kind": "photoNoScale",
+      "samples": [
+        {"id":"photo-01","likely":80,"reference":55},{"id":"photo-02","likely":100,"reference":140},
+        {"id":"photo-03","likely":130,"reference":100},{"id":"photo-04","likely":160,"reference":210},
+        {"id":"photo-05","likely":180,"reference":120},{"id":"photo-06","likely":200,"reference":290},
+        {"id":"photo-07","likely":240,"reference":180},{"id":"photo-08","likely":280,"reference":390},
+        {"id":"photo-09","likely":320,"reference":200},{"id":"photo-10","likely":360,"reference":500}
+      ]
+    },
+    {
+      "kind": "photoMixedOccluded",
+      "samples": [
+        {"id":"mixed-01","likely":100,"reference":45},{"id":"mixed-02","likely":120,"reference":190},
+        {"id":"mixed-03","likely":150,"reference":70},{"id":"mixed-04","likely":180,"reference":280},
+        {"id":"mixed-05","likely":200,"reference":90},{"id":"mixed-06","likely":240,"reference":380},
+        {"id":"mixed-07","likely":280,"reference":130},{"id":"mixed-08","likely":320,"reference":500},
+        {"id":"mixed-09","likely":360,"reference":180},{"id":"mixed-10","likely":400,"reference":630}
+      ]
+    },
+    {
+      "kind": "packageServing",
+      "samples": [
+        {"id":"package-01","serving":30,"count":1,"reference":30},{"id":"package-02","serving":40,"count":1,"reference":41},
+        {"id":"package-03","serving":50,"count":2,"reference":98},{"id":"package-04","serving":60,"count":1.5,"reference":92},
+        {"id":"package-05","serving":80,"count":1,"reference":78},{"id":"package-06","serving":100,"count":1,"reference":104},
+        {"id":"package-07","serving":125,"count":2,"reference":247},{"id":"package-08","serving":150,"count":1,"reference":145},
+        {"id":"package-09","serving":200,"count":0.5,"reference":102},{"id":"package-10","serving":250,"count":1,"reference":240}
+      ]
+    },
+    {
+      "kind": "householdPrior",
+      "prior": {"unit":"bowl","p10Grams":120,"p50Grams":180,"p90Grams":260,"version":"household-v1"},
+      "samples": [
+        {"id":"bowl-01","count":0.5,"reference":70},{"id":"bowl-02","count":0.75,"reference":100},
+        {"id":"bowl-03","count":1,"reference":150},{"id":"bowl-04","count":1,"reference":220},
+        {"id":"bowl-05","count":1.25,"reference":250},{"id":"bowl-06","count":1.5,"reference":300},
+        {"id":"bowl-07","count":2,"reference":400},{"id":"bowl-08","count":2.5,"reference":500},
+        {"id":"bowl-09","count":3,"reference":650},{"id":"bowl-10","count":4,"reference":900}
+      ]
+    }
+  ]
+}

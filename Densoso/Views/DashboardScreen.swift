@@ -1,9 +1,11 @@
 import Charts
+import DensosoDomain
 import SwiftData
 import SwiftUI
 
 struct DashboardScreen: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(Dependencies.self) private var dependencies
     @Query private var profiles: [UserProfile]
 
     @State private var metrics: DailyMetrics?
@@ -15,10 +17,47 @@ struct DashboardScreen: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     OrbitScreenHeader(
-                        eyebrow: "From records to rhythm",
-                        title: "今天的能量轨迹",
-                        subtitle: "先看今天，再用七日趋势判断节奏。没有记录的日期会明确留空。"
+                        eyebrow: "Trends without a health score",
+                        title: "看见自己的长期节奏",
+                        subtitle: "数据只和个人基线比较；缺失值保留为空，不生成统一健康分。"
                     )
+
+                    if let brief = dependencies.healthIntelligenceService.dailyBrief {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("四域状态")
+                                .font(.headline)
+                            ForEach(brief.domains) { domain in
+                                HStack {
+                                    Text(domainLabel(domain.domain))
+                                    Spacer()
+                                    Text(statusLabel(domain.status))
+                                        .foregroundStyle(statusColor(domain.status))
+                                    if let value = domain.currentValue {
+                                        Text(value.formatted(.number.precision(.fractionLength(0))))
+                                            .monospacedDigit()
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .font(.subheadline)
+                                .accessibilityElement(children: .combine)
+                            }
+                        }
+                        .orbitCard()
+                    }
+
+                    WeeklyHealthBriefCard(brief: dependencies.healthIntelligenceService.weeklyBrief)
+
+                    if let brief = dependencies.healthIntelligenceService.dailyBrief {
+                        HealthVitalTrendsCard(trends: brief.vitalTrends)
+                    }
+
+                    NavigationLink {
+                        WorkoutPlanScreen()
+                    } label: {
+                        Label("查看训练计划", systemImage: "figure.run")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .orbitCard()
 
                     if let metrics {
                         todayCard(metrics)
@@ -52,7 +91,7 @@ struct DashboardScreen: View {
                 .padding()
             }
             .refreshable { loadData() }
-            .navigationTitle("数据")
+            .navigationTitle("趋势")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear(perform: loadData)
         }
@@ -159,6 +198,7 @@ struct DashboardScreen: View {
     private func loadData() {
         loadError = nil
         do {
+            _ = try dependencies.healthIntelligenceService.refresh()
             let calendar = Calendar.current
             let today = calendar.startOfDay(for: Date())
             let predicate = #Predicate<DailyMetrics> { $0.date == today }
@@ -166,10 +206,40 @@ struct DashboardScreen: View {
             weekly = try WeeklyAnalyticsService(calendar: calendar).load(
                 referenceDate: today,
                 profile: profiles.first,
+                goal: try dependencies.healthIntelligenceService.goalProfile(asOf: today),
                 in: modelContext
             )
         } catch {
             loadError = "无法更新数据看板：\(error.localizedDescription)"
+        }
+    }
+
+    private func domainLabel(_ domain: HealthDomain) -> String {
+        switch domain {
+        case .nutrition: "营养"
+        case .sleep: "睡眠"
+        case .activity: "活动"
+        case .body: "身体指标"
+        }
+    }
+
+    private func statusLabel(_ status: HealthDomainStatus) -> String {
+        switch status {
+        case .noData: "暂无数据"
+        case .learning: "学习中"
+        case .withinTypicalRange: "处于个人范围"
+        case .changed: "与近期不同"
+        case .attention: "值得留意"
+        }
+    }
+
+    private func statusColor(_ status: HealthDomainStatus) -> Color {
+        switch status {
+        case .noData: Color.secondary
+        case .learning: OrbitPalette.blue
+        case .withinTypicalRange: OrbitPalette.green
+        case .changed: OrbitPalette.gold
+        case .attention: OrbitPalette.coral
         }
     }
 }
@@ -177,4 +247,5 @@ struct DashboardScreen: View {
 #Preview {
     DashboardScreen()
         .modelContainer(for: [UserProfile.self, DailyMetrics.self, WeeklyReport.self], inMemory: true)
+        .environment(Dependencies())
 }

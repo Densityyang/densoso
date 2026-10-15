@@ -1,0 +1,20 @@
+{
+  "id": "chatcmpl-gate05-vl",
+  "object": "chat.completion",
+  "model": "qwen3-vl-flash",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"labels\":[\"红烧豆腐\"],\"preparationHints\":[\"cooked\"],\"cookingMethod\":\"braise\",\"containerHint\":\"plate\",\"portionHint\":\"约200g\",\"isOccluded\":false}"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 320,
+    "completion_tokens": 48,
+    "total_tokens": 368
+  }
+}

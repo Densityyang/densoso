@@ -11,17 +11,23 @@ import json, sqlite3, argparse, sys
 from pathlib import Path
 
 def create_schema(conn):
+    # Rebuild the generated bundle database so an older local artifact cannot
+    # silently retain the pre-Phase5 column/nullability layout.
+    conn.execute("DROP TABLE IF EXISTS food_fts")
+    conn.execute("DROP TABLE IF EXISTS food_items")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS food_items (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             alias TEXT,
+            preparation TEXT,
+            isCookedComposite INTEGER NOT NULL DEFAULT 0,
             category TEXT NOT NULL,
             edible INTEGER NOT NULL DEFAULT 100,
             energyKcal INTEGER NOT NULL,
-            proteinG REAL NOT NULL DEFAULT 0,
-            fatG REAL NOT NULL DEFAULT 0,
-            carbohydrateG REAL NOT NULL DEFAULT 0,
+            proteinG REAL,
+            fatG REAL,
+            carbohydrateG REAL,
             fiberG REAL
         )
     """)
@@ -38,19 +44,21 @@ def create_schema(conn):
 def import_data(conn, items):
     conn.executemany("""
         INSERT OR REPLACE INTO food_items
-        (id, name, alias, category, edible, energyKcal, proteinG, fatG, carbohydrateG, fiberG)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, name, alias, preparation, isCookedComposite, category, edible, energyKcal, proteinG, fatG, carbohydrateG, fiberG)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [
         (
             item.get("id"),
             item.get("name", ""),
             item.get("alias"),
+            item.get("preparation"),
+            int(bool(item.get("isCookedComposite", False))),
             item.get("category", ""),
             item.get("edible", 100),
             item.get("energyKcal", 0),
-            item.get("proteinG", 0),
-            item.get("fatG", 0),
-            item.get("carbohydrateG", 0),
+            item.get("proteinG"),
+            item.get("fatG"),
+            item.get("carbohydrateG"),
             item.get("fiberG"),
         )
         for item in items

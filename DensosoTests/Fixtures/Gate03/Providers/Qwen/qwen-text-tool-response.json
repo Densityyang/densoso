@@ -1,0 +1,24 @@
+{
+  "id": "chatcmpl_fixture_qwen",
+  "model": "qwen-flash",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "我会先生成可检查的草稿。",
+        "tool_calls": [
+          {
+            "id": "tool_1",
+            "type": "function",
+            "function": {
+              "name": "log_weight",
+              "arguments": "{\"kilograms\":62.5,\"measuredAt\":null}"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {"prompt_tokens": 100, "completion_tokens": 28}
+}

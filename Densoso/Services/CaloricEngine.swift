@@ -121,7 +121,9 @@ enum CaloricEngine {
         date: Date,
         meals: [MealRecord],
         workouts: [WorkoutRecord],
-        userProfile: UserProfile
+        userProfile: UserProfile,
+        healthKitActiveEnergyKcal: Double? = nil,
+        healthKitRestingEnergyKcal: Double? = nil
     ) -> DailyMetrics {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
@@ -138,26 +140,23 @@ enum CaloricEngine {
         let dayWorkouts = workouts.filter { calendar.isDate($0.date, inSameDayAs: startOfDay) }
 
         let totalIntake = dayMeals.map(\.totalCaloriesKcal).reduce(0, +)
+        // V3 DailyMetrics macros are compatibility aggregates. A meal's zero
+        // mirror can mean unknown; use the optional meal ranges for evidence.
         let totalProtein = dayMeals.map(\.proteinG).reduce(0, +)
         let totalFat = dayMeals.map(\.fatG).reduce(0, +)
         let totalCarbs = dayMeals.map(\.carbsG).reduce(0, +)
 
-        // v1: 活动消耗 = 用户自报运动消耗之和
-        //     如果当天没运动，用 TDEE 的 activity 部分粗略估算
-        let activeCal: Int
-        if !dayWorkouts.isEmpty {
-            activeCal = dayWorkouts.map(\.estimatedCaloriesBurned).reduce(0, +)
-        } else {
-            // 兜底：TDEE - BMR 作为活动消耗的粗略值
-            activeCal = tdee(bmr: bmrValue, activityLevel: userProfile.activityLevel) - bmrValue
-        }
-
-        let totalExpenditure = bmrValue + activeCal
+        // HealthKit's daily active-energy aggregate already includes workout activity.
+        // A workout record is descriptive and must never be added to that aggregate.
+        let activeCal = validEnergy(healthKitActiveEnergyKcal)
+            ?? max(tdee(bmr: bmrValue, activityLevel: userProfile.activityLevel) - bmrValue, 0)
+        let basalCal = validEnergy(healthKitRestingEnergyKcal) ?? bmrValue
+        let totalExpenditure = basalCal + activeCal
         let deficit = dailyDeficit(totalExpenditure: totalExpenditure, totalIntake: totalIntake)
 
         return DailyMetrics(
             date: startOfDay,
-            bmrKcal: bmrValue,
+            bmrKcal: basalCal,
             activeCaloriesKcal: activeCal,
             totalExpenditureKcal: totalExpenditure,
             totalIntakeKcal: totalIntake,
@@ -168,5 +167,10 @@ enum CaloricEngine {
             mealCount: dayMeals.count,
             workoutCount: dayWorkouts.count
         )
+    }
+
+    private static func validEnergy(_ value: Double?) -> Int? {
+        guard let value, value.isFinite, value >= 0, value < Double(Int.max) else { return nil }
+        return Int(value.rounded())
     }
 }

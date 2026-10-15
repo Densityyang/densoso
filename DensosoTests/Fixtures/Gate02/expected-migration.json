@@ -1,0 +1,8 @@
+{
+  "legacyEvidenceGrade": "legacyPointEstimate",
+  "v1WorkoutOrigin": "userEntered",
+  "v1WorkoutDataQuality": "complete",
+  "v1WorkoutRouteStatus": "unavailable",
+  "outboxAttemptCount": 0,
+  "outboxState": "pending"
+}

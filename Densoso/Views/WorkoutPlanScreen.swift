@@ -1,115 +1,143 @@
+import DensosoDomain
 import SwiftUI
 
-/// A confirmation-first editor for WorkoutKit plans. No WorkoutKit call happens
-/// while this view is being edited.
+private enum WorkoutPlanGoalKind: String, CaseIterable, Identifiable {
+    case open = "开放目标"
+    case time = "时长"
+    case distance = "距离"
+
+    var id: Self { self }
+}
+
+/// Plans remain local, editable drafts until ConfirmationCoordinator commits them.
 struct WorkoutPlanScreen: View {
     @Environment(AppState.self) private var appState
-    @State private var name = WorkoutPlanDraft.squatFiveByFive.name
-    @State private var activity = WorkoutPlanDraft.Activity.strength
-    @State private var location = WorkoutPlanDraft.Location.indoor
-    @State private var usesTimeGoal = true
-    @State private var durationMinutes = 45
-    @State private var shouldSchedule = true
+    @Environment(Dependencies.self) private var dependencies
+
+    @State private var name = WorkoutPlanDraft.defaultDraft.name
+    @State private var activity = WorkoutPlanDraft.defaultDraft.activity
+    @State private var location = WorkoutPlanDraft.Location.outdoor
+    @State private var goalKind = WorkoutPlanGoalKind.time
+    @State private var durationMinutes = 30
+    @State private var distanceMeters = 1_000.0
     @State private var scheduledAt = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-    @State private var strengthSets = WorkoutPlanDraft.squatFiveByFive.strengthSets
     @State private var isPresentingConfirmation = false
+    @State private var isScheduling = false
     @State private var resultMessage: String?
-    @State private var schedulingService = WorkoutPlanSchedulingService()
-    @State private var catalogEntries: [ExerciseCatalog.Entry] = []
-    @State private var catalogVersion: String?
+    @State private var confirmedPlans: [ConfirmedWorkoutPlanEntry] = []
 
     var body: some View {
         NavigationStack {
             Form {
-                    Section {
-                        OrbitScreenHeader(
-                            eyebrow: "Plan on phone, act on wrist",
-                            title: "手机负责意图，手表负责训练现场。",
-                            subtitle: "这里始终先编辑本地草稿；只有你确认后才连接 WorkoutKit。"
+                Section {
+                    OrbitScreenHeader(
+                        eyebrow: "Plan first, schedule after confirmation",
+                        title: "训练计划由你确认后交给 WorkoutKit。",
+                        subtitle: "Densoso 不记录自建 Workout Session；Workout App 与 HealthKit 是训练事实源。"
+                    )
+                    .padding(.vertical, 8)
+                }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+
+                Section("计划草稿") {
+                    TextField("计划名称", text: $name)
+                    Picker("活动", selection: $activity) {
+                        ForEach(WorkoutPlanDraft.Activity.supportedCases, id: \.self) { item in
+                            Text(item.displayName).tag(item)
+                        }
+                    }
+                    Picker("地点", selection: $location) {
+                        ForEach(WorkoutPlanDraft.Location.allCases, id: \.self) { item in
+                            Text(item.displayName).tag(item)
+                        }
+                    }
+                }
+
+                Section("单一目标") {
+                    Picker("目标类型", selection: $goalKind) {
+                        ForEach(WorkoutPlanGoalKind.allCases) { item in
+                            Text(item.rawValue).tag(item)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    switch goalKind {
+                    case .open:
+                        Text("开始训练后由 Apple Workout 决定记录细节。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    case .time:
+                        Stepper("\(durationMinutes) 分钟", value: $durationMinutes, in: 1...720, step: 5)
+                    case .distance:
+                        Stepper(
+                            "\(Int(distanceMeters.rounded())) 米",
+                            value: $distanceMeters,
+                            in: 100...100_000,
+                            step: 100
                         )
-                        .padding(.vertical, 8)
                     }
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+                }
 
-                    Section("训练草稿") {
-                        TextField("计划名称", text: $name)
-                        Picker("训练类型", selection: $activity) {
-                            ForEach(WorkoutPlanDraft.Activity.allCases, id: \.self) { activity in
-                                Text(activity.displayName).tag(activity)
-                            }
-                        }
-                        Picker("地点", selection: $location) {
-                            ForEach(WorkoutPlanDraft.Location.allCases, id: \.self) { location in
-                                Text(location.displayName).tag(location)
-                            }
-                        }
-                    }
+                Section("安排时间") {
+                    DatePicker("开始时间", selection: $scheduledAt, displayedComponents: [.date, .hourAndMinute])
+                    Label(
+                        "只有确认本机计划后才会请求 WorkoutKit 授权并安排到 Apple Watch。",
+                        systemImage: "hand.raised.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
 
-                    Section("目标") {
-                        Toggle("设定时长", isOn: $usesTimeGoal)
-                        if usesTimeGoal {
-                            Stepper("\(durationMinutes) 分钟", value: $durationMinutes, in: 1...720, step: 5)
-                        }
-                    }
-
-                    Section("力量组次（应用内数据）") {
-                        ForEach($strengthSets) { $set in
-                            VStack(alignment: .leading, spacing: 8) {
-                                TextField("动作", text: $set.exerciseName)
-                                Menu("从离线目录选择") {
-                                    ForEach(strengthExercises) { exercise in
-                                        Button(exercise.name) {
-                                            set.exerciseID = exercise.id
-                                            set.exerciseName = exercise.aliases.first ?? exercise.name
-                                        }
-                                    }
+                Section("已确认的计划") {
+                    if confirmedPlans.isEmpty {
+                        Text("确认后的计划会显示在这里。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(confirmedPlans, id: \.actionID) { entry in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(entry.draft.name).font(.subheadline.weight(.semibold))
+                                Text(entry.draft.scheduledAt ?? Date(), format: .dateTime.month().day().hour().minute())
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Label(queueStatus(entry), systemImage: entry.state == .scheduled ? "checkmark.circle.fill" : "clock")
+                                    .font(.caption)
+                                    .foregroundStyle(entry.state == .scheduled ? OrbitPalette.green : OrbitPalette.gold)
+                                if let lastError = entry.lastError {
+                                    Text(lastError)
+                                        .font(.caption2)
+                                        .foregroundStyle(OrbitPalette.coral)
                                 }
-                                Stepper("\(set.setCount) 组 × \(set.repetitions) 次", value: $set.setCount, in: 1...100)
-                                Stepper("每组 \(set.repetitions) 次", value: $set.repetitions, in: 1...1_000)
+                                if entry.state == .queued || entry.state == .retryable {
+                                    Button("继续同步到 WorkoutKit") {
+                                        Task { await schedule(actionID: entry.actionID) }
+                                    }
+                                    .disabled(isScheduling)
+                                }
                             }
-                        }
-                        .onDelete { strengthSets.remove(atOffsets: $0) }
-
-                        Button("添加动作", systemImage: "plus") {
-                            strengthSets.append(.init(exerciseName: "", setCount: 3, repetitions: 10))
-                        }
-                        if let catalogVersion {
-                            Text("动作目录：\(catalogVersion)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            .padding(.vertical, 4)
                         }
                     }
+                }
 
-                    Section("同步到 Apple Watch") {
-                        Toggle("安排到指定时间", isOn: $shouldSchedule)
-                        if shouldSchedule {
-                            DatePicker("开始时间", selection: $scheduledAt, displayedComponents: [.date, .hourAndMinute])
-                        }
-                        Label(
-                            "确认前只编辑本地草稿；确认后才会调用 WorkoutKit。力量组次保留为 Densoso 领域数据。",
-                            systemImage: "hand.raised.fill"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if let resultMessage {
+                    Section("状态") {
+                        Text(resultMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-
-                    if let resultMessage {
-                        Section("状态") {
-                            Label(resultMessage, systemImage: "info.circle")
-                                .font(.caption)
-                        }
-                    }
+                }
             }
             .orbitScrollBackground()
-            .navigationTitle("计划")
+            .navigationTitle("训练计划")
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear {
-                loadExerciseCatalog()
+            .task {
                 if let incomingDraft = appState.pendingWorkoutPlan {
                     apply(incomingDraft)
                     appState.pendingWorkoutPlan = nil
                 }
+                refreshConfirmedPlans()
             }
             .toolbar {
                 Button {
@@ -117,66 +145,101 @@ struct WorkoutPlanScreen: View {
                 } label: {
                     Image(systemName: "checkmark")
                 }
+                .disabled(isScheduling)
                 .accessibilityLabel("确认训练计划")
             }
-            .confirmationDialog("确认同步训练计划？", isPresented: $isPresentingConfirmation) {
-                Button("确认并继续", role: .none) {
-                    Task { await confirm() }
-                }
+            .confirmationDialog("确认此训练计划？", isPresented: $isPresentingConfirmation) {
+                Button("确认并安排") { Task { await confirmAndSchedule() } }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("系统仅会在确认后打开或安排 Apple Watch Workout 计划。")
+                Text("确认前不会调用 WorkoutKit；确认后会先在本机留下可重试的计划记录。")
             }
         }
     }
 
     private var draft: WorkoutPlanDraft {
-        WorkoutPlanDraft(
+        let goal: WorkoutPlanDraft.Goal
+        switch goalKind {
+        case .open: goal = .open
+        case .time: goal = .timeMinutes(durationMinutes)
+        case .distance: goal = .distanceMeters(distanceMeters)
+        }
+        return WorkoutPlanDraft(
             name: name,
             activity: activity,
             location: location,
-            goal: usesTimeGoal ? .timeMinutes(durationMinutes) : .open,
-            scheduledAt: shouldSchedule ? scheduledAt : nil,
-            strengthSets: strengthSets
+            goal: goal,
+            scheduledAt: scheduledAt
         )
     }
 
-    private func confirm() async {
+    private func confirmAndSchedule() async {
+        guard !isScheduling else { return }
+        isScheduling = true
+        defer { isScheduling = false }
         do {
-            try await schedulingService.previewOrSchedule(draft)
-            resultMessage = "已请求系统安排该训练计划。"
+            try WorkoutPlanCompiler().validate(draft)
+            let action = try await dependencies.confirmationCoordinator.stage(
+                payload: .workoutPlan(draft),
+                clientRequestID: UUID()
+            )
+            _ = try await dependencies.confirmationCoordinator.confirm(id: action.id)
+            try? await dependencies.agentSession.reloadPendingActions()
+            refreshConfirmedPlans()
+            do {
+                try await dependencies.workoutPlanSchedulingService.scheduleConfirmedPlan(actionID: action.id)
+                resultMessage = "计划已确认，并已交给 WorkoutKit 安排。"
+            } catch {
+                resultMessage = "计划已在本机确认；系统安排待处理，可在下方重试：\(error.localizedDescription)"
+            }
+            dependencies.watchConnectivityCoordinator.refreshApplicationContext()
+            refreshConfirmedPlans()
         } catch {
             resultMessage = error.localizedDescription
         }
     }
 
-    private func apply(_ draft: WorkoutPlanDraft) {
-        name = draft.name
-        activity = draft.activity
-        location = draft.location
-        if case .timeMinutes(let minutes) = draft.goal {
-            usesTimeGoal = true
-            durationMinutes = minutes
-        } else {
-            usesTimeGoal = false
-        }
-        shouldSchedule = draft.scheduledAt != nil
-        scheduledAt = draft.scheduledAt ?? scheduledAt
-        strengthSets = draft.strengthSets
-    }
-
-    private var strengthExercises: [ExerciseCatalog.Entry] {
-        Array(catalogEntries.filter { $0.category == "strength" }.prefix(12))
-    }
-
-    private func loadExerciseCatalog() {
-        guard catalogEntries.isEmpty else { return }
+    private func schedule(actionID: UUID) async {
+        guard !isScheduling else { return }
+        isScheduling = true
+        defer { isScheduling = false }
         do {
-            let catalog = try ExerciseCatalog.loadBundled()
-            catalogEntries = catalog.entries
-            catalogVersion = catalog.catalogVersion
+            try await dependencies.workoutPlanSchedulingService.scheduleConfirmedPlan(actionID: actionID)
+            resultMessage = "WorkoutKit 计划状态已更新。"
         } catch {
             resultMessage = error.localizedDescription
+        }
+        dependencies.watchConnectivityCoordinator.refreshApplicationContext()
+        refreshConfirmedPlans()
+    }
+
+    private func refreshConfirmedPlans() {
+        confirmedPlans = (try? dependencies.workoutPlanSchedulingService.confirmedPlans()) ?? []
+    }
+
+    private func apply(_ incomingDraft: WorkoutPlanDraft) {
+        name = incomingDraft.name
+        activity = incomingDraft.activity.isWorkoutKitSupported ? incomingDraft.activity : .walking
+        location = incomingDraft.location
+        scheduledAt = incomingDraft.scheduledAt ?? scheduledAt
+        switch incomingDraft.goal {
+        case .open:
+            goalKind = .open
+        case .timeMinutes(let minutes):
+            goalKind = .time
+            durationMinutes = min(max(minutes, 1), 720)
+        case .distanceMeters(let meters):
+            goalKind = .distance
+            distanceMeters = min(max(meters, 100), 100_000)
+        }
+    }
+
+    private func queueStatus(_ entry: ConfirmedWorkoutPlanEntry) -> String {
+        switch entry.state {
+        case .queued: "已本机确认，等待同步"
+        case .retryable: "安排未完成，可重试"
+        case .scheduled: "已安排"
+        case .terminal: "此计划无法安排，请重新创建"
         }
     }
 }

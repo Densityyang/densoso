@@ -5,6 +5,7 @@ struct HistoryScreen: View {
     private enum RecordKind: String, CaseIterable, Identifiable {
         case meals = "饮食"
         case workouts = "运动"
+        case weights = "体重"
 
         var id: Self { self }
     }
@@ -19,6 +20,9 @@ struct HistoryScreen: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \MealRecord.date, order: .reverse) private var meals: [MealRecord]
     @Query(sort: \WorkoutRecord.date, order: .reverse) private var workouts: [WorkoutRecord]
+    @Query(sort: \WeightRecord.measuredAt, order: .reverse) private var weights: [WeightRecord]
+    @Query(sort: \HealthSyncOutboxEntry.createdAt, order: .reverse) private var healthOutbox: [HealthSyncOutboxEntry]
+    @Query(sort: \HealthKitImportCursor.updatedAt, order: .reverse) private var healthCursors: [HealthKitImportCursor]
 
     @State private var selectedKind: RecordKind = .meals
     @State private var dateScope: DateScope = .all
@@ -31,7 +35,7 @@ struct HistoryScreen: View {
                     OrbitScreenHeader(
                         eyebrow: "Records stay inspectable",
                         title: "按时间回看每一次确认。",
-                        subtitle: "餐食和运动分别浏览；筛选只改变显示范围，不修改记录。"
+                        subtitle: "餐食、体重和 HealthKit 运动都保留来源与同步状态。"
                     )
                     .padding(.vertical, 8)
                 }
@@ -58,15 +62,33 @@ struct HistoryScreen: View {
                     }
                 }
 
+                Section("HealthKit 同步") {
+                    let pendingCount = healthOutbox.filter { ["pending", "sending", "retryable"].contains($0.state) }.count
+                    let failedCount = healthOutbox.filter { $0.state == "terminal" }.count
+                    let lastSync = healthCursors.compactMap(\.lastSuccessfulAt).max()
+                    LabeledContent("待处理写入", value: "\(pendingCount)")
+                    LabeledContent("需处理失败", value: "\(failedCount)")
+                    LabeledContent("最近导入") {
+                        if let lastSync {
+                            Text(lastSync, format: .dateTime.month().day().hour().minute())
+                        } else {
+                            Text("尚无成功导入")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
                 if selectedKind == .meals {
                     mealSection
-                } else {
+                } else if selectedKind == .workouts {
                     workoutSection
+                } else {
+                    weightSection
                 }
             }
             .listStyle(.plain)
             .orbitScrollBackground()
-            .navigationTitle("历史")
+            .navigationTitle("记录")
             .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -152,6 +174,41 @@ struct HistoryScreen: View {
         }
     }
 
+    @ViewBuilder
+    private var weightSection: some View {
+        Section("体重记录") {
+            if filteredWeights.isEmpty {
+                ContentUnavailableView(
+                    "没有手工体重记录",
+                    systemImage: "scalemass",
+                    description: Text(dateScope == .day ? "所选日期没有记录。" : "已确认的手工体重会出现在这里。")
+                )
+                .listRowBackground(Color.clear)
+            } else {
+                ForEach(filteredWeights) { weight in
+                    HStack(spacing: 12) {
+                        Image(systemName: "scalemass.fill")
+                            .font(.title2)
+                            .foregroundStyle(OrbitPalette.blue)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(weight.measuredAt, format: .dateTime.month().day().hour().minute())
+                                .font(.headline)
+                            Text(weight.source == "healthKit" ? "Apple Health 导入" : "手工确认")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("\(weight.kilograms.formatted(.number.precision(.fractionLength(1)))) kg")
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                    }
+                    .padding(.vertical, 6)
+                }
+                .onDelete(perform: deleteWeights)
+            }
+        }
+    }
+
     private var filteredMeals: [MealRecord] {
         guard dateScope == .day else { return meals }
         return meals.filter { Calendar.current.isDate($0.date, inSameDayAs: selectedDate) }
@@ -160,6 +217,11 @@ struct HistoryScreen: View {
     private var filteredWorkouts: [WorkoutRecord] {
         guard dateScope == .day else { return workouts }
         return workouts.filter { Calendar.current.isDate($0.date, inSameDayAs: selectedDate) }
+    }
+
+    private var filteredWeights: [WeightRecord] {
+        guard dateScope == .day else { return weights }
+        return weights.filter { Calendar.current.isDate($0.measuredAt, inSameDayAs: selectedDate) }
     }
 
     private func mealTypeLabel(_ type: String) -> String {
@@ -185,9 +247,22 @@ struct HistoryScreen: View {
             try? HealthRepository(modelContext: modelContext).delete(visibleWorkouts[index])
         }
     }
+
+    private func deleteWeights(offsets: IndexSet) {
+        let visibleWeights = filteredWeights
+        for index in offsets {
+            try? HealthRepository(modelContext: modelContext).delete(visibleWeights[index])
+        }
+    }
 }
 
 #Preview {
     HistoryScreen()
-        .modelContainer(for: [MealRecord.self, DishEntry.self, WorkoutRecord.self], inMemory: true)
+        .modelContainer(
+            for: [
+                MealRecord.self, DishEntry.self, WorkoutRecord.self, WeightRecord.self,
+                HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
+            ],
+            inMemory: true
+        )
 }
