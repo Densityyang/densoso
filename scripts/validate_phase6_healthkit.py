@@ -150,6 +150,7 @@ def main() -> int:
         "DensosoTests/HealthKitSyncCoordinatorTests.swift",
         (
             "testObserverCompletionRunsAfterAnchoredWorkoutIsCommitted",
+            "self.context.fetch(FetchDescriptor<WorkoutRecord>())",
             "refreshSawCommittedWorkout",
             "testMeasuredDailyActivityAggregateFeedsProjectionWithoutWorkoutEnergy",
             "testEmptyAmbiguousWorkoutReadAdvancesCursorWithoutClaimingReadDenial",

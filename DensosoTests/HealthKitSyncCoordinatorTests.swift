@@ -50,7 +50,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         var refreshedBriefDay: Date?
         coordinator.onObserverSyncCompleted = {
             observerRefreshCount += 1
-            refreshSawCommittedWorkout = ((try? context.fetch(FetchDescriptor<WorkoutRecord>())) ?? [])
+            refreshSawCommittedWorkout = ((try? self.context.fetch(FetchDescriptor<WorkoutRecord>())) ?? [])
                 .contains(where: { $0.healthKitUUID == workoutID })
             _ = try? intelligence.refresh(asOf: date)
             refreshedBriefDay = intelligence.dailyBrief?.dayStart
