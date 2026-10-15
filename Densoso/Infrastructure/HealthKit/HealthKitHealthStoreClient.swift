@@ -376,14 +376,14 @@ final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient,
     }
 
     private static func sleepCategoryName(_ value: Int) -> String {
-        if value == HKCategoryValueSleepAnalysis.inBed.rawValue { return \"inBed\" }
-        if value == HKCategoryValueSleepAnalysis.awake.rawValue { return \"awake\" }
-        if value == HKCategoryValueSleepAnalysis.asleepCore.rawValue { return \"asleepCore\" }
-        if value == HKCategoryValueSleepAnalysis.asleepDeep.rawValue { return \"asleepDeep\" }
-        if value == HKCategoryValueSleepAnalysis.asleepREM.rawValue { return \"asleepREM\" }
-        if value == HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue { return \"asleepUnspecified\" }
-        if value == HKCategoryValueSleepAnalysis.asleep.rawValue { return \"asleepUnspecified\" }
-        return \"unknown\"
+        if value == HKCategoryValueSleepAnalysis.inBed.rawValue { return "inBed" }
+        if value == HKCategoryValueSleepAnalysis.awake.rawValue { return "awake" }
+        if value == HKCategoryValueSleepAnalysis.asleepCore.rawValue { return "asleepCore" }
+        if value == HKCategoryValueSleepAnalysis.asleepDeep.rawValue { return "asleepDeep" }
+        if value == HKCategoryValueSleepAnalysis.asleepREM.rawValue { return "asleepREM" }
+        if value == HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue { return "asleepUnspecified" }
+        if value == HKCategoryValueSleepAnalysis.asleep.rawValue { return "asleepUnspecified" }
+        return "unknown"
     }
 
     private static func workoutSnapshot(from workout: HKWorkout) -> WorkoutSnapshot? {

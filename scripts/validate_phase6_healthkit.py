@@ -69,6 +69,13 @@ def main() -> int:
     )
     if "workoutRoute" in health_store or "HKSeriesType" in health_store:
         errors.append("HealthKit adapter must not query workout routes")
+    sleep_category = health_store.partition("private static func sleepCategoryName")[2].partition(
+        "\n    private static func"
+    )[0]
+    if not sleep_category:
+        errors.append("HealthKit sleep category names must remain explicitly mapped")
+    elif r'\"' in sleep_category:
+        errors.append("HealthKit sleep category return strings must not contain escaped source quotes")
 
     repository = require_text(
         "Densoso/Services/HealthRepository.swift",
