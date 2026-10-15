@@ -548,7 +548,6 @@ public struct HealthIntelligenceEngine: Sendable {
         func sourceKey(_ sample: SleepSampleInterval) -> String {
             if let bundle = sample.sourceBundleIdentifier, !bundle.isEmpty { return bundle }
             if let model = sample.deviceModel, !model.isEmpty { return "device:\(model)" }
-            if let name = sample.deviceName, !name.isEmpty { return "device:\(name)" }
             return "unknown"
         }
         func clip(_ samples: [SleepSampleInterval]) -> [(start: Date, end: Date, stage: SleepStage)] {
