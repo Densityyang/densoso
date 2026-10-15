@@ -288,7 +288,7 @@ final class ExportServiceTests: XCTestCase {
         let snapshot = DailyHealthSnapshot(
             dayStart: day,
             timezoneIdentifier: Calendar.current.timeZone.identifier,
-            energyIntakeKcal: EstimateRange(low: 450, likely: 500, high: 600),
+            energyIntakeKcal: try EstimateRange(low: 450, likely: 500, high: 600),
             stepCount: 7_000,
             algorithmVersion: "v3"
         )

@@ -71,6 +71,7 @@ def main() -> int:
             "testLegacyV3BackupStillRestoresMealEvidenceAfterHealthDataWasAdded",
             "testV4BackupRestoresHealthDataGoalsAndReportsWithoutSyncQueueState",
             "XCTAssertEqual(exported.formatVersion, 4)",
+            "energyIntakeKcal: try EstimateRange(low: 450, likely: 500, high: 600)",
         ),
         errors,
     )
