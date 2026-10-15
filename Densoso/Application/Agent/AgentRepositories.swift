@@ -31,5 +31,7 @@ protocol ConversationRepository: Sendable {
         requestID: UUID?
     ) async throws
     func messageData(conversationID: UUID) async throws -> [Data]
+    func containsRequestID(_ requestID: UUID, conversationID: UUID) async throws -> Bool
+    func containsCompletedResponse(requestID: UUID, conversationID: UUID) async throws -> Bool
     func reset(conversationID: UUID) async throws
 }

@@ -3,6 +3,27 @@ import XCTest
 
 @MainActor
 final class DeepSeekProviderContractTests: XCTestCase {
+    func testMissingKeyFailsBeforeNetworkOrUserContentIsSent() async throws {
+        let transport = ScriptedProviderHTTPTransport(steps: [])
+        let clock = TestProviderRetryClock()
+        let provider = DeepSeekProvider(
+            credentialSource: TestCredentialSource(values: [:]),
+            transport: transport,
+            clock: clock,
+            logSink: RecordingProviderLogSink(),
+            jitter: { _ in 0 }
+        )
+
+        do {
+            _ = try await collect(provider.stream(request(deadline: clock.now().addingTimeInterval(45))))
+            XCTFail("A missing API key must fail locally")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .configurationMissing(provider: .deepSeek))
+        }
+        let recorded = await transport.recordedRequests()
+        XCTAssertTrue(recorded.isEmpty)
+    }
+
     func testAnthropicRequestAndResponseContract() async throws {
         let transport = ScriptedProviderHTTPTransport(
             steps: [

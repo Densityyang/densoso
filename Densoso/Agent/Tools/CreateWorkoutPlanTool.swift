@@ -10,33 +10,17 @@ struct CreateWorkoutPlanTool: ConfirmationRequiredTool {
             properties: [
                 "name": .string(minimumLength: 1, maximumLength: 120),
                 "activity": .string(
-                    allowedValues: WorkoutPlanDraft.Activity.allCases.map(\.rawValue)
+                    allowedValues: WorkoutPlanDraft.Activity.supportedCases.map(\.rawValue)
                 ),
                 "location": .string(
                     allowedValues: WorkoutPlanDraft.Location.allCases.map(\.rawValue)
                 ),
                 "durationMinutes": .anyOf([.integer(minimum: 1, maximum: 720), .null]),
-                "scheduledAt": .anyOf([.string(format: "date-time"), .null]),
-                "strengthSets": .array(
-                    items: .object(
-                        properties: [
-                            "exerciseID": .anyOf([.string(maximumLength: 120), .null]),
-                            "exerciseName": .string(minimumLength: 1, maximumLength: 120),
-                            "setCount": .integer(minimum: 1, maximum: 100),
-                            "repetitions": .integer(minimum: 1, maximum: 1_000),
-                            "loadKilograms": .anyOf([.number(minimum: 0, maximum: 1_000), .null]),
-                        ],
-                        required: [
-                            "exerciseID", "exerciseName", "setCount", "repetitions", "loadKilograms",
-                        ],
-                        additionalProperties: false
-                    ),
-                    minimumItems: 0,
-                    maximumItems: 30
-                ),
+                "distanceMeters": .anyOf([.number(minimum: 100, maximum: 100_000), .null]),
+                "scheduledAt": .string(format: "date-time"),
             ],
             required: [
-                "name", "activity", "location", "durationMinutes", "scheduledAt", "strengthSets",
+                "name", "activity", "location", "durationMinutes", "distanceMeters", "scheduledAt",
             ]
         )
     }
@@ -46,29 +30,20 @@ struct CreateWorkoutPlanTool: ConfirmationRequiredTool {
               let arguments = try? JSONDecoder().decode(Arguments.self, from: data),
               let activity = WorkoutPlanDraft.Activity(rawValue: arguments.activity),
               let location = WorkoutPlanDraft.Location(rawValue: arguments.location),
+              !(arguments.durationMinutes != nil && arguments.distanceMeters != nil),
               !arguments.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DraftError.invalidWorkoutPlan
         }
-        let scheduledAt: Date?
-        if let raw = arguments.scheduledAt {
-            guard let parsed = ISO8601DateFormatter().date(from: raw) else {
-                throw DraftError.invalidWorkoutPlan
-            }
-            scheduledAt = parsed
-        } else {
-            scheduledAt = nil
+        guard let scheduledAt = ISO8601DateFormatter().date(from: arguments.scheduledAt) else {
+            throw DraftError.invalidWorkoutPlan
         }
-        let goal: WorkoutPlanDraft.Goal = arguments.durationMinutes.map {
-            .timeMinutes($0)
-        } ?? .open
-        let strengthSets = arguments.strengthSets.map {
-            WorkoutPlanDraft.StrengthSet(
-                exerciseID: $0.exerciseID,
-                exerciseName: $0.exerciseName,
-                setCount: $0.setCount,
-                repetitions: $0.repetitions,
-                loadKilograms: $0.loadKilograms
-            )
+        let goal: WorkoutPlanDraft.Goal
+        if let duration = arguments.durationMinutes {
+            goal = .timeMinutes(duration)
+        } else if let distance = arguments.distanceMeters {
+            goal = .distanceMeters(distance)
+        } else {
+            goal = .open
         }
         return .workoutPlan(
             WorkoutPlanDraft(
@@ -76,8 +51,7 @@ struct CreateWorkoutPlanTool: ConfirmationRequiredTool {
                 activity: activity,
                 location: location,
                 goal: goal,
-                scheduledAt: scheduledAt,
-                strengthSets: strengthSets
+                scheduledAt: scheduledAt
             )
         )
     }
@@ -87,15 +61,7 @@ struct CreateWorkoutPlanTool: ConfirmationRequiredTool {
         let activity: String
         let location: String
         let durationMinutes: Int?
-        let scheduledAt: String?
-        let strengthSets: [StrengthSet]
-
-        struct StrengthSet: Decodable {
-            let exerciseID: String?
-            let exerciseName: String
-            let setCount: Int
-            let repetitions: Int
-            let loadKilograms: Double?
-        }
+        let distanceMeters: Double?
+        let scheduledAt: String
     }
 }

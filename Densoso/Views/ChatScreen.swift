@@ -12,6 +12,12 @@ struct ChatScreen: View {
     @State private var voiceDraftSummary: String?
     @State private var didHydratePersistedMessages = false
     @State private var showMealCapture = false
+    @State private var pendingWatchMessageID: UUID?
+    @State private var claimedWatchMessageIDs = Set<UUID>()
+    @State private var displayedWatchTranscriptIDs = Set<UUID>()
+    @State private var pendingWatchOriginalText: String?
+    @State private var pendingWatchAttemptText: String?
+    @State private var pendingWatchAttemptRequestID: UUID?
 
     var body: some View {
         NavigationStack {
@@ -19,7 +25,7 @@ struct ChatScreen: View {
                 conversation
                 composer
             }
-            .navigationTitle("对话")
+            .navigationTitle("今天")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -27,8 +33,12 @@ struct ChatScreen: View {
                 }
             }
             .onAppear(perform: prepareInitialState)
+            .task { restorePendingWatchTranscript() }
             .onChange(of: dependencies.agentSession.restoredVisibleMessages.count) { _, _ in
                 hydratePersistedMessagesIfNeeded()
+            }
+            .onChange(of: dependencies.watchConnectivityCoordinator.pendingTranscriptRevision) { _, _ in
+                restorePendingWatchTranscript()
             }
             .onChange(of: dependencies.speechService.transcribedText) { _, newValue in
                 inputText = newValue
@@ -47,6 +57,8 @@ struct ChatScreen: View {
                         subtitle: "告诉我吃了什么、练了什么；涉及写入时会先生成可检查的草稿。"
                     )
                     .padding(.bottom, 4)
+
+                    DailyHealthBriefCard(brief: dependencies.healthIntelligenceService.dailyBrief)
 
                     promptChips
 
@@ -72,6 +84,7 @@ struct ChatScreen: View {
                                 Task {
                                     do {
                                         try await dependencies.agentSession.rejectPendingAction(id: action.id)
+                                        dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                                         addMessage(text: "已拒绝该记录草稿，未保存任何健康数据。", isUser: false)
                                     } catch {
                                         addMessage(text: "无法拒绝草稿：\(error.localizedDescription)", isUser: false)
@@ -206,6 +219,7 @@ struct ChatScreen: View {
     }
 
     private func prepareInitialState() {
+        _ = try? dependencies.healthIntelligenceService.refresh()
         hydratePersistedMessagesIfNeeded()
         if messages.isEmpty {
             addMessage(text: "你好，我是 densoso。使用语音或文字告诉我你吃了什么、练了什么。", isUser: false)
@@ -261,19 +275,65 @@ struct ChatScreen: View {
     private func send(text: String) async {
         let userText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !userText.isEmpty else { return }
-        let route = VoiceCommandRouter().route(
-            VoiceCommandEnvelope(text: userText, source: inputSource)
-        )
-        inputText = ""
-        inputSource = .manualText
-        voiceDraftSummary = "正在处理\(route.displayName)草稿；涉及写入时仍需在确认卡片中确认。"
-        addMessage(text: userText, isUser: true)
-
+        guard !isProcessing else { return }
         isProcessing = true
         appState.isAgentProcessing = true
         defer {
             isProcessing = false
             appState.isAgentProcessing = false
+        }
+        let sourceForRequest = inputSource
+        let watchMessageID = sourceForRequest == .watchDictation ? pendingWatchMessageID : nil
+        let agentRequestID: UUID?
+        if let watchMessageID {
+            if userText == pendingWatchOriginalText {
+                agentRequestID = watchMessageID
+            } else {
+                if pendingWatchAttemptText != userText {
+                    pendingWatchAttemptText = userText
+                    pendingWatchAttemptRequestID = UUID()
+                }
+                agentRequestID = pendingWatchAttemptRequestID
+            }
+        } else {
+            agentRequestID = nil
+        }
+        var watchTranscriptWasDurablyHandled = false
+        let route = VoiceCommandRouter().route(
+            VoiceCommandEnvelope(text: userText, source: sourceForRequest)
+        )
+        inputText = ""
+        inputSource = .manualText
+        defer {
+            if let watchMessageID {
+                if watchTranscriptWasDurablyHandled {
+                    try? dependencies.watchConnectivityCoordinator.markTranscriptProcessed(watchMessageID)
+                    claimedWatchMessageIDs.remove(watchMessageID)
+                    pendingWatchMessageID = nil
+                    pendingWatchOriginalText = nil
+                    pendingWatchAttemptText = nil
+                    pendingWatchAttemptRequestID = nil
+                } else {
+                    inputText = userText
+                    inputSource = .watchDictation
+                    voiceDraftSummary = "尚未生成可恢复的云端草稿；Watch 转写仍保存在本机，可检查后重试。"
+                }
+            }
+            dependencies.watchConnectivityCoordinator.refreshApplicationContext()
+        }
+        voiceDraftSummary = "正在处理\(route.displayName)草稿；涉及写入时仍需在确认卡片中确认。"
+        if let watchMessageID {
+            let requestWasPersisted: Bool
+            if let agentRequestID {
+                requestWasPersisted = await dependencies.agentSession.hasPersistedRequestHistory(for: agentRequestID)
+            } else {
+                requestWasPersisted = false
+            }
+            if displayedWatchTranscriptIDs.insert(watchMessageID).inserted && !requestWasPersisted {
+                addMessage(text: userText, isUser: true)
+            }
+        } else {
+            addMessage(text: userText, isUser: true)
         }
 
         let path = IntelligenceRoutingPolicy().path(
@@ -293,7 +353,8 @@ struct ChatScreen: View {
                     )
                 }
             case .cloudDeepSeek, .cloudQwen:
-                let response = try await dependencies.agentSession.send(userText: userText)
+                let response = try await dependencies.agentSession.send(userText: userText, requestID: agentRequestID)
+                watchTranscriptWasDurablyHandled = watchMessageID != nil
                 addMessage(text: response.text, isUser: false)
             case .manual:
                 addMessage(text: "本地智能当前不可用；你的输入尚未保存。可在设置中选择 DeepSeek 云端处理，或继续手动编辑。", isUser: false)
@@ -311,10 +372,31 @@ struct ChatScreen: View {
         Task {
             do {
                 let message = try await dependencies.agentSession.confirmPendingAction(id: action.id)
+                _ = try? dependencies.healthIntelligenceService.refresh()
+                dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                 addMessage(text: message, isUser: false)
             } catch {
                 addMessage(text: "未能保存：\(error.localizedDescription)", isUser: false)
             }
+        }
+    }
+
+    private func restorePendingWatchTranscript() {
+        guard inputText.isEmpty, pendingWatchMessageID == nil else { return }
+        do {
+            guard let pending = try dependencies.watchConnectivityCoordinator.nextPendingTranscript(
+                excluding: claimedWatchMessageIDs
+            ) else { return }
+            pendingWatchMessageID = pending.messageID
+            claimedWatchMessageIDs.insert(pending.messageID)
+            pendingWatchOriginalText = pending.text
+            pendingWatchAttemptText = nil
+            pendingWatchAttemptRequestID = nil
+            inputText = pending.text
+            inputSource = .watchDictation
+            voiceDraftSummary = "已收到 Watch 系统听写；检查或编辑后发送，涉及写入时仍需确认。"
+        } catch {
+            voiceDraftSummary = "无法读取 Watch 草稿：\(error.localizedDescription)"
         }
     }
 

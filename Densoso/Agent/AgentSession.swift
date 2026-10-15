@@ -72,6 +72,8 @@ final class AgentSession {
     private let readRepository: any AgentReadRepository
     private let conversationRepository: any ConversationRepository
     private let confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)?
+    private let healthContextSummaryProvider: (@MainActor () -> HealthContextSummary?)?
+    private let confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)?
     private let conversationID: UUID
     private let budgetFactory: @Sendable () -> AgentBudget
 
@@ -101,7 +103,9 @@ final class AgentSession {
         conversationRepository: any ConversationRepository,
         conversationID: UUID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
-        confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)? = nil
+        confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)? = nil,
+        healthContextSummaryProvider: (@MainActor () -> HealthContextSummary?)? = nil,
+        confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)? = nil
     ) {
         self.providerSelector = providerSelector
         self.intelligencePreferences = intelligencePreferences
@@ -113,6 +117,8 @@ final class AgentSession {
         self.readRepository = readRepository
         self.conversationRepository = conversationRepository
         self.confirmedFoodHistory = confirmedFoodHistory
+        self.healthContextSummaryProvider = healthContextSummaryProvider
+        self.confirmedWorkoutPlanHandler = confirmedWorkoutPlanHandler
         self.conversationID = conversationID
         self.budgetFactory = budgetFactory
         self.systemPrompt = AgentSystemPrompt()
@@ -134,8 +140,12 @@ final class AgentSession {
         return (try? await confirmedFoodHistory.confirmedFoodIDs(matching: label)) ?? []
     }
 
-    func send(userText: String) async throws -> AgentResponse {
-        let request = try startRequest(userText: userText)
+    func hasPersistedRequestHistory(for requestID: UUID) async -> Bool {
+        (try? await conversationRepository.containsRequestID(requestID, conversationID: conversationID)) ?? false
+    }
+
+    func send(userText: String, requestID: UUID? = nil) async throws -> AgentResponse {
+        let request = try startRequest(userText: userText, requestID: requestID)
         return try await awaitRequest(request.task, requestID: request.id)
     }
 
@@ -153,11 +163,11 @@ final class AgentSession {
 
     /// Starts one request and preserves every typed Agent event in order.
     /// Cancelling the consumer cancels the full Agent/Provider request chain.
-    func sendEvents(userText: String) -> AsyncThrowingStream<AgentEvent, Error> {
+    func sendEvents(userText: String, requestID: UUID? = nil) -> AsyncThrowingStream<AgentEvent, Error> {
         return AsyncThrowingStream { continuation in
             let request: (id: UUID, task: Task<AgentResponse, Error>)
             do {
-                request = try startRequest(userText: userText, observer: continuation)
+                request = try startRequest(userText: userText, requestID: requestID, observer: continuation)
             } catch {
                 continuation.finish(throwing: error)
                 return
@@ -187,10 +197,11 @@ final class AgentSession {
 
     private func startRequest(
         userText: String,
+        requestID requestedID: UUID? = nil,
         observer: AsyncThrowingStream<AgentEvent, Error>.Continuation? = nil
     ) throws -> (id: UUID, task: Task<AgentResponse, Error>) {
         guard activeAgentTask == nil else { throw AgentError.requestAlreadyRunning }
-        let requestID = UUID()
+        let requestID = requestedID ?? UUID()
         let task = Task<AgentResponse, Error> {
             try await run(userText: userText, requestID: requestID)
         }
@@ -219,7 +230,28 @@ final class AgentSession {
         emit(.accepted(requestID: requestID))
         do {
             try Task.checkCancellation()
-            try await append(ModelMessage(role: .user, text: userText), requestID: requestID)
+            if try await conversationRepository.containsRequestID(requestID, conversationID: conversationID) {
+                if try await conversationRepository.containsCompletedResponse(
+                    requestID: requestID,
+                    conversationID: conversationID
+                ) {
+                    pendingActions = try await confirmationCoordinator.activeActions()
+                    let response = AgentResponse(
+                        text: "这条请求已在本机完成，不会因 Watch 重放而重复处理；请检查已有消息和待确认草稿。",
+                        toolCallsCount: 0,
+                        providerRoundsCount: 0
+                    )
+                    emit(.completed(response))
+                    return response
+                }
+                // A previously interrupted request has durable partial history. Resume it
+                // with the same request ID without appending another copy of the transcript.
+                let persisted = try await conversationRepository.messageData(conversationID: conversationID)
+                conversationHistory = persisted.map(Self.decodePersistedMessage)
+                restoredVisibleMessages = conversationHistory.compactMap(Self.visibleMessage)
+            } else {
+                try await append(ModelMessage(role: .user, text: userText), requestID: requestID)
+            }
 
             let provider = try providerSelector.provider(for: intelligencePreferences.mode)
             guard provider.descriptor.capabilities.contains(.text) else {
@@ -237,6 +269,12 @@ final class AgentSession {
                     dataClass: .healthText
                 )
             }
+            let healthSummary = healthContextSummaryProvider?()
+            let requestSystemPrompt = HealthContextPromptBuilder.prompt(
+                basePrompt: systemPrompt.text,
+                userText: userText,
+                summary: healthSummary
+            )
             var tracker = AgentBudgetTracker(budget: budgetFactory())
 
             while true {
@@ -250,7 +288,7 @@ final class AgentSession {
                 let request = ModelRequest(
                     requestID: requestID,
                     conversationID: conversationID,
-                    systemPrompt: systemPrompt.text,
+                    systemPrompt: requestSystemPrompt,
                     messages: conversationHistory,
                     tools: registry.toolDefinitions,
                     maxOutputTokens: 2_048,
@@ -363,6 +401,7 @@ final class AgentSession {
     }
 
     func confirmPendingAction(id: UUID) async throws -> String {
+        let pendingPlan = pendingActions.first(where: { $0.id == id })
         let receipt = try await confirmationCoordinator.confirm(id: id)
         pendingActions = try await confirmationCoordinator.activeActions()
         switch receipt.actionType {
@@ -371,7 +410,18 @@ final class AgentSession {
         case .weight:
             return "体重已保存到 Densoso，Apple 健康同步待处理。"
         case .workoutPlan:
-            throw ConfirmationError.unsupportedAction
+            guard let pendingPlan, case .workoutPlan(_) = pendingPlan.payload else {
+                return "训练计划已在本机确认；同步状态可在计划页查看。"
+            }
+            guard let confirmedWorkoutPlanHandler else {
+                return "训练计划已在本机确认；请到计划页完成 WorkoutKit 安排。"
+            }
+            do {
+                try await confirmedWorkoutPlanHandler(id)
+                return "训练计划已确认，并已交给 WorkoutKit 安排。"
+            } catch {
+                return "训练计划已在本机确认，但同步尚未完成：\(error.localizedDescription)。可在趋势页的计划入口重试。"
+            }
         }
     }
 

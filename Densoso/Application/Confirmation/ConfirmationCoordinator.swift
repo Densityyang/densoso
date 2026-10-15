@@ -61,7 +61,9 @@ actor ConfirmationCoordinator {
     func confirm(id: UUID) async throws -> CommitReceipt {
         try requireWritable()
         let receipt = try await repository.confirm(id: id, now: now())
-        await healthSyncOutbox?.processPending()
+        if receipt.actionType != .workoutPlan {
+            await healthSyncOutbox?.processPending()
+        }
         return receipt
     }
 

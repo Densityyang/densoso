@@ -128,7 +128,6 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         guard try payload.canonicalData(schemaVersion: action.schemaVersion) == action.canonicalPayloadData else {
             throw ConfirmationError.payloadCorrupt
         }
-        guard payload.actionType != .workoutPlan else { throw ConfirmationError.unsupportedAction }
         action.stateRaw = PendingActionState.committing.rawValue
         action.updatedAt = now
         try modelContext.save()
@@ -144,13 +143,16 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                 }
 
                 let localRecordID: UUID
-                let affectedDate: Date
+                var affectedDate: Date?
+                var outboxIDs: [UUID] = []
+                var healthSyncState = HealthSyncState.notApplicable
                 switch payload {
                 case .meal(let draft):
                     let meal = try makeMeal(from: draft, sourceActionKey: action.idempotencyKey)
                     modelContext.insert(meal)
                     localRecordID = meal.id
                     affectedDate = meal.date
+                    healthSyncState = .pending
                 case .weight(let draft):
                     let weight = WeightRecord(
                         sourceActionKey: action.idempotencyKey,
@@ -162,31 +164,64 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                     try updateProfileWeight(draft.kilograms)
                     localRecordID = weight.id
                     affectedDate = draft.measuredAt
-                case .workoutPlan:
-                    throw ConfirmationError.unsupportedAction
+                    healthSyncState = .pending
+                case .workoutPlan(let draft):
+                    try WorkoutPlanCompiler().validate(draft)
+                    guard let scheduledAt = draft.scheduledAt else {
+                        throw WorkoutPlanCompileError.scheduleDateRequired
+                    }
+                    let entry = ConfirmedWorkoutPlanEntry(
+                        actionID: action.id,
+                        idempotencyKey: action.idempotencyKey,
+                        draft: draft
+                    )
+                    let estimatedEnd: Date?
+                    if case .timeMinutes(let minutes) = draft.goal {
+                        estimatedEnd = scheduledAt.addingTimeInterval(Double(minutes) * 60)
+                    } else {
+                        estimatedEnd = nil
+                    }
+                    modelContext.insert(ScheduleEvent(
+                        date: scheduledAt,
+                        title: draft.name,
+                        notes: try entry.encodedNotes(),
+                        startTime: scheduledAt,
+                        endTime: estimatedEnd
+                    ))
+                    // A plan receipt refers to its action; it is not a completed Workout record.
+                    localRecordID = action.id
+                    affectedDate = nil
                 }
                 try injectFailure(.afterRecord)
 
-                try reprojectDaily(on: affectedDate)
-                try reprojectWeek(containing: affectedDate)
-                try reprojectDailyHealthSnapshot(on: affectedDate)
+                if let affectedDate {
+                    try reprojectDaily(on: affectedDate)
+                    try reprojectWeek(containing: affectedDate)
+                    try reprojectDailyHealthSnapshot(on: affectedDate)
+                }
                 try injectFailure(.afterProjection)
 
-                let outboxID = UUID()
-                let outbox = HealthSyncOutboxEntry(
-                    id: outboxID,
-                    operation: payload.actionType == .meal ? "upsertMeal" : "upsertWeight",
-                    recordID: localRecordID,
-                    payloadData: action.payloadData,
-                    idempotencyKey: "\(action.idempotencyKey):health-sync",
-                    syncIdentifier: "densoso.\(payload.actionType.rawValue).\(localRecordID.uuidString.lowercased())"
-                )
-                modelContext.insert(outbox)
+                let outbox: HealthSyncOutboxEntry?
+                if payload.actionType == .workoutPlan {
+                    outbox = nil
+                } else {
+                    let outboxID = UUID()
+                    outbox = HealthSyncOutboxEntry(
+                        id: outboxID,
+                        operation: payload.actionType == .meal ? "upsertMeal" : "upsertWeight",
+                        recordID: localRecordID,
+                        payloadData: action.payloadData,
+                        idempotencyKey: "\(action.idempotencyKey):health-sync",
+                        syncIdentifier: "densoso.\(payload.actionType.rawValue).\(localRecordID.uuidString.lowercased())"
+                    )
+                    modelContext.insert(outbox)
+                    outboxIDs.append(outboxID)
+                }
                 try injectFailure(.afterOutbox)
 
                 let receiptID = UUID()
-                outbox.receiptID = receiptID
-                let outboxIDsData = try JSONEncoder().encode([outboxID])
+                outbox?.receiptID = receiptID
+                let outboxIDsData = try JSONEncoder().encode(outboxIDs)
                 let receipt = CommittedActionReceiptRecord(
                     id: receiptID,
                     actionID: action.id,
@@ -194,7 +229,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                     actionTypeRaw: payload.actionType.rawValue,
                     localRecordID: localRecordID,
                     outboxIDsData: outboxIDsData,
-                    committedAt: now
+                    committedAt: now,
+                    healthSyncStateRaw: healthSyncState.rawValue
                 )
                 modelContext.insert(receipt)
                 try injectFailure(.afterReceipt)
@@ -484,7 +520,9 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         case .weight:
             return try modelContext.fetch(FetchDescriptor<WeightRecord>()).contains { $0.sourceActionKey == idempotencyKey }
         case .workoutPlan:
-            return false
+            return try modelContext.fetch(FetchDescriptor<ScheduleEvent>()).contains { event in
+                ConfirmedWorkoutPlanEntry.decode(notes: event.notes)?.idempotencyKey == idempotencyKey
+            }
         case nil:
             throw ConfirmationError.invariantViolation("unknown action type \(actionTypeRaw)")
         }

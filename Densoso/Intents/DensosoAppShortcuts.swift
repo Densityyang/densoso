@@ -34,7 +34,7 @@ struct StartWorkoutIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        AppIntentInbox.store(workoutPlan: .squatFiveByFive)
+        AppIntentInbox.store(workoutPlan: .defaultDraft)
         return .result(dialog: "已打开 densoso。请确认训练草稿后再同步到 Apple Watch。")
     }
 }
@@ -48,7 +48,7 @@ struct CreateWorkoutPlanIntent: AppIntent {
     var name: String
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        AppIntentInbox.store(workoutPlan: WorkoutPlanDraft(name: name, activity: .strength))
+        AppIntentInbox.store(workoutPlan: WorkoutPlanDraft(name: name, activity: .walking, goal: .timeMinutes(30)))
         return .result(dialog: "已创建训练计划草稿。请在 densoso 中确认后再同步。")
     }
 }

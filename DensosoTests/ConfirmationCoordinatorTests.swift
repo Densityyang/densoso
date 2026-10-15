@@ -77,6 +77,40 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(savedSnapshot.restingEnergyKcal, 1_410)
     }
 
+    func testConfirmedWorkoutPlanCreatesRetryableScheduleIntentButNoWorkoutOrHealthOutbox() async throws {
+        let harness = try Harness()
+        let draft = WorkoutPlanDraft(
+            name: "午后步行",
+            activity: .walking,
+            location: .outdoor,
+            goal: .distanceMeters(2_000),
+            scheduledAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        let action = try await harness.coordinator.stage(
+            payload: .workoutPlan(draft),
+            clientRequestID: UUID()
+        )
+
+        let first = try await harness.coordinator.confirm(id: action.id)
+        let replay = try await harness.coordinator.confirm(id: action.id)
+        XCTAssertEqual(first, replay)
+        XCTAssertEqual(first.actionType, .workoutPlan)
+        XCTAssertEqual(first.localRecordID, action.id)
+        XCTAssertEqual(first.outboxIDs, [])
+        XCTAssertEqual(first.healthSyncState, .notApplicable)
+
+        let context = ModelContext(harness.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WorkoutRecord>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyMetrics>()), 0)
+        let events = try context.fetch(FetchDescriptor<ScheduleEvent>())
+        let entry = try XCTUnwrap(events.compactMap { ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) }.first)
+        XCTAssertEqual(entry.actionID, action.id)
+        XCTAssertEqual(entry.idempotencyKey, action.idempotencyKey)
+        XCTAssertEqual(entry.draft, draft)
+        XCTAssertEqual(entry.state, .queued)
+    }
+
     func testRejectAndExpiryNeverWriteHealthRecords() async throws {
         let rejectedHarness = try Harness()
         let rejected = try await rejectedHarness.coordinator.stage(

@@ -97,6 +97,8 @@ public struct HealthSampleSnapshot: Codable, Equatable, Identifiable, Sendable {
     public let value: Double?
     public let categoryValue: String?
     public let sourceBundleIdentifier: String?
+    public let deviceName: String?
+    public let deviceModel: String?
     public let syncIdentifier: String?
     public let syncVersion: Int?
 
@@ -108,6 +110,8 @@ public struct HealthSampleSnapshot: Codable, Equatable, Identifiable, Sendable {
         value: Double? = nil,
         categoryValue: String? = nil,
         sourceBundleIdentifier: String? = nil,
+        deviceName: String? = nil,
+        deviceModel: String? = nil,
         syncIdentifier: String? = nil,
         syncVersion: Int? = nil
     ) {
@@ -118,6 +122,8 @@ public struct HealthSampleSnapshot: Codable, Equatable, Identifiable, Sendable {
         self.value = value.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
         self.categoryValue = categoryValue
         self.sourceBundleIdentifier = sourceBundleIdentifier
+        self.deviceName = deviceName
+        self.deviceModel = deviceModel
         self.syncIdentifier = syncIdentifier
         self.syncVersion = syncVersion
     }

@@ -124,6 +124,7 @@ public enum HealthSyncState: String, Codable, CaseIterable, Sendable {
     case succeeded
     case retryable
     case terminal
+    case notApplicable
 }
 
 public struct CommitReceipt: Codable, Equatable, Identifiable, Sendable {
@@ -323,7 +324,7 @@ private struct CanonicalWorkoutPlan: Encodable {
         name = plan.name.trimmingCharacters(in: .whitespacesAndNewlines)
         activity = plan.activity.rawValue
         location = plan.location.rawValue
-        goal = CanonicalWorkoutGoal(plan.goal)
+        goal = try CanonicalWorkoutGoal(plan.goal)
         scheduledAtMilliseconds = try plan.scheduledAt.map {
             try CanonicalInteger.dateMilliseconds($0, field: "workoutPlan.scheduledAt")
         }
@@ -334,11 +335,21 @@ private struct CanonicalWorkoutPlan: Encodable {
 private enum CanonicalWorkoutGoal: Encodable {
     case open
     case timeMinutes(Int)
+    case distanceMeters(Int64)
 
-    init(_ goal: WorkoutPlanDraft.Goal) {
+    init(_ goal: WorkoutPlanDraft.Goal) throws {
         switch goal {
         case .open: self = .open
         case .timeMinutes(let minutes): self = .timeMinutes(minutes)
+        case .distanceMeters(let meters):
+            guard (100...100_000).contains(meters) else {
+                throw CanonicalizationError.outOfRange(field: "workoutPlan.goal.distanceMeters")
+            }
+            self = .distanceMeters(try CanonicalInteger.scaled(
+                meters,
+                by: 1_000,
+                field: "workoutPlan.goal.distanceMeters"
+            ))
         }
     }
 }

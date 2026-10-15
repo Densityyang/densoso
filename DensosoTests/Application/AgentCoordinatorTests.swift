@@ -34,6 +34,70 @@ final class AgentCoordinatorTests: XCTestCase {
         XCTAssertEqual(usageCount, 1)
     }
 
+    func testReplayedWatchRequestIDDoesNotStartAnotherProviderRound() async throws {
+        let provider = ScriptedTextProvider(
+            scripts: [[.textDelta("已生成可检查的草稿。"), .completed(.completed)]]
+        )
+        let harness = try await Harness(provider: provider)
+        let messageID = UUID(uuidString: "00000000-0000-0000-0000-000000000705")!
+
+        _ = try await harness.session.send(userText: "帮我查看本周趋势", requestID: messageID)
+        let replay = try await harness.session.send(userText: "帮我查看本周趋势", requestID: messageID)
+
+        XCTAssertTrue(replay.text.contains("不会因 Watch 重放而重复处理"))
+        XCTAssertEqual(provider.recordedRequests().count, 1)
+        let messages = try ModelContext(harness.container).fetch(FetchDescriptor<MessageRecord>())
+            .filter { $0.requestID == messageID }
+        XCTAssertEqual(messages.count, 2)
+    }
+
+    func testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce() async throws {
+        let provider = FailOnceScriptedTextProvider(scripts: [
+            [
+                .toolCall(weightCall(id: "watch-weight")),
+                .completed(.toolUse),
+            ],
+            [
+                .textDelta("已生成体重草稿，请检查后确认。"),
+                .completed(.completed),
+            ],
+        ])
+        let harness = try await Harness(provider: provider)
+        let inbox = WatchMessageInboxStore(modelContainer: harness.container)
+        let envelope = WatchMessageEnvelope(payload: .transcript("记录体重 62.5kg"))
+        XCTAssertEqual(try inbox.ingest(envelope), .accepted)
+        let pending = try XCTUnwrap(inbox.pendingTranscripts().first)
+
+        do {
+            _ = try await harness.session.send(userText: pending.text, requestID: pending.messageID)
+            XCTFail("The injected first provider failure should leave the Watch message pending")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .network(code: nil))
+        }
+        let failedRequestWasPersisted = await harness.session.hasPersistedRequestHistory(for: pending.messageID)
+        XCTAssertTrue(failedRequestWasPersisted)
+        XCTAssertEqual(try inbox.pendingTranscripts().map(\.messageID), [pending.messageID])
+
+        let response = try await harness.session.send(userText: pending.text, requestID: pending.messageID)
+        XCTAssertTrue(response.text.contains("已生成体重草稿"))
+        XCTAssertEqual(provider.recordedRequests().count, 3)
+        XCTAssertEqual(harness.session.pendingActions.count, 1)
+
+        var context = ModelContext(harness.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeightRecord>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
+        _ = try await harness.session.confirmPendingAction(id: try XCTUnwrap(harness.session.pendingActions.first?.id))
+
+        context = ModelContext(harness.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeightRecord>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
+        try inbox.setState(WatchReceiptState.processed, for: pending.messageID)
+        XCTAssertTrue(try inbox.pendingTranscripts().isEmpty)
+
+        _ = try await harness.session.send(userText: pending.text, requestID: pending.messageID)
+        XCTAssertEqual(provider.recordedRequests().count, 3)
+    }
+
     func testPromptInjectionCannotBypassConfirmation() async throws {
         let provider = ScriptedTextProvider(
             scripts: [

@@ -1,6 +1,6 @@
 # Gate 06 — HealthKit Synchronization and Energy Semantics
 
-Status: macOS CI passed; awaiting user Gate 6 review
+Status: macOS CI passed; user approved Gate 6 and Phase 7–10 work proceeded
 
 Gate 6 extends Draft PR #14 after the user approved Gate 5. It adds the HealthKit
 boundary, query/sync path, outbox worker and energy projection rules. It does not
@@ -91,7 +91,7 @@ change the V3 persistent schema.
 | Static contract | HealthKit boundary, route removal and no Workout writes | Passed in Gate 6 |
 | Artifact | `.xcresult`, summary, logs and contract report retained | [gate-06-healthkit-results, artifact 11942416503](https://github.com/Densityyang/densoso/actions/runs/38661937756/artifacts/11942416503) |
 | Device background delivery | Signed-device observer/background matrix | Not claimed; signing remains blocked |
-| User decision | Approve or reject entry to Phase 7 | Awaiting Phase 6 review; Phase 7 has not started |
+| User decision | Approve or reject entry to Phase 7 | Approved; Phase 7–10 implementation is now included in the cumulative V3 delivery |
 
 ## Gate boundary
 

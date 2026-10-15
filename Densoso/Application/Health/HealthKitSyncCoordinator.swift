@@ -46,6 +46,7 @@ final class HealthKitSyncCoordinator {
     private let healthStore: any HealthStoreClient
     private let observer: any HealthObserverClient
     private var observationRepository: (any HealthSyncRepository)?
+    var onObserverSyncCompleted: (() -> Void)?
 
     init(
         healthStore: any HealthStoreClient = HealthKitHealthStoreClient(),
@@ -72,7 +73,10 @@ final class HealthKitSyncCoordinator {
                 defer { completion.call() }
                 guard let self else { return }
                 guard let repository = self.observationRepository else { return }
-                do { try await self.sync(stream: metric, using: repository, now: Date()) }
+                do {
+                    try await self.sync(stream: metric, using: repository, now: Date())
+                    self.onObserverSyncCompleted?()
+                }
                 catch { /* The unchanged cursor makes the stream retryable on the next wakeup. */ }
             }
         }

@@ -1,6 +1,7 @@
 import SwiftData
 import SwiftUI
 import UIKit
+import DensosoDomain
 
 struct SettingsScreen: View {
     @Environment(Dependencies.self) private var dependencies
@@ -25,6 +26,11 @@ struct SettingsScreen: View {
     @State private var isAuthorizingHealth = false
     @State private var healthAuthorizationError: String?
     @State private var isEditingProfile = false
+    @State private var goalTargetWeight = ""
+    @State private var goalDailyDeficit = ""
+    @State private var goalDailyProtein = ""
+    @State private var isConfirmingGoalSave = false
+    @State private var notificationError: String?
 
     var body: some View {
         NavigationStack {
@@ -42,7 +48,9 @@ struct SettingsScreen: View {
 
                     intelligenceSection
                     profileSection
+                    goalsSection
                     capabilitySections
+                    notificationSection
                     dataSection
 
                     if let statusMessage {
@@ -53,7 +61,7 @@ struct SettingsScreen: View {
                         }
                     }
 
-                    if let error = healthAuthorizationError ?? dependencies.exportService.lastError {
+                    if let error = healthAuthorizationError ?? notificationError ?? dependencies.exportService.lastError {
                         Section("需要处理") {
                             Label(error, systemImage: "exclamationmark.triangle.fill")
                                 .font(.footnote)
@@ -72,6 +80,7 @@ struct SettingsScreen: View {
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .task {
+                loadGoalFields()
                 if !AppLaunchConfiguration.current.isUITesting {
                     hasSavedAPIKey = (try? KeychainStore.shared.readAPIKey()) != nil
                     hasSavedQwenAPIKey = (try? KeychainStore.shared.readModelStudioAPIKey()) != nil
@@ -80,7 +89,10 @@ struct SettingsScreen: View {
                 }
             }
             .onChange(of: healthImportCursors.first?.updatedAt) { _, _ in
-                Task { await refreshDiagnostics() }
+                Task {
+                    await refreshDiagnostics()
+                    _ = try? dependencies.healthIntelligenceService.refresh()
+                }
             }
             .sheet(isPresented: $showShareSheet) {
                 if let exportURL {
@@ -243,6 +255,119 @@ struct SettingsScreen: View {
                 Button("编辑个人资料", systemImage: "person.crop.circle") {
                     isEditingProfile = true
                 }
+            }
+        }
+    }
+
+    private var goalsSection: some View {
+        Section("健康目标") {
+            TextField("目标体重 kg（可选）", text: $goalTargetWeight)
+                .keyboardType(.decimalPad)
+            TextField("每日缺口 kcal（可选）", text: $goalDailyDeficit)
+                .keyboardType(.numberPad)
+            TextField("每日蛋白质 g（可选）", text: $goalDailyProtein)
+                .keyboardType(.decimalPad)
+            Button("确认并保存目标", systemImage: "checkmark.circle") {
+                isConfirmingGoalSave = true
+            }
+            .confirmationDialog("确认保存健康目标？", isPresented: $isConfirmingGoalSave) {
+                Button("确认并保存") {
+                    saveGoalProfile()
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("目标只用于本机健康摘要与趋势，不会单独上传；之后可随时修改。")
+            }
+            Text("目标是你设定的参考，不构成医疗建议。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var notificationSection: some View {
+        Section("本地日报与周报提醒") {
+            Toggle(
+                "每天 08:00 提醒查看日报",
+                isOn: Binding(
+                    get: { dependencies.briefNotificationScheduler.dailyEnabled },
+                    set: { setDailyNotification($0) }
+                )
+            )
+            Toggle(
+                "每周一 08:00 提醒查看周报",
+                isOn: Binding(
+                    get: { dependencies.briefNotificationScheduler.weeklyEnabled },
+                    set: { setWeeklyNotification($0) }
+                )
+            )
+            Text("提醒默认关闭；通知只提示打开应用，不显示健康数值。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func loadGoalFields() {
+        do {
+            guard let goal = try dependencies.healthIntelligenceService.goalProfile() else { return }
+            goalTargetWeight = goal.targetWeightKilograms.map { String($0) } ?? ""
+            goalDailyDeficit = goal.dailyDeficitKcal.map(String.init) ?? ""
+            goalDailyProtein = goal.dailyProteinGrams.map { String($0) } ?? ""
+        } catch {
+            healthAuthorizationError = "无法加载健康目标：\(error.localizedDescription)"
+        }
+    }
+
+    private func saveGoalProfile() {
+        do {
+            let targetWeight = try optionalNumber(goalTargetWeight, field: "目标体重", range: 25...350)
+            let deficitValue = try optionalNumber(goalDailyDeficit, field: "每日缺口", range: 0...3_000)
+            let protein = try optionalNumber(goalDailyProtein, field: "蛋白质目标", range: 0...500)
+            let goal = GoalProfile(
+                effectiveFrom: Date(),
+                targetWeightKilograms: targetWeight,
+                dailyDeficitKcal: deficitValue.map { Int($0.rounded()) },
+                dailyProteinGrams: protein
+            )
+            try dependencies.healthIntelligenceService.saveGoalProfile(goal)
+            _ = try dependencies.healthIntelligenceService.refresh()
+            statusMessage = "健康目标已确认并保存。"
+            healthAuthorizationError = nil
+        } catch {
+            healthAuthorizationError = "未保存健康目标：\(error.localizedDescription)"
+        }
+    }
+
+    private func optionalNumber(
+        _ text: String,
+        field: String,
+        range: ClosedRange<Double>
+    ) throws -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let value = Double(trimmed), value.isFinite, range.contains(value) else {
+            throw GoalInputError.invalid(field)
+        }
+        return value
+    }
+
+    private func setDailyNotification(_ enabled: Bool) {
+        Task {
+            do {
+                try await dependencies.briefNotificationScheduler.setDailyEnabled(enabled)
+                notificationError = nil
+            } catch {
+                notificationError = error.localizedDescription
+            }
+        }
+    }
+
+    private func setWeeklyNotification(_ enabled: Bool) {
+        Task {
+            do {
+                try await dependencies.briefNotificationScheduler.setWeeklyEnabled(enabled)
+                notificationError = nil
+            } catch {
+                notificationError = error.localizedDescription
             }
         }
     }
@@ -480,6 +605,16 @@ struct SettingsScreen: View {
         } catch {
             healthAuthorizationError = "Apple Health 授权失败：\(error.localizedDescription)"
             await refreshDiagnostics()
+        }
+    }
+}
+
+private enum GoalInputError: LocalizedError {
+    case invalid(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalid(let field): "\(field)格式无效或超出允许范围。"
         }
     }
 }

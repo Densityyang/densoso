@@ -17,7 +17,7 @@ final class Gate01PrimaryScreenshotsTests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(
-            app.tabBars.buttons["对话"].waitForExistence(timeout: 15),
+            app.tabBars.buttons["今天"].waitForExistence(timeout: 15),
             "The seeded UI-test profile must enter the main tab hierarchy"
         )
 

@@ -20,9 +20,9 @@ does not authorize Phase 2; the user must review the recorded CI evidence first.
 - iOS 26 Simulator unit tests: 49 passed, 0 failures.
 - UI tests: 2 passed, 0 failures.
 - Watch app and extension build: successful at watchOS 11.
-- UI screenshots: six iPhone 17 Pro portrait captures covering onboarding and
-  the five current baseline tabs; each was reviewed and showed no top/bottom
-  black bands or cropping.
+- Historical Gate 1 UI screenshots: six iPhone 17 Pro portrait captures from
+  the original five-tab baseline before Phase 9 consolidated navigation; the
+  final four-tab layout is captured again under Gate 9.
 - Signing remains blocked. Unsigned Simulator HealthKit/CoreData warnings are
   not device-signing evidence.
 - User decision: Gate 1 approved on 2026-08-18; Phase 2 authorized on the same
@@ -91,7 +91,7 @@ swift test --package-path Packages/DensosoDomain
 | iOS deployment build | iOS 18 target compiles | `BUILD SUCCEEDED` |
 | iOS Simulator tests | Unit and UI suites pass on iPhone 17 Pro | Unit 49 passed; UI 2 passed |
 | Watch build | App and extension compile at watchOS 11 target | Successful |
-| UI evidence | Onboarding and five baseline-tab screenshots retained | 6 iPhone 17 Pro portrait PNGs reviewed; no bands/cropping |
+| UI evidence | Original Gate 1 baseline evidence, before Phase 9 navigation | 6 iPhone 17 Pro portrait PNGs; current four-tab screenshots are in Gate 9 |
 | Signing | Explicitly blocked and not inferred from Simulator | `blocked-by-signing` |
 | User decision | Approve or reject entry to Phase 2 | Approved 2026-08-18; Phase 2 authorized |
 

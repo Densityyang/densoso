@@ -1,3 +1,4 @@
+import DensosoDomain
 import SwiftData
 import XCTest
 @testable import Densoso
@@ -61,7 +62,7 @@ final class ExportServiceTests: XCTestCase {
             ExportService.BackupDocument.self,
             from: Data(contentsOf: url)
         )
-        XCTAssertEqual(exportedDocument.formatVersion, 3)
+        XCTAssertEqual(exportedDocument.formatVersion, 4)
 
         let (targetContainer, target) = try makeContext()
         _ = targetContainer
@@ -152,6 +153,12 @@ final class ExportServiceTests: XCTestCase {
             JSONSerialization.jsonObject(with: Data(contentsOf: currentURL)) as? [String: Any]
         )
         var legacyPayloadObject = try XCTUnwrap(currentObject["payload"] as? [String: Any])
+        for key in [
+            "weightRecords", "goalProfiles", "dailyHealthSnapshots", "scheduleEvents",
+            "dailyBriefs", "weeklyBriefs",
+        ] {
+            legacyPayloadObject.removeValue(forKey: key)
+        }
         var legacyMeals = try XCTUnwrap(legacyPayloadObject["mealRecords"] as? [[String: Any]])
         for index in legacyMeals.indices {
             for key in [
@@ -208,9 +215,159 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(restored.energyHighKcal, 350)
     }
 
+    func testLegacyV3BackupStillRestoresMealEvidenceAfterHealthDataWasAdded() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let evidence = Data("v3-evidence".utf8)
+        source.insert(MealRecord(
+            totalCaloriesKcal: 410,
+            proteinG: 18,
+            fatG: 12,
+            carbsG: 51,
+            energyLikelyKcal: 410,
+            evidenceData: evidence
+        ))
+        try source.save()
+
+        let service = ExportService()
+        let currentURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: currentURL) }
+        let currentObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: currentURL)) as? [String: Any]
+        )
+        var v3PayloadObject = try XCTUnwrap(currentObject["payload"] as? [String: Any])
+        for key in [
+            "weightRecords", "goalProfiles", "dailyHealthSnapshots", "scheduleEvents",
+            "dailyBriefs", "weeklyBriefs", "weeklyReports",
+        ] {
+            v3PayloadObject.removeValue(forKey: key)
+        }
+        let payloadData = try JSONSerialization.data(withJSONObject: v3PayloadObject, options: [.sortedKeys])
+        let payload = try JSONDecoder().decode(ExportService.BackupPayload.self, from: payloadData)
+        let v3Document = ExportService.BackupDocument(
+            formatVersion: 3,
+            checksum: try service.checksum(for: payload),
+            payload: payload
+        )
+        let v3URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gate09-legacy-v3-\(UUID().uuidString.lowercased()).json")
+        try JSONEncoder().encode(v3Document).write(to: v3URL)
+        defer { try? FileManager.default.removeItem(at: v3URL) }
+
+        let (targetContainer, target) = try makeContext()
+        _ = targetContainer
+        let summary = try await service.restoreJSON(url: v3URL, context: target)
+
+        XCTAssertEqual(summary.meals, 1)
+        let restored = try XCTUnwrap(target.fetch(FetchDescriptor<MealRecord>()).first)
+        XCTAssertEqual(restored.totalCaloriesKcal, 410)
+        XCTAssertEqual(restored.energyLikelyKcal, 410)
+        XCTAssertEqual(restored.evidenceData, evidence)
+    }
+
+    func testV4BackupRestoresHealthDataGoalsAndReportsWithoutSyncQueueState() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        source.insert(UserProfile())
+        source.insert(WeightRecord(
+            sourceActionKey: "v4-weight-action",
+            measuredAt: date,
+            kilograms: 70.5
+        ))
+        source.insert(GoalProfileRecord(
+            profileKey: "primary",
+            targetWeightKilograms: 68,
+            dailyDeficitKcal: 350,
+            dailyProteinGrams: 90,
+            effectiveFrom: date
+        ))
+        let day = Calendar.current.startOfDay(for: date)
+        let dayParts = Calendar.current.dateComponents([.year, .month, .day], from: day)
+        let dayKey = String(format: "%04d-%02d-%02d", dayParts.year ?? 0, dayParts.month ?? 0, dayParts.day ?? 0)
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: Calendar.current.timeZone.identifier,
+            energyIntakeKcal: EstimateRange(low: 450, likely: 500, high: 600),
+            stepCount: 7_000,
+            algorithmVersion: "v3"
+        )
+        let snapshotEncoder = JSONEncoder()
+        snapshotEncoder.dateEncodingStrategy = .millisecondsSince1970
+        source.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey,
+            timezoneID: snapshot.timezoneIdentifier,
+            payloadData: try snapshotEncoder.encode(snapshot),
+            snapshotHash: "v4-health-hash",
+            algorithmVersion: "v3"
+        ))
+        source.insert(ScheduleEvent(
+            date: date,
+            title: "药物提醒",
+            notes: "ordinary user schedule",
+            startTime: date
+        ))
+        source.insert(DailyBriefRecord(
+            cacheKey: "daily:\(dayKey)",
+            dayKey: dayKey,
+            snapshotHash: "v4-health-hash",
+            algorithmVersion: "health-intelligence-v1",
+            payloadData: Data("daily-brief".utf8)
+        ))
+        source.insert(WeeklyBriefRecord(
+            cacheKey: "weekly:\(dayKey)",
+            weekKey: dayKey,
+            snapshotHash: "v4-week-hash",
+            algorithmVersion: "health-intelligence-v1",
+            payloadData: Data("weekly-brief".utf8)
+        ))
+        source.insert(HealthSyncOutboxEntry(
+            operation: "upsertWeight",
+            recordID: UUID(),
+            idempotencyKey: "source-outbox"
+        ))
+        source.insert(HealthKitImportCursor(stream: "bodyMass", anchorData: Data([1]))
+        )
+        try source.save()
+
+        let service = ExportService()
+        let url = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let exported = try JSONDecoder().decode(
+            ExportService.BackupDocument.self,
+            from: Data(contentsOf: url)
+        )
+        XCTAssertEqual(exported.formatVersion, 4)
+        XCTAssertEqual(exported.payload.weightRecords?.count, 1)
+        XCTAssertEqual(exported.payload.dailyHealthSnapshots?.count, 1)
+        XCTAssertEqual(exported.payload.goalProfiles?.count, 1)
+        XCTAssertEqual(exported.payload.dailyBriefs?.count, 1)
+        XCTAssertEqual(exported.payload.weeklyBriefs?.count, 1)
+        XCTAssertEqual(exported.payload.scheduleEvents?.count, 1)
+
+        let (targetContainer, target) = try makeContext()
+        _ = targetContainer
+        target.insert(HealthSyncOutboxEntry(operation: "upsertMeal", recordID: UUID()))
+        target.insert(HealthKitImportCursor(stream: "workouts", anchorData: Data([9])))
+        try target.save()
+        let summary = try await service.restoreJSON(url: url, context: target)
+
+        XCTAssertEqual(summary.weights, 1)
+        XCTAssertEqual(summary.healthDays, 1)
+        XCTAssertEqual(summary.scheduledPlans, 0)
+        XCTAssertEqual(try target.fetch(FetchDescriptor<WeightRecord>()).first?.kilograms, 70.5)
+        XCTAssertEqual(try target.fetch(FetchDescriptor<GoalProfileRecord>()).first?.dailyProteinGrams, 90)
+        XCTAssertEqual(try target.fetch(FetchDescriptor<ScheduleEvent>()).first?.title, "药物提醒")
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<HealthKitImportCursor>()), 0)
+        XCTAssertEqual(try target.fetch(FetchDescriptor<DailyBriefRecord>()).first?.payloadData, Data("daily-brief".utf8))
+    }
+
     private func makeContext() throws -> (ModelContainer, ModelContext) {
         let container = try ModelContainer(
-            for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
+            for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, WeeklyReport.self,
+            ScheduleEvent.self, WeightRecord.self, GoalProfileRecord.self, DailyHealthSnapshotRecord.self,
+            DailyBriefRecord.self, WeeklyBriefRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         return (container, ModelContext(container))

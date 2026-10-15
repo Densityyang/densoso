@@ -11,7 +11,8 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
     override func setUpWithError() throws {
         container = try ModelContainer(
             for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self,
-                DailyHealthSnapshotRecord.self, WeightRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
+                DailyHealthSnapshotRecord.self, DailyBriefRecord.self, WeeklyBriefRecord.self, GoalProfileRecord.self,
+                WeightRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         context = ModelContext(container)
@@ -43,6 +44,17 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         ])
         let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
         let repository = HealthRepository(modelContext: context)
+        let intelligence = HealthIntelligenceService(modelContainer: container)
+        var observerRefreshCount = 0
+        var refreshSawCommittedWorkout = false
+        var refreshedBriefDay: Date?
+        coordinator.onObserverSyncCompleted = {
+            observerRefreshCount += 1
+            refreshSawCommittedWorkout = ((try? context.fetch(FetchDescriptor<WorkoutRecord>())) ?? [])
+                .contains(where: { $0.healthKitUUID == workoutID })
+            _ = try? intelligence.refresh(asOf: date)
+            refreshedBriefDay = intelligence.dailyBrief?.dayStart
+        }
         try await coordinator.startBackgroundObservers(using: repository)
         let previousCompletions = await fake.completedObserverCount()
 
@@ -54,6 +66,9 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let imported = try context.fetch(FetchDescriptor<WorkoutRecord>())
         XCTAssertEqual(imported.count, 1)
         XCTAssertEqual(imported.first?.healthKitUUID, workoutID)
+        XCTAssertEqual(observerRefreshCount, 1)
+        XCTAssertTrue(refreshSawCommittedWorkout)
+        XCTAssertEqual(refreshedBriefDay, Calendar.current.startOfDay(for: date))
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthKitImportCursor>())
             .first(where: { $0.stream == "workouts" })?.anchorData, Data([1]))
     }

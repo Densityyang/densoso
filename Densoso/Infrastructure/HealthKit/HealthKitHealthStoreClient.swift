@@ -356,7 +356,7 @@ final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient,
             categoryValue = nil
         } else if let categorySample = sample as? HKCategorySample {
             value = nil
-            categoryValue = String(categorySample.value)
+            categoryValue = sleepCategoryName(categorySample.value)
         } else {
             return nil
         }
@@ -368,9 +368,22 @@ final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient,
             value: value,
             categoryValue: categoryValue,
             sourceBundleIdentifier: sample.sourceRevision.source.bundleIdentifier,
+            deviceName: sample.device?.name,
+            deviceModel: sample.device?.model,
             syncIdentifier: sample.metadata?[HKMetadataKeySyncIdentifier] as? String,
             syncVersion: (sample.metadata?[HKMetadataKeySyncVersion] as? NSNumber)?.intValue
         )
+    }
+
+    private static func sleepCategoryName(_ value: Int) -> String {
+        if value == HKCategoryValueSleepAnalysis.inBed.rawValue { return \"inBed\" }
+        if value == HKCategoryValueSleepAnalysis.awake.rawValue { return \"awake\" }
+        if value == HKCategoryValueSleepAnalysis.asleepCore.rawValue { return \"asleepCore\" }
+        if value == HKCategoryValueSleepAnalysis.asleepDeep.rawValue { return \"asleepDeep\" }
+        if value == HKCategoryValueSleepAnalysis.asleepREM.rawValue { return \"asleepREM\" }
+        if value == HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue { return \"asleepUnspecified\" }
+        if value == HKCategoryValueSleepAnalysis.asleep.rawValue { return \"asleepUnspecified\" }
+        return \"unknown\"
     }
 
     private static func workoutSnapshot(from workout: HKWorkout) -> WorkoutSnapshot? {

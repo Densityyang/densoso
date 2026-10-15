@@ -1,4 +1,5 @@
 import CryptoKit
+import DensosoDomain
 import Foundation
 import SwiftData
 
@@ -9,8 +10,8 @@ final class ExportService {
     var isExporting = false
     var lastError: String?
 
-    private static let formatVersion = 3
-    private static let supportedFormatVersions: Set<Int> = [2, 3]
+    private static let formatVersion = 4
+    private static let supportedFormatVersions: Set<Int> = [2, 3, 4]
 
     struct BackupDocument: Codable {
         let formatVersion: Int
@@ -23,6 +24,13 @@ final class ExportService {
         let userProfile: UserProfileExport?
         let mealRecords: [MealRecordExport]
         let workoutRecords: [WorkoutRecordExport]
+        let weightRecords: [WeightRecordExport]?
+        let goalProfiles: [GoalProfileExport]?
+        let dailyHealthSnapshots: [DailyHealthSnapshotExport]?
+        let scheduleEvents: [ScheduleEventExport]?
+        let dailyBriefs: [DailyBriefExport]?
+        let weeklyBriefs: [WeeklyBriefExport]?
+        let weeklyReports: [WeeklyReportExport]?
 
         struct UserProfileExport: Codable {
             let name: String
@@ -316,6 +324,82 @@ final class ExportService {
             let routeStatus: String?
             let routePointCount: Int?
         }
+
+        struct WeightRecordExport: Codable {
+            let id: UUID
+            let sourceActionKey: String
+            let measuredAt: Date
+            let kilograms: Double
+            let source: String
+            let algorithmVersion: String
+            let createdAt: Date
+        }
+
+        struct GoalProfileExport: Codable {
+            let id: UUID
+            let profileKey: String
+            let targetWeightKilograms: Double?
+            let dailyDeficitKcal: Int?
+            let dailyProteinGrams: Double?
+            let effectiveFrom: Date
+            let updatedAt: Date
+        }
+
+        struct DailyHealthSnapshotExport: Codable {
+            let id: UUID
+            let dayKey: String
+            let timezoneID: String
+            let payloadData: Data
+            let snapshotHash: String
+            let algorithmVersion: String
+            let createdAt: Date
+        }
+
+        struct ScheduleEventExport: Codable {
+            let date: Date
+            let title: String
+            let notes: String?
+            let startTime: Date
+            let endTime: Date?
+            let createdAt: Date
+        }
+
+        struct DailyBriefExport: Codable {
+            let id: UUID
+            let cacheKey: String
+            let dayKey: String
+            let snapshotHash: String
+            let algorithmVersion: String
+            let payloadData: Data
+            let generatedAt: Date
+        }
+
+        struct WeeklyBriefExport: Codable {
+            let id: UUID
+            let cacheKey: String
+            let weekKey: String
+            let snapshotHash: String
+            let algorithmVersion: String
+            let payloadData: Data
+            let generatedAt: Date
+        }
+
+        struct WeeklyReportExport: Codable {
+            let weekStartDate: Date
+            let weekEndDate: Date
+            let totalDeficitKcal: Int
+            let avgDailyDeficitKcal: Double
+            let projectedWeightLossKg: Double
+            let avgProteinG: Double
+            let avgFatG: Double
+            let avgCarbsG: Double
+            let bestDay: Date?
+            let worstDay: Date?
+            let mealsCount: Int
+            let workoutsCount: Int
+            let compliance: Double
+            let generatedAt: Date
+        }
     }
 
     enum BackupError: LocalizedError, Equatable {
@@ -368,7 +452,14 @@ final class ExportService {
             try context.delete(model: UserProfile.self)
             try context.delete(model: MealRecord.self)
             try context.delete(model: WorkoutRecord.self)
+            try context.delete(model: WeightRecord.self)
+            try context.delete(model: GoalProfileRecord.self)
+            try context.delete(model: DailyHealthSnapshotRecord.self)
+            try context.delete(model: DailyBriefRecord.self)
+            try context.delete(model: WeeklyBriefRecord.self)
+            try context.delete(model: ScheduleEvent.self)
             try context.delete(model: DailyMetrics.self)
+            try context.delete(model: WeeklyReport.self)
             try context.delete(model: HealthSyncOutboxEntry.self)
             try context.delete(model: HealthKitImportCursor.self)
 
@@ -388,7 +479,19 @@ final class ExportService {
                 context.insert(profile)
             }
 
-            let affectedDays = Set(document.payload.mealRecords.map(\.date) + document.payload.workoutRecords.map(\.date))
+            let snapshots = document.payload.dailyHealthSnapshots ?? []
+            let snapshotDecoder = JSONDecoder()
+            snapshotDecoder.dateDecodingStrategy = .millisecondsSince1970
+            let snapshotDates = snapshots.compactMap {
+                try? snapshotDecoder.decode(DailyHealthSnapshot.self, from: $0.payloadData).dayStart
+            }
+            let weights = document.payload.weightRecords ?? []
+            let affectedDays = Set(
+                document.payload.mealRecords.map(\.date)
+                    + document.payload.workoutRecords.map(\.date)
+                    + weights.map(\.measuredAt)
+                    + snapshotDates
+            )
             for source in document.payload.mealRecords {
                 let meal = MealRecord(
                     date: source.date,
@@ -480,15 +583,115 @@ final class ExportService {
                 context.insert(workout)
             }
 
+            for source in weights {
+                let weight = WeightRecord(
+                    id: source.id,
+                    sourceActionKey: source.sourceActionKey,
+                    measuredAt: source.measuredAt,
+                    kilograms: source.kilograms,
+                    source: source.source,
+                    algorithmVersion: source.algorithmVersion
+                )
+                weight.createdAt = source.createdAt
+                context.insert(weight)
+            }
+
+            for source in document.payload.goalProfiles ?? [] {
+                let goal = GoalProfileRecord(
+                    id: source.id,
+                    profileKey: source.profileKey,
+                    targetWeightKilograms: source.targetWeightKilograms,
+                    dailyDeficitKcal: source.dailyDeficitKcal,
+                    dailyProteinGrams: source.dailyProteinGrams,
+                    effectiveFrom: source.effectiveFrom
+                )
+                goal.updatedAt = source.updatedAt
+                context.insert(goal)
+            }
+
+            for source in snapshots {
+                let snapshot = DailyHealthSnapshotRecord(
+                    id: source.id,
+                    dayKey: source.dayKey,
+                    timezoneID: source.timezoneID,
+                    payloadData: source.payloadData,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion
+                )
+                snapshot.createdAt = source.createdAt
+                context.insert(snapshot)
+            }
+
+            for source in document.payload.scheduleEvents ?? [] {
+                let event = ScheduleEvent(
+                    date: source.date,
+                    title: source.title,
+                    notes: source.notes,
+                    startTime: source.startTime,
+                    endTime: source.endTime
+                )
+                event.createdAt = source.createdAt
+                context.insert(event)
+            }
+
             for date in affectedDays {
                 try DailyMetricsProjector.reproject(on: date, in: context)
+            }
+
+            for source in document.payload.dailyBriefs ?? [] {
+                let brief = DailyBriefRecord(
+                    id: source.id,
+                    cacheKey: source.cacheKey,
+                    dayKey: source.dayKey,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion,
+                    payloadData: source.payloadData
+                )
+                brief.generatedAt = source.generatedAt
+                context.insert(brief)
+            }
+            for source in document.payload.weeklyBriefs ?? [] {
+                let brief = WeeklyBriefRecord(
+                    id: source.id,
+                    cacheKey: source.cacheKey,
+                    weekKey: source.weekKey,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion,
+                    payloadData: source.payloadData
+                )
+                brief.generatedAt = source.generatedAt
+                context.insert(brief)
+            }
+            for source in document.payload.weeklyReports ?? [] {
+                let report = WeeklyReport(
+                    weekStartDate: source.weekStartDate,
+                    weekEndDate: source.weekEndDate,
+                    totalDeficitKcal: source.totalDeficitKcal,
+                    avgDailyDeficitKcal: source.avgDailyDeficitKcal,
+                    projectedWeightLossKg: source.projectedWeightLossKg,
+                    avgProteinG: source.avgProteinG,
+                    avgFatG: source.avgFatG,
+                    avgCarbsG: source.avgCarbsG,
+                    bestDay: source.bestDay,
+                    worstDay: source.worstDay,
+                    mealsCount: source.mealsCount,
+                    workoutsCount: source.workoutsCount,
+                    compliance: source.compliance
+                )
+                report.generatedAt = source.generatedAt
+                context.insert(report)
             }
             try context.save()
 
             return ImportSummary(
                 meals: document.payload.mealRecords.count,
                 workouts: document.payload.workoutRecords.count,
-                dailyMetrics: affectedDays.count
+                dailyMetrics: affectedDays.count,
+                weights: weights.count,
+                healthDays: snapshots.count,
+                scheduledPlans: (document.payload.scheduleEvents ?? []).filter {
+                    ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) != nil
+                }.count
             )
         } catch {
             context.rollback()
@@ -500,12 +703,31 @@ final class ExportService {
         let meals: Int
         let workouts: Int
         let dailyMetrics: Int
+        let weights: Int
+        let healthDays: Int
+        let scheduledPlans: Int
     }
 
     private func makePayload(context: ModelContext) throws -> BackupPayload {
         let profile = try context.fetch(FetchDescriptor<UserProfile>()).first
         let meals = try context.fetch(FetchDescriptor<MealRecord>())
+            .sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }
         let workouts = try context.fetch(FetchDescriptor<WorkoutRecord>())
+            .sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }
+        let weights = try context.fetch(FetchDescriptor<WeightRecord>())
+            .sorted { $0.measuredAt == $1.measuredAt ? $0.id.uuidString < $1.id.uuidString : $0.measuredAt < $1.measuredAt }
+        let goals = try context.fetch(FetchDescriptor<GoalProfileRecord>())
+            .sorted { $0.effectiveFrom < $1.effectiveFrom }
+        let healthSnapshots = try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .sorted { $0.dayKey < $1.dayKey }
+        let scheduleEvents = try context.fetch(FetchDescriptor<ScheduleEvent>())
+            .sorted { $0.startTime == $1.startTime ? $0.title < $1.title : $0.startTime < $1.startTime }
+        let dailyBriefs = try context.fetch(FetchDescriptor<DailyBriefRecord>())
+            .sorted { $0.dayKey < $1.dayKey }
+        let weeklyBriefs = try context.fetch(FetchDescriptor<WeeklyBriefRecord>())
+            .sorted { $0.weekKey < $1.weekKey }
+        let weeklyReports = try context.fetch(FetchDescriptor<WeeklyReport>())
+            .sorted { $0.weekStartDate < $1.weekStartDate }
 
         return BackupPayload(
             exportedAt: Date(),
@@ -607,6 +829,89 @@ final class ExportService {
                     dataQuality: source.dataQuality,
                     routeStatus: source.routeStatus,
                     routePointCount: source.routePointCount
+                )
+            },
+            weightRecords: weights.map { source in
+                .init(
+                    id: source.id,
+                    sourceActionKey: source.sourceActionKey,
+                    measuredAt: source.measuredAt,
+                    kilograms: source.kilograms,
+                    source: source.source,
+                    algorithmVersion: source.algorithmVersion,
+                    createdAt: source.createdAt
+                )
+            },
+            goalProfiles: goals.map { source in
+                .init(
+                    id: source.id,
+                    profileKey: source.profileKey,
+                    targetWeightKilograms: source.targetWeightKilograms,
+                    dailyDeficitKcal: source.dailyDeficitKcal,
+                    dailyProteinGrams: source.dailyProteinGrams,
+                    effectiveFrom: source.effectiveFrom,
+                    updatedAt: source.updatedAt
+                )
+            },
+            dailyHealthSnapshots: healthSnapshots.map { source in
+                .init(
+                    id: source.id,
+                    dayKey: source.dayKey,
+                    timezoneID: source.timezoneID,
+                    payloadData: source.payloadData,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion,
+                    createdAt: source.createdAt
+                )
+            },
+            scheduleEvents: scheduleEvents.map { source in
+                .init(
+                    date: source.date,
+                    title: source.title,
+                    notes: source.notes,
+                    startTime: source.startTime,
+                    endTime: source.endTime,
+                    createdAt: source.createdAt
+                )
+            },
+            dailyBriefs: dailyBriefs.map { source in
+                .init(
+                    id: source.id,
+                    cacheKey: source.cacheKey,
+                    dayKey: source.dayKey,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion,
+                    payloadData: source.payloadData,
+                    generatedAt: source.generatedAt
+                )
+            },
+            weeklyBriefs: weeklyBriefs.map { source in
+                .init(
+                    id: source.id,
+                    cacheKey: source.cacheKey,
+                    weekKey: source.weekKey,
+                    snapshotHash: source.snapshotHash,
+                    algorithmVersion: source.algorithmVersion,
+                    payloadData: source.payloadData,
+                    generatedAt: source.generatedAt
+                )
+            },
+            weeklyReports: weeklyReports.map { source in
+                .init(
+                    weekStartDate: source.weekStartDate,
+                    weekEndDate: source.weekEndDate,
+                    totalDeficitKcal: source.totalDeficitKcal,
+                    avgDailyDeficitKcal: source.avgDailyDeficitKcal,
+                    projectedWeightLossKg: source.projectedWeightLossKg,
+                    avgProteinG: source.avgProteinG,
+                    avgFatG: source.avgFatG,
+                    avgCarbsG: source.avgCarbsG,
+                    bestDay: source.bestDay,
+                    worstDay: source.worstDay,
+                    mealsCount: source.mealsCount,
+                    workoutsCount: source.workoutsCount,
+                    compliance: source.compliance,
+                    generatedAt: source.generatedAt
                 )
             }
         )

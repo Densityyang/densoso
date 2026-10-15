@@ -48,14 +48,20 @@ struct AppRoot: View {
                     await dependencies.restorePersistenceState()
                     if launchConfiguration.isUITesting {
                         prepareUITestState()
+                        _ = try? dependencies.healthIntelligenceService.refresh()
                         return
                     }
+                    dependencies.watchConnectivityCoordinator.activate()
                     if dependencies.healthKitService.hasRequestedAuthorization {
                         let healthRepository = HealthRepository(modelContext: modelContext)
                         try? await dependencies.healthKitSyncCoordinator.startBackgroundObservers(using: healthRepository)
                         _ = try? await dependencies.healthKitSyncCoordinator.syncAvailableData(using: healthRepository)
                     }
                     await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
+                    dependencies.healthIntelligenceService.loadCachedBriefs()
+                    _ = try? dependencies.healthIntelligenceService.refresh()
+                    await dependencies.briefNotificationScheduler.restoreSchedules()
+                    dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                     appState.pendingWorkoutPlan = AppIntentInbox.consumeWorkoutPlan()
                     appState.pendingMealText = AppIntentInbox.consumeMealText()
                     checkOnboarding()

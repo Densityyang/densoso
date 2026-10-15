@@ -44,6 +44,10 @@ jobs:
             scripts/validate_phase4_speech.py \
             scripts/validate_phase5_meal_capture.py \
             scripts/validate_phase6_healthkit.py \
+            scripts/validate_phase7_health_intelligence.py \
+            scripts/validate_phase8_watch.py \
+            scripts/validate_phase9_integration.py \
+            scripts/validate_phase10_final_acceptance.py \
             scripts/validate_voice_goldens.py
 
       - name: Validate bundled food database
@@ -135,7 +139,7 @@ jobs:
             --path "$UI_RESULT_BUNDLE" \
             --output-path Gate01Screenshots
           SCREENSHOT_COUNT="$(find Gate01Screenshots -type f -name '*.png' | wc -l | tr -d ' ')"
-          test "$SCREENSHOT_COUNT" -ge 6
+          test "$SCREENSHOT_COUNT" -ge 5
           echo "Exported $SCREENSHOT_COUNT Gate 1 screenshots."
 
       - name: Build Watch app and extension
@@ -596,3 +600,330 @@ jobs:
             DensosoTests/ConfirmationCoordinatorTests.swift
           if-no-files-found: error
           retention-days: 14
+
+  health-intelligence:
+    name: gate-07-health-intelligence
+    needs: healthkit
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 7 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate07DerivedData" >> "$GITHUB_ENV"
+          echo "GATE07_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate07HealthIntelligenceTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 7 health-intelligence contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase7_health_intelligence.py
+          python3 scripts/validate_phase7_health_intelligence.py \
+            --report gate07-contract-summary.json
+
+      - name: Test cumulative DensosoDomain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate07-domain.log
+
+      - name: Install XcodeGen and generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Prepare iOS 26 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test Phase 7 app contracts
+        run: |
+          set -o pipefail
+          rm -rf "$GATE07_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/HealthIntelligenceServiceTests \
+            -only-testing:DensosoTests/HealthContextPromptBuilderTests \
+            -only-testing:DensosoTests/BriefNotificationSchedulerTests \
+            -enableCodeCoverage YES \
+            -resultBundlePath "$GATE07_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate07-health-intelligence-tests.log
+
+      - name: Export Gate 7 test summary
+        run: |
+          set -euo pipefail
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE07_RESULT_BUNDLE" > gate07-test-summary.json
+          grep -q '"result" : "Passed"' gate07-test-summary.json
+
+      - name: Upload Gate 7 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-07-health-intelligence-results
+          path: |
+            Gate07HealthIntelligenceTests.xcresult
+            gate07-domain.log
+            gate07-health-intelligence-tests.log
+            gate07-test-summary.json
+            gate07-contract-summary.json
+            docs/gates/gate-07-health-intelligence.md
+          if-no-files-found: error
+          retention-days: 14
+
+  watch:
+    name: gate-08-watch
+    needs: health-intelligence
+    runs-on: macos-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 8 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate08DerivedData" >> "$GITHUB_ENV"
+          echo "GATE08_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate08WatchTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 8 Watch contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase8_watch.py
+          python3 scripts/validate_phase8_watch.py --report gate08-contract-summary.json
+
+      - name: Test cumulative DensosoDomain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate08-domain.log
+
+      - name: Install XcodeGen and generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build iPhone and Watch schemes
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee gate08-iphone-build.log
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme DensosoWatch \
+            -destination "generic/platform=watchOS Simulator" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            WATCHOS_DEPLOYMENT_TARGET=11.0 \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee gate08-watch-build.log
+
+      - name: Prepare iOS 26 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test Phase 8 message and scheduling idempotency
+        run: |
+          set -o pipefail
+          rm -rf "$GATE08_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests \
+            -only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests \
+            -only-testing:DensosoTests/WorkoutPlanCompilerTests \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests \
+            -enableCodeCoverage YES \
+            -resultBundlePath "$GATE08_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate08-watch-tests.log
+
+      - name: Export Gate 8 test summary
+        run: |
+          set -euo pipefail
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE08_RESULT_BUNDLE" > gate08-test-summary.json
+          grep -q '"result" : "Passed"' gate08-test-summary.json
+
+      - name: Upload Gate 8 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-08-watch-results
+          path: |
+            Gate08WatchTests.xcresult
+            gate08-domain.log
+            gate08-iphone-build.log
+            gate08-watch-build.log
+            gate08-watch-tests.log
+            gate08-test-summary.json
+            gate08-contract-summary.json
+            docs/gates/gate-08-watch.md
+          if-no-files-found: error
+          retention-days: 14
+
+  integration:
+    name: gate-09-integration
+    needs: watch
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 9 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate09DerivedData" >> "$GITHUB_ENV"
+          echo "GATE09_UNIT_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate09IntegrationTests.xcresult" >> "$GITHUB_ENV"
+          echo "GATE09_UI_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate09UITests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 9 integration contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase9_integration.py
+          python3 scripts/validate_phase9_integration.py --report gate09-contract-summary.json
+
+      - name: Test cumulative DensosoDomain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate09-domain.log
+
+      - name: Install XcodeGen and generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Prepare iPhone 17 Pro iOS 26 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run complete iOS unit suite with coverage
+        run: |
+          set -o pipefail
+          rm -rf "$GATE09_UNIT_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 1800 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests \
+            -enableCodeCoverage YES \
+            -resultBundlePath "$GATE09_UNIT_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate09-integration-tests.log
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE09_UNIT_RESULT_BUNDLE" > gate09-unit-test-summary.json
+          grep -q '"result" : "Passed"' gate09-unit-test-summary.json
+          xcrun xccov view --report "$GATE09_UNIT_RESULT_BUNDLE" > gate09-coverage-summary.txt
+
+      - name: Run complete UI suite and capture integration screens
+        run: |
+          set -o pipefail
+          rm -rf "$GATE09_UI_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 1800 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoUITests \
+            -resultBundlePath "$GATE09_UI_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate09-ui-tests.log
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE09_UI_RESULT_BUNDLE" > gate09-ui-test-summary.json
+          grep -q '"result" : "Passed"' gate09-ui-test-summary.json
+          rm -rf Gate09Screenshots
+          mkdir -p Gate09Screenshots
+          xcrun xcresulttool export attachments \
+            --path "$GATE09_UI_RESULT_BUNDLE" \
+            --output-path Gate09Screenshots
+          SCREENSHOT_COUNT="$(find Gate09Screenshots -type f -name '*.png' | wc -l | tr -d ' ')"
+          test "$SCREENSHOT_COUNT" -ge 8
+          echo "Exported $SCREENSHOT_COUNT Phase 9 screenshots."
+
+      - name: Upload Gate 9 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-09-integration-results
+          path: |
+            Gate09IntegrationTests.xcresult
+            Gate09UITests.xcresult
+            Gate09Screenshots
+            gate09-domain.log
+            gate09-integration-tests.log
+            gate09-ui-tests.log
+            gate09-unit-test-summary.json
+            gate09-ui-test-summary.json
+            gate09-coverage-summary.txt
+            gate09-contract-summary.json
+            docs/gates/gate-09-integration.md
+          if-no-files-found: error
+          retention-days: 14
+
+  final-acceptance:
+    name: gate-10-final-acceptance
+    needs: integration
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Gates 1–9 evidence from this workflow run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: gate-0*-results
+          path: GateArtifacts
+          merge-multiple: false
+
+      - name: Validate Phase 10 final acceptance roll-up
+        env:
+          ACCEPTANCE_WORKFLOW_SHA: ${{ github.sha }}
+          ACCEPTANCE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          ACCEPTANCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 -m py_compile scripts/validate_phase10_final_acceptance.py
+          mkdir -p Gate10Acceptance
+          python3 scripts/validate_phase10_final_acceptance.py \
+            --artifact-root GateArtifacts \
+            --workflow-sha "$ACCEPTANCE_WORKFLOW_SHA" \
+            --pr-head-sha "$ACCEPTANCE_PR_HEAD_SHA" \
+            --run-url "$ACCEPTANCE_RUN_URL" \
+            --report Gate10Acceptance/acceptance-manifest.json
+          cat > Gate10Acceptance/acceptance-summary.md <<'EOF'
+          # Phase 10 final software acceptance
+
+          This manifest records the tested workflow commit SHA and PR source head SHA for one run. A pull-request run tests GitHub's generated merge candidate and proves only the defined software CI gates.
+
+          Apple signing, TestFlight, production use, signed-device HealthKit background delivery, and Watch pairing/offline behavior remain unverified and blocked.
+          EOF
+
+      - name: Upload Gate 10 acceptance manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-10-final-acceptance-results
+          path: |
+            Gate10Acceptance
+            docs/gates/gate-10-final-acceptance.md
+          if-no-files-found: error
+          retention-days: 30

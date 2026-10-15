@@ -78,6 +78,21 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
             .map(\.contentData)
     }
 
+    func containsRequestID(_ requestID: UUID, conversationID: UUID) throws -> Bool {
+        try modelContext.fetch(FetchDescriptor<MessageRecord>())
+            .contains { $0.conversationID == conversationID && $0.requestID == requestID }
+    }
+
+    func containsCompletedResponse(requestID: UUID, conversationID: UUID) throws -> Bool {
+        try modelContext.fetch(FetchDescriptor<MessageRecord>())
+            .contains {
+                $0.conversationID == conversationID
+                    && $0.requestID == requestID
+                    && $0.roleRaw == "assistant"
+                    && $0.toolSummaryData == nil
+            }
+    }
+
     func reset(conversationID: UUID) throws {
         let messages = try modelContext.fetch(FetchDescriptor<MessageRecord>())
             .filter { $0.conversationID == conversationID }

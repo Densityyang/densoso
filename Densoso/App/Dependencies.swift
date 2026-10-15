@@ -16,6 +16,10 @@ final class Dependencies {
     let providerRegistry: ProviderRegistry
     let healthKitService: HealthKitService
     let healthKitSyncCoordinator: HealthKitSyncCoordinator
+    let healthIntelligenceService: HealthIntelligenceService
+    let briefNotificationScheduler: BriefNotificationScheduler
+    let workoutPlanSchedulingService: WorkoutPlanSchedulingService
+    let watchConnectivityCoordinator: PhoneWatchConnectivityCoordinator
     let healthSyncOutboxWorker: HealthSyncOutboxWorker
     let capabilityDiagnostics: CapabilityDiagnosticsService
     let exportService: ExportService
@@ -50,6 +54,11 @@ final class Dependencies {
             healthStore: healthKitService.client,
             observer: healthKitService.client
         )
+        let healthIntelligenceService = HealthIntelligenceService(modelContainer: modelContainer)
+        self.healthIntelligenceService = healthIntelligenceService
+        self.briefNotificationScheduler = BriefNotificationScheduler()
+        let workoutPlanSchedulingService = WorkoutPlanSchedulingService(modelContainer: modelContainer)
+        self.workoutPlanSchedulingService = workoutPlanSchedulingService
         let healthSyncOutboxWorker = HealthSyncOutboxWorker(
             healthStore: healthKitService.client,
             modelContainer: modelContainer
@@ -97,7 +106,7 @@ final class Dependencies {
             providerConfiguration: providerConfiguration
         )
 
-        self.agentSession = AgentSession(
+        let agentSession = AgentSession(
             providerSelector: providerRegistry,
             intelligencePreferences: intelligencePreferences,
             providerConfiguration: providerConfiguration,
@@ -107,8 +116,27 @@ final class Dependencies {
             confirmationCoordinator: confirmationCoordinator,
             readRepository: agentRepository,
             conversationRepository: agentRepository,
-            confirmedFoodHistory: confirmedFoodHistory
+            confirmedFoodHistory: confirmedFoodHistory,
+            healthContextSummaryProvider: {
+                try? healthIntelligenceService.healthContextSummary()
+            },
+            confirmedWorkoutPlanHandler: { actionID in
+                try await workoutPlanSchedulingService.scheduleConfirmedPlan(actionID: actionID)
+            }
         )
+        self.agentSession = agentSession
+        let watchConnectivityCoordinator = PhoneWatchConnectivityCoordinator(
+            modelContainer: modelContainer,
+            confirmationCoordinator: confirmationCoordinator,
+            agentSession: agentSession,
+            healthIntelligenceService: healthIntelligenceService,
+            workoutPlanSchedulingService: workoutPlanSchedulingService
+        )
+        self.watchConnectivityCoordinator = watchConnectivityCoordinator
+        healthKitSyncCoordinator.onObserverSyncCompleted = {
+            _ = try? healthIntelligenceService.refresh()
+            watchConnectivityCoordinator.refreshApplicationContext()
+        }
 
         // 尝试加载食材库
         if automaticallyLoadFoodDatabase {

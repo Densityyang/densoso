@@ -121,8 +121,10 @@ def main() -> int:
             errors.append(f"missing UI fixture {fixture.relative_to(ROOT)}")
     if screen_fixture.is_file():
         screens = json.loads(screen_fixture.read_text(encoding="utf-8")).get("screens", [])
-        if len(screens) != 5:
-            errors.append("Gate 1 UI fixture must cover all five current baseline tabs")
+        current_tabs = {screen.get("tab") for screen in screens}
+        expected_tabs = {"今天", "趋势", "记录", "设置"}
+        if len(screens) != 4 or current_tabs != expected_tabs:
+            errors.append("Gate 1 UI fixture must cover the final Today/Trends/Records/Settings tabs")
 
     if not GATE_DOC.is_file():
         errors.append("docs/gates/gate-01-foundation.md is missing")
@@ -139,7 +141,7 @@ def main() -> int:
         "Test UI fixtures and capture screenshots",
         "-only-testing:DensosoUITests",
         "xcresulttool export attachments",
-        'test "$SCREENSHOT_COUNT" -ge 6',
+        'test "$SCREENSHOT_COUNT" -ge 5',
         "-scheme DensosoWatch",
         "WATCHOS_DEPLOYMENT_TARGET=11.0",
         "UILaunchStoryboardName",

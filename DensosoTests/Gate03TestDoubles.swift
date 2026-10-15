@@ -123,6 +123,45 @@ final class ScriptedTextProvider: TextModelProvider, @unchecked Sendable {
     }
 }
 
+final class FailOnceScriptedTextProvider: TextModelProvider, @unchecked Sendable {
+    let descriptor = ProviderDescriptor(
+        id: .deepSeek,
+        model: "retry-fixture-model",
+        capabilities: [.text, .toolCalling]
+    )
+    private let lock = NSLock()
+    private var scripts: [[ProviderEvent]]
+    private var requests: [ModelRequest] = []
+    private var shouldFailFirstRequest = true
+
+    init(scripts: [[ProviderEvent]]) {
+        self.scripts = scripts
+    }
+
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ProviderEvent, Error> {
+        let outcome = lock.withLock { () -> Result<[ProviderEvent], ProviderError> in
+            requests.append(request)
+            if shouldFailFirstRequest {
+                shouldFailFirstRequest = false
+                return .failure(.network(code: nil))
+            }
+            return .success(scripts.isEmpty ? [] : scripts.removeFirst())
+        }
+        return AsyncThrowingStream { continuation in
+            switch outcome {
+            case .failure(let error): continuation.finish(throwing: error)
+            case .success(let events):
+                for event in events { continuation.yield(event) }
+                continuation.finish()
+            }
+        }
+    }
+
+    func recordedRequests() -> [ModelRequest] {
+        lock.withLock { requests }
+    }
+}
+
 final class DelayedTextProvider: TextModelProvider, @unchecked Sendable {
     let descriptor = ProviderDescriptor(
         id: .deepSeek,
@@ -237,6 +276,10 @@ actor BlockingConversationRepository: ConversationRepository {
     }
 
     func messageData(conversationID: UUID) -> [Data] { [] }
+
+    func containsRequestID(_ requestID: UUID, conversationID: UUID) -> Bool { false }
+
+    func containsCompletedResponse(requestID: UUID, conversationID: UUID) -> Bool { false }
 
     func reset(conversationID: UUID) {}
 

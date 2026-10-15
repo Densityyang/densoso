@@ -94,6 +94,7 @@ def main() -> int:
         (
             "lookbackStart", "endDate: .distantFuture", "forceRebaseline", "value: -30",
             "failedStreams[metric]", "completedStreams.insert(metric)",
+            "onObserverSyncCompleted", "self.onObserverSyncCompleted?()",
         ),
         errors,
     )
@@ -142,6 +143,7 @@ def main() -> int:
         "DensosoTests/HealthKitSyncCoordinatorTests.swift",
         (
             "testObserverCompletionRunsAfterAnchoredWorkoutIsCommitted",
+            "refreshSawCommittedWorkout",
             "testMeasuredDailyActivityAggregateFeedsProjectionWithoutWorkoutEnergy",
             "testEmptyAmbiguousWorkoutReadAdvancesCursorWithoutClaimingReadDenial",
             "testOneFailedStreamDoesNotBlockOtherHealthMetrics",
@@ -177,11 +179,16 @@ def main() -> int:
         errors,
     )
     watch_app = require_text(
-        "DensosoWatchExtension/DensosoWatchWorkoutApp.swift",
-        ("WatchCompanionPlaceholder", "Watch 伴侣功能将在后续阶段接入"),
+        "DensosoWatchExtension/DensosoWatchCompanionApp.swift",
+        ("DensosoWatchCompanionApp", "WatchCompanionView"),
         errors,
     )
-    if "HealthKit" in watch_app or "HKWorkout" in watch_app:
+    watch_view = require_text(
+        "DensosoWatchExtension/WatchCompanionView.swift",
+        ("WatchCompanionView", "connectivity.sendTranscript", "connectivity.confirm", "connectivity.reject"),
+        errors,
+    )
+    if any(token in watch_app + watch_view for token in ("import HealthKit", "HKWorkout")):
         errors.append("Watch extension must not host a custom HealthKit Workout writer")
     require_text(
         "Densoso/App/DensosoApp.swift",
