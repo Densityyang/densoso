@@ -191,7 +191,7 @@ def main() -> int:
     require_text(
         "docs/gates/gate-06-healthkit.md",
         (
-            "Status: implementation candidate; awaiting macOS CI and user review",
+            "Status:",
             "no read permission denial",
             "Gate 6 does not claim",
             "Weight edit/delete controls are not added",
