@@ -214,7 +214,9 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                         idempotencyKey: "\(action.idempotencyKey):health-sync",
                         syncIdentifier: "densoso.\(payload.actionType.rawValue).\(localRecordID.uuidString.lowercased())"
                     )
-                    modelContext.insert(outbox)
+                    if let outbox {
+                        modelContext.insert(outbox)
+                    }
                     outboxIDs.append(outboxID)
                 }
                 try injectFailure(.afterOutbox)

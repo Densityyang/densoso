@@ -33,6 +33,13 @@ enum WorkoutPlanCompileError: LocalizedError, Equatable {
     }
 }
 
+@concurrent
+private func workoutPlanIsAlreadyScheduled(_ planID: UUID) async -> Bool {
+    let scheduler = WorkoutScheduler.shared
+    let scheduledWorkouts = await scheduler.scheduledWorkouts
+    return scheduledWorkouts.contains { $0.plan.id == planID }
+}
+
 /// Validates and compiles a user-confirmed single-goal draft into WorkoutKit.
 /// Legacy set fields are rejected and are never passed to Apple's scheduler.
 struct WorkoutPlanCompiler {
@@ -124,8 +131,7 @@ struct WorkoutKitPlanSchedulingClient: WorkoutPlanSchedulingClient {
         guard await scheduler.requestAuthorization() == .authorized else {
             throw WorkoutPlanCompileError.scheduleAuthorizationDenied
         }
-        let scheduledWorkouts = await scheduler.scheduledWorkouts
-        let alreadyScheduled = scheduledWorkouts.contains { $0.plan.id == plan.id }
+        let alreadyScheduled = await workoutPlanIsAlreadyScheduled(plan.id)
         guard !alreadyScheduled else { return }
         await scheduler.schedule(plan, at: Calendar.current.dateComponents(
             [.calendar, .timeZone, .year, .month, .day, .hour, .minute],
