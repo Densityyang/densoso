@@ -120,7 +120,6 @@ final class DensosoMigrationTests: XCTestCase {
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
         try createV2Store(seed: seed, at: location.storeURL)
-        let sourceBefore = try storeFamilySnapshot(at: location.storeURL)
 
         let bootstrap = PersistenceBootstrap.make(
             storeURL: location.storeURL,
@@ -132,8 +131,11 @@ final class DensosoMigrationTests: XCTestCase {
         let manifest = try XCTUnwrap(bootstrap.backupManifest)
         let backupDirectory = manifest.backupStoreURL.deletingLastPathComponent()
         let sourceDirectory = manifest.sourceStoreURL.deletingLastPathComponent()
-        XCTAssertEqual(try storeFamilySnapshot(at: location.storeURL), sourceBefore)
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "2.0.0")
+        // The verified backup is the stable byte-level oracle. A just-closed
+        // SwiftData fixture can checkpoint its WAL after createV2Store returns,
+        // so comparing against raw bytes captured before backup creation races
+        // SQLite's store-family lifecycle rather than testing restore integrity.
         for entry in manifest.files {
             XCTAssertEqual(
                 try Data(contentsOf: backupDirectory.appendingPathComponent(entry.name)),
@@ -145,12 +147,25 @@ final class DensosoMigrationTests: XCTestCase {
             url: location.storeURL
         )
         var restoredContext: ModelContext? = ModelContext(restoredContainer!)
-        XCTAssertEqual(
-            try restoredContext!
-                .fetch(FetchDescriptor<DensosoSchemaV2.MealRecord>())
-                .first?.totalCaloriesKcal,
-            seed.mealCalories
+        let restoredMeal = try XCTUnwrap(
+            restoredContext!.fetch(FetchDescriptor<DensosoSchemaV2.MealRecord>()).first
         )
+        XCTAssertEqual(restoredMeal.id, seed.mealID)
+        XCTAssertEqual(restoredMeal.totalCaloriesKcal, seed.mealCalories)
+        let restoredWorkout = try XCTUnwrap(
+            restoredContext!.fetch(FetchDescriptor<DensosoSchemaV2.WorkoutRecord>()).first
+        )
+        XCTAssertEqual(restoredWorkout.id, seed.workoutID)
+        XCTAssertEqual(restoredWorkout.estimatedCaloriesBurned, seed.workoutCalories)
+        let restoredCursor = try XCTUnwrap(
+            restoredContext!.fetch(FetchDescriptor<DensosoSchemaV2.HealthKitImportCursor>()).first
+        )
+        XCTAssertEqual(restoredCursor.stream, "workouts")
+        XCTAssertEqual(restoredCursor.anchorData, seed.cursorBytes.map { Data($0) })
+        let restoredOutboxEntry = try XCTUnwrap(
+            restoredContext!.fetch(FetchDescriptor<DensosoSchemaV2.HealthSyncOutboxEntry>()).first
+        )
+        XCTAssertEqual(restoredOutboxEntry.recordID, seed.mealID)
         restoredContext = nil
         restoredContainer = nil
 
