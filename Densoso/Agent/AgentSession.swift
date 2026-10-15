@@ -247,7 +247,7 @@ final class AgentSession {
                 // A previously interrupted request has durable partial history. Resume it
                 // with the same request ID without appending another copy of the transcript.
                 let persisted = try await conversationRepository.messageData(conversationID: conversationID)
-                conversationHistory = persisted.map(Self.decodePersistedMessage)
+                conversationHistory = try persisted.map(Self.decodePersistedMessage)
                 restoredVisibleMessages = conversationHistory.compactMap(Self.visibleMessage)
             } else {
                 try await append(ModelMessage(role: .user, text: userText), requestID: requestID)

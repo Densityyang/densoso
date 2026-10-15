@@ -141,6 +141,11 @@ def main() -> int:
         errors,
     )
     require_text(
+        "Densoso/Agent/AgentSession.swift",
+        ("conversationHistory = try persisted.map(Self.decodePersistedMessage)",),
+        errors,
+    )
+    require_text(
         "DensosoTests/WorkoutPlanSchedulingServiceTests.swift",
         (
             "testUnconfirmedPlanNeverCallsWorkoutScheduler",
