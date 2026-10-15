@@ -68,7 +68,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(imported.first?.healthKitUUID, workoutID)
         XCTAssertEqual(observerRefreshCount, 1)
         XCTAssertTrue(refreshSawCommittedWorkout)
-        XCTAssertEqual(refreshedBriefDay, Calendar.current.startOfDay(for: date))
+        XCTAssertEqual(try XCTUnwrap(refreshedBriefDay), Calendar.current.startOfDay(for: date))
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthKitImportCursor>())
             .first(where: { $0.stream == "workouts" })?.anchorData, Data([1]))
     }

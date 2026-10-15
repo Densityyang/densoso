@@ -28,7 +28,7 @@ final class HealthIntelligenceTests: XCTestCase {
         XCTAssertEqual(summary.totalAsleepMinutes, 490, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(summary.mainSleepMinutes), 390, accuracy: 0.001)
         XCTAssertEqual(summary.napMinutes, 100, accuracy: 0.001)
-        XCTAssertEqual(summary.stageCoverage, 1, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(summary.stageCoverage), 1, accuracy: 0.001)
         let stages = try XCTUnwrap(summary.stages)
         XCTAssertEqual(stages.core, 240, accuracy: 0.001)
         XCTAssertEqual(stages.deep, 90, accuracy: 0.001)
