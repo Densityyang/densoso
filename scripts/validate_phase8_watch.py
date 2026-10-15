@@ -141,6 +141,8 @@ def main() -> int:
         source = path.read_text(encoding="utf-8")
         if "import HealthKit" in source or "HKWorkout" in source:
             errors.append(f"Watch target contains a custom HealthKit workout path: {path.name}")
+        if "OrbitPalette" in source:
+            errors.append(f"Watch target must not depend on iOS-only OrbitPalette: {path.name}")
         if "AVAudioSession" in source or "AVAudioRecorder" in source or "AVCaptureAudio" in source:
             errors.append(f"Watch target contains a custom microphone capture path: {path.name}")
     for removed in (

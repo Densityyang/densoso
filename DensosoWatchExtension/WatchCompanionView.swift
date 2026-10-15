@@ -127,7 +127,7 @@ struct WatchCompanionView: View {
                         }
                         Text(plan.lastError ?? planState(plan.state))
                             .font(.caption2)
-                            .foregroundStyle(plan.lastError == nil ? Color.secondary : OrbitPalette.coral)
+                            .foregroundStyle(plan.lastError == nil ? Color.secondary : Color.red)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)
