@@ -32,15 +32,12 @@ final class WatchMessageOutboxTests: XCTestCase {
         }
     }
 
-    func testAcceptedAcknowledgementKeepsMessageUntilProcessedOrPhoneContextConfirmsIt() throws {
+    func testAcceptedAcknowledgementRemovesMessageAfterPhonePersistsItsReceipt() throws {
         let id = UUID()
         var outbox = WatchMessageOutbox(pending: [
             WatchMessageEnvelope(messageID: id, payload: .transcript("今天跑步"))
         ])
         outbox.acknowledge(.init(messageID: id, state: .accepted))
-        XCTAssertEqual(outbox.pending.count, 1)
-
-        outbox.acknowledge(.init(messageID: id, state: .processed))
         XCTAssertTrue(outbox.pending.isEmpty)
     }
 

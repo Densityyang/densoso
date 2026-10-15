@@ -43,19 +43,27 @@ def main() -> int:
     )
     inbox = require_text(
         "Densoso/Infrastructure/WatchConnectivity/WatchMessageInboxStore.swift",
-        ("func ingest(_ envelope:", "payloadHash", "WatchMessageReceiptRecord", "context.transaction {"),
+        (
+            "func ingest(_ envelope:", "payloadHash", "WatchMessageReceiptRecord", "context.transaction {",
+            "func recentReceivedMessageIDs(limit: Int = 100)",
+            "func pendingCommandEnvelopes() throws -> [WatchMessageEnvelope]",
+        ),
         errors,
     )
     phone = require_text(
         "Densoso/Infrastructure/WatchConnectivity/PhoneWatchConnectivityCoordinator.swift",
-        ("session.updateApplicationContext", "didReceiveUserInfo", "didReceiveMessage", "pendingTranscriptRevision"),
+        (
+            "session.updateApplicationContext", "didReceiveUserInfo", "didReceiveMessage",
+            "pendingTranscriptRevision", "recentReceivedMessageIDs()",
+            "resumePendingCommands()",
+        ),
         errors,
     )
     watch = require_text(
         "DensosoWatchExtension/WatchConnectivityClient.swift",
         (
             "session.sendMessage", "session.transferUserInfo", "didReceiveApplicationContext",
-            "didFinish userInfoTransfer: WCSessionUserInfoTransfer", "sendTranscript",
+            "didFinish userInfoTransfer: WCSessionUserInfoTransfer", "dispatchedIDs.removeAll()", "sendTranscript",
         ),
         errors,
     )
@@ -78,6 +86,17 @@ def main() -> int:
     if "func scheduleConfirmedPlan(actionID:" not in compiler:
         errors.append("WorkoutPlanSchedulingService must require a persisted confirmed action ID")
 
+    require_text(
+        "Densoso/Application/Confirmation/ConfirmationRepository.swift",
+        ("var isRetryable: Bool",),
+        errors,
+    )
+    require_text(
+        "DensosoTests/ConfirmationCoordinatorTests.swift",
+        ("testConfirmationErrorsDistinguishRetryableWatchReplayFromTerminalFailures",),
+        errors,
+    )
+
     confirm_repo = require_text(
         "Densoso/Infrastructure/Persistence/SwiftDataConfirmationRepository.swift",
         ("ConfirmedWorkoutPlanEntry", "ScheduleEvent", "HealthSyncOutboxEntry"),
@@ -88,13 +107,18 @@ def main() -> int:
 
     require_text(
         "Packages/DensosoDomain/Tests/DensosoDomainTests/WatchMessageOutboxTests.swift",
-        ("testHundredOfflineMessagesRemainOrderedAndDuplicateReplaysDoNotAddRows",),
+        (
+            "testHundredOfflineMessagesRemainOrderedAndDuplicateReplaysDoNotAddRows",
+            "testAcceptedAcknowledgementRemovesMessageAfterPhonePersistsItsReceipt",
+        ),
         errors,
     )
     require_text(
         "DensosoTests/WatchMessageInboxStoreTests.swift",
         (
             "testRepeatedOfflineTranscriptReplayCreatesOneDurableInboxMessage",
+            "testPhoneAcknowledgesDurablePendingReceiptBeforeTranscriptProcessing",
+            "testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",
             "testOutOfOrderMessagesAreReturnedInDurableArrivalOrder",
             "testConflictingPayloadWithSameMessageIDIsRejected",
         ),

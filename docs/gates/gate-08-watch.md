@@ -11,6 +11,12 @@ database, microphone recorder, or workout tracker.
   stores outgoing messages durably and retries with `sendMessage` when
   reachable or `transferUserInfo` when offline; the phone persists inbox
   messages and receipts transactionally and treats message IDs idempotently.
+  The phone's `accepted` acknowledgement means its durable inbox owns the
+  envelope, even if transcript review/action confirmation remains pending.
+  On app startup, pending non-transcript commands are replayed in durable
+  arrival order; transcripts remain in the review queue rather than being
+  silently submitted. Terminal action failures close the command receipt;
+  transient persistence/commit failures leave it pending for recovery.
 - The Watch shows a small current-day snapshot, accepts system text dictation,
   and can confirm or reject an existing phone-side draft. A transcript creates
   a draft on the phone and does not itself write a health record.

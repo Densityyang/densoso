@@ -11,6 +11,31 @@ struct PendingWatchTranscript: Equatable, Identifiable, Sendable {
     var id: UUID { messageID }
 }
 
+/// WCSession's Objective-C reply closure is non-Sendable. This single-use box
+/// transfers it across the actor hop and invokes it exactly once after inbox persistence.
+private final class WatchSessionReplyHandler: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: (([String: Any]) -> Void)?
+
+    init(_ handler: @escaping ([String: Any]) -> Void) {
+        self.handler = handler
+    }
+
+    func reply(with data: Data?) {
+        lock.lock()
+        let handler = self.handler
+        self.handler = nil
+        lock.unlock()
+
+        guard let handler else { return }
+        if let data {
+            handler(["densoso.watch.payload": data])
+        } else {
+            handler([:])
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
@@ -24,6 +49,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     @ObservationIgnored private let workoutPlanSchedulingService: WorkoutPlanSchedulingService
     @ObservationIgnored private let inboxStore: WatchMessageInboxStore
     @ObservationIgnored private var processingMessageIDs = Set<UUID>()
+    @ObservationIgnored private var isResumingPendingCommands = false
 
     private(set) var isAvailable = false
     private(set) var isActivated = false
@@ -51,8 +77,32 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     }
 
     func activate() {
+        resumePendingCommands()
         guard isAvailable, session.activationState == .notActivated else { return }
         session.activate()
+    }
+
+    private func resumePendingCommands() {
+        guard !isResumingPendingCommands else { return }
+
+        let envelopes: [WatchMessageEnvelope]
+        do {
+            envelopes = try inboxStore.pendingCommandEnvelopes()
+        } catch {
+            lastError = "无法恢复 Watch 命令：\(error.localizedDescription)"
+            return
+        }
+        guard !envelopes.isEmpty else { return }
+
+        isResumingPendingCommands = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isResumingPendingCommands = false }
+            for envelope in envelopes {
+                guard let data = try? WatchMessageCodec.encode(envelope) else { continue }
+                _ = await self.receive(data)
+            }
+        }
     }
 
     func refreshApplicationContext() {
@@ -95,7 +145,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         let today = Calendar.current.startOfDay(for: Date())
         let metrics = try context.fetch(FetchDescriptor<DailyMetrics>())
             .first(where: { Calendar.current.isDate($0.date, inSameDayAs: today) })
-        let processed = try inboxStore.recentProcessedMessageIDs()
+        let received = try inboxStore.recentReceivedMessageIDs()
         let scheduledPlans = try workoutPlanSchedulingService.confirmedPlans().map {
             WatchWorkoutPlanSummary(
                 actionID: $0.actionID,
@@ -114,7 +164,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
             domains: healthIntelligenceService.dailyBrief?.domains ?? [],
             pendingActions: pendingActionSummaries(),
             workoutPlans: scheduledPlans,
-            acknowledgedMessageIDs: Array(processed.suffix(100))
+            acknowledgedMessageIDs: received
         )
     }
 
@@ -147,8 +197,15 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 do {
                     receipt = try await confirmationCoordinator.confirm(id: actionID)
                 } catch {
-                    try inboxStore.setState(WatchReceiptState.rejected, for: envelope.messageID)
-                    return acknowledgement(for: envelope.messageID, state: .rejected, detail: error.localizedDescription)
+                    if let confirmationError = error as? ConfirmationError, !confirmationError.isRetryable {
+                        try inboxStore.setState(WatchReceiptState.rejected, for: envelope.messageID)
+                        return acknowledgement(
+                            for: envelope.messageID,
+                            state: .rejected,
+                            detail: confirmationError.localizedDescription
+                        )
+                    }
+                    throw error
                 }
                 var detail = "已在本机确认"
                 if receipt.actionType == .workoutPlan {
@@ -165,7 +222,20 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 refreshApplicationContext()
                 return acknowledgement(for: envelope.messageID, state: .processed, detail: detail)
             case .reject(let actionID):
-                try await confirmationCoordinator.reject(id: actionID)
+                do {
+                    try await confirmationCoordinator.reject(id: actionID)
+                } catch {
+                    if let confirmationError = error as? ConfirmationError, !confirmationError.isRetryable {
+                        try inboxStore.setState(WatchReceiptState.rejected, for: envelope.messageID)
+                        refreshApplicationContext()
+                        return acknowledgement(
+                            for: envelope.messageID,
+                            state: .rejected,
+                            detail: confirmationError.localizedDescription
+                        )
+                    }
+                    throw error
+                }
                 try? await agentSession.reloadPendingActions()
                 try inboxStore.setState(WatchReceiptState.processed, for: envelope.messageID)
                 refreshApplicationContext()
@@ -192,21 +262,17 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         return try? WatchMessageCodec.encode(envelope)
     }
 
-    private func receiveDictionary(_ dictionary: [String: Any]) async -> [String: Any] {
-        guard let data = dictionary[Self.payloadKey] as? Data,
-              let acknowledgement = await receive(data) else { return [:] }
-        return [Self.payloadKey: acknowledgement]
-    }
-
     nonisolated func session(
         _ session: WCSession,
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
     ) {
+        let isActivated = activationState == .activated
+        let errorMessage = error?.localizedDescription
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.isActivated = activationState == .activated
-            if let error { self.lastError = error.localizedDescription }
+            self.isActivated = isActivated
+            if let errorMessage { self.lastError = errorMessage }
             else { self.lastError = nil }
             self.refreshApplicationContext()
         }
@@ -219,8 +285,9 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        guard let data = userInfo["densoso.watch.payload"] as? Data else { return }
         Task { @MainActor [weak self] in
-            guard let self, let data = userInfo["densoso.watch.payload"] as? Data else { return }
+            guard let self else { return }
             _ = await self.receive(data)
             self.refreshApplicationContext()
         }
@@ -231,9 +298,16 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         didReceiveMessage message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void
     ) {
-        Task { @MainActor [weak self] in
-            guard let self else { replyHandler([:]); return }
-            replyHandler(await self.receiveDictionary(message))
+        let reply = WatchSessionReplyHandler(replyHandler)
+        guard let data = message["densoso.watch.payload"] as? Data else {
+            reply.reply(with: nil)
+            return
+        }
+        Task { @MainActor [weak self, reply] in
+            guard let self else { reply.reply(with: nil); return }
+            let response = await self.receive(data)
+            reply.reply(with: response)
+            self.refreshApplicationContext()
         }
     }
 }

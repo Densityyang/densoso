@@ -43,6 +43,41 @@ final class WatchMessageInboxStoreTests: XCTestCase {
         XCTAssertEqual(try store.pendingTranscripts().map(\.text), ["第二条", "第一条"])
     }
 
+    func testPhoneAcknowledgesDurablePendingReceiptBeforeTranscriptProcessing() throws {
+        let store = try makeStore()
+        let envelope = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000705")!,
+            payload: .transcript("午餐记录")
+        )
+
+        XCTAssertEqual(try store.ingest(envelope), .accepted)
+        XCTAssertEqual(try store.recentReceivedMessageIDs(), [envelope.messageID])
+        XCTAssertEqual(try store.pendingTranscripts().map(\.messageID), [envelope.messageID])
+    }
+
+    func testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder() throws {
+        let store = try makeStore()
+        let transcript = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000706")!,
+            payload: .transcript("记录午餐")
+        )
+        let confirm = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000707")!,
+            payload: .confirm(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000717")!)
+        )
+        let reject = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000708")!,
+            payload: .reject(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000718")!)
+        )
+
+        for envelope in [transcript, confirm, reject] {
+            XCTAssertEqual(try store.ingest(envelope), .accepted)
+        }
+
+        XCTAssertEqual(try store.pendingCommandEnvelopes(), [confirm, reject])
+        XCTAssertEqual(try store.pendingTranscripts().map(\.messageID), [transcript.messageID])
+    }
+
     func testConflictingPayloadWithSameMessageIDIsRejected() throws {
         let store = try makeStore()
         let messageID = UUID(uuidString: "00000000-0000-0000-0000-000000000704")!

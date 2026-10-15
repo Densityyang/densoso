@@ -90,15 +90,24 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
             session.sendMessage(
                 payload,
                 replyHandler: { [weak self] reply in
-                    Task { @MainActor in self?.receive(reply) }
+                    guard let replyData = reply["densoso.watch.payload"] as? Data else {
+                        Task { @MainActor in
+                            guard let self else { return }
+                            self.dispatchedIDs.remove(envelope.messageID)
+                            self.statusMessage = "iPhone 未确认消息已本地接收，已转入离线队列。"
+                            self.session.transferUserInfo(["densoso.watch.payload": data])
+                        }
+                        return
+                    }
+                    Task { @MainActor in self?.receive(replyData) }
                 },
                 errorHandler: { [weak self] error in
+                    let errorMessage = error.localizedDescription
                     Task { @MainActor in
                         guard let self else { return }
                         self.dispatchedIDs.remove(envelope.messageID)
-                        self.statusMessage = "即时消息未送达，已转入离线队列。"
-                        self.session.transferUserInfo(payload)
-                        _ = error
+                        self.statusMessage = "即时消息未送达，已转入离线队列。\(errorMessage)"
+                        self.session.transferUserInfo(["densoso.watch.payload": data])
                     }
                 }
             )
@@ -108,13 +117,13 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
         }
     }
 
-    private func receive(_ dictionary: [String: Any]) {
-        guard let data = dictionary[Self.payloadKey] as? Data else { return }
+    private func receive(_ data: Data) {
         do {
             let envelope = try WatchMessageCodec.decode(data)
             switch envelope.payload {
             case .acknowledgement(let acknowledgement):
                 outbox.acknowledge(acknowledgement)
+                dispatchedIDs.remove(acknowledgement.messageID)
                 persistOutbox()
                 statusMessage = acknowledgement.detail ?? acknowledgementLabel(acknowledgement.state)
             case .todaySnapshot(let snapshot):
@@ -130,6 +139,7 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
     private func apply(_ snapshot: WatchTodaySnapshot) {
         todaySnapshot = snapshot
         outbox.acknowledge(messageIDs: snapshot.acknowledgedMessageIDs)
+        dispatchedIDs.subtract(snapshot.acknowledgedMessageIDs)
         persistOutbox()
         if snapshot.acknowledgedMessageIDs.isEmpty {
             statusMessage = "已更新 Today 摘要。"
@@ -157,31 +167,43 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
     ) {
+        let isActivated = activationState == .activated
+        let isReachable = session.isReachable
+        let errorMessage = error?.localizedDescription
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.isActivated = activationState == .activated
-            self.isReachable = session.isReachable
-            if let error { self.statusMessage = error.localizedDescription }
+            self.isActivated = isActivated
+            self.isReachable = isReachable
+            if let errorMessage { self.statusMessage = errorMessage }
             else { self.statusMessage = self.isReachable ? "已连接 iPhone。" : "iPhone 暂不可达；可离线排队。" }
-            self.dispatchPendingMessages()
+            if self.isActivated {
+                self.dispatchedIDs.removeAll()
+                self.dispatchPendingMessages()
+            }
         }
     }
 
     nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
+        let isReachable = session.isReachable
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.isReachable = session.isReachable
+            self.isReachable = isReachable
             self.statusMessage = self.isReachable ? "已连接 iPhone。" : "iPhone 暂不可达；可离线排队。"
-            if self.isReachable { self.dispatchPendingMessages() }
+            if self.isReachable {
+                self.dispatchedIDs.removeAll()
+                self.dispatchPendingMessages()
+            }
         }
     }
 
     nonisolated func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        Task { @MainActor [weak self] in self?.receive(applicationContext) }
+        guard let data = applicationContext["densoso.watch.payload"] as? Data else { return }
+        Task { @MainActor [weak self] in self?.receive(data) }
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
-        Task { @MainActor [weak self] in self?.receive(userInfo) }
+        guard let data = userInfo["densoso.watch.payload"] as? Data else { return }
+        Task { @MainActor [weak self] in self?.receive(data) }
     }
 
     nonisolated func session(
@@ -189,19 +211,19 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
         didReceiveMessage message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void
     ) {
-        Task { @MainActor [weak self] in
-            self?.receive(message)
-            replyHandler([:])
-        }
+        replyHandler([:])
+        guard let data = message["densoso.watch.payload"] as? Data else { return }
+        Task { @MainActor [weak self] in self?.receive(data) }
     }
 
     nonisolated func session(_ session: WCSession, didFinish userInfoTransfer: WCSessionUserInfoTransfer, error: Error?) {
+        let data = userInfoTransfer.userInfo["densoso.watch.payload"] as? Data
+        let errorMessage = error?.localizedDescription
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if let error {
-                self.statusMessage = "离线消息传输失败，可重试：\(error.localizedDescription)"
-                if let data = userInfoTransfer.userInfo[Self.payloadKey] as? Data,
-                   let envelope = try? WatchMessageCodec.decode(data) {
+            if let errorMessage {
+                self.statusMessage = "离线消息传输失败，可重试：\(errorMessage)"
+                if let data, let envelope = try? WatchMessageCodec.decode(data) {
                     self.dispatchedIDs.remove(envelope.messageID)
                 }
             }

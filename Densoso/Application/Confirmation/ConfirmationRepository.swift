@@ -29,6 +29,17 @@ enum ConfirmationError: LocalizedError, Equatable, Sendable {
     case invariantViolation(String)
     case commitFailed(retryable: Bool)
 
+    var isRetryable: Bool {
+        switch self {
+        case .alreadyCommitting, .persistenceReadOnly:
+            return true
+        case .commitFailed(let retryable):
+            return retryable
+        case .notFound, .expired, .rejected, .payloadCorrupt, .unsupportedAction, .invariantViolation:
+            return false
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case .notFound: "待确认操作不存在"

@@ -90,6 +90,23 @@ final class WatchMessageInboxStore {
             }
     }
 
+    func pendingCommandEnvelopes() throws -> [WatchMessageEnvelope] {
+        let context = ModelContext(modelContainer)
+        let pendingReceipts = try context.fetch(FetchDescriptor<WatchMessageReceiptRecord>())
+            .filter { $0.state == WatchReceiptState.pending }
+        let pendingIDs = Set(pendingReceipts.compactMap { UUID(uuidString: $0.messageID) })
+        let messages = try context.fetch(FetchDescriptor<MessageRecord>())
+            .filter { $0.conversationID == Self.conversationID && $0.roleRaw == "watch-envelope" }
+            .sorted { $0.ordinal < $1.ordinal }
+        return messages.compactMap { message -> WatchMessageEnvelope? in
+            guard let id = message.requestID,
+                  pendingIDs.contains(id),
+                  let envelope = try? WatchMessageCodec.decode(message.contentData) else { return nil }
+            if case .transcript = envelope.payload { return nil }
+            return envelope
+        }
+    }
+
     func setState(_ state: String, for messageID: UUID) throws {
         let context = ModelContext(modelContainer)
         let key = messageID.uuidString.lowercased()
@@ -108,6 +125,19 @@ final class WatchMessageInboxStore {
             .compactMap { UUID(uuidString: $0.messageID) }
             .suffix(max(limit, 0))
             .map { $0 }
+    }
+
+    func recentReceivedMessageIDs(limit: Int = 100) throws -> [UUID] {
+        let inboxID = Self.conversationID
+        return try ModelContext(modelContainer).fetch(
+            FetchDescriptor<MessageRecord>(
+                predicate: #Predicate { $0.conversationID == inboxID && $0.roleRaw == "watch-envelope" }
+            )
+        )
+        .sorted { $0.ordinal < $1.ordinal }
+        .compactMap(\.requestID)
+        .suffix(max(limit, 0))
+        .map { $0 }
     }
 
     func receiptCount() throws -> Int {

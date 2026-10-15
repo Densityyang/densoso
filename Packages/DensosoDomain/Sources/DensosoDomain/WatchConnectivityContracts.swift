@@ -96,6 +96,7 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
     public let domains: [HealthDomainResult]
     public let pendingActions: [WatchPendingActionSummary]
     public let workoutPlans: [WatchWorkoutPlanSummary]
+    /// Message IDs whose envelopes are durably stored on iPhone; their work may still be pending.
     public let acknowledgedMessageIDs: [UUID]
 
     public init(
@@ -148,10 +149,9 @@ public struct WatchMessageOutbox: Codable, Equatable, Sendable {
 
     public mutating func acknowledge(_ acknowledgement: WatchAcknowledgement) {
         switch acknowledgement.state {
-        case .processed, .duplicate, .rejected:
+        // `accepted` is emitted only after the phone persists a receipt.
+        case .accepted, .processed, .duplicate, .rejected:
             pendingByID.removeValue(forKey: acknowledgement.messageID)
-        case .accepted:
-            break
         }
     }
 

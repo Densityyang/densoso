@@ -5,6 +5,20 @@ import XCTest
 
 @MainActor
 final class ConfirmationCoordinatorTests: XCTestCase {
+    func testConfirmationErrorsDistinguishRetryableWatchReplayFromTerminalFailures() {
+        XCTAssertTrue(ConfirmationError.alreadyCommitting.isRetryable)
+        XCTAssertTrue(ConfirmationError.persistenceReadOnly(diagnosticID: "recovery").isRetryable)
+        XCTAssertTrue(ConfirmationError.commitFailed(retryable: true).isRetryable)
+
+        XCTAssertFalse(ConfirmationError.notFound.isRetryable)
+        XCTAssertFalse(ConfirmationError.expired.isRetryable)
+        XCTAssertFalse(ConfirmationError.rejected.isRetryable)
+        XCTAssertFalse(ConfirmationError.payloadCorrupt.isRetryable)
+        XCTAssertFalse(ConfirmationError.unsupportedAction.isRetryable)
+        XCTAssertFalse(ConfirmationError.invariantViolation("terminal").isRetryable)
+        XCTAssertFalse(ConfirmationError.commitFailed(retryable: false).isRetryable)
+    }
+
     func testConcurrentStageAndConfirmWriteOneLogicalTransaction() async throws {
         let harness = try Harness()
         let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000101")!
