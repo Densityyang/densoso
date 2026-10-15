@@ -74,7 +74,9 @@ final class WatchMessageInboxStoreTests: XCTestCase {
             XCTAssertEqual(try store.ingest(envelope), .accepted)
         }
 
-        XCTAssertEqual(try store.pendingCommandEnvelopes(), [confirm, reject])
+        let pendingCommands = try store.pendingCommandEnvelopes()
+        XCTAssertEqual(pendingCommands.map(\.messageID), [confirm.messageID, reject.messageID])
+        XCTAssertEqual(pendingCommands.map(\.payload), [confirm.payload, reject.payload])
         XCTAssertEqual(try store.pendingTranscripts().map(\.messageID), [transcript.messageID])
     }
 

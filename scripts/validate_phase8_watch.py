@@ -122,6 +122,8 @@ def main() -> int:
             "testRepeatedOfflineTranscriptReplayCreatesOneDurableInboxMessage",
             "testPhoneAcknowledgesDurablePendingReceiptBeforeTranscriptProcessing",
             "testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",
+            "pendingCommands.map(\\.messageID)",
+            "pendingCommands.map(\\.payload)",
             "testOutOfOrderMessagesAreReturnedInDurableArrivalOrder",
             "testConflictingPayloadWithSameMessageIDIsRejected",
         ),
