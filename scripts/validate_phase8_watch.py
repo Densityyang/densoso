@@ -130,6 +130,7 @@ def main() -> int:
     require_text(
         "DensosoTests/Application/AgentCoordinatorTests.swift",
         (
+            "import DensosoDomain",
             "testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce",
             "hasPersistedRequestHistory(for: pending.messageID)",
         ),
