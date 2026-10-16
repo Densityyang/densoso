@@ -3,6 +3,12 @@ import Foundation
 
 @MainActor
 final class ToolRegistry {
+    private let todayHealthStateProvider: TodayHealthStateProvider
+
+    init(todayHealthStateProvider: @escaping TodayHealthStateProvider = { _ in nil }) {
+        self.todayHealthStateProvider = todayHealthStateProvider
+    }
+
     var toolDefinitions: [ToolSchema] { allTools.map(\.definition) }
 
     private var allTools: [any AgentTool] {
@@ -15,6 +21,7 @@ final class ToolRegistry {
             GetWeeklyDeficitTool(),
             SuggestMealPlanTool(),
             GetScheduleTool(),
+            GetTodayHealthStateTool(stateProvider: todayHealthStateProvider),
         ]
     }
 

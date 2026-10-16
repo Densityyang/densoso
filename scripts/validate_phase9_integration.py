@@ -47,8 +47,8 @@ def main() -> int:
     export = require_text(
         "Densoso/Services/ExportService.swift",
         (
-            "private static let formatVersion = 4",
-            "private static let supportedFormatVersions: Set<Int> = [2, 3, 4]",
+            "private static let formatVersion = 5",
+            "private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5]",
             "weightRecords: [WeightRecordExport]?",
             "goalProfiles: [GoalProfileExport]?",
             "dailyHealthSnapshots: [DailyHealthSnapshotExport]?",
@@ -69,8 +69,8 @@ def main() -> int:
         (
             "testLegacyV2BackupStillRestoresAfterGate5EvidenceFieldsWereAdded",
             "testLegacyV3BackupStillRestoresMealEvidenceAfterHealthDataWasAdded",
-            "testV4BackupRestoresHealthDataGoalsAndReportsWithoutSyncQueueState",
-            "XCTAssertEqual(exported.formatVersion, 4)",
+            "testV5BackupRestoresProfileHistoryAndHealthDataWithoutSyncQueueState",
+            "XCTAssertEqual(exported.formatVersion, 5)",
             "energyIntakeKcal: try EstimateRange(low: 450, likely: 500, high: 600)",
         ),
         errors,

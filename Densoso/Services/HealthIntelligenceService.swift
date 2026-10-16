@@ -94,6 +94,19 @@ final class HealthIntelligenceService {
         return result.dailyBrief.contextSummary
     }
 
+    /// Builds today's deterministic state without updating either persisted brief cache.
+    /// Read-only agent tools use this path so a query does not cause a write as a side effect.
+    func todayHealthState(asOf date: Date = Date()) throws -> HealthStateV2? {
+        let context = ModelContext(modelContainer)
+        let days = try loadDays(through: date, in: context)
+        let plannedWorkout = try plannedWorkoutTomorrow(asOf: date, in: context)
+        return engine.makeDailyBrief(
+            days: days,
+            goals: try goalProfile(asOf: date, in: context),
+            plannedWorkoutTomorrow: plannedWorkout
+        )?.dailyBrief.healthState
+    }
+
     func goalProfile(asOf date: Date = Date()) throws -> GoalProfile? {
         try goalProfile(asOf: date, in: ModelContext(modelContainer))
     }

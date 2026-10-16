@@ -5,7 +5,7 @@ import XCTest
 final class ToolSchemaTests: XCTestCase {
     func testEveryToolUsesClosedObjectSchemaAndLocalEffect() throws {
         let registry = ToolRegistry()
-        XCTAssertEqual(registry.toolDefinitions.count, 8)
+        XCTAssertEqual(registry.toolDefinitions.count, 9)
         for tool in registry.toolDefinitions {
             guard case .object(_, _, let additionalProperties, _) = tool.parameters else {
                 return XCTFail("\(tool.name) must use an object schema")

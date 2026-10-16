@@ -80,7 +80,9 @@ final class Dependencies {
         } else {
             packagedFoodProvider = nil
         }
-        let toolRegistry = ToolRegistry()
+        let toolRegistry = ToolRegistry(todayHealthStateProvider: { date in
+            try healthIntelligenceService.todayHealthState(asOf: date)
+        })
         self.intelligencePreferences = intelligencePreferences
         self.providerConfiguration = providerConfiguration
         self.providerRegistry = providerRegistry
