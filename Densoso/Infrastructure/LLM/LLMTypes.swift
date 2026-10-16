@@ -299,9 +299,33 @@ struct ProviderUsage: Codable, Equatable, Sendable {
     let model: String
     let capability: ProviderCapability
     let inputTokens: Int
+    let cachedInputTokens: Int
     let outputTokens: Int
+    let reasoningTokens: Int
     let audioSeconds: Double
     let attempt: Int
+
+    init(
+        provider: ProviderID,
+        model: String,
+        capability: ProviderCapability,
+        inputTokens: Int,
+        outputTokens: Int,
+        audioSeconds: Double,
+        attempt: Int,
+        cachedInputTokens: Int = 0,
+        reasoningTokens: Int = 0
+    ) {
+        self.provider = provider
+        self.model = model
+        self.capability = capability
+        self.inputTokens = max(inputTokens, 0)
+        self.cachedInputTokens = max(cachedInputTokens, 0)
+        self.outputTokens = max(outputTokens, 0)
+        self.reasoningTokens = max(reasoningTokens, 0)
+        self.audioSeconds = max(audioSeconds, 0)
+        self.attempt = max(attempt, 0)
+    }
 }
 
 enum ProviderStopReason: String, Codable, Sendable {

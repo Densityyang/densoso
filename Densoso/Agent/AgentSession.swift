@@ -228,13 +228,23 @@ final class AgentSession {
     private func run(userText: String, requestID: UUID) async throws -> AgentResponse {
         streamedText = ""
         emit(.accepted(requestID: requestID))
+        var requestRecordStarted = false
         do {
             try Task.checkCancellation()
-            if try await conversationRepository.containsRequestID(requestID, conversationID: conversationID) {
+            let hasPersistedHistory = try await conversationRepository.containsRequestID(
+                requestID,
+                conversationID: conversationID
+            )
+            if hasPersistedHistory {
                 if try await conversationRepository.containsCompletedResponse(
                     requestID: requestID,
                     conversationID: conversationID
                 ) {
+                    try? await conversationRepository.updateAgentRequestState(
+                        requestID: requestID,
+                        conversationID: conversationID,
+                        state: .completed
+                    )
                     pendingActions = try await confirmationCoordinator.activeActions()
                     let response = AgentResponse(
                         text: "这条请求已在本机完成，不会因 Watch 重放而重复处理；请检查已有消息和待确认草稿。",
@@ -244,9 +254,37 @@ final class AgentSession {
                     emit(.completed(response))
                     return response
                 }
-                // A previously interrupted request has durable partial history. Resume it
-                // with the same request ID without appending another copy of the transcript.
-                let persisted = try await conversationRepository.messageData(conversationID: conversationID)
+            }
+
+            let requestSnapshot = try await conversationRepository.beginAgentRequest(
+                requestID: requestID,
+                conversationID: conversationID,
+                initialBudget: budgetFactory(),
+                startedAt: Date()
+            )
+            requestRecordStarted = true
+            switch requestSnapshot.state {
+            case .running, .interrupted:
+                break
+            case .completed:
+                requestRecordStarted = false
+                throw AgentError.requestAlreadyCompleted
+            case .failed:
+                requestRecordStarted = false
+                throw ProviderError.budgetExceeded
+            case .expired:
+                requestRecordStarted = false
+                throw ProviderError.timeout
+            }
+
+            if hasPersistedHistory {
+                // Rebuild from the saved conversation and original user turn. Partial assistant
+                // tool turns are discarded so a restarted provider does not need persisted CoT.
+                // The request ledger retains the original deadline and cumulative consumption.
+                let persisted = try await conversationRepository.resumeHistory(
+                    conversationID: conversationID,
+                    requestID: requestID
+                )
                 conversationHistory = try persisted.map(Self.decodePersistedMessage)
                 restoredVisibleMessages = conversationHistory.compactMap(Self.visibleMessage)
             } else {
@@ -269,16 +307,23 @@ final class AgentSession {
                     dataClass: .healthText
                 )
             }
+            let promptUserText = conversationHistory.last(where: { $0.role == .user })
+                .flatMap { Self.visibleMessage($0)?.text }
+                ?? userText
             let healthSummary = healthContextSummaryProvider?()
             let requestSystemPrompt = HealthContextPromptBuilder.prompt(
                 basePrompt: systemPrompt.text,
-                userText: userText,
+                userText: promptUserText,
                 summary: healthSummary
             )
-            var tracker = AgentBudgetTracker(budget: budgetFactory())
+            var tracker = AgentBudgetTracker(
+                budget: requestSnapshot.budget,
+                consumption: requestSnapshot.consumption
+            )
 
             while true {
                 try tracker.consumeProviderRound()
+                try await persist(consumption: tracker.consumption, requestID: requestID)
                 emit(
                     .providerRoundStarted(
                         provider: provider.descriptor.id,
@@ -302,6 +347,15 @@ final class AgentSession {
                     request: request,
                     providerRound: tracker.providerRounds
                 )
+                for usage in result.usages {
+                    tracker.record(AgentTokenUsage(
+                        inputTokens: usage.inputTokens,
+                        cachedInputTokens: usage.cachedInputTokens,
+                        outputTokens: usage.outputTokens,
+                        reasoningTokens: usage.reasoningTokens
+                    ))
+                }
+                try await persist(consumption: tracker.consumption, requestID: requestID)
                 try tracker.requireTime()
 
                 if !result.toolCalls.isEmpty {
@@ -316,6 +370,7 @@ final class AgentSession {
 
                     for call in result.toolCalls {
                         try tracker.consumeToolCall()
+                        try await persist(consumption: tracker.consumption, requestID: requestID)
                         emit(.toolCallStarted(name: call.name, index: tracker.toolCalls))
                         let output = await executeTool(call, clientRequestID: requestID)
                         try await append(
@@ -339,19 +394,52 @@ final class AgentSession {
                     toolCallsCount: tracker.toolCalls,
                     providerRoundsCount: tracker.providerRounds
                 )
+                try await conversationRepository.updateAgentRequestState(
+                    requestID: requestID,
+                    conversationID: conversationID,
+                    state: .completed
+                )
                 emit(.completed(response))
                 return response
             }
         } catch is CancellationError {
+            if requestRecordStarted { await persist(state: .interrupted, requestID: requestID) }
             emit(.cancelled(requestID: requestID))
             throw ProviderError.cancelled
         } catch let error as ProviderError where error == .cancelled {
+            if requestRecordStarted { await persist(state: .interrupted, requestID: requestID) }
             emit(.cancelled(requestID: requestID))
             throw error
+        } catch let error as ProviderError {
+            if requestRecordStarted {
+                await persist(
+                    state: error == .timeout ? .expired : (error == .budgetExceeded ? .failed : .interrupted),
+                    requestID: requestID
+                )
+            }
+            emit(.failed(error.localizedDescription))
+            throw error
         } catch {
+            if requestRecordStarted { await persist(state: .interrupted, requestID: requestID) }
             emit(.failed(error.localizedDescription))
             throw error
         }
+    }
+
+    private func persist(consumption: AgentBudgetConsumption, requestID: UUID) async throws {
+        try await conversationRepository.updateAgentRequestConsumption(
+            requestID: requestID,
+            conversationID: conversationID,
+            consumption: consumption
+        )
+    }
+
+    private func persist(state: AgentRequestState, requestID: UUID) async {
+        try? await conversationRepository.updateAgentRequestState(
+            requestID: requestID,
+            conversationID: conversationID,
+            state: state
+        )
     }
 
     func cancelActiveRequest() {
@@ -437,6 +525,7 @@ final class AgentSession {
             var text = ""
             var toolCalls: [ToolCall] = []
             var reasoning: [JSONValue] = []
+            var usages: [ProviderUsage] = []
             for try await event in provider.stream(request) {
                 try Task.checkCancellation()
                 switch event {
@@ -451,6 +540,17 @@ final class AgentSession {
                 case .reasoning(let item):
                     reasoning.append(item)
                 case .usage(let usage):
+                    usages.append(usage)
+                    try await conversationRepository.addAgentRequestUsage(
+                        requestID: request.requestID,
+                        conversationID: request.conversationID,
+                        usage: AgentTokenUsage(
+                            inputTokens: usage.inputTokens,
+                            cachedInputTokens: usage.cachedInputTokens,
+                            outputTokens: usage.outputTokens,
+                            reasoningTokens: usage.reasoningTokens
+                        )
+                    )
                     try await usageLedger.record(
                         usage,
                         requestID: request.requestID,
@@ -474,7 +574,7 @@ final class AgentSession {
             // cancelled. Re-check here so cancellation cannot become an empty
             // successful Provider round.
             try Task.checkCancellation()
-            return ProviderRoundResult(text: text, toolCalls: toolCalls, reasoning: reasoning)
+            return ProviderRoundResult(text: text, toolCalls: toolCalls, reasoning: reasoning, usages: usages)
         }
         activeProviderTask = task
         defer { activeProviderTask = nil }
@@ -492,6 +592,22 @@ final class AgentSession {
 
     func dailyMetrics(from startDate: Date, through endDate: Date) async throws -> [AgentDailyMetric] {
         try await readRepository.dailyMetrics(from: startDate, through: endDate)
+    }
+
+    func recentMeals(from startDate: Date, through endDate: Date, limit: Int) async throws -> [AgentRecentMeal] {
+        try await readRepository.recentMeals(
+            from: startDate,
+            through: endDate,
+            limit: min(limit + 1, AgentRecentMealsLimits.maximumQueryMealCount)
+        )
+    }
+
+    func recentWorkouts(from startDate: Date, through endDate: Date, limit: Int) async throws -> [AgentRecentWorkout] {
+        try await readRepository.recentWorkouts(
+            from: startDate,
+            through: endDate,
+            limit: min(limit + 1, AgentRecentWorkoutsLimits.maximumQueryWorkoutCount)
+        )
     }
 
     func schedule(on date: Date) async throws -> [AgentScheduleItem] {
@@ -613,6 +729,7 @@ private struct ProviderRoundResult: Sendable {
     let text: String
     let toolCalls: [ToolCall]
     let reasoning: [JSONValue]
+    let usages: [ProviderUsage]
 }
 
 struct PersistedChatMessage: Identifiable, Equatable {
@@ -624,10 +741,12 @@ struct PersistedChatMessage: Identifiable, Equatable {
 enum AgentError: Error, LocalizedError, Equatable, Sendable {
     case emptyResponse
     case requestAlreadyRunning
+    case requestAlreadyCompleted
     var errorDescription: String? {
         switch self {
         case .emptyResponse: "Agent 未返回有效响应"
         case .requestAlreadyRunning: "已有 Agent 请求正在运行"
+        case .requestAlreadyCompleted: "Agent 请求已完成，无法继续恢复"
         }
     }
 }

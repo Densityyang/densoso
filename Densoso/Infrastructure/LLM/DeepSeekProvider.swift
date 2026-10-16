@@ -243,6 +243,8 @@ struct DeepSeekProvider: MultimodalModelProvider {
         for call in calls { continuation.yield(.toolCall(call)) }
 
         if let usageObject = response["usage"]?.objectValue {
+            let cachedInputTokens = usageObject["input_tokens_details"]?.objectValue?["cached_tokens"]?.intValue ?? 0
+            let reasoningTokens = usageObject["output_tokens_details"]?.objectValue?["reasoning_tokens"]?.intValue ?? 0
             continuation.yield(
                 .usage(
                     ProviderUsage(
@@ -252,7 +254,9 @@ struct DeepSeekProvider: MultimodalModelProvider {
                         inputTokens: usageObject["input_tokens"]?.intValue ?? 0,
                         outputTokens: usageObject["output_tokens"]?.intValue ?? 0,
                         audioSeconds: 0,
-                        attempt: attempt
+                        attempt: attempt,
+                        cachedInputTokens: cachedInputTokens,
+                        reasoningTokens: reasoningTokens
                     )
                 )
             )

@@ -316,6 +316,7 @@ jobs:
             -only-testing:DensosoTests/AgentCoordinatorTests \
             -only-testing:DensosoTests/PromptInjectionEvalTests \
             -only-testing:DensosoTests/AgentBudgetTests \
+            -only-testing:DensosoTests/AgentRequestResumeTests \
             -only-testing:DensosoTests/ToolSchemaTests \
             -only-testing:DensosoTests/ProviderUsageLedgerTests \
             -only-testing:DensosoTests/RestrictedMarkdownRendererTests \
@@ -323,6 +324,9 @@ jobs:
             -only-testing:DensosoTests/AgentPersistenceBoundaryTests \
             -only-testing:DensosoTests/IntelligenceRoutingPolicyTests \
             -only-testing:DensosoTests/ConversationPersistenceTests \
+            -only-testing:DensosoTests/GetRecentMealsToolTests \
+            -only-testing:DensosoTests/GetRecentWorkoutsToolTests \
+            -only-testing:DensosoTests/GetGoalToolTests \
             -resultBundlePath "$GATE03_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
             test 2>&1 | tee gate03-agent-provider-tests.log
@@ -650,6 +654,7 @@ jobs:
             -destination-timeout 120 \
             -derivedDataPath "$DERIVED_DATA_PATH" \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests \
+            -only-testing:DensosoTests/GetHealthHistoryToolTests \
             -only-testing:DensosoTests/HealthContextPromptBuilderTests \
             -only-testing:DensosoTests/BriefNotificationSchedulerTests \
             -enableCodeCoverage YES \

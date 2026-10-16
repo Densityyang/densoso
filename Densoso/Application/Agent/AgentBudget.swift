@@ -10,31 +10,45 @@ struct AgentBudget: Equatable, Sendable {
         maximumToolCalls: Int = 8,
         deadline: Date = Date().addingTimeInterval(45)
     ) {
-        self.maximumProviderRounds = maximumProviderRounds
-        self.maximumToolCalls = maximumToolCalls
+        self.maximumProviderRounds = max(maximumProviderRounds, 0)
+        self.maximumToolCalls = max(maximumToolCalls, 0)
         self.deadline = deadline
     }
+
 }
 
 struct AgentBudgetTracker: Sendable {
     let budget: AgentBudget
-    private(set) var providerRounds = 0
-    private(set) var toolCalls = 0
+    private(set) var consumption: AgentBudgetConsumption
+
+    var providerRounds: Int { consumption.providerRoundsUsed }
+    var toolCalls: Int { consumption.toolCallsUsed }
+    var remainingProviderRounds: Int { max(budget.maximumProviderRounds - providerRounds, 0) }
+    var remainingToolCalls: Int { max(budget.maximumToolCalls - toolCalls, 0) }
+
+    init(budget: AgentBudget, consumption: AgentBudgetConsumption = .zero) {
+        self.budget = budget
+        self.consumption = consumption
+    }
 
     mutating func consumeProviderRound(now: Date = Date()) throws {
         try requireTime(now: now)
-        guard providerRounds < budget.maximumProviderRounds else {
+        guard remainingProviderRounds > 0 else {
             throw ProviderError.budgetExceeded
         }
-        providerRounds += 1
+        consumption = consumption.addingProviderRound()
     }
 
     mutating func consumeToolCall(now: Date = Date()) throws {
         try requireTime(now: now)
-        guard toolCalls < budget.maximumToolCalls else {
+        guard remainingToolCalls > 0 else {
             throw ProviderError.budgetExceeded
         }
-        toolCalls += 1
+        consumption = consumption.addingToolCall()
+    }
+
+    mutating func record(_ usage: AgentTokenUsage) {
+        consumption = consumption.adding(usage)
     }
 
     func requireTime(now: Date = Date()) throws {

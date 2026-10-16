@@ -20,3 +20,4 @@ typealias WeeklyBriefRecord = DensosoSchemaV4.WeeklyBriefRecord
 typealias WatchMessageReceiptRecord = DensosoSchemaV4.WatchMessageReceiptRecord
 typealias ConsentRecord = DensosoSchemaV4.ConsentRecord
 typealias ProfileRevisionRecord = DensosoSchemaV4.ProfileRevisionRecord
+typealias AgentRequestRecord = DensosoSchemaV5.AgentRequestRecord

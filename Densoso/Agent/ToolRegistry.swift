@@ -4,9 +4,17 @@ import Foundation
 @MainActor
 final class ToolRegistry {
     private let todayHealthStateProvider: TodayHealthStateProvider
+    private let healthHistoryProvider: HealthHistoryProvider
+    private let goalProfileProvider: GoalProfileProvider
 
-    init(todayHealthStateProvider: @escaping TodayHealthStateProvider = { _ in nil }) {
+    init(
+        todayHealthStateProvider: @escaping TodayHealthStateProvider = { _ in nil },
+        healthHistoryProvider: @escaping HealthHistoryProvider = { _, _ in [] },
+        goalProfileProvider: @escaping GoalProfileProvider = { _ in nil }
+    ) {
         self.todayHealthStateProvider = todayHealthStateProvider
+        self.healthHistoryProvider = healthHistoryProvider
+        self.goalProfileProvider = goalProfileProvider
     }
 
     var toolDefinitions: [ToolSchema] { allTools.map(\.definition) }
@@ -22,6 +30,11 @@ final class ToolRegistry {
             SuggestMealPlanTool(),
             GetScheduleTool(),
             GetTodayHealthStateTool(stateProvider: todayHealthStateProvider),
+            GetHealthHistoryTool(historyProvider: healthHistoryProvider),
+            GetPendingActionsTool(),
+            GetRecentMealsTool(),
+            GetRecentWorkoutsTool(),
+            GetGoalTool(goalProvider: goalProfileProvider),
         ]
     }
 

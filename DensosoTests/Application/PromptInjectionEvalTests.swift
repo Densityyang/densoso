@@ -134,6 +134,14 @@ private actor PromptInjectionReadRepository: AgentReadRepository {
         []
     }
 
+    func recentMeals(from startDate: Date, through endDate: Date, limit: Int) -> [AgentRecentMeal] {
+        []
+    }
+
+    func recentWorkouts(from startDate: Date, through endDate: Date, limit: Int) -> [AgentRecentWorkout] {
+        []
+    }
+
     func schedule(on date: Date) -> [AgentScheduleItem] {
         guard let injectedScheduleText else { return [] }
         return [
@@ -156,7 +164,7 @@ private struct PromptInjectionHarness {
         provider: any TextModelProvider,
         readRepository: any AgentReadRepository
     ) async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: container)

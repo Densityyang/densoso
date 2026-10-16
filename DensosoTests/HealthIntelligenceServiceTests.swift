@@ -142,6 +142,63 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         XCTAssertEqual(nutrition.baseline.readiness, .mature)
     }
 
+    func testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 1)))
+        let end = try XCTUnwrap(calendar.date(byAdding: .day, value: 2, to: start))
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+
+        for offset in -41...2 {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: start))
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                stepCount: Double(5_000 + offset),
+                healthReadStates: [HealthMetricID.stepCount.rawValue: .available],
+                algorithmVersion: "history-fixture-v4"
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: dayKey(day),
+                timezoneID: snapshot.timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "history-\(offset)",
+                algorithmVersion: snapshot.algorithmVersion
+            ))
+        }
+        try context.save()
+
+        let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
+        let history = try service.healthHistory(from: start, through: end)
+
+        XCTAssertEqual(history.map(\.date), [
+            start,
+            try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: start)),
+            end,
+        ])
+        let firstActivity = try XCTUnwrap(history.first?.state.domains.first(where: { $0.domain == .activity }))
+        let lastActivity = try XCTUnwrap(history.last?.state.domains.first(where: { $0.domain == .activity }))
+        XCTAssertEqual(firstActivity.currentValue, 5_000)
+        XCTAssertEqual(lastActivity.currentValue, 5_002)
+        XCTAssertGreaterThanOrEqual(firstActivity.baseline.validDays, 28)
+        XCTAssertTrue(history.allSatisfy { $0.state.tomorrowGuidance == nil })
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyBriefRecord>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyBriefRecord>()), 0)
+    }
+
+    func testHealthHistoryRejectsInvalidAndOversizedRanges() throws {
+        let container = try makeContainer()
+        let service = HealthIntelligenceService(modelContainer: container)
+        let start = Date(timeIntervalSince1970: 1_780_000_000)
+        let tooLate = Calendar.current.date(byAdding: .day, value: 14, to: start)!
+
+        XCTAssertThrowsError(try service.healthHistory(from: tooLate, through: start))
+        XCTAssertThrowsError(try service.healthHistory(from: start, through: tooLate))
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)

@@ -261,6 +261,94 @@ actor InMemoryProviderGovernanceRepository: ProviderGovernanceRepository {
 
 actor BlockingConversationRepository: ConversationRepository {
     private var appendStarted = false
+    private var requests: [UUID: AgentRequestSnapshot] = [:]
+
+    func beginAgentRequest(
+        requestID: UUID,
+        conversationID: UUID,
+        initialBudget: AgentBudget,
+        startedAt: Date
+    ) -> AgentRequestSnapshot {
+        if let existing = requests[requestID] {
+            let resumed = AgentRequestSnapshot(
+                requestID: existing.requestID,
+                conversationID: existing.conversationID,
+                startedAt: existing.startedAt,
+                budget: existing.budget,
+                consumption: existing.consumption,
+                resumeCount: existing.resumeCount + 1,
+                state: .running
+            )
+            requests[requestID] = resumed
+            return resumed
+        }
+        let created = AgentRequestSnapshot(
+            requestID: requestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            budget: initialBudget,
+            consumption: .zero,
+            resumeCount: 0,
+            state: .running
+        )
+        requests[requestID] = created
+        return created
+    }
+
+    func updateAgentRequestConsumption(
+        requestID: UUID,
+        conversationID: UUID,
+        consumption: AgentBudgetConsumption
+    ) throws {
+        guard let existing = requests[requestID] else { throw AgentRequestPersistenceError.requestNotFound }
+        requests[requestID] = AgentRequestSnapshot(
+            requestID: existing.requestID,
+            conversationID: existing.conversationID,
+            startedAt: existing.startedAt,
+            budget: existing.budget,
+            consumption: consumption,
+            resumeCount: existing.resumeCount,
+            state: existing.state
+        )
+    }
+
+    func addAgentRequestUsage(
+        requestID: UUID,
+        conversationID: UUID,
+        usage: AgentTokenUsage
+    ) throws {
+        guard let existing = requests[requestID] else { throw AgentRequestPersistenceError.requestNotFound }
+        requests[requestID] = AgentRequestSnapshot(
+            requestID: existing.requestID,
+            conversationID: existing.conversationID,
+            startedAt: existing.startedAt,
+            budget: existing.budget,
+            consumption: existing.consumption.adding(usage),
+            resumeCount: existing.resumeCount,
+            state: existing.state
+        )
+    }
+
+    func updateAgentRequestState(
+        requestID: UUID,
+        conversationID: UUID,
+        state: AgentRequestState
+    ) throws {
+        guard let existing = requests[requestID] else { throw AgentRequestPersistenceError.requestNotFound }
+        requests[requestID] = AgentRequestSnapshot(
+            requestID: existing.requestID,
+            conversationID: existing.conversationID,
+            startedAt: existing.startedAt,
+            budget: existing.budget,
+            consumption: existing.consumption,
+            resumeCount: existing.resumeCount,
+            state: state
+        )
+    }
+
+    func agentRequest(requestID: UUID, conversationID: UUID) -> AgentRequestSnapshot? {
+        requests[requestID]
+    }
 
     func ensureConversation(id: UUID) {}
 
@@ -276,6 +364,8 @@ actor BlockingConversationRepository: ConversationRepository {
     }
 
     func messageData(conversationID: UUID) -> [Data] { [] }
+
+    func resumeHistory(conversationID: UUID, requestID: UUID) -> [Data] { [] }
 
     func containsRequestID(_ requestID: UUID, conversationID: UUID) -> Bool { false }
 

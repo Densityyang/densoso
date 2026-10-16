@@ -60,7 +60,10 @@ final class DeepSeekProviderContractTests: XCTestCase {
         })
         XCTAssertTrue(events.contains { event in
             guard case .usage(let usage) = event else { return false }
-            return usage.inputTokens == 120 && usage.outputTokens == 32
+            return usage.inputTokens == 120
+                && usage.cachedInputTokens == 40
+                && usage.outputTokens == 32
+                && usage.reasoningTokens == 12
         })
         XCTAssertTrue(events.contains(.completed(.completed)))
 

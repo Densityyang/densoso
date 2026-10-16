@@ -155,7 +155,7 @@ def main() -> int:
         "docs/gates/gate-09-integration.md",
         (
             "Status:",
-            "format version 4",
+            "format version 5",
             "Gates 1–8",
             "physical iPhone render",
             "blocked-by-signing",
@@ -186,8 +186,8 @@ def main() -> int:
 
     report = {
         "status": "pass",
-        "scope": "four-tab-integration-and-v4-backup",
-        "backupCompatibility": [2, 3, 4],
+        "scope": "four-tab-integration-and-v5-backup",
+        "backupCompatibility": [2, 3, 4, 5],
         "sensitiveSyncStateRestored": False,
         "physicalDeviceVisualAcceptanceClaimed": False,
     }

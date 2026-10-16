@@ -120,7 +120,9 @@ struct QwenProvider: TextModelProvider {
                                     inputTokens: usage.promptTokens ?? 0,
                                     outputTokens: usage.completionTokens ?? 0,
                                     audioSeconds: usage.audioSeconds ?? 0,
-                                    attempt: result.attempt
+                                    attempt: result.attempt,
+                                    cachedInputTokens: usage.promptTokensDetails?.cachedTokens ?? 0,
+                                    reasoningTokens: usage.completionTokensDetails?.reasoningTokens ?? 0
                                 )
                             )
                         )
@@ -286,10 +288,24 @@ private struct OpenAIUsage: Decodable {
     let promptTokens: Int?
     let completionTokens: Int?
     let audioSeconds: Double?
+    let promptTokensDetails: OpenAITokenDetails?
+    let completionTokensDetails: OpenAITokenDetails?
 
     enum CodingKeys: String, CodingKey {
         case promptTokens = "prompt_tokens"
         case completionTokens = "completion_tokens"
         case audioSeconds = "audio_seconds"
+        case promptTokensDetails = "prompt_tokens_details"
+        case completionTokensDetails = "completion_tokens_details"
+    }
+}
+
+private struct OpenAITokenDetails: Decodable {
+    let cachedTokens: Int?
+    let reasoningTokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case cachedTokens = "cached_tokens"
+        case reasoningTokens = "reasoning_tokens"
     }
 }

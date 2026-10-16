@@ -107,6 +107,44 @@ final class HealthIntelligenceService {
         )?.dailyBrief.healthState
     }
 
+    /// Returns deterministic, read-only daily health summaries for a bounded historical window.
+    /// The same 41-day baseline used by the daily brief is loaded before the first requested day.
+    func healthHistory(from startDate: Date, through endDate: Date) throws -> [HealthStateHistoryPoint] {
+        let startDay = calendar.startOfDay(for: startDate)
+        let endDay = calendar.startOfDay(for: endDate)
+        guard startDay <= endDay else { throw HealthHistoryQueryError.invalidRange }
+        guard endDay <= calendar.startOfDay(for: Date()) else { throw HealthHistoryQueryError.futureDate }
+        let dayCount = calendar.dateComponents([.day], from: startDay, to: endDay).day ?? -1
+        guard (0..<HealthHistoryQueryError.maximumDays).contains(dayCount) else {
+            throw HealthHistoryQueryError.rangeTooLarge
+        }
+        guard let baselineStart = calendar.date(byAdding: .day, value: -41, to: startDay) else {
+            throw HealthHistoryQueryError.invalidRange
+        }
+
+        let context = ModelContext(modelContainer)
+        let days = try loadDays(from: baselineStart, through: endDay, in: context)
+        var points: [HealthStateHistoryPoint] = []
+        for offset in 0...dayCount {
+            guard let targetDay = calendar.date(byAdding: .day, value: offset, to: startDay) else { continue }
+            let inputs = days.filter { calendar.startOfDay(for: $0.dayStart) <= targetDay }
+            guard let state = engine.makeDailyBrief(
+                days: inputs,
+                goals: try goalProfile(asOf: targetDay, in: context)
+            )?.dailyBrief.healthState else { continue }
+            points.append(HealthStateHistoryPoint(
+                date: targetDay,
+                state: HealthStateV2(
+                    domains: state.domains,
+                    recovery: state.recovery,
+                    trainingLoad: state.trainingLoad,
+                    tomorrowGuidance: nil
+                )
+            ))
+        }
+        return points
+    }
+
     func goalProfile(asOf date: Date = Date()) throws -> GoalProfile? {
         try goalProfile(asOf: date, in: ModelContext(modelContainer))
     }
@@ -168,6 +206,20 @@ final class HealthIntelligenceService {
         // 13 days behind `end`; retain that full week plus its 28-day baseline.
         guard let start = calendar.date(byAdding: .day, value: -41, to: end) else { return [] }
 
+        return try loadDays(from: start, through: end, in: context)
+    }
+
+    private func loadDays(
+        from startDate: Date,
+        through date: Date,
+        in context: ModelContext
+    ) throws -> [HealthIntelligenceDay] {
+        let start = calendar.startOfDay(for: startDate)
+        let end = calendar.startOfDay(for: date)
+        guard start <= end,
+              let dayCount = calendar.dateComponents([.day], from: start, to: end).day,
+              dayCount >= 0 else { return [] }
+
         let snapshots = try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
         let decoder = makeDecoder()
         var snapshotByDay: [Date: DailyHealthSnapshot] = [:]
@@ -193,8 +245,8 @@ final class HealthIntelligenceService {
         let workoutRecords = try context.fetch(FetchDescriptor<WorkoutRecord>())
             .filter { $0.date >= start && $0.date < (calendar.date(byAdding: .day, value: 1, to: end) ?? end) }
         var days: [HealthIntelligenceDay] = []
-        for offset in 0...41 {
-            guard let day = calendar.date(byAdding: .day, value: offset - 41, to: end) else { continue }
+        for offset in 0...dayCount {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: start) else { continue }
             let dayStart = calendar.startOfDay(for: day)
             guard dayStart >= start && dayStart <= end else { continue }
             let snapshot = snapshotByDay[dayStart]
@@ -403,4 +455,29 @@ private struct CacheInput: Codable {
     let goal: GoalProfile?
     let algorithmVersion: String
     let plannedWorkoutTomorrow: Bool?
+}
+
+struct HealthStateHistoryPoint: Equatable {
+    let date: Date
+    let state: HealthStateV2
+}
+
+enum HealthHistoryQueryError: Error, LocalizedError {
+    // Keep a compact daily report below the Agent tool-output limit.
+    static let maximumDays = 14
+
+    case invalidRange
+    case rangeTooLarge
+    case futureDate
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidRange:
+            "健康历史日期范围无效。"
+        case .rangeTooLarge:
+            "健康状态历史一次最多查询 14 天。"
+        case .futureDate:
+            "健康状态历史不能查询未来日期。"
+        }
+    }
 }

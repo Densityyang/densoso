@@ -90,13 +90,83 @@ def main() -> int:
             "AgentBudgetTracker", "toolCallsCount: tracker.toolCalls",
             "providerRoundsCount: tracker.providerRounds", "cancelActiveRequest",
             "governanceRepository.isConsentGranted", "latestEvent", "sendEvents",
-            "cancelled(requestID:",
+            "cancelled(requestID:", "beginAgentRequest", "resumeHistory",
+            "requestSnapshot.budget", "requestSnapshot.consumption",
+            "updateAgentRequestState",
         ],
         errors,
     )
     agent_text = (ROOT / "Densoso" / "Agent" / "AgentSession.swift").read_text(encoding="utf-8")
     if "DeepSeekClient" in agent_text or "ModelContext" in agent_text:
         errors.append("AgentSession must remain provider-neutral and free of ModelContext")
+
+    require_text(
+        ROOT / "Densoso" / "Persistence" / "Schemas" / "DensosoSchemaV5.swift",
+        [
+            "AgentRequestRecord", "requestID", "conversationID", "startedAt",
+            "absoluteDeadline", "providerRoundsUsed", "toolCallsUsed", "inputTokens",
+            "cachedInputTokens", "outputTokens", "reasoningTokens", "resumeCount", "stateRaw",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataAgentRepository.swift",
+        ["beginAgentRequest", "absoluteDeadline", "resumeCount", "updateAgentRequestConsumption"],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "AgentRequestResumeTests.swift",
+        [
+            "testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage",
+            "testV4StoreMigratesToV5AndAddsAnEmptyRequestLedger",
+            "resumeCount", "cachedInputTokens", "reasoningTokens",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataAgentRepository.swift",
+        ["func recentMeals", "AgentRecentMeal", "startDate <= endDate"],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "GetRecentMealsToolTests.swift",
+        [
+            "testQueryWindowAndOutputUseLocalDaysSortNewestFirstAndEnforceLimit",
+            "testSizeBoundReportsThatAdditionalMealsRemain",
+            "testToolHasStrictReadOnlySchemaAndRejectsOutOfRangeArguments",
+            "testRepositoryUsesUUIDAsStableTieBreakBeforeApplyingFetchLimit",
+            "testRepositoryReturnsBoundedSummariesWithoutWritingOrExposingStoredFields",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataAgentRepository.swift",
+        ["func recentWorkouts", "WorkoutRecord", "workout.durationMinutes > 0"],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "GetRecentWorkoutsToolTests.swift",
+        [
+            "testQueryWindowAndOutputUseLocalDaysSortNewestFirstAndEnforceLimit",
+            "testToolHasStrictReadOnlySchemaAndRejectsOutOfRangeArguments",
+            "testRepositoryReturnsCompletedRecordsOnlyWithoutWritesOrStoredFields",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Agent" / "Tools" / "GetGoalTool.swift",
+        ["get_goal", "goalProvider", "unavailable"],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "GetGoalToolTests.swift",
+        [
+            "testToolUsesStrictEmptyReadOnlySchema",
+            "testMissingOrEmptyGoalsReturnUnavailableWithoutDefaults",
+            "testServiceReturnsOnlyCurrentEffectiveGoalAndReadDoesNotWrite",
+        ],
+        errors,
+    )
 
     require_text(
         ROOT / "Densoso" / "Agent" / "Tools" / "LogMealTool.swift",
@@ -107,7 +177,25 @@ def main() -> int:
         errors.append("log_meal still accepts stringified nested JSON")
     require_text(
         ROOT / "Densoso" / "Agent" / "ToolRegistry.swift",
-        ["ToolSchemaValidator.validate", "CreateWorkoutPlanTool", "8_192"],
+        [
+            "ToolSchemaValidator.validate",
+            "CreateWorkoutPlanTool",
+            "GetRecentMealsTool",
+            "GetRecentWorkoutsTool",
+            "GetGoalTool",
+            "GetHealthHistoryTool",
+            "GetPendingActionsTool",
+            "8_192",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "ToolSchemaTests.swift",
+        [
+            "testPendingActionsToolOnlyReturnsUnexpiredUncommittedSummaries",
+            "testPendingActionsToolAcceptsOnlyAnEmptyReadOnlyRequest",
+            "testPendingActionsToolBoundsResultsAndReportsRemainingActions",
+        ],
         errors,
     )
     require_text(
@@ -127,9 +215,13 @@ def main() -> int:
         "DensosoTests/Infrastructure/LLM/QwenProviderContractTests.swift",
         "DensosoTests/Infrastructure/LLM/ProviderRetryPolicyTests.swift",
         "DensosoTests/Application/AgentCoordinatorTests.swift",
+        "DensosoTests/Application/AgentRequestResumeTests.swift",
         "DensosoTests/Application/PromptInjectionEvalTests.swift",
         "DensosoTests/Application/AgentBudgetTests.swift",
         "DensosoTests/Application/ToolSchemaTests.swift",
+        "DensosoTests/Application/GetRecentMealsToolTests.swift",
+        "DensosoTests/Application/GetRecentWorkoutsToolTests.swift",
+        "DensosoTests/Application/GetGoalToolTests.swift",
         "DensosoTests/Application/ProviderUsageLedgerTests.swift",
         "DensosoTests/Presentation/RestrictedMarkdownRendererTests.swift",
         "DensosoTests/Privacy/ProviderLogRedactionTests.swift",

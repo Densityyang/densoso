@@ -82,6 +82,10 @@ final class Dependencies {
         }
         let toolRegistry = ToolRegistry(todayHealthStateProvider: { date in
             try healthIntelligenceService.todayHealthState(asOf: date)
+        }, healthHistoryProvider: { start, end in
+            try healthIntelligenceService.healthHistory(from: start, through: end)
+        }, goalProfileProvider: { date in
+            try healthIntelligenceService.goalProfile(asOf: date)
         })
         self.intelligencePreferences = intelligencePreferences
         self.providerConfiguration = providerConfiguration

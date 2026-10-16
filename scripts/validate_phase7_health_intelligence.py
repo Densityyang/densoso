@@ -110,6 +110,18 @@ def main() -> int:
         (
             "testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
             "testPreviousWeekUsesItsFullTwentyEightDayBaselineOnSunday",
+            "testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches",
+            "testHealthHistoryRejectsInvalidAndOversizedRanges",
+        ),
+        errors,
+    )
+    require_text(
+        "DensosoTests/Application/GetHealthHistoryToolTests.swift",
+        (
+            "testRegistryExposesStrictReadOnlyBoundedHistoryTool",
+            "testResponseContainsOnlyDailyAggregatesAndExplicitEvidenceStatus",
+            "testNoHistoryReportsMissingDataInsteadOfZero",
+            "testResponseRejectsMoreThanFourteenDaysAndFutureDates",
         ),
         errors,
     )
