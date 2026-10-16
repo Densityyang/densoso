@@ -52,9 +52,11 @@ public enum ActionPayload: Codable, Equatable, Sendable {
     public var summary: String {
         switch self {
         case .meal(let draft):
-            let likely = draft.totalNutrients?.energyKcal.likely ?? 0
-            let likelyText = likely.isFinite ? String(format: "%.0f", likely) : "unavailable"
-            return "\(draft.dishes.map(\.name).joined(separator: "、"))，约 \(likelyText) kcal"
+            let dishes = draft.dishes.map(\.name).joined(separator: "、")
+            guard let presentation = draft.caloriePresentation else {
+                return "\(dishes)，热量暂不可用"
+            }
+            return "\(dishes)，约 \(presentation.likelyKcal) kcal，可信度\(presentation.confidence.displayName)"
         case .weight(let draft):
             return String(format: "%.1f kg", draft.kilograms)
         case .workoutPlan(let draft):
@@ -96,10 +98,11 @@ public enum ActionPayload: Codable, Equatable, Sendable {
     public var confidence: Double {
         switch self {
         case .meal(let draft):
-            return draft.dishes
-                .flatMap(\.evidence)
-                .compactMap(\.confidence)
-                .min() ?? 0
+            switch draft.caloriePresentation?.confidence {
+            case .some(.high): return 0.9
+            case .some(.medium): return 0.65
+            case .some(.low), .none: return 0.35
+            }
         case .weight, .workoutPlan, .trainingPlan, .dailyCheckIn, .userPreference:
             return 1
         }

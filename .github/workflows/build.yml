@@ -490,6 +490,7 @@ jobs:
             -destination-timeout 120 \
             -derivedDataPath "$DERIVED_DATA_PATH" \
             -only-testing:DensosoTests/Gate05EvaluationTests \
+            -only-testing:DensosoTests/LogMealQuantityEvidenceTests \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests \
             -only-testing:DensosoTests/QwenMealVisionProviderContractTests \
             -only-testing:DensosoTests/PhotoEvidenceSanitizerTests \

@@ -126,10 +126,14 @@ final class ToolSchemaTests: XCTestCase {
                     "ingredients": .array([
                         .object([
                             "name": .string("米饭"),
-                            "amountGrams": .number(150),
+                            "quantityEvidence": .object([
+                                "kind": .string("exactGrams"),
+                                "value": .number(150),
+                                "unit": .string("g"),
+                                "gramsPerServing": .null,
+                            ]),
                         ])
                     ]),
-                    "notedOilG": .null,
                     "lowConfidence": .boolean(false),
                 ])
             ]),
@@ -141,6 +145,20 @@ final class ToolSchemaTests: XCTestCase {
         stringified["dishes"] = .string("[]")
         XCTAssertThrowsError(
             try ToolSchemaValidator.validate(.object(stringified), against: schema)
+        )
+
+        var legacyAmount = valid.objectValue!
+        var legacyDishes = legacyAmount["dishes"]!.arrayValue!
+        var legacyDish = legacyDishes[0].objectValue!
+        var legacyIngredients = legacyDish["ingredients"]!.arrayValue!
+        var legacyIngredient = legacyIngredients[0].objectValue!
+        legacyIngredient["amountGrams"] = .number(150)
+        legacyIngredients[0] = .object(legacyIngredient)
+        legacyDish["ingredients"] = .array(legacyIngredients)
+        legacyDishes[0] = .object(legacyDish)
+        legacyAmount["dishes"] = .array(legacyDishes)
+        XCTAssertThrowsError(
+            try ToolSchemaValidator.validate(.object(legacyAmount), against: schema)
         )
 
         var extra = valid.objectValue!

@@ -25,6 +25,15 @@ meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
   confirmation; ambiguous results keep `foodID == nil` until explicit selection.
 - `PortionEstimator` implements measured, approximate, package, household and
   photo interval rules. A single photo is never measured.
+- `log_meal` accepts `quantityEvidence`; exact grams are used only when the
+  current user text locally verifies that amount for the matching ingredient.
+  Household/count/photo estimates remain ranges, package serving mass must be
+  verified by user text or local label evidence, and unknown identity or portion
+  produces a single clarification instead of a calorie draft.
+- Broad energy ranges retain their likely point estimate with a weak evidence
+  grade. The app asks at most one high-value question for each meal capture.
+- V2 estimates record `meal-estimator-v2`, `portion-estimator-v2`, and
+  `calorie-accounting-v2` in meal/evidence version fields for exports and review.
 - `MealEstimator` propagates ingredient intervals, keeps raw/cooked distinct,
   treats oil/sugar/sauce as explicit ingredients, avoids duplicate oil for cooked
   composite entries, and preserves unknown macros as nil in the canonical range
@@ -35,9 +44,10 @@ meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
   aggregates requires a separately versioned schema migration, not an in-place
   V3 change.
 - At most one high-value clarification is shown and answered before staging:
-  candidate identity, corrected gram amount, or explicit oil presence. The answer
-  is retained as user-reported evidence. Staging creates `PendingAction`; only
-  the existing confirmation transaction writes Meal, receipt and nutrition outbox.
+  candidate identity, missing quantity, or an unusually broad energy interval.
+  Verified exact user grams remain user-reported evidence, never measured.
+  Staging creates `PendingAction`; only the existing confirmation transaction
+  writes Meal, receipt and nutrition outbox.
 
 ## Non-goals
 

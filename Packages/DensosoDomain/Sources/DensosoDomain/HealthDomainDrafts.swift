@@ -87,6 +87,11 @@ public struct MealDraft: Codable, Equatable, Sendable {
         )
     }
 
+    public var caloriePresentation: CaloriePresentation? {
+        guard let energy = totalNutrients?.energyKcal else { return nil }
+        return CaloriePresentationPolicy().presentation(for: energy)
+    }
+
     private func sumOptional(_ keyPath: KeyPath<NutrientEstimate, EstimateRange?>) -> EstimateRange? {
         let values = dishes.compactMap { $0.nutrients[keyPath: keyPath] }
         guard values.count == dishes.count else { return nil }

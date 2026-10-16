@@ -123,8 +123,8 @@ final class AgentRequestResumeTests: XCTestCase {
                 return nil
             } }
             .joined(separator: "\n")
-        XCTAssertTrue(resumedUserText?.contains("恢复预算请求") == true)
-        XCTAssertFalse(resumedUserText?.contains("ignored replay text") == true)
+        XCTAssertTrue(resumedUserText.contains("恢复预算请求"))
+        XCTAssertFalse(resumedUserText.contains("ignored replay text"))
         XCTAssertFalse(resumedRequest.messages.contains { message in
             message.content.contains { content in
                 if case .toolCall = content { return true }

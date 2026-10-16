@@ -27,17 +27,20 @@ public struct MealDishEstimationInput: Codable, Equatable, Sendable {
     public let cookingMethod: String?
     public let ingredients: [MealIngredientEstimationInput]
     public let inferredOilGrams: EstimateRange?
+    public let inferredOilEvidence: EvidenceSnapshot?
 
     public init(
         name: String,
         cookingMethod: String? = nil,
         ingredients: [MealIngredientEstimationInput],
-        inferredOilGrams: EstimateRange? = nil
+        inferredOilGrams: EstimateRange? = nil,
+        inferredOilEvidence: EvidenceSnapshot? = nil
     ) {
         self.name = name
         self.cookingMethod = cookingMethod
         self.ingredients = ingredients
         self.inferredOilGrams = inferredOilGrams
+        self.inferredOilEvidence = inferredOilEvidence
     }
 }
 
@@ -67,7 +70,7 @@ public struct CookingOilPriorTable: Sendable {
 }
 
 public struct MealEstimator: Sendable {
-    public static let algorithmVersion = "meal-estimator-v1"
+    public static let algorithmVersion = "meal-estimator-v2"
 
     public init() {}
 
@@ -85,12 +88,32 @@ public struct MealEstimator: Sendable {
            !hasExplicitOil,
            !isCookedComposite,
            let oil = input.inferredOilGrams {
-            ingredients.append(try oilIngredient(oil, cookingMethod: input.cookingMethod))
+            ingredients.append(
+                try oilIngredient(
+                    oil,
+                    cookingMethod: input.cookingMethod,
+                    evidence: input.inferredOilEvidence
+                )
+            )
         }
 
         let nutrients = try sumNutrients(ingredients.map(\.nutrients))
         let portion = try EstimateRange.sum(ingredients.map(\.amountGrams))
-        let evidence = ingredients.flatMap(\.evidence)
+        let caloriePresentation = CaloriePresentationPolicy().presentation(for: nutrients.energyKcal)
+        let confidenceGrade: EvidenceGrade
+        switch caloriePresentation.confidence {
+        case .high: confidenceGrade = .strong
+        case .medium: confidenceGrade = .moderate
+        case .low: confidenceGrade = .weak
+        }
+        let calorieEvidence = EvidenceSnapshot(
+            grade: confidenceGrade,
+            sourceID: "calorie-accounting",
+            sourceVersion: CaloriePresentationPolicy.algorithmVersion,
+            summary: "约 \(caloriePresentation.likelyKcal) kcal，可信度\(caloriePresentation.confidence.displayName)",
+            confidence: nil
+        )
+        let evidence = ingredients.flatMap(\.evidence) + [calorieEvidence]
         return MealDishDraft(
             name: input.name,
             cookingMethod: input.cookingMethod,
@@ -180,7 +203,7 @@ public struct MealEstimator: Sendable {
                 EvidenceSnapshot(
                     grade: .unresolved,
                     sourceID: "portion-conflict",
-                    sourceVersion: Self.algorithmVersion,
+                    sourceVersion: PortionEstimator.algorithmVersion,
                     summary: $0,
                     confidence: nil
                 )
@@ -188,7 +211,7 @@ public struct MealEstimator: Sendable {
                 EvidenceSnapshot(
                     grade: grade,
                     sourceID: "portion:\(input.portion.source.rawValue)",
-                    sourceVersion: Self.algorithmVersion,
+                    sourceVersion: PortionEstimator.algorithmVersion,
                     summary: "约 \(Int(input.portion.likelyGrams.rounded()))g（\(Int(input.portion.lowGrams.rounded()))–\(Int(input.portion.highGrams.rounded()))g）",
                     confidence: nil
                 )
@@ -260,9 +283,17 @@ public struct MealEstimator: Sendable {
 
     private func oilIngredient(
         _ grams: EstimateRange,
-        cookingMethod: String?
+        cookingMethod: String?,
+        evidence: EvidenceSnapshot?
     ) throws -> MealIngredientDraft {
         let energy = try grams.scaled(by: 9)
+        let evidenceSnapshot = evidence ?? EvidenceSnapshot(
+            grade: .estimated,
+            sourceID: "cooking-oil-prior",
+            sourceVersion: CookingOilPriorTable().version,
+            summary: "\(cookingMethod ?? "未知烹饪")的用油范围",
+            confidence: nil
+        )
         return MealIngredientDraft(
             foodID: nil,
             name: "烹饪用油",
@@ -273,15 +304,7 @@ public struct MealEstimator: Sendable {
                 fatGrams: grams,
                 carbohydrateGrams: try EstimateRange.point(0)
             ),
-            evidence: [
-                EvidenceSnapshot(
-                    grade: .estimated,
-                    sourceID: "cooking-oil-prior",
-                    sourceVersion: Self.algorithmVersion,
-                    summary: "\(cookingMethod ?? "未知烹饪")的用油范围",
-                    confidence: nil
-                )
-            ]
+            evidence: [evidenceSnapshot]
         )
     }
 
@@ -293,7 +316,7 @@ public struct MealEstimator: Sendable {
         if resolution.autoPreselect != nil,
            [.measured, .userReportedExact, .packageServing].contains(portion.source) { return .strong }
         let width = (portion.highGrams - portion.lowGrams) / max(portion.likelyGrams, 1)
-        if resolution.autoPreselect != nil || width <= 0.60 { return .moderate }
+        if resolution.autoPreselect != nil, width <= 0.60 { return .moderate }
         return .weak
     }
 

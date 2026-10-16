@@ -46,6 +46,7 @@ public struct PortionEstimate: Codable, Equatable, Sendable {
         case approximateGrams
         case packageServing
         case householdPrior
+        case modelEstimate
         case photoWithScale
         case photoWithoutScale
     }
@@ -147,7 +148,7 @@ public struct ClarificationSelector: Sendable {
     public func selectOne(from context: ClarificationContext) -> ClarificationQuestion? {
         let relativeWidth = (context.energyKcal.high - context.energyKcal.low)
             / max(context.energyKcal.likely, 1)
-        guard relativeWidth > 0.60 else { return nil }
+        guard relativeWidth > 0.65 else { return nil }
         let selected = context.candidates
             .filter { $0.expectedEnergyRangeReduction >= 0.20 }
             .sorted {

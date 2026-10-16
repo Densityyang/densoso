@@ -275,12 +275,16 @@ final class MultimodalAgentImageTests: XCTestCase {
                         "ingredients": .array([
                             .object([
                                 "name": .string("米饭(熟)"),
-                                "amountGrams": .number(150),
+                                "quantityEvidence": .object([
+                                    "kind": .string("photoEstimate"),
+                                    "value": .number(150),
+                                    "unit": .string("g"),
+                                    "gramsPerServing": .null,
+                                ]),
                                 "preparation": .string("cooked"),
                                 "massBasis": .string("cooked"),
                             ]),
                         ]),
-                        "notedOilG": .null,
                         "lowConfidence": .boolean(false),
                     ]),
                 ]),

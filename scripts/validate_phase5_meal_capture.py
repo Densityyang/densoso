@@ -61,7 +61,8 @@ def main() -> int:
             "approximateGrams", "* 0.9", "* 1.1", "packageServing",
             "0.95", "1.05", "minimumHalfWidth = 0.30",
             "minimumHalfWidth = 0.50", "minimumHalfWidth = 0.65",
-            "isMeasured: false", "userCorrection",
+            "isMeasured: false", "userCorrection", "case modelEstimate", "1.65",
+            'algorithmVersion = "portion-estimator-v2"',
         ],
         errors,
     )
@@ -70,6 +71,7 @@ def main() -> int:
         [
             "isCookedComposite", "hasExplicitOil", "oilIngredient",
             "return nil", "foodID = selectedCandidate?.entry.localFoodID",
+            'algorithmVersion = "meal-estimator-v2"',
         ],
         errors,
     )
@@ -77,7 +79,54 @@ def main() -> int:
         errors.append("MealEstimator must not use the first unresolved candidate as likely truth")
     require_text(
         ROOT / "Packages/DensosoDomain/Sources/DensosoDomain/MealEvidence.swift",
-        ["relativeWidth > 0.60", "expectedEnergyRangeReduction >= 0.20", "selectOne"],
+        ["relativeWidth > 0.65", "expectedEnergyRangeReduction >= 0.20", "selectOne"],
+        errors,
+    )
+    require_text(
+        ROOT / "Packages/DensosoDomain/Sources/DensosoDomain/MealQuantityEvidence.swift",
+        [
+            "case exactGrams", "case household", "case count", "case packageServing",
+            "case photoEstimate", "case unknown", "validatedUserReportedGrams",
+            "validatedPackageGramsPerServing", "allowLowConfidenceModelEstimate",
+            "missingPortionEvidence",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Packages/DensosoDomain/Sources/DensosoDomain/ExplicitUserGramsParser.swift",
+        ["exactGrams(in userText", "hasUncertainContext", "hasAlternativeGramAmount"],
+        errors,
+    )
+    require_text(
+        ROOT / "Packages/DensosoDomain/Sources/DensosoDomain/CaloriePresentationPolicy.swift",
+        [
+            "relativeWidth <= 0.35", "relativeWidth <= 0.65", "needsClarification",
+            'algorithmVersion = "calorie-accounting-v2"',
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Packages/DensosoDomain/Sources/DensosoDomain/HealthDomainDrafts.swift",
+        ["var caloriePresentation: CaloriePresentation?", "totalNutrients?.energyKcal"],
+        errors,
+    )
+    require_text(
+        ROOT / "Packages/DensosoDomain/Sources/DensosoDomain/ActionPayload.swift",
+        ["presentation.likelyKcal", "presentation.confidence.displayName", "热量暂不可用"],
+        errors,
+    )
+    require_text(
+        ROOT / "Packages/DensosoDomain/Tests/DensosoDomainTests/MealQuantityEvidenceTests.swift",
+        [
+            "testCaloriePresentationUsesLikelyPointAndRelativeWidthThresholds",
+            "testMealSummaryCarriesLikelyValueAndTextConfidenceWithoutFalseZero",
+            "testV2MealAlgorithmVersionsAreExplicit",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso/Views/Components/FoodConfirmationCard.swift",
+        ["约 \\(presentation.likelyKcal) kcal", "区间详情："],
         errors,
     )
 
@@ -90,6 +139,28 @@ def main() -> int:
         errors.append("log_meal retains a silent first-match or whole-dish coefficient path")
     if ".first" in log_meal:
         errors.append("log_meal still selects the first food match implicitly")
+    if '"amountGrams"' in log_meal or '"notedOilG"' in log_meal:
+        errors.append("log_meal must not accept model-supplied exact ingredient or oil grams")
+    require_text(
+        ROOT / "DensosoTests/Application/LogMealQuantityEvidenceTests.swift",
+        [
+            "testExactGramsUsesCurrentUserTextInsteadOfModelClaim",
+            "testUnverifiedModelGramClaimRequestsClarificationWithoutStaging",
+            "testAnswerAfterOneClarificationStagesWideEstimateWithoutAskingAgain",
+            "testUserStillUncertainAfterClarificationStagesLowConfidenceEstimateWithoutSecondQuestion",
+            "testNewUnrelatedFoodDoesNotInheritPreviousMealClarification",
+            "testPackageServingRequiresLocalUserOrLabelGrams",
+            "testPackageServingMassIsNotReusedAcrossMixedIngredients",
+            "testUnknownPortionAsksAtMostOneQuestionAndNeverStagesMeal",
+            "testUnknownFoodIdentityDoesNotReceiveInventedCalories",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests/Application/ToolSchemaTests.swift",
+        ("testLogMealRequiresRealNestedArrays", 'legacyIngredient["amountGrams"] = .number(150)'),
+        errors,
+    )
 
     require_text(
         ROOT / "Densoso/Infrastructure/Vision/PhotoEvidenceSanitizer.swift",

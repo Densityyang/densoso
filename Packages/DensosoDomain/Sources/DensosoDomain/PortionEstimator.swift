@@ -21,6 +21,9 @@ public enum PortionEvidence: Codable, Equatable, Sendable {
     case kitchenScale(grams: Double)
     case exactGrams(grams: Double)
     case approximateGrams(grams: Double)
+    /// A model supplied likely mass with deliberately wide uncertainty. It is
+    /// never promoted to a user-reported exact amount.
+    case modelEstimate(likelyGrams: Double)
     case packageServing(gramsPerServing: Double, count: Double)
     case household(prior: HouseholdPortionPrior, count: Double)
     case photo(likelyGrams: Double, hasScale: Bool, isMixedDish: Bool, isOccluded: Bool, unknownContainer: Bool)
@@ -31,6 +34,8 @@ public protocol PortionEstimating: Sendable {
 }
 
 public struct PortionEstimator: PortionEstimating, Sendable {
+    public static let algorithmVersion = "portion-estimator-v2"
+
     public init() {}
 
     public func estimate(
@@ -116,6 +121,12 @@ public struct PortionEstimator: PortionEstimating, Sendable {
             return Candidate(
                 low: grams * 0.9, likely: grams, high: grams * 1.1, priority: 80,
                 isMeasured: false, source: .approximateGrams, label: "approximate"
+            )
+        case .modelEstimate(let grams):
+            let grams = try requirePositive(grams)
+            return Candidate(
+                low: grams * 0.35, likely: grams, high: grams * 1.65, priority: 30,
+                isMeasured: false, source: .modelEstimate, label: "model-estimate"
             )
         case .packageServing(let gramsPerServing, let count):
             let total = try requirePositive(gramsPerServing) * requirePositive(count)

@@ -76,7 +76,11 @@ struct PendingActionConfirmationCard: View {
                 .foregroundStyle(.secondary)
             if case .meal(let meal) = action.payload {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("热量范围：\(rangeText(meal.totalNutrients?.energyKcal, unit: "kcal"))")
+                    if let presentation = meal.caloriePresentation {
+                        Text("约 \(presentation.likelyKcal) kcal · 可信度\(presentation.confidence.displayName)")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    Text("区间详情：\(rangeText(meal.totalNutrients?.energyKcal, unit: "kcal"))")
                     Text("蛋白质：\(rangeText(meal.totalNutrients?.proteinGrams, unit: "g")) · 脂肪：\(rangeText(meal.totalNutrients?.fatGrams, unit: "g")) · 碳水：\(rangeText(meal.totalNutrients?.carbohydrateGrams, unit: "g"))")
                     ForEach(meal.dishes) { dish in
                         VStack(alignment: .leading, spacing: 3) {
@@ -97,12 +101,6 @@ struct PendingActionConfirmationCard: View {
                     }
                 }
                 .font(.caption)
-                Label(
-                    "估算可信度：\(Int(action.payload.confidence * 100))%",
-                    systemImage: "checkmark.seal"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
             if case .trainingPlan(let plan) = action.payload {
                 VStack(alignment: .leading, spacing: 8) {

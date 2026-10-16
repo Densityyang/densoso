@@ -26,7 +26,33 @@ struct LogMealTool: ConfirmationRequiredTool {
                                 items: .object(
                                     properties: [
                                         "name": .string(minimumLength: 1, maximumLength: 120),
-                                        "amountGrams": .number(minimum: 0.1, maximum: 5_000),
+                                        "quantityEvidence": .object(
+                                            properties: [
+                                                "kind": .string(allowedValues: [
+                                                    "exactGrams", "household", "count", "packageServing",
+                                                    "photoEstimate", "unknown",
+                                                ]),
+                                                "value": .anyOf([
+                                                    .number(minimum: 0.1, maximum: 5_000), .null,
+                                                ]),
+                                                "unit": .anyOf([
+                                                    .string(allowedValues: [
+                                                        "g", "gram", "grams", "克", "公克",
+                                                        "bowl", "smallBowl", "largeBowl", "fist", "palm", "cup", "slice",
+                                                        "egg", "dumpling", "banana", "apple", "serving", "portion",
+                                                        "pack", "package", "碗", "小碗", "大碗", "拳", "拳头", "掌心", "掌",
+                                                        "杯", "片", "鸡蛋", "蛋", "饺子", "香蕉", "苹果", "份", "每份", "包",
+                                                    ]),
+                                                    .null,
+                                                ]),
+                                                "gramsPerServing": .anyOf([
+                                                    .number(minimum: 0.1, maximum: 5_000), .null,
+                                                ]),
+                                            ],
+                                            required: ["kind", "value", "unit", "gramsPerServing"],
+                                            additionalProperties: false,
+                                            description: "模型给出的份量线索，不是事实克重；精确克重必须能从当前用户原话本地验证。"
+                                        ),
                                         "preparation": .anyOf([
                                             .string(allowedValues: ["raw", "cooked", "unknown"]),
                                             .null,
@@ -36,17 +62,16 @@ struct LogMealTool: ConfirmationRequiredTool {
                                             .null,
                                         ]),
                                     ],
-                                    required: ["name", "amountGrams"],
+                                    required: ["name", "quantityEvidence"],
                                     additionalProperties: false
                                 ),
                                 minimumItems: 1,
                                 maximumItems: 20
                             ),
-                            "notedOilG": .anyOf([.number(minimum: 0, maximum: 500), .null]),
                             "lowConfidence": .boolean(),
                         ],
                         required: [
-                            "dishName", "cookingMethod", "ingredients", "notedOilG", "lowConfidence",
+                            "dishName", "cookingMethod", "ingredients", "lowConfidence",
                         ],
                         additionalProperties: false
                     ),
@@ -79,11 +104,22 @@ struct LogMealTool: ConfirmationRequiredTool {
             date = Date()
         }
 
+        guard !context.hasIssuedMealClarification() else {
+            throw DraftError.clarificationLimitReached
+        }
         let resolver = FoodResolver(catalog: try database.catalogEntries())
         let portionEstimator = PortionEstimator()
         let mealEstimator = MealEstimator()
         let oilPriors = CookingOilPriorTable()
+        let quantityResolver = MealQuantityEvidenceResolver()
+        let explicitGramsParser = ExplicitUserGramsParser()
+        let packageServingParser = PackageServingGramsParser()
+        let userText = context.currentMealUserText()
         let agentImageEvidence = context.currentMealImageEvidence()
+        let packageLabelTexts = agentImageEvidence
+            .filter { $0.kind == .nutritionLabel }
+            .map(\.value)
+        let allIngredientNames = arguments.dishes.flatMap { $0.ingredients.map(\.name) }
         var drafts: [MealDishDraft] = []
         for rawDish in arguments.dishes {
             let name = rawDish.dishName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -92,11 +128,8 @@ struct LogMealTool: ConfirmationRequiredTool {
                   rawDish.ingredients.count <= 20,
                   rawDish.ingredients.allSatisfy({
                       !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                          && $0.amountGrams.isFinite
-                          && (0.1...5_000).contains($0.amountGrams)
                   }),
-                  rawDish.notedOilG == nil
-                    || (rawDish.notedOilG!.isFinite && (0...500).contains(rawDish.notedOilG!)) else {
+                  rawDish.cookingMethod.count <= 40 else {
                 throw DraftError.invalidMeal
             }
 
@@ -112,13 +145,55 @@ struct LogMealTool: ConfirmationRequiredTool {
                         confirmedHistoryFoodIDs: confirmedHistory
                     )
                 )
-                guard !resolution.candidates.isEmpty else { throw DraftError.invalidMeal }
-                guard resolution.autoPreselect != nil else {
+                guard !resolution.candidates.isEmpty else {
+                    throw DraftError.clarificationRequired(
+                        field: "foodIdentity",
+                        question: "“\(ingredient.name)”具体是什么食物？",
+                        subject: ingredient.name
+                    )
+                }
+                guard let selectedFood = resolution.autoPreselect else {
                     throw DraftError.ambiguousFood(
                         name: ingredient.name,
                         candidates: resolution.candidates.map { $0.entry.name }
                     )
                 }
+                let ingredientTerms = [ingredient.name, selectedFood.entry.name] + selectedFood.entry.aliases
+                let validatedPackageServingGrams = uniquePackageServingGrams(
+                    in: userText,
+                    imageLabelTexts: packageLabelTexts,
+                    matching: ingredientTerms,
+                    otherIngredientNames: allIngredientNames.filter { $0 != ingredient.name },
+                    parser: packageServingParser
+                )
+                let userReportedGrams = explicitGramsParser.exactGrams(
+                    in: userText,
+                    matching: ingredientTerms
+                )
+                let portionEvidence: PortionEvidence
+                do {
+                    portionEvidence = try quantityResolver.resolve(
+                        ingredient.quantityEvidence,
+                        validatedUserReportedGrams: userReportedGrams,
+                        validatedPackageGramsPerServing: validatedPackageServingGrams,
+                        allowLowConfidenceModelEstimate: context.currentMealClarificationWasAnswered()
+                    )
+                } catch MealQuantityEvidenceResolutionError.missingPortionEvidence {
+                    if context.currentMealClarificationWasAnswered() {
+                        throw DraftError.clarificationLimitReached
+                    }
+                    throw DraftError.clarificationRequired(
+                        field: "quantityEvidence",
+                        question: "“\(ingredient.name)”大约有多少份量（例如一碗、几个或包装份数）？",
+                        subject: ingredient.name
+                    )
+                } catch {
+                    throw DraftError.invalidMeal
+                }
+                let portion = try portionEstimator.estimate(
+                    evidence: [portionEvidence],
+                    food: selectedFood
+                )
                 let massBasis = FoodMassBasis(rawValue: ingredient.massBasis ?? "")
                     ?? (preparation == .cooked ? .cooked : .edibleRaw)
                 let imageEvidence: [EvidenceSnapshot] = ingredientIndex == 0
@@ -138,37 +213,109 @@ struct LogMealTool: ConfirmationRequiredTool {
                     MealIngredientEstimationInput(
                         label: ingredient.name,
                         resolution: resolution,
-                        portion: try portionEstimator.estimate(
-                        evidence: [.exactGrams(grams: ingredient.amountGrams)],
-                        food: resolution.autoPreselect
-                        ),
+                        portion: portion,
                         massBasis: massBasis,
                         additionalEvidence: imageEvidence
                     )
                 )
             }
-            let oilRange = try rawDish.notedOilG.map(EstimateRange.point)
+            let userReportedOilGrams = explicitGramsParser.exactGrams(
+                in: userText,
+                matching: ["食用油", "炒菜油", "橄榄油", "菜籽油", "油"]
+            )
+            let oilRange = try userReportedOilGrams.map(EstimateRange.point)
                 ?? oilPriors.range(for: rawDish.cookingMethod)
+            let oilEvidence = userReportedOilGrams.map { grams in
+                EvidenceSnapshot(
+                    grade: .userReported,
+                    sourceID: "user-reported-oil",
+                    sourceVersion: MealEstimator.algorithmVersion,
+                    summary: "用户明确报告食用油 \(Int(grams.rounded()))g",
+                    confidence: nil
+                )
+            }
             drafts.append(
                 try mealEstimator.estimateDish(
                     MealDishEstimationInput(
                         name: name,
                         cookingMethod: rawDish.cookingMethod,
                         ingredients: ingredients,
-                        inferredOilGrams: oilRange
+                        inferredOilGrams: oilRange,
+                        inferredOilEvidence: oilEvidence
                     )
                 )
             )
         }
 
-        return .meal(
-            MealDraft(
-                occurredAt: date,
-                mealType: arguments.mealType,
-                dishes: drafts,
-                note: arguments.note
-            )
+        let mealDraft = MealDraft(
+            occurredAt: date,
+            mealType: arguments.mealType,
+            dishes: drafts,
+            note: arguments.note
         )
+        if let energy = mealDraft.totalNutrients?.energyKcal,
+           case .needsClarification = CaloriePresentationPolicy().presentation(for: energy),
+           !context.hasIssuedMealClarification(),
+           !context.currentMealClarificationWasAnswered() {
+            let dishName = drafts.max { lhs, rhs in
+                let lhsWidth = lhs.nutrients.energyKcal.high - lhs.nutrients.energyKcal.low
+                let rhsWidth = rhs.nutrients.energyKcal.high - rhs.nutrients.energyKcal.low
+                return lhsWidth < rhsWidth
+            }?.name ?? "这餐"
+            let clarification = ClarificationSelector().selectOne(
+                from: ClarificationContext(
+                    energyKcal: energy,
+                    candidates: [
+                        ClarificationCandidate(
+                            kind: .portion,
+                            prompt: "“\(dishName)”大约有多大份量？",
+                            expectedEnergyRangeReduction: 0.4,
+                            userEffort: 1
+                        ),
+                    ]
+                )
+            )
+            if let clarification {
+                throw DraftError.clarificationRequired(
+                    field: "mealEnergy",
+                    question: clarification.prompt,
+                    subject: dishName
+                )
+            }
+        }
+        return .meal(mealDraft)
+    }
+
+    private func uniquePackageServingGrams(
+        in userText: String,
+        imageLabelTexts: [String],
+        matching ingredientTerms: [String],
+        otherIngredientNames: [String],
+        parser: PackageServingGramsParser
+    ) -> Double? {
+        var values = Set<Double>()
+        let userSentences = userText.components(separatedBy: CharacterSet(charactersIn: "。.;；\n"))
+        for sentence in userSentences where mentionsAnyTerm(sentence, terms: ingredientTerms) {
+            guard !otherIngredientNames.contains(where: {
+                sentence.localizedCaseInsensitiveContains($0)
+            }) else { continue }
+            if let grams = parser.gramsPerServing(in: sentence) { values.insert(grams) }
+        }
+        for labelText in imageLabelTexts where mentionsAnyTerm(labelText, terms: ingredientTerms) {
+            guard !otherIngredientNames.contains(where: {
+                labelText.localizedCaseInsensitiveContains($0)
+            }) else { continue }
+            if let grams = parser.gramsPerServing(in: labelText) { values.insert(grams) }
+        }
+        guard values.count == 1 else { return nil }
+        return values.makeIterator().next()
+    }
+
+    private func mentionsAnyTerm(_ text: String, terms: [String]) -> Bool {
+        terms.contains { term in
+            let normalized = term.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !normalized.isEmpty && text.localizedCaseInsensitiveContains(normalized)
+        }
     }
 }
 
@@ -182,13 +329,12 @@ private struct LogMealArguments: Decodable {
         let dishName: String
         let cookingMethod: String
         let ingredients: [Ingredient]
-        let notedOilG: Double?
         let lowConfidence: Bool
     }
 
     struct Ingredient: Decodable {
         let name: String
-        let amountGrams: Double
+        let quantityEvidence: MealQuantityEvidence
         let preparation: String?
         let massBasis: String?
     }

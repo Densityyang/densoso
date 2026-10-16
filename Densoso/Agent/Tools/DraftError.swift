@@ -3,6 +3,8 @@ import Foundation
 enum DraftError: LocalizedError {
     case invalidMeal
     case ambiguousFood(name: String, candidates: [String])
+    case clarificationRequired(field: String, question: String, subject: String? = nil)
+    case clarificationLimitReached
     case invalidWeight
     case invalidWorkoutPlan
     case invalidDailyCheckIn
@@ -13,6 +15,8 @@ enum DraftError: LocalizedError {
         case .invalidMeal: "餐食草稿字段不完整或超出允许范围"
         case .ambiguousFood(let name, let candidates):
             "食材“\(name)”需要确认候选：\(candidates.joined(separator: "、"))"
+        case .clarificationRequired(_, let question, _): question
+        case .clarificationLimitReached: "本轮已经提出一个澄清问题；请等待用户补充后再继续。"
         case .invalidWeight: "体重草稿字段不完整或超出允许范围"
         case .invalidWorkoutPlan: "训练计划草稿字段不完整或超出允许范围"
         case .invalidDailyCheckIn: "每日状态草稿字段不完整或超出允许范围"
