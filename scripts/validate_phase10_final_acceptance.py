@@ -69,10 +69,18 @@ def main() -> int:
         "physical Watch",
         "Protected food OCR",
         "not",
+        "Privacy-focused diagnostics export",
+        "DiagnosticsExportPrivacyTests",
     )
     for needle in required:
         if needle not in docs:
             errors.append(f"final acceptance contract is missing {needle}")
+    gate9_validator_path = ROOT / "scripts/validate_phase9_integration.py"
+    gate9_validator = gate9_validator_path.read_text(encoding="utf-8") if gate9_validator_path.is_file() else ""
+    if "DiagnosticsExportPrivacyTests.swift" not in gate9_validator:
+        errors.append("Gate 9 static validation must require the diagnostics privacy tests")
+    if '"diagnosticsExportWhitelistRequired": True' not in gate9_validator:
+        errors.append("Gate 9 report must identify the diagnostics export whitelist contract")
     if "gh pr merge" in workflow.lower() or "gh pr ready" in workflow.lower():
         errors.append("the workflow must not merge the PR or remove its Draft boundary")
     if "upload-artifact@v4" not in workflow:
@@ -155,6 +163,7 @@ def main() -> int:
         "testFlightOrProduction": "not-claimed",
         "prBoundary": "OPEN-Draft-blocked-by-signing",
         "protectedOCRRead": False,
+        "diagnosticsExportPrivacyContract": "required-by-gate-9",
     }
     if args.report:
         Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -56,7 +56,8 @@ struct DeepSeekProvider: MultimodalModelProvider {
                             provider: .deepSeek,
                             status: result.response.statusCode,
                             attempt: result.attempt,
-                            latencyMilliseconds: Self.latencyMilliseconds(since: startedAt)
+                            latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                            model: descriptor.model
                         )
                     )
 
@@ -128,10 +129,43 @@ struct DeepSeekProvider: MultimodalModelProvider {
                     guard didFinish else { throw ProviderError.malformedResponse }
                     continuation.finish()
                 } catch is CancellationError {
+                    logSink.record(
+                        ProviderLogRedactor.metadata(
+                            requestID: request.requestID,
+                            provider: .deepSeek,
+                            status: nil,
+                            attempt: 1,
+                            latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                            providerCode: "cancelled",
+                            model: descriptor.model
+                        )
+                    )
                     continuation.finish(throwing: ProviderError.cancelled)
                 } catch let error as ProviderError {
+                    logSink.record(
+                        ProviderLogRedactor.metadata(
+                            requestID: request.requestID,
+                            provider: .deepSeek,
+                            status: nil,
+                            attempt: 1,
+                            latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                            providerCode: ProviderLogRedactor.errorCode(for: error),
+                            model: descriptor.model
+                        )
+                    )
                     continuation.finish(throwing: error)
                 } catch {
+                    logSink.record(
+                        ProviderLogRedactor.metadata(
+                            requestID: request.requestID,
+                            provider: .deepSeek,
+                            status: nil,
+                            attempt: 1,
+                            latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                            providerCode: "malformed_response",
+                            model: descriptor.model
+                        )
+                    )
                     continuation.finish(throwing: ProviderError.malformedResponse)
                 }
             }

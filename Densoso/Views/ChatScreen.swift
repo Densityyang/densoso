@@ -4,6 +4,7 @@ import SwiftUI
 struct ChatScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(AppState.self) private var appState
+    @FocusState private var composerFocused: Bool
 
     @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
@@ -12,12 +13,14 @@ struct ChatScreen: View {
     @State private var voiceDraftSummary: String?
     @State private var didHydratePersistedMessages = false
     @State private var showMealCapture = false
+    @State private var showTextEditor = false
     @State private var pendingWatchMessageID: UUID?
     @State private var claimedWatchMessageIDs = Set<UUID>()
     @State private var displayedWatchTranscriptIDs = Set<UUID>()
     @State private var pendingWatchOriginalText: String?
     @State private var pendingWatchAttemptText: String?
     @State private var pendingWatchAttemptRequestID: UUID?
+    @State private var dailyLoopSnapshot: DailyLoopSnapshot?
 
     var body: some View {
         NavigationStack {
@@ -34,6 +37,15 @@ struct ChatScreen: View {
             }
             .onAppear(perform: prepareInitialState)
             .task { restorePendingWatchTranscript() }
+            .onChange(of: dependencies.agentSession.pendingActions) { _, _ in
+                refreshDailyLoopSnapshot()
+            }
+            .onChange(of: dependencies.healthIntelligenceService.dailyBrief) { _, _ in
+                refreshDailyLoopSnapshot()
+            }
+            .onChange(of: appState.shouldFocusComposer) { _, shouldFocus in
+                if shouldFocus { focusComposer() }
+            }
             .onChange(of: dependencies.agentSession.restoredVisibleMessages.count) { _, _ in
                 hydratePersistedMessagesIfNeeded()
             }
@@ -43,6 +55,7 @@ struct ChatScreen: View {
             .onChange(of: dependencies.speechService.transcribedText) { _, newValue in
                 inputText = newValue
                 inputSource = dependencies.speechService.envelopeSource
+                if !newValue.isEmpty { showTextEditor = true }
             }
         }
     }
@@ -57,6 +70,9 @@ struct ChatScreen: View {
                         subtitle: "告诉我吃了什么、练了什么；涉及写入时会先生成可检查的草稿。"
                     )
                     .padding(.bottom, 4)
+
+                    DailyLoopSnapshotCard(snapshot: dailyLoopSnapshot)
+                        .id("daily-loop-snapshot-anchor")
 
                     DailyHealthBriefCard(brief: dependencies.healthIntelligenceService.dailyBrief)
 
@@ -84,6 +100,7 @@ struct ChatScreen: View {
                                 Task {
                                     do {
                                         try await dependencies.agentSession.rejectPendingAction(id: action.id)
+                                        refreshDailyLoopSnapshot()
                                         dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                                         addMessage(text: "已拒绝该记录草稿，未保存任何健康数据。", isUser: false)
                                     } catch {
@@ -117,14 +134,24 @@ struct ChatScreen: View {
             .onChange(of: messages.count) { _, _ in
                 scrollToBottom(proxy: proxy)
             }
+            .onChange(of: appState.shouldScrollToDailyLoop) { _, shouldScroll in
+                guard shouldScroll else { return }
+                refreshDailyLoopSnapshot()
+                withAnimation { proxy.scrollTo("daily-loop-snapshot-anchor", anchor: .top) }
+                appState.shouldScrollToDailyLoop = false
+            }
+            .accessibilityIdentifier("today-conversation-scroll")
             .onChange(of: dependencies.agentSession.streamedText) { _, _ in
                 scrollToBottom(proxy: proxy)
             }
             .sheet(isPresented: $showMealCapture) {
-                MealCaptureSheet { action in
+                MealCaptureSheet { request in
+                    let requestWithSupplement = request.includingSupplementalText(inputText)
                     Task {
-                        try? await dependencies.agentSession.reloadPendingActions()
-                        voiceDraftSummary = "照片餐食草稿已生成：\(action.payload.summary)；确认前不会保存。"
+                        await send(
+                            text: requestWithSupplement.userText,
+                            multimodalRequest: requestWithSupplement
+                        )
                     }
                 }
                 .presentationBackground { OrbitBackground() }
@@ -135,69 +162,135 @@ struct ChatScreen: View {
     private var promptChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                promptButton("记录午餐", systemImage: "fork.knife", text: "我想记录午餐")
-                promptButton("生成训练计划", systemImage: "figure.strengthtraining.traditional", text: "帮我生成训练计划")
-                promptButton("查看本周", systemImage: "chart.bar.xaxis", text: "查看本周热量缺口")
+                ForEach(dailyLoopSnapshot?.quickActions ?? [], id: \.rawValue) { action in
+                    promptButton(for: action)
+                }
             }
         }
         .contentMargins(.horizontal, 1, for: .scrollContent)
     }
 
-    private func promptButton(_ title: String, systemImage: String, text: String) -> some View {
-        Button(title, systemImage: systemImage) {
-            inputText = text
+    private func promptButton(for action: DailyLoopQuickAction) -> some View {
+        let details = quickActionDetails(for: action)
+        return Button(details.title, systemImage: details.systemImage) {
+            inputText = details.prompt
             inputSource = .manualText
+            showTextEditor = true
+            voiceDraftSummary = nil
+            focusComposer()
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
+        .accessibilityLabel(details.title)
+    }
+
+    private func quickActionDetails(for action: DailyLoopQuickAction) -> (title: String, systemImage: String, prompt: String) {
+        switch action {
+        case .logMeal:
+            return ("记录餐食", "fork.knife", "我想记录一餐")
+        case .logWeight:
+            return ("记录体重", "scalemass", "我想记录体重")
+        case .planWorkout:
+            return ("训练计划", "figure.run", "帮我生成训练计划")
+        case .dailyCheckIn:
+            return ("记录今日状态", "heart.text.square", "我想记录今天的状态")
+        }
     }
 
     private var composer: some View {
-        HStack(spacing: 10) {
-            Button {
-                showMealCapture = true
-            } label: {
-                Image(systemName: "camera.fill")
-            }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .controlSize(.large)
-            .accessibilityLabel("照片记餐")
+        VStack(spacing: 8) {
+            if showTextEditor {
+                HStack(alignment: .bottom, spacing: 10) {
+                    TextField("检查或编辑文字", text: $inputText, axis: .vertical)
+                        .lineLimit(1...4)
+                        .textFieldStyle(.plain)
+                        .focused($composerFocused)
+                        .submitLabel(.send)
+                        .disabled(isProcessing)
+                        .accessibilityIdentifier("today-composer")
+                        .onSubmit {
+                            Task { await send(text: inputText) }
+                        }
 
-            Button {
-                Task { await toggleVoice() }
-            } label: {
-                Image(systemName: dependencies.speechService.isRecording ? "stop.fill" : "mic.fill")
+                    Button {
+                        Task { await send(text: inputText) }
+                    } label: {
+                        Image(systemName: "arrow.up")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.large)
+                    .disabled(isProcessing || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel("发送")
+                    .accessibilityIdentifier("today-send")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(OrbitPalette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .accessibilityElement(children: .contain)
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.circle)
-            .controlSize(.large)
-            .tint(dependencies.speechService.isRecording ? OrbitPalette.coral : OrbitPalette.gold)
-            .accessibilityLabel(dependencies.speechService.isRecording ? "停止录音" : "开始录音")
 
-            TextField("输入或语音…", text: $inputText, axis: .vertical)
-                .lineLimit(1...4)
-                .textFieldStyle(.plain)
-                .submitLabel(.send)
+            HStack(spacing: 14) {
+                Button {
+                    showMealCapture = true
+                } label: {
+                    Image(systemName: "camera.fill")
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
                 .disabled(isProcessing)
-                .onSubmit {
-                    Task { await send(text: inputText) }
-                }
+                .accessibilityLabel("照片记餐")
+                .accessibilityIdentifier("today-photo-secondary")
 
-            Button {
-                if isProcessing {
-                    dependencies.agentSession.cancelActiveRequest()
-                } else {
-                    Task { await send(text: inputText) }
+                Spacer(minLength: 0)
+
+                Button {
+                    Task { await toggleVoice() }
+                } label: {
+                    Label(
+                        dependencies.speechService.isRecording ? "停止录音" : "开始说话",
+                        systemImage: dependencies.speechService.isRecording ? "stop.fill" : "mic.fill"
+                    )
+                    .fontWeight(.semibold)
+                    .padding(.horizontal, 8)
                 }
-            } label: {
-                Image(systemName: isProcessing ? "xmark" : "arrow.up")
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(dependencies.speechService.isRecording ? OrbitPalette.coral : OrbitPalette.gold)
+                .disabled(isProcessing)
+                .accessibilityLabel(dependencies.speechService.isRecording ? "停止录音" : "开始说话")
+                .accessibilityIdentifier("today-voice-primary")
+
+                Spacer(minLength: 0)
+
+                if isProcessing {
+                    Button {
+                        dependencies.agentSession.cancelActiveRequest()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.large)
+                    .accessibilityLabel("取消请求")
+                } else {
+                    Button {
+                        showTextEditor.toggle()
+                        if showTextEditor {
+                            focusComposer()
+                        } else {
+                            composerFocused = false
+                        }
+                    } label: {
+                        Label(showTextEditor ? "收起文字" : "文字", systemImage: "pencil")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .accessibilityLabel(showTextEditor ? "收起文字编辑" : "编辑文字")
+                    .accessibilityIdentifier("today-text-entry")
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.circle)
-            .controlSize(.large)
-            .disabled(!isProcessing && inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityLabel(isProcessing ? "取消请求" : "发送")
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
@@ -220,12 +313,15 @@ struct ChatScreen: View {
 
     private func prepareInitialState() {
         _ = try? dependencies.healthIntelligenceService.refresh()
+        refreshDailyLoopSnapshot()
+        if appState.shouldFocusComposer { focusComposer() }
         hydratePersistedMessagesIfNeeded()
         if messages.isEmpty {
             addMessage(text: "你好，我是 densoso。使用语音或文字告诉我你吃了什么、练了什么。", isUser: false)
         }
         if let pendingMealText = appState.pendingMealText {
             inputText = pendingMealText
+            showTextEditor = true
             appState.pendingMealText = nil
             addMessage(text: "已收到系统语音转写草稿，请检查后再发送；尚未保存任何餐食记录。", isUser: false)
         }
@@ -243,6 +339,20 @@ struct ChatScreen: View {
         didHydratePersistedMessages = true
     }
 
+    private func refreshDailyLoopSnapshot() {
+        do {
+            dailyLoopSnapshot = try dependencies.dailyLoopSnapshotService.snapshot()
+        } catch {
+            dailyLoopSnapshot = nil
+        }
+    }
+
+    private func focusComposer() {
+        showTextEditor = true
+        composerFocused = true
+        appState.shouldFocusComposer = false
+    }
+
     private func toggleVoice() async {
         let speech = dependencies.speechService
         if speech.isRecording {
@@ -250,6 +360,7 @@ struct ChatScreen: View {
             inputText = speech.transcribedText
             inputSource = speech.envelopeSource
             if !speech.transcribedText.isEmpty {
+                showTextEditor = true
                 let envelope = VoiceCommandEnvelope(
                     text: speech.transcribedText,
                     source: speech.envelopeSource
@@ -272,8 +383,8 @@ struct ChatScreen: View {
         }
     }
 
-    private func send(text: String) async {
-        let userText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func send(text: String, multimodalRequest: MultimodalModelRequest? = nil) async {
+        let userText = (multimodalRequest?.userText ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !userText.isEmpty else { return }
         guard !isProcessing else { return }
         isProcessing = true
@@ -341,6 +452,9 @@ struct ChatScreen: View {
             capabilities: .current
         )
         do {
+            if multimodalRequest?.image != nil, path != .cloudDeepSeek {
+                throw ProviderError.unsupportedCapability(.vision)
+            }
             switch path {
             case .localOnDevice:
                 let result = try await dependencies.localIntelligence.extract(from: userText)
@@ -353,8 +467,20 @@ struct ChatScreen: View {
                     )
                 }
             case .cloudDeepSeek, .cloudQwen:
-                let response = try await dependencies.agentSession.send(userText: userText, requestID: agentRequestID)
+                let response: AgentResponse
+                if let multimodalRequest {
+                    response = try await dependencies.agentSession.send(
+                        multimodalRequest: multimodalRequest,
+                        requestID: agentRequestID
+                    )
+                } else {
+                    response = try await dependencies.agentSession.send(
+                        userText: userText,
+                        requestID: agentRequestID
+                    )
+                }
                 watchTranscriptWasDurablyHandled = watchMessageID != nil
+                refreshDailyLoopSnapshot()
                 addMessage(text: response.text, isUser: false)
             case .manual:
                 addMessage(text: "本地智能当前不可用；你的输入尚未保存。可在设置中选择 DeepSeek 云端处理，或继续手动编辑。", isUser: false)
@@ -373,6 +499,7 @@ struct ChatScreen: View {
             do {
                 let message = try await dependencies.agentSession.confirmPendingAction(id: action.id)
                 _ = try? dependencies.healthIntelligenceService.refresh()
+                refreshDailyLoopSnapshot()
                 dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                 addMessage(text: message, isUser: false)
             } catch {
@@ -394,6 +521,7 @@ struct ChatScreen: View {
             pendingWatchAttemptRequestID = nil
             inputText = pending.text
             inputSource = .watchDictation
+            showTextEditor = true
             voiceDraftSummary = "已收到 Watch 系统听写；检查或编辑后发送，涉及写入时仍需确认。"
         } catch {
             voiceDraftSummary = "无法读取 Watch 草稿：\(error.localizedDescription)"

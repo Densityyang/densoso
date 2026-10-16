@@ -83,6 +83,7 @@ struct LogMealTool: ConfirmationRequiredTool {
         let portionEstimator = PortionEstimator()
         let mealEstimator = MealEstimator()
         let oilPriors = CookingOilPriorTable()
+        let agentImageEvidence = context.currentMealImageEvidence()
         var drafts: [MealDishDraft] = []
         for rawDish in arguments.dishes {
             let name = rawDish.dishName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -100,7 +101,7 @@ struct LogMealTool: ConfirmationRequiredTool {
             }
 
             var ingredients: [MealIngredientEstimationInput] = []
-            for ingredient in rawDish.ingredients {
+            for (ingredientIndex, ingredient) in rawDish.ingredients.enumerated() {
                 let preparation = FoodPreparation(rawValue: ingredient.preparation ?? "") ?? .unknown
                 let confirmedHistory = await context.confirmedFoodIDs(matching: ingredient.name)
                 let resolution = resolver.resolve(
@@ -120,6 +121,19 @@ struct LogMealTool: ConfirmationRequiredTool {
                 }
                 let massBasis = FoodMassBasis(rawValue: ingredient.massBasis ?? "")
                     ?? (preparation == .cooked ? .cooked : .edibleRaw)
+                let imageEvidence: [EvidenceSnapshot] = ingredientIndex == 0
+                    ? agentImageEvidence.map { evidence in
+                        EvidenceSnapshot(
+                            grade: evidence.kind == .barcode || evidence.kind == .nutritionLabel
+                                ? .label
+                                : .estimated,
+                            sourceID: "agent-image:\(evidence.kind.rawValue)",
+                            sourceVersion: "local-image-scan-v1",
+                            summary: "本机图像线索已附加，提取文本未保存",
+                            confidence: evidence.confidence
+                        )
+                    }
+                    : []
                 ingredients.append(
                     MealIngredientEstimationInput(
                         label: ingredient.name,
@@ -128,7 +142,8 @@ struct LogMealTool: ConfirmationRequiredTool {
                         evidence: [.exactGrams(grams: ingredient.amountGrams)],
                         food: resolution.autoPreselect
                         ),
-                        massBasis: massBasis
+                        massBasis: massBasis,
+                        additionalEvidence: imageEvidence
                     )
                 )
             }

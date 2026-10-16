@@ -104,6 +104,31 @@ struct PendingActionConfirmationCard: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
+            if case .trainingPlan(let plan) = action.payload {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(plan.sessions) { session in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(session.date, format: .dateTime.weekday(.wide).month().day().hour().minute())
+                                .font(.caption.weight(.semibold))
+                            if session.isRestDay {
+                                Text("休息日 · \(session.reason)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if let activity = session.activity,
+                                      let goal = session.goal,
+                                      let location = session.location,
+                                      let intensity = session.recommendedIntensity {
+                                Text("\(activity.displayName) · \(goal.displayName) · \(location.displayName) · \(intensity.displayName)")
+                                    .font(.caption)
+                                Text(session.reason)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 2)
+            }
             HStack {
                 Button("拒绝", role: .cancel, action: onReject)
                     .buttonStyle(.bordered)

@@ -87,6 +87,65 @@ struct ImageInput: Codable, Equatable, Sendable {
     }
 }
 
+/// One user-initiated multimodal turn. The sanitized image and extracted local
+/// evidence are held only in memory; AgentSession persists the text turn and
+/// later attaches bounded evidence to a pending meal action.
+struct MultimodalModelRequest: Sendable {
+    static let maximumJPEGBytes = 5_000_000
+    static let maximumMealEvidenceCount = 12
+
+    let userText: String
+    let image: ImageInput?
+    let mealEvidence: [MealEvidence]
+
+    init(userText: String) {
+        self.userText = userText
+        self.image = nil
+        self.mealEvidence = []
+    }
+
+    init(userText: String, imageJPEG: Data, mealEvidence: [MealEvidence]) throws {
+        guard !imageJPEG.isEmpty, imageJPEG.starts(with: [0xFF, 0xD8]) else {
+            throw ProviderError.schemaViolation(path: "image")
+        }
+        guard imageJPEG.count <= Self.maximumJPEGBytes else {
+            throw ProviderError.requestTooLarge(limitBytes: Self.maximumJPEGBytes)
+        }
+        self.userText = userText
+        self.image = ImageInput(
+            mimeType: "image/jpeg",
+            base64Data: imageJPEG.base64EncodedString(),
+            detail: .high
+        )
+        self.mealEvidence = mealEvidence.prefix(Self.maximumMealEvidenceCount).map { evidence in
+            MealEvidence(
+                id: evidence.id,
+                kind: evidence.kind,
+                value: String(evidence.value.prefix(160)),
+                confidence: evidence.confidence.isFinite ? evidence.confidence : 0,
+                capturedAt: evidence.capturedAt,
+                sourceVersion: evidence.sourceVersion.map { String($0.prefix(80)) }
+            )
+        }
+    }
+
+    func includingSupplementalText(_ supplementalText: String) -> MultimodalModelRequest {
+        let supplemental = supplementalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !supplemental.isEmpty else { return self }
+        return MultimodalModelRequest(
+            userText: "\(userText)\n\n用户补充说明：\(supplemental)",
+            image: image,
+            mealEvidence: mealEvidence
+        )
+    }
+
+    private init(userText: String, image: ImageInput?, mealEvidence: [MealEvidence]) {
+        self.userText = userText
+        self.image = image
+        self.mealEvidence = Array(mealEvidence.prefix(Self.maximumMealEvidenceCount))
+    }
+}
+
 struct StructuredOutputFormat: Equatable, Sendable {
     let name: String
     let schema: JSONSchemaNode

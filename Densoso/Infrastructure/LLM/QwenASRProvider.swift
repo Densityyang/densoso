@@ -59,17 +59,34 @@ struct QwenASRProvider: CloudSpeechProvider {
 
         let requestID = UUID()
         let startedAt = Date()
-        let result = try await executor.execute(
-            request,
-            deadline: Date().addingTimeInterval(45)
-        )
+        let result: ProviderHTTPResult
+        do {
+            result = try await executor.execute(
+                request,
+                deadline: Date().addingTimeInterval(45)
+            )
+        } catch {
+            logSink.record(
+                ProviderLogRedactor.metadata(
+                    requestID: requestID,
+                    provider: .qwen,
+                    status: nil,
+                    attempt: 1,
+                    latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                    providerCode: ProviderLogRedactor.errorCode(for: error),
+                    model: Self.model
+                )
+            )
+            throw error
+        }
         logSink.record(
             ProviderLogRedactor.metadata(
                 requestID: requestID,
                 provider: .qwen,
                 status: result.response.statusCode,
                 attempt: result.attempt,
-                latencyMilliseconds: Self.latencyMilliseconds(since: startedAt)
+                latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                model: Self.model
             )
         )
 

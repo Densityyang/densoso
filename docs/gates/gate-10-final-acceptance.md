@@ -4,7 +4,13 @@ Status: final acceptance definition; the workflow determines success from the ex
 
 Phase 10 is the final acceptance pass requested by the user. It is a roll-up
 over Phases 1–9, not a new feature phase and not an additional hardware or
-signing claim.
+signing claim. This existing Gate 10 CI job is a software roll-up; it is not
+the product release decision defined by Gate 16.
+
+Gates 11–14 add focused contracts after this roll-up. Gate 15 remains a manual
+signed-device acceptance step, and Gate 16 remains a final human release
+decision after Gates 1–14 and Gate 15 evidence are reviewed. Simulator output
+cannot mark Gate 15 or Gate 16 passed.
 
 ## Software completion contract
 
@@ -14,6 +20,8 @@ signing claim.
   head SHA.
 - All required gate artifacts are present: test result bundles, build/test
   logs, contract reports, integration screenshots and coverage summary.
+- Privacy-focused diagnostics export is covered by the Gate 9 whitelist tests
+  and static contract; Gate 10 requires that contract in its final roll-up.
 - No model, photo, speech or Watch path bypasses an explicit confirmation
   before creating user health data.
 - HealthKit projections and writes remain idempotent; WorkoutKit scheduling

@@ -98,11 +98,15 @@ final class ScriptedTextProvider: TextModelProvider, @unchecked Sendable {
     private var scripts: [[ProviderEvent]]
     private var requests: [ModelRequest] = []
 
-    init(provider: ProviderID = .deepSeek, scripts: [[ProviderEvent]]) {
+    init(
+        provider: ProviderID = .deepSeek,
+        scripts: [[ProviderEvent]],
+        capabilities: Set<ProviderCapability> = [.text, .toolCalling]
+    ) {
         descriptor = ProviderDescriptor(
             id: provider,
             model: "fixture-model",
-            capabilities: [.text, .toolCalling]
+            capabilities: capabilities
         )
         self.scripts = scripts
     }
@@ -267,7 +271,8 @@ actor BlockingConversationRepository: ConversationRepository {
         requestID: UUID,
         conversationID: UUID,
         initialBudget: AgentBudget,
-        startedAt: Date
+        startedAt: Date,
+        containsTransientImage: Bool
     ) -> AgentRequestSnapshot {
         if let existing = requests[requestID] {
             let resumed = AgentRequestSnapshot(
@@ -277,6 +282,7 @@ actor BlockingConversationRepository: ConversationRepository {
                 budget: existing.budget,
                 consumption: existing.consumption,
                 resumeCount: existing.resumeCount + 1,
+                containsTransientImage: existing.containsTransientImage,
                 state: .running
             )
             requests[requestID] = resumed
@@ -289,6 +295,7 @@ actor BlockingConversationRepository: ConversationRepository {
             budget: initialBudget,
             consumption: .zero,
             resumeCount: 0,
+            containsTransientImage: containsTransientImage,
             state: .running
         )
         requests[requestID] = created
@@ -308,6 +315,7 @@ actor BlockingConversationRepository: ConversationRepository {
             budget: existing.budget,
             consumption: consumption,
             resumeCount: existing.resumeCount,
+            containsTransientImage: existing.containsTransientImage,
             state: existing.state
         )
     }
@@ -325,6 +333,7 @@ actor BlockingConversationRepository: ConversationRepository {
             budget: existing.budget,
             consumption: existing.consumption.adding(usage),
             resumeCount: existing.resumeCount,
+            containsTransientImage: existing.containsTransientImage,
             state: existing.state
         )
     }
@@ -342,6 +351,7 @@ actor BlockingConversationRepository: ConversationRepository {
             budget: existing.budget,
             consumption: existing.consumption,
             resumeCount: existing.resumeCount,
+            containsTransientImage: existing.containsTransientImage,
             state: state
         )
     }

@@ -20,6 +20,9 @@ final class AppState {
     var agentStreamedText = ""
     var pendingWorkoutPlan: WorkoutPlanDraft?
     var pendingMealText: String?
+    var pendingSystemIntent: DensosoAppIntentDestination?
+    var shouldFocusComposer = false
+    var shouldScrollToDailyLoop = false
 
     // 语音
     var isRecording = false

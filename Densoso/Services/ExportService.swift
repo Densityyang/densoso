@@ -33,6 +33,8 @@ final class ExportService {
         let weeklyReports: [WeeklyReportExport]?
         let profileRevisions: [ProfileRevisionExport]?
         let dailyMetricsProjection: [DailyMetricsProjectionExport]?
+        let dailyCheckIns: [DailyCheckInExport]?
+        let userPreferences: [UserPreferenceExport]?
 
         struct UserProfileExport: Codable {
             let name: String
@@ -354,6 +356,27 @@ final class ExportService {
             let createdAt: Date
         }
 
+        struct DailyCheckInExport: Codable {
+            let id: UUID
+            let sourceActionKey: String
+            let occurredAt: Date
+            let energyRaw: String
+            let stressRaw: String
+            let subjectiveSleepRaw: String
+            let note: String?
+            let sourceRaw: String
+            let createdAt: Date
+        }
+
+        struct UserPreferenceExport: Codable {
+            let id: UUID
+            let sourceActionKey: String
+            let categoryRaw: String
+            let statement: String
+            let sourceRaw: String
+            let createdAt: Date
+        }
+
         struct DailyMetricsProjectionExport: Codable {
             let date: Date
             let projectionVersion: String
@@ -432,11 +455,17 @@ final class ExportService {
     enum BackupError: LocalizedError, Equatable {
         case unsupportedVersion(Int)
         case checksumMismatch
+        case invalidDailyCheckIn
+        case invalidUserPreference
+        case invalidTrainingPlan
 
         var errorDescription: String? {
             switch self {
             case .unsupportedVersion(let version): "Unsupported backup version: \(version)"
             case .checksumMismatch: "The backup file did not pass its integrity check."
+            case .invalidDailyCheckIn: "The backup contains an invalid user-reported daily check-in."
+            case .invalidUserPreference: "The backup contains an invalid user-reported preference."
+            case .invalidTrainingPlan: "The backup contains an invalid confirmed training plan."
             }
         }
     }
@@ -474,6 +503,7 @@ final class ExportService {
         guard try checksum(for: document.payload) == document.checksum else {
             throw BackupError.checksumMismatch
         }
+        try validateTrainingPlanBackupEvents(document.payload.scheduleEvents)
         let profileSource = document.payload.userProfile
         let restoredBirthDate: Date?
         if let profileSource,
@@ -485,18 +515,88 @@ final class ExportService {
             restoredBirthDate = nil
         }
         let restoredProfileKey = profileSource?.profileKey ?? "primary"
+        let dailyCheckIns = try (document.payload.dailyCheckIns ?? []).map { source in
+            guard source.sourceRaw == "userReported",
+                  let energy = UserReportedEnergy(rawValue: source.energyRaw),
+                  let stress = UserReportedStress(rawValue: source.stressRaw),
+                  let sleep = SubjectiveSleepQuality(rawValue: source.subjectiveSleepRaw),
+                  !source.sourceActionKey.isEmpty else {
+                throw BackupError.invalidDailyCheckIn
+            }
+            do {
+                _ = try ActionPayload.dailyCheckIn(DailyCheckIn(
+                    occurredAt: source.occurredAt,
+                    energy: energy,
+                    stress: stress,
+                    subjectiveSleep: sleep,
+                    note: source.note
+                )).canonicalData()
+            } catch {
+                throw BackupError.invalidDailyCheckIn
+            }
+            return source
+        }
+        let userPreferences = try (document.payload.userPreferences ?? []).map { source in
+            let statement = source.statement.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard source.sourceRaw == UserPreferenceSource.userReported.rawValue,
+                  let category = UserPreferenceCategory(rawValue: source.categoryRaw),
+                  !source.sourceActionKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !statement.isEmpty,
+                  statement.count <= 500 else {
+                throw BackupError.invalidUserPreference
+            }
+            do {
+                _ = try ActionPayload.userPreference(UserPreference(
+                    id: source.id,
+                    category: category,
+                    statement: statement,
+                    createdAt: source.createdAt
+                )).canonicalData()
+            } catch {
+                throw BackupError.invalidUserPreference
+            }
+            return BackupPayload.UserPreferenceExport(
+                id: source.id,
+                sourceActionKey: source.sourceActionKey,
+                categoryRaw: category.rawValue,
+                statement: statement,
+                sourceRaw: UserPreferenceSource.userReported.rawValue,
+                createdAt: source.createdAt
+            )
+        }
         let legacyWeightEntries: [UserProfile.WeightEntry] = profileSource.flatMap { source in
             guard let data = source.weightHistoryJSON.data(using: .utf8) else { return nil }
             return try? JSONDecoder().decode([UserProfile.WeightEntry].self, from: data)
         } ?? []
 
         do {
+            // Request budgets are deliberately not part of backups: their resumable
+            // transcript is not exported. Remove unfinished request fragments and all
+            // request ledger rows so restore cannot leave orphan resumable work.
+            let requestRecords = try context.fetch(FetchDescriptor<AgentRequestRecord>())
+            let unfinishedRequestIDs = Set(
+                requestRecords
+                    .filter { $0.stateRaw != AgentRequestState.completed.rawValue }
+                    .map(\.requestID)
+            )
+            if !unfinishedRequestIDs.isEmpty {
+                let messages = try context.fetch(FetchDescriptor<MessageRecord>())
+                for message in messages {
+                    if let requestID = message.requestID, unfinishedRequestIDs.contains(requestID) {
+                        context.delete(message)
+                    }
+                }
+            }
+            for request in requestRecords { context.delete(request) }
+
             try context.delete(model: UserProfile.self)
             try context.delete(model: ProfileRevisionRecord.self)
             try context.delete(model: MealRecord.self)
             try context.delete(model: WorkoutRecord.self)
             try context.delete(model: WeightRecord.self)
             try context.delete(model: GoalProfileRecord.self)
+            try context.delete(model: DailyCheckInRecord.self)
+            try context.delete(model: UserPreferenceRecord.self)
             try context.delete(model: DailyHealthSnapshotRecord.self)
             try context.delete(model: DailyBriefRecord.self)
             try context.delete(model: WeeklyBriefRecord.self)
@@ -540,6 +640,29 @@ final class ExportService {
                         createdAt: source.createdAt
                     )
                 )
+            }
+            for source in dailyCheckIns {
+                context.insert(DailyCheckInRecord(
+                    id: source.id,
+                    sourceActionKey: source.sourceActionKey,
+                    occurredAt: source.occurredAt,
+                    energyRaw: source.energyRaw,
+                    stressRaw: source.stressRaw,
+                    subjectiveSleepRaw: source.subjectiveSleepRaw,
+                    note: source.note,
+                    sourceRaw: source.sourceRaw,
+                    createdAt: source.createdAt
+                ))
+            }
+            for source in userPreferences {
+                context.insert(UserPreferenceRecord(
+                    id: source.id,
+                    sourceActionKey: source.sourceActionKey,
+                    categoryRaw: source.categoryRaw,
+                    statement: source.statement,
+                    sourceRaw: source.sourceRaw,
+                    createdAt: source.createdAt
+                ))
             }
             if sourceRevisions.isEmpty, let source = profileSource {
                 context.insert(
@@ -790,8 +913,11 @@ final class ExportService {
                 dailyMetrics: affectedDays.count,
                 weights: weights.count,
                 healthDays: snapshots.count,
+                dailyCheckIns: dailyCheckIns.count,
+                userPreferences: userPreferences.count,
                 scheduledPlans: (document.payload.scheduleEvents ?? []).filter {
                     ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) != nil
+                        || ConfirmedTrainingPlanEntry.decode(notes: $0.notes) != nil
                 }.count
             )
         } catch {
@@ -806,7 +932,22 @@ final class ExportService {
         let dailyMetrics: Int
         let weights: Int
         let healthDays: Int
+        let dailyCheckIns: Int
+        let userPreferences: Int
         let scheduledPlans: Int
+    }
+
+    func validateTrainingPlanBackupEvents(_ events: [BackupPayload.ScheduleEventExport]?) throws {
+        for event in events ?? [] {
+            guard let notes = event.notes,
+                  notes.hasPrefix(ConfirmedTrainingPlanEntry.notesPrefix) else {
+                continue
+            }
+            guard let entry = ConfirmedTrainingPlanEntry.decode(notes: notes),
+                  entry.draft.validationError == nil else {
+                throw BackupError.invalidTrainingPlan
+            }
+        }
     }
 
     private func makePayload(context: ModelContext) throws -> BackupPayload {
@@ -821,6 +962,18 @@ final class ExportService {
             .sorted { $0.measuredAt == $1.measuredAt ? $0.id.uuidString < $1.id.uuidString : $0.measuredAt < $1.measuredAt }
         let goals = try context.fetch(FetchDescriptor<GoalProfileRecord>())
             .sorted { $0.effectiveFrom < $1.effectiveFrom }
+        let dailyCheckIns = try context.fetch(FetchDescriptor<DailyCheckInRecord>())
+            .sorted {
+                $0.occurredAt == $1.occurredAt
+                    ? $0.id.uuidString < $1.id.uuidString
+                    : $0.occurredAt < $1.occurredAt
+            }
+        let userPreferences = try context.fetch(FetchDescriptor<UserPreferenceRecord>())
+            .sorted {
+                $0.createdAt == $1.createdAt
+                    ? $0.id.uuidString < $1.id.uuidString
+                    : $0.createdAt < $1.createdAt
+            }
         let healthSnapshots = try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
             .sorted { $0.dayKey < $1.dayKey }
         let scheduleEvents = try context.fetch(FetchDescriptor<ScheduleEvent>())
@@ -1044,6 +1197,29 @@ final class ExportService {
                     sourceFingerprint: source.sourceFingerprint,
                     energyQuality: source.energyQuality,
                     requiresRecompute: source.requiresRecompute
+                )
+            },
+            dailyCheckIns: dailyCheckIns.map { source in
+                .init(
+                    id: source.id,
+                    sourceActionKey: source.sourceActionKey,
+                    occurredAt: source.occurredAt,
+                    energyRaw: source.energyRaw,
+                    stressRaw: source.stressRaw,
+                    subjectiveSleepRaw: source.subjectiveSleepRaw,
+                    note: source.note,
+                    sourceRaw: source.sourceRaw,
+                    createdAt: source.createdAt
+                )
+            },
+            userPreferences: userPreferences.map { source in
+                .init(
+                    id: source.id,
+                    sourceActionKey: source.sourceActionKey,
+                    categoryRaw: source.categoryRaw,
+                    statement: source.statement,
+                    sourceRaw: source.sourceRaw,
+                    createdAt: source.createdAt
                 )
             }
         )

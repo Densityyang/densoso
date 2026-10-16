@@ -18,12 +18,12 @@ struct GetRecentMealsTool: AgentTool {
             properties: [
                 "days": .integer(
                     minimum: 1,
-                    maximum: Double(AgentRecentMealsLimits.maximumDays),
+                    maximum: AgentRecentMealsLimits.maximumDays,
                     description: "查看最近几天，范围 1–30，默认 7；按用户本地自然日计算"
                 ),
                 "limit": .integer(
                     minimum: 1,
-                    maximum: Double(AgentRecentMealsLimits.maximumMealCount),
+                    maximum: AgentRecentMealsLimits.maximumMealCount,
                     description: "最多返回几餐，范围 1–20，默认 10"
                 ),
             ],

@@ -24,6 +24,9 @@ final class ToolRegistry {
             LogMealTool(),
             LogWeightTool(),
             CreateWorkoutPlanTool(),
+            CreateTrainingPlanTool(),
+            StageDailyCheckInTool(),
+            StageUserPreferenceTool(),
             QueryFoodTool(),
             GetMetricsTool(),
             GetWeeklyDeficitTool(),
@@ -35,6 +38,7 @@ final class ToolRegistry {
             GetRecentMealsTool(),
             GetRecentWorkoutsTool(),
             GetGoalTool(goalProvider: goalProfileProvider),
+            GetUserPreferencesTool(),
         ]
     }
 

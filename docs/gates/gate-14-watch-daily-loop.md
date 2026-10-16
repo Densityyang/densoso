@@ -1,0 +1,33 @@
+# Gate 14 — Watch Daily Loop
+
+Status: focused simulator and domain-contract gate; physical-device acceptance
+remains separate.
+
+## Scope
+
+Checks daily snapshot summaries, pending-action confirmation boundaries,
+durable quick-record envelopes, offline replay deduplication, arrival ordering,
+and retry/resume behavior. Watch outbox and phone inbox tests cover replay
+semantics; the phone coordinator's activation path restores pending commands.
+
+## Focused tests
+
+- DensosoDomain: `DailyLoopSnapshotTests`, `TrainingPlanDraftTests`,
+  `WatchMessageOutboxTests`, and `WatchWorkoutCoordinatorTests`.
+- iOS tests: `DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState`,
+  `DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays`,
+  `DailyLoopSnapshotCompositionTests.testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary`,
+  `WatchMessageInboxStoreTests.testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder`,
+  `WatchMessageInboxStoreTests.testOutOfOrderMessagesAreReturnedInDurableArrivalOrder`,
+  `TrainingPlanSchedulingServiceTests.testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry`,
+  `TrainingPlanSchedulingServiceTests.testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays`,
+  `TrainingPlanScheduleQueryTests.testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay`,
+  `AgentCoordinatorTests.testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce`.
+
+Confirmed multi-day training sessions expose bounded human-readable goal,
+location, intensity, and reason details to schedule queries. Rest days expose
+their reason only; encoded plan payloads are never returned to the Agent.
+
+Simulator evidence does not prove Watch pairing, radio delivery, offline
+reconnection, WorkoutKit presentation, or signed-device HealthKit behavior.
+Those checks belong to manual Gate 15.

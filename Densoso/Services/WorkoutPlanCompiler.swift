@@ -145,13 +145,22 @@ struct WorkoutKitPlanSchedulingClient: WorkoutPlanSchedulingClient {
 final class WorkoutPlanSchedulingService {
     private let modelContainer: ModelContainer
     private let client: any WorkoutPlanSchedulingClient
+    private let multiDayService: TrainingPlanSchedulingService
     private var schedulingActionIDs = Set<UUID>()
     private var schedulingWaiters: [UUID: [CheckedContinuation<Void, Error>]] = [:]
     private(set) var lastError: String?
 
-    init(modelContainer: ModelContainer, client: any WorkoutPlanSchedulingClient = WorkoutKitPlanSchedulingClient()) {
+    init(
+        modelContainer: ModelContainer,
+        client: any WorkoutPlanSchedulingClient = WorkoutKitPlanSchedulingClient(),
+        multiDayClient: any MultiDayWorkoutSchedulingClient = WorkoutKitMultiDaySchedulingClient()
+    ) {
         self.modelContainer = modelContainer
         self.client = client
+        self.multiDayService = TrainingPlanSchedulingService(
+            modelContainer: modelContainer,
+            client: multiDayClient
+        )
     }
 
     func scheduleConfirmedPlan(actionID: UUID) async throws {
@@ -175,6 +184,18 @@ final class WorkoutPlanSchedulingService {
     private func scheduleConfirmedPlanOnce(actionID: UUID) async throws {
         let context = ModelContext(modelContainer)
         let events = try context.fetch(FetchDescriptor<ScheduleEvent>())
+        if events.contains(where: {
+            ConfirmedTrainingPlanEntry.decode(notes: $0.notes)?.actionID == actionID
+        }) {
+            do {
+                try await multiDayService.scheduleConfirmedPlan(actionID: actionID)
+                lastError = nil
+            } catch {
+                lastError = error.localizedDescription
+                throw error
+            }
+            return
+        }
         guard let event = events.first(where: {
             ConfirmedWorkoutPlanEntry.decode(notes: $0.notes)?.actionID == actionID
         }), var entry = ConfirmedWorkoutPlanEntry.decode(notes: event.notes) else {
@@ -226,5 +247,9 @@ final class WorkoutPlanSchedulingService {
         return try context.fetch(FetchDescriptor<ScheduleEvent>())
             .compactMap { ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) }
             .sorted { ($0.draft.scheduledAt ?? .distantPast) > ($1.draft.scheduledAt ?? .distantPast) }
+    }
+
+    func confirmedTrainingPlans() throws -> [ConfirmedTrainingPlanEntry] {
+        try multiDayService.confirmedPlans()
     }
 }

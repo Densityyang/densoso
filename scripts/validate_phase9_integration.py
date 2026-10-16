@@ -56,6 +56,12 @@ def main() -> int:
             "dailyBriefs: [DailyBriefExport]?",
             "weeklyBriefs: [WeeklyBriefExport]?",
             "weeklyReports: [WeeklyReportExport]?",
+            "dailyCheckIns: [DailyCheckInExport]?",
+            "userPreferences: [UserPreferenceExport]?",
+            "DailyCheckInRecord.self",
+            "UserPreferenceRecord.self",
+            "unfinishedRequestIDs",
+            "AgentRequestRecord",
             "HealthSyncOutboxEntry.self",
             "HealthKitImportCursor.self",
         ),
@@ -70,6 +76,12 @@ def main() -> int:
             "testLegacyV2BackupStillRestoresAfterGate5EvidenceFieldsWereAdded",
             "testLegacyV3BackupStillRestoresMealEvidenceAfterHealthDataWasAdded",
             "testV5BackupRestoresProfileHistoryAndHealthDataWithoutSyncQueueState",
+            "exported.payload.dailyCheckIns?.count",
+            "summary.dailyCheckIns",
+            "exported.payload.userPreferences?.count",
+            "summary.userPreferences",
+            "未确认的偏好",
+            "not-part-of-backup",
             "XCTAssertEqual(exported.formatVersion, 5)",
             "energyIntakeKcal: try EstimateRange(low: 450, likely: 500, high: 600)",
         ),
@@ -79,7 +91,10 @@ def main() -> int:
         "DensosoUITests/Gate09IntegrationScreenshotsTests.swift",
         (
             "testAllPrimaryTabsCapturePortraitScreensWithAccessibilityLabels",
+            "testVoiceBarPrioritizesVoiceAndOpensEditableTextEntry",
             "testPrimaryTabsRemainReachableWithLargeTextAndDarkAppearance",
+            "daily-loop-snapshot",
+            "daily-loop-phase",
             'keepScreenshot(named: "gate-09-',
             "let appFrame = app.windows.firstMatch.frame",
             "XCTAssertGreaterThan(appFrame.height, appFrame.width)",
@@ -88,9 +103,224 @@ def main() -> int:
     )
     if "XCUIScreen.main.bounds" in screenshot_tests:
         errors.append("UI portrait screenshots must use supported XCUIApplication frame APIs")
+    chat_screen = require_text(
+        "Densoso/Views/ChatScreen.swift",
+        (
+            "DailyLoopSnapshotCard(snapshot: dailyLoopSnapshot)",
+            "dailyLoopSnapshotService.snapshot()",
+            "开始说话",
+            "停止录音",
+            "照片记餐",
+            "today-voice-primary",
+            "today-photo-secondary",
+            "today-text-entry",
+            "today-composer",
+            "today-send",
+            "发送",
+        ),
+        errors,
+    )
+    quick_action_handler = chat_screen.split("private func promptButton(for action:", 1)[-1].split(
+        "private func quickActionDetails", 1
+    )[0]
+    if "send(" in quick_action_handler or "agentSession" in quick_action_handler:
+        errors.append("Today quick actions must only prefill the editable composer")
+    require_text(
+        "Densoso/App/Dependencies.swift",
+        ("dailyLoopSnapshotService: DailyLoopSnapshotService", "DailyLoopSnapshotService("),
+        errors,
+    )
+    daily_loop = require_text(
+        "Densoso/Application/DailyLoop/DailyLoopSnapshotService.swift",
+        (
+            "healthIntelligenceService.dailyBrief",
+            "agentSession.pendingActions",
+            "workoutPlanSchedulingService.confirmedPlans()",
+            "plansThroughTomorrow",
+            "scheduledAt >= dayStart",
+            "DailyLoopSnapshot(",
+        ),
+        errors,
+    )
+    if "healthIntelligenceService.refresh()" in daily_loop or "todayHealthState(" in daily_loop:
+        errors.append("DailyLoop composition must not refresh or recalculate health state")
+    require_text(
+        "Densoso/Views/Components/DailyLoopSnapshotCard.swift",
+        (
+            "daily-loop-snapshot",
+            "daily-loop-phase",
+            "todayState",
+            "todaySummary",
+            "tomorrowGuidance",
+            "pendingActions",
+            "workoutPlans",
+            "今日状态暂不可用",
+        ),
+        errors,
+    )
+    intent_source = require_text(
+        "Densoso/Intents/DensosoAppShortcuts.swift",
+        (
+            "struct ViewTodayStatusIntent",
+            "struct ViewTodayGuidanceIntent",
+            "struct OpenDensosoIntent",
+            "struct StartRecordIntent",
+            "struct StartWorkoutIntent",
+            "struct CreateWorkoutPlanIntent",
+            "struct LogMealByVoiceIntent",
+            "intent: ViewTodayStatusIntent()",
+            "intent: ViewTodayGuidanceIntent()",
+            "intent: OpenDensosoIntent()",
+            "intent: StartRecordIntent()",
+            "openAppWhenRun = true",
+            "store(destination:",
+            "store(workoutPlan:",
+            "store(mealText:",
+            "consumeDestination",
+        ),
+        errors,
+    )
+    if "ModelContext" in intent_source or "HKHealthStore" in intent_source:
+        errors.append("App Intents must hand off a request without writing SwiftData or HealthKit")
+    require_text(
+        "Densoso/App/AppState.swift",
+        ("pendingSystemIntent", "shouldFocusComposer", "shouldScrollToDailyLoop"),
+        errors,
+    )
+    require_text(
+        "Densoso/App/DensosoApp.swift",
+        ("AppIntentInbox.consumeDestination()", "appState.pendingSystemIntent"),
+        errors,
+    )
+    require_text(
+        "Densoso/Views/ContentView.swift",
+        (
+            "selectedTab = 0",
+            "consumeSystemIntent",
+            "AppIntentInbox.consumeDestination()",
+            "case .startRecording",
+            "shouldFocusComposer = true",
+        ),
+        errors,
+    )
+    require_text(
+        "Densoso/Views/ChatScreen.swift",
+        (".focused($composerFocused)", "appState.shouldFocusComposer", "scrollTo(\"daily-loop-snapshot-anchor\""),
+        errors,
+    )
+    require_text(
+        "DensosoTests/Application/AppIntentInboxTests.swift",
+        ("testSystemDestinationsRoundTripAndAreConsumedOnce", "startRecording"),
+        errors,
+    )
+    diagnostics_service = require_text(
+        "Densoso/Services/DiagnosticsExportService.swift",
+        (
+            "struct DiagnosticsExportDocument",
+            "ProviderUsageRecord",
+            "HealthSyncOutboxEntry",
+            "HealthKitImportCursor",
+            "DailyMetrics",
+            "ProviderLogBuffer",
+            "completeFileProtection",
+        ),
+        errors,
+    )
+    for forbidden in (
+        "MealRecord",
+        "WeightRecord",
+        "MessageRecord",
+        "UserPreferenceRecord",
+        "DailyCheckInRecord",
+        "ConsentRecord",
+        "KeychainStore",
+        "APIKey",
+        "payloadData",
+        "lastError",
+        "anchorData",
+        "sourceFingerprint",
+        "dataCoverageJSON",
+    ):
+        if forbidden in diagnostics_service:
+            errors.append(f"diagnostics export source must not access {forbidden}")
+    require_text(
+        "Densoso/Infrastructure/LLM/ProviderLogRedactor.swift",
+        (
+            "struct ProviderLogMetadata",
+            "static func safeModel",
+            "static func safeProviderCode",
+            "static func errorCode(for error: Error)",
+            "final class ProviderLogBuffer",
+            "private let capacity: Int",
+        ),
+        errors,
+    )
+    require_text(
+        "Densoso/Services/IntelligenceRouting.swift",
+        ("private let logSink: any ProviderLogSink", "logSink: logSink"),
+        errors,
+    )
+    require_text(
+        "Densoso/Views/SettingsScreen.swift",
+        (
+            'Button("导出系统诊断 JSON"',
+            "diagnosticsExportService.exportJSON(",
+            "hasError: watch.lastError != nil",
+            "不含健康记录、备注、转录、偏好、密钥或同意内容",
+        ),
+        errors,
+    )
+    require_text(
+        "DensosoTests/Privacy/DiagnosticsExportPrivacyTests.swift",
+        (
+            "testExportContainsOnlyWhitelistedDiagnosticsAndIsReadOnly",
+            "testProviderLogBufferIsBoundedAndRedactsModelAndErrorCode",
+            "testProviderErrorsExportOnlyAllowlistedCodes",
+            "PRIVATE-USER-DATA-DO-NOT-EXPORT",
+            "sk-private-api-key-do-not-export",
+            "PRIVATE-TRANSCRIPT",
+            "PRIVATE-HEALTH-SAMPLE",
+            "PRIVATE-DRAFT-NOTE",
+            "PRIVATE-PREFERENCE",
+            "PRIVATE-CONSENT",
+            "sourceFingerprint",
+            "XCTAssertEqual(before, after)",
+        ),
+        errors,
+    )
+    require_text(
+        "DensosoUITests/Gate09IntegrationScreenshotsTests.swift",
+        (
+            "testTodayQuickActionPrefillsEditableComposerWithoutSubmitting",
+            "记录体重",
+            "today-composer",
+            "正在整理草稿",
+        ),
+        errors,
+    )
+    require_text(
+        "Densoso/Views/ChatScreen.swift",
+        (
+            r"ForEach(dailyLoopSnapshot?.quickActions ?? [], id: \.rawValue)",
+            "case .logWeight",
+            "case .dailyCheckIn",
+            "inputText = details.prompt",
+        ),
+        errors,
+    )
     require_text(
         "DensosoUITests/Fixtures/Gate01/expected-tabs.json",
         ('"tab": "今天"', '"tab": "趋势"', '"tab": "记录"', '"tab": "设置"'),
+        errors,
+    )
+    require_text(
+        "DensosoTests/Application/DailyLoopSnapshotCompositionTests.swift",
+        ("stale-plan", "distant-plan", "tomorrowPlan.actionID"),
+        errors,
+    )
+    require_text(
+        "DensosoTests/Application/AppIntentInboxTests.swift",
+        ("testSystemDestinationsRoundTripAndAreConsumedOnce", "todayGuidance", "startRecording"),
         errors,
     )
     require_text(
@@ -159,6 +389,8 @@ def main() -> int:
             "Gates 1–8",
             "physical iPhone render",
             "blocked-by-signing",
+            "Privacy-focused diagnostics export",
+            "DiagnosticsExportPrivacyTests",
         ),
         errors,
     )
@@ -186,8 +418,13 @@ def main() -> int:
 
     report = {
         "status": "pass",
-        "scope": "four-tab-integration-and-v5-backup",
+        "scope": "four-tab-integration-v5-backup-and-privacy-focused-diagnostics-export",
         "backupCompatibility": [2, 3, 4, 5],
+        "userReportedCheckInsExported": True,
+        "userReportedPreferencesExported": True,
+        "dailyLoopTodaySurfaceIntegrated": True,
+        "diagnosticsExportWhitelistRequired": True,
+        "unfinishedAgentRequestsRestored": False,
         "sensitiveSyncStateRestored": False,
         "physicalDeviceVisualAcceptanceClaimed": False,
     }

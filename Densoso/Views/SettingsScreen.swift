@@ -15,6 +15,7 @@ struct SettingsScreen: View {
     @State private var qwenAPIKey = ""
     @State private var hasSavedQwenAPIKey = false
     @State private var deepSeekTextConsent = false
+    @State private var deepSeekMealImageConsent = false
     @State private var qwenTextConsent = false
     @State private var qwenSpeechConsent = false
     @State private var qwenMealImageConsent = false
@@ -23,6 +24,7 @@ struct SettingsScreen: View {
     @State private var statusMessage: String?
     @State private var exportURL: URL?
     @State private var showShareSheet = false
+    @State private var isExportingDiagnostics = false
     @State private var isAuthorizingHealth = false
     @State private var healthAuthorizationError: String?
     @State private var isEditingProfile = false
@@ -143,6 +145,19 @@ struct SettingsScreen: View {
                     .onChange(of: deepSeekTextConsent) { _, value in
                         Task { await saveConsent(provider: .deepSeek, granted: value) }
                 }
+                Toggle("同意向 DeepSeek 上传处理后的餐食照片", isOn: $deepSeekMealImageConsent)
+                    .onChange(of: deepSeekMealImageConsent) { _, value in
+                        Task {
+                            await saveConsent(
+                                provider: .deepSeek,
+                                dataClass: .mealImage,
+                                granted: value
+                            )
+                        }
+                    }
+                Text("餐食照片经本机缩放并移除元数据；原图不留存。仅在选择 DeepSeek 且启用此项后，照片才随本次 Agent 请求上传。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 LabeledContent("本月用量", value: deepSeekUsage)
                 TextField(
                     "软提醒预算 USD/月",
@@ -466,6 +481,19 @@ struct SettingsScreen: View {
                 Task { await exportSpeechDiagnostics() }
             }
 
+            Button("导出系统诊断 JSON", systemImage: "stethoscope") {
+                Task { await exportDiagnostics() }
+            }
+            .disabled(isExportingDiagnostics)
+
+            Text("仅包含版本、云端提供方与模型、延迟/用量/错误码、同步投影和 Watch 状态；不含健康记录、备注、转录、偏好、密钥或同意内容。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if isExportingDiagnostics {
+                ProgressView("正在生成脱敏诊断")
+            }
+
             if dependencies.exportService.isExporting {
                 ProgressView("正在生成备份")
             }
@@ -508,11 +536,12 @@ struct SettingsScreen: View {
                 provider: provider,
                 dataClass: dataClass,
                 granted: granted,
-                policyVersion: dataClass == .speechAudio
-                    ? "qwen-single-audio-v1"
-                    : dataClass == .mealImage
-                        ? "qwen-sanitized-meal-image-v1"
-                        : "cloud-health-text-v1"
+                policyVersion: switch (provider, dataClass) {
+                case (.qwen, .speechAudio): "qwen-single-audio-v1"
+                case (.qwen, .mealImage): "qwen-sanitized-meal-image-v1"
+                case (.deepSeek, .mealImage): "deepseek-sanitized-meal-image-v1"
+                default: "cloud-health-text-v1"
+                }
             )
         } catch {
             healthAuthorizationError = "无法保存云端同意状态：\(error.localizedDescription)"
@@ -523,6 +552,10 @@ struct SettingsScreen: View {
         deepSeekTextConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
             provider: .deepSeek,
             dataClass: .healthText
+        )) == true
+        deepSeekMealImageConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+            provider: .deepSeek,
+            dataClass: .mealImage
         )) == true
         qwenTextConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
             provider: .qwen,
@@ -570,6 +603,28 @@ struct SettingsScreen: View {
             showShareSheet = true
         } catch {
             healthAuthorizationError = "无法导出语音诊断：\(error.localizedDescription)"
+        }
+    }
+
+    private func exportDiagnostics() async {
+        isExportingDiagnostics = true
+        defer { isExportingDiagnostics = false }
+        await Task.yield()
+        let watch = dependencies.watchConnectivityCoordinator
+        do {
+            exportURL = try dependencies.diagnosticsExportService.exportJSON(
+                context: modelContext,
+                mode: dependencies.intelligencePreferences.mode,
+                watch: DiagnosticsWatchStatus(
+                    isAvailable: watch.isAvailable,
+                    isActivated: watch.isActivated,
+                    hasError: watch.lastError != nil
+                )
+            )
+            healthAuthorizationError = nil
+            showShareSheet = true
+        } catch {
+            healthAuthorizationError = "无法生成系统诊断文件，请稍后重试。"
         }
     }
 

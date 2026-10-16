@@ -14,14 +14,17 @@ final class Dependencies {
     let intelligencePreferences: IntelligencePreferences
     let providerConfiguration: ProviderConfigurationPreferences
     let providerRegistry: ProviderRegistry
+    let providerLogBuffer: ProviderLogBuffer
     let healthKitService: HealthKitService
     let healthKitSyncCoordinator: HealthKitSyncCoordinator
     let healthIntelligenceService: HealthIntelligenceService
+    let dailyLoopSnapshotService: DailyLoopSnapshotService
     let briefNotificationScheduler: BriefNotificationScheduler
     let workoutPlanSchedulingService: WorkoutPlanSchedulingService
     let watchConnectivityCoordinator: PhoneWatchConnectivityCoordinator
     let healthSyncOutboxWorker: HealthSyncOutboxWorker
     let capabilityDiagnostics: CapabilityDiagnosticsService
+    let diagnosticsExportService: DiagnosticsExportService
     let exportService: ExportService
     let toolRegistry: ToolRegistry
     let agentSession: AgentSession
@@ -71,7 +74,11 @@ final class Dependencies {
         self.localIntelligence = LocalIntelligenceService()
         let intelligencePreferences = IntelligencePreferences()
         let providerConfiguration = ProviderConfigurationPreferences()
-        let providerRegistry = ProviderRegistry(configuration: providerConfiguration)
+        let providerLogBuffer = ProviderLogBuffer()
+        let providerRegistry = ProviderRegistry(
+            configuration: providerConfiguration,
+            logSink: providerLogBuffer
+        )
         let packagedFoodProvider: (any PackagedFoodProvider)?
         if let openFoodFacts = try? OpenFoodFactsPackagedFoodProvider(
             userAgent: "densoso/1.0 (iOS; meal barcode lookup)"
@@ -94,7 +101,9 @@ final class Dependencies {
         self.healthKitSyncCoordinator = healthKitSyncCoordinator
         self.healthSyncOutboxWorker = healthSyncOutboxWorker
         self.capabilityDiagnostics = CapabilityDiagnosticsService()
+        self.diagnosticsExportService = DiagnosticsExportService(providerLogs: providerLogBuffer)
         self.exportService = ExportService()
+        self.providerLogBuffer = providerLogBuffer
         self.toolRegistry = toolRegistry
         self.persistenceWriteGate = writeGate
         self.confirmationRepository = confirmationRepository
@@ -106,7 +115,7 @@ final class Dependencies {
         self.providerUsageLedger = usageLedger
         self.packagedFoodProvider = packagedFoodProvider
         self.speechService = SpeechService(
-            cloudProvider: ConfiguredQwenASRProvider(),
+            cloudProvider: ConfiguredQwenASRProvider(logSink: providerLogBuffer),
             governanceRepository: governanceRepository,
             usageLedger: usageLedger,
             providerConfiguration: providerConfiguration
@@ -131,6 +140,11 @@ final class Dependencies {
             }
         )
         self.agentSession = agentSession
+        self.dailyLoopSnapshotService = DailyLoopSnapshotService(
+            healthIntelligenceService: healthIntelligenceService,
+            agentSession: agentSession,
+            workoutPlanSchedulingService: workoutPlanSchedulingService
+        )
         let watchConnectivityCoordinator = PhoneWatchConnectivityCoordinator(
             modelContainer: modelContainer,
             confirmationCoordinator: confirmationCoordinator,
@@ -179,7 +193,7 @@ final class Dependencies {
             foodDatabase: foodDatabase,
             packagedFoodProvider: packagedFoodProvider,
             confirmedFoodHistory: confirmedFoodHistoryRepository,
-            visionProvider: ConfiguredQwenMealVisionProvider(),
+            visionProvider: ConfiguredQwenMealVisionProvider(logSink: providerLogBuffer),
             governanceRepository: providerGovernanceRepository,
             providerConfiguration: providerConfiguration,
             usageLedger: providerUsageLedger,

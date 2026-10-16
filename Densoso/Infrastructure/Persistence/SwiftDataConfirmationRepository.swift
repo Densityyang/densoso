@@ -191,6 +191,56 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                     // A plan receipt refers to its action; it is not a completed Workout record.
                     localRecordID = action.id
                     affectedDate = nil
+                case .trainingPlan(let draft):
+                    let compiled = try TrainingPlanCompiler().compile(draft)
+                    guard let firstSession = draft.sessions.min(by: { $0.date < $1.date }) else {
+                        throw TrainingPlanCompileError.invalidDraft(.invalidSessionCount)
+                    }
+                    let entry = ConfirmedTrainingPlanEntry(
+                        actionID: action.id,
+                        idempotencyKey: action.idempotencyKey,
+                        draft: draft
+                    )
+                    modelContext.insert(ScheduleEvent(
+                        date: firstSession.date,
+                        title: compiled.name,
+                        notes: try entry.encodedNotes(),
+                        startTime: firstSession.date,
+                        endTime: nil
+                    ))
+                    // One app-owned plan record represents all sessions; none is a completed Workout.
+                    localRecordID = action.id
+                    affectedDate = nil
+                    healthSyncState = .notApplicable
+                case .dailyCheckIn(let checkIn):
+                    let record = DailyCheckInRecord(
+                        sourceActionKey: action.idempotencyKey,
+                        occurredAt: checkIn.occurredAt,
+                        energyRaw: checkIn.energy.rawValue,
+                        stressRaw: checkIn.stress.rawValue,
+                        subjectiveSleepRaw: checkIn.subjectiveSleep.rawValue,
+                        note: checkIn.note?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                        sourceRaw: "userReported"
+                    )
+                    modelContext.insert(record)
+                    localRecordID = record.id
+                    // User-reported check-ins remain separate from objective daily projections.
+                    affectedDate = nil
+                    healthSyncState = .notApplicable
+                case .userPreference(let preference):
+                    let record = UserPreferenceRecord(
+                        id: preference.id,
+                        sourceActionKey: action.idempotencyKey,
+                        categoryRaw: preference.category.rawValue,
+                        statement: preference.statement.trimmingCharacters(in: .whitespacesAndNewlines),
+                        sourceRaw: preference.source.rawValue,
+                        createdAt: preference.createdAt
+                    )
+                    modelContext.insert(record)
+                    localRecordID = record.id
+                    // Preferences are local user-reported facts, not HealthKit data or projections.
+                    affectedDate = nil
+                    healthSyncState = .notApplicable
                 }
                 try injectFailure(.afterRecord)
 
@@ -202,7 +252,10 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                 try injectFailure(.afterProjection)
 
                 let outbox: HealthSyncOutboxEntry?
-                if payload.actionType == .workoutPlan {
+                if payload.actionType == .workoutPlan
+                    || payload.actionType == .trainingPlan
+                    || payload.actionType == .dailyCheckIn
+                    || payload.actionType == .userPreference {
                     outbox = nil
                 } else {
                     let outboxID = UUID()
@@ -643,6 +696,16 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             return try modelContext.fetch(FetchDescriptor<ScheduleEvent>()).contains { event in
                 ConfirmedWorkoutPlanEntry.decode(notes: event.notes)?.idempotencyKey == idempotencyKey
             }
+        case .trainingPlan:
+            return try modelContext.fetch(FetchDescriptor<ScheduleEvent>()).contains { event in
+                ConfirmedTrainingPlanEntry.decode(notes: event.notes)?.idempotencyKey == idempotencyKey
+            }
+        case .dailyCheckIn:
+            return try modelContext.fetch(FetchDescriptor<DailyCheckInRecord>())
+                .contains { $0.sourceActionKey == idempotencyKey }
+        case .userPreference:
+            return try modelContext.fetch(FetchDescriptor<UserPreferenceRecord>())
+                .contains { $0.sourceActionKey == idempotencyKey }
         case nil:
             throw ConfirmationError.invariantViolation("unknown action type \(actionTypeRaw)")
         }
@@ -699,4 +762,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         values.isEmpty ? 0 : values.reduce(0, +) / Double(values.count)
     }
 
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

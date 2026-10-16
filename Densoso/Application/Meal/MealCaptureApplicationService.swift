@@ -252,6 +252,22 @@ final class MealCaptureApplicationService {
         )
     }
 
+    /// Sanitizes a photo and keeps its local scan evidence separate from the
+    /// image bytes. The returned request is passed to AgentSession, which only
+    /// stages a pending action after the model invokes the existing meal tool.
+    func prepareForAgent(
+        originalData: Data,
+        userText: String = "请根据这张餐食照片协助我记录，生成待确认草稿；不确定的部分先提出一个问题。"
+    ) async throws -> MultimodalModelRequest {
+        let sanitized = try await photoSanitizer.sanitize(originalData: originalData)
+        let localEvidence = try await scanner.scan(imageJPEG: sanitized)
+        return try MultimodalModelRequest(
+            userText: userText,
+            imageJPEG: sanitized,
+            mealEvidence: localEvidence
+        )
+    }
+
     func stageMeal(
         review: MealCaptureReview,
         selectedFoodID: String?,

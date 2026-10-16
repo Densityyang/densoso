@@ -2,11 +2,19 @@ import AppIntents
 import Foundation
 import DensosoDomain
 
+enum DensosoAppIntentDestination: String, CaseIterable, Equatable, Sendable {
+    case todayStatus
+    case todayGuidance
+    case openToday
+    case startRecording
+}
+
 /// A small inbox is sufficient for handoff from a system App Intent to the app.
 /// The data is always a draft; no HealthKit or SwiftData write occurs here.
 enum AppIntentInbox {
     private static let workoutPlanKey = "appIntent.workoutPlanDraft"
     private static let mealTextKey = "appIntent.mealTextDraft"
+    private static let destinationKey = "appIntent.destination"
 
     static func store(workoutPlan: WorkoutPlanDraft) {
         UserDefaults.standard.set(try? JSONEncoder().encode(workoutPlan), forKey: workoutPlanKey)
@@ -25,6 +33,73 @@ enum AppIntentInbox {
     static func consumeMealText() -> String? {
         defer { UserDefaults.standard.removeObject(forKey: mealTextKey) }
         return UserDefaults.standard.string(forKey: mealTextKey)
+    }
+
+    static func store(destination: DensosoAppIntentDestination, defaults: UserDefaults = .standard) {
+        defaults.set(destination.rawValue, forKey: destinationKey)
+    }
+
+    static func consumeDestination(defaults: UserDefaults = .standard) -> DensosoAppIntentDestination? {
+        defer { defaults.removeObject(forKey: destinationKey) }
+        guard let rawValue = defaults.string(forKey: destinationKey) else { return nil }
+        return DensosoAppIntentDestination(rawValue: rawValue)
+    }
+
+    static func clearDestination(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: destinationKey)
+    }
+
+    @MainActor
+    static func deliver(destination: DensosoAppIntentDestination) {
+        AppState.shared.pendingSystemIntent = destination
+    }
+}
+
+struct ViewTodayStatusIntent: AppIntent {
+    static let title: LocalizedStringResource = "查看今天状态"
+    static let description = IntentDescription("打开 densoso Today snapshot 查看已有的今日状态摘要。")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        AppIntentInbox.store(destination: .todayStatus)
+        await AppIntentInbox.deliver(destination: .todayStatus)
+        return .result(dialog: "已打开 densoso Today 概览。")
+    }
+}
+
+struct ViewTodayGuidanceIntent: AppIntent {
+    static let title: LocalizedStringResource = "查看今日建议"
+    static let description = IntentDescription("打开 densoso Today snapshot 查看现有的明日建议。")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        AppIntentInbox.store(destination: .todayGuidance)
+        await AppIntentInbox.deliver(destination: .todayGuidance)
+        return .result(dialog: "已打开 densoso Today 概览。")
+    }
+}
+
+struct OpenDensosoIntent: AppIntent {
+    static let title: LocalizedStringResource = "打开 densoso"
+    static let description = IntentDescription("打开 densoso 的 Today 页面。")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        AppIntentInbox.store(destination: .openToday)
+        await AppIntentInbox.deliver(destination: .openToday)
+        return .result(dialog: "已打开 densoso。")
+    }
+}
+
+struct StartRecordIntent: AppIntent {
+    static let title: LocalizedStringResource = "开始记录"
+    static let description = IntentDescription("打开 densoso 并聚焦可编辑的文字输入框，不会自动录音或保存。")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        AppIntentInbox.store(destination: .startRecording)
+        await AppIntentInbox.deliver(destination: .startRecording)
+        return .result(dialog: "已打开输入框。检查并编辑内容后，再由你决定是否发送。")
     }
 }
 
@@ -86,6 +161,30 @@ struct DensosoAppShortcuts: AppShortcutsProvider {
             phrases: ["在\(.applicationName)记录餐食"],
             shortTitle: "语音记餐",
             systemImageName: "mic"
+        )
+        AppShortcut(
+            intent: ViewTodayStatusIntent(),
+            phrases: ["在\(.applicationName)查看今天状态"],
+            shortTitle: "今天状态",
+            systemImageName: "heart.text.square"
+        )
+        AppShortcut(
+            intent: ViewTodayGuidanceIntent(),
+            phrases: ["在\(.applicationName)查看今日建议"],
+            shortTitle: "今日建议",
+            systemImageName: "arrow.up.right"
+        )
+        AppShortcut(
+            intent: OpenDensosoIntent(),
+            phrases: ["打开\(.applicationName)"],
+            shortTitle: "打开 densoso",
+            systemImageName: "sun.max"
+        )
+        AppShortcut(
+            intent: StartRecordIntent(),
+            phrases: ["在\(.applicationName)开始记录"],
+            shortTitle: "开始记录",
+            systemImageName: "square.and.pencil"
         )
     }
 }

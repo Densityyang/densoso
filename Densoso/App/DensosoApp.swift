@@ -64,6 +64,9 @@ struct AppRoot: View {
                     dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                     appState.pendingWorkoutPlan = AppIntentInbox.consumeWorkoutPlan()
                     appState.pendingMealText = AppIntentInbox.consumeMealText()
+                    if let pendingSystemIntent = AppIntentInbox.consumeDestination() {
+                        appState.pendingSystemIntent = pendingSystemIntent
+                    }
                     checkOnboarding()
                 }
         } else {
@@ -79,8 +82,12 @@ struct AppRoot: View {
 
     private func prepareUITestState() {
         appState.startupWarning = nil
+        appState.pendingSystemIntent = nil
+        appState.shouldFocusComposer = false
+        appState.shouldScrollToDailyLoop = false
         appState.pendingWorkoutPlan = nil
         appState.pendingMealText = nil
+        AppIntentInbox.clearDestination()
 
         guard launchConfiguration.usesSeededProfile else {
             appState.isOnboarded = false

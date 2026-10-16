@@ -9,7 +9,9 @@ acceptance.
 ## Scope
 
 - Four-tab navigation: Today, Trends, Records and Settings. Today remains the
-  voice-first interaction, with text and photo capture as alternate inputs.
+  voice-first interaction, with a prominent voice control, secondary photo
+  capture, and an explicit editable-text entry. Quick actions and transcripts
+  fill editable text and never submit by themselves.
 - Trends presents the four health domains, evidence-linked briefs and
   individual vitals without a global score. Records covers meals, workouts,
   weights and sync state. Settings covers permissions, provider consent,
@@ -25,6 +27,11 @@ acceptance.
   large-text/dark appearance configuration. Automated tests assert tab labels
   and screen markers; screenshots remain review artifacts, not proof of a
   physical iPhone render.
+- Privacy-focused diagnostics export offers a shareable JSON file with only
+  OS/app/schema, provider/model, latency/usage/error codes, aggregate sync and
+  projection status, and Watch availability. Meals, weights, HealthKit
+  metrics/samples, notes, transcripts, preferences, API keys, and consent
+  contents are excluded and checked by `DiagnosticsExportPrivacyTests`.
 
 ## Gate contract
 

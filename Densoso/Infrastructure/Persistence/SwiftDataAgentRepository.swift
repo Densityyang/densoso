@@ -1,4 +1,5 @@
 import Foundation
+import DensosoDomain
 import SwiftData
 
 @ModelActor
@@ -7,7 +8,8 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         requestID: UUID,
         conversationID: UUID,
         initialBudget: AgentBudget,
-        startedAt: Date
+        startedAt: Date,
+        containsTransientImage: Bool
     ) throws -> AgentRequestSnapshot {
         let descriptor = FetchDescriptor<AgentRequestRecord>(
             predicate: #Predicate { $0.requestID == requestID }
@@ -15,6 +17,14 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         if let existing = try modelContext.fetch(descriptor).first {
             guard existing.conversationID == conversationID else {
                 throw AgentRequestPersistenceError.conversationMismatch
+            }
+            if existing.containsTransientImage && !containsTransientImage {
+                // Do not consume a resume or reset state when the original
+                // transient media has not been reattached by the user.
+                return try requestSnapshot(existing)
+            }
+            guard existing.containsTransientImage == containsTransientImage else {
+                throw AgentRequestPersistenceError.requestMediaMismatch
             }
             let state = try requestState(existing)
             if state == .running || state == .interrupted {
@@ -32,7 +42,8 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
             startedAt: startedAt,
             absoluteDeadline: initialBudget.deadline,
             maximumProviderRounds: initialBudget.maximumProviderRounds,
-            maximumToolCalls: initialBudget.maximumToolCalls
+            maximumToolCalls: initialBudget.maximumToolCalls,
+            containsTransientImage: containsTransientImage
         )
         modelContext.insert(record)
         try modelContext.save()
@@ -111,17 +122,56 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: date)
         let end = calendar.date(byAdding: .day, value: 1, to: start)!
-        return try modelContext.fetch(FetchDescriptor<ScheduleEvent>())
-            .filter { $0.date >= start && $0.date < end }
-            .sorted { $0.startTime < $1.startTime }
-            .map {
-                AgentScheduleItem(
-                    title: $0.title,
-                    startTime: $0.startTime,
-                    endTime: $0.endTime,
-                    notes: $0.notes
-                )
+        var scheduleItems: [AgentScheduleItem] = []
+        for event in try modelContext.fetch(FetchDescriptor<ScheduleEvent>()) {
+            if let trainingPlan = ConfirmedTrainingPlanEntry.decode(notes: event.notes) {
+                guard trainingPlan.state != .terminal else { continue }
+                scheduleItems.append(contentsOf: trainingPlan.draft.sessions.compactMap { session in
+                    guard calendar.isDate(session.date, inSameDayAs: date) else { return nil }
+                    let planName = String(trainingPlan.draft.name.prefix(80))
+                    let title = session.activity.map {
+                        "\(planName) · \($0.displayName)"
+                    } ?? "\(planName) · 休息日"
+                    let reason = String(session.reason.prefix(240))
+                    let notes: String
+                    if session.activity == nil {
+                        notes = reason
+                    } else {
+                        var details: [String] = []
+                        if let goal = session.goal { details.append("目标：\(goal.displayName)") }
+                        if let location = session.location { details.append("地点：\(location.displayName)") }
+                        if let intensity = session.recommendedIntensity {
+                            details.append("建议强度：\(intensity.displayName)")
+                        }
+                        details.append("理由：\(reason)")
+                        notes = String(details.joined(separator: "；").prefix(600))
+                    }
+                    return AgentScheduleItem(
+                        title: title,
+                        startTime: session.date,
+                        endTime: nil,
+                        notes: notes
+                    )
+                })
+                continue
             }
+
+            guard event.date >= start, event.date < end else { continue }
+            scheduleItems.append(
+                AgentScheduleItem(
+                    title: event.title,
+                    startTime: event.startTime,
+                    endTime: event.endTime,
+                    notes: ConfirmedWorkoutPlanEntry.decode(notes: event.notes) == nil
+                        ? event.notes
+                        : nil
+                )
+            )
+        }
+        return scheduleItems.sorted {
+            if $0.startTime != $1.startTime { return $0.startTime < $1.startTime }
+            return $0.title < $1.title
+        }
     }
 
     func recentMeals(from startDate: Date, through endDate: Date, limit: Int) throws -> [AgentRecentMeal] {
@@ -211,6 +261,32 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
                         : nil
                 )
             }
+    }
+
+    func userPreferences(limit: Int) throws -> [AgentUserPreference] {
+        let cappedLimit = min(max(limit, 1), AgentUserPreferencesLimits.maximumQueryPreferenceCount)
+        let candidates: [(
+            record: UserPreferenceRecord,
+            category: UserPreferenceCategory,
+            statement: String
+        )] = try modelContext.fetch(FetchDescriptor<UserPreferenceRecord>()).compactMap { record in
+            guard record.sourceRaw == UserPreferenceSource.userReported.rawValue,
+                  let category = UserPreferenceCategory(rawValue: record.categoryRaw) else {
+                return nil
+            }
+            let statement = record.statement.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !statement.isEmpty, statement.count <= 500 else { return nil }
+            return (record, category, String(statement.prefix(AgentUserPreferencesLimits.maximumStatementLength)))
+        }
+        return candidates
+            .sorted {
+                if $0.record.createdAt != $1.record.createdAt {
+                    return $0.record.createdAt > $1.record.createdAt
+                }
+                return $0.record.id.uuidString < $1.record.id.uuidString
+            }
+            .prefix(cappedLimit)
+            .map { AgentUserPreference(category: $0.category, statement: $0.statement) }
     }
 
     func ensureConversation(id: UUID) throws {
@@ -327,6 +403,7 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
                 reasoningTokens: record.reasoningTokens
             ),
             resumeCount: record.resumeCount,
+            containsTransientImage: record.containsTransientImage,
             state: state
         )
     }

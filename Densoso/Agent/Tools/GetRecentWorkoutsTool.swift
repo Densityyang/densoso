@@ -18,12 +18,12 @@ struct GetRecentWorkoutsTool: AgentTool {
             properties: [
                 "days": .integer(
                     minimum: 1,
-                    maximum: Double(AgentRecentWorkoutsLimits.maximumDays),
+                    maximum: AgentRecentWorkoutsLimits.maximumDays,
                     description: "查看最近几天，范围 1–30，默认 7；按用户本地自然日计算"
                 ),
                 "limit": .integer(
                     minimum: 1,
-                    maximum: Double(AgentRecentWorkoutsLimits.maximumWorkoutCount),
+                    maximum: AgentRecentWorkoutsLimits.maximumWorkoutCount,
                     description: "最多返回几项已记录运动，范围 1–20，默认 10"
                 ),
             ],

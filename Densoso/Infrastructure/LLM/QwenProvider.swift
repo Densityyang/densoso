@@ -88,7 +88,8 @@ struct QwenProvider: TextModelProvider {
                             provider: .qwen,
                             status: result.response.statusCode,
                             attempt: result.attempt,
-                            latencyMilliseconds: Self.latencyMilliseconds(since: startedAt)
+                            latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                            model: descriptor.model
                         )
                     )
                     let response = try JSONDecoder().decode(OpenAIResponse.self, from: result.data)
@@ -130,10 +131,43 @@ struct QwenProvider: TextModelProvider {
                     continuation.yield(.completed(Self.stopReason(choice.finishReason)))
                     continuation.finish()
                 } catch is CancellationError {
+                    logSink.record(
+                        ProviderLogRedactor.metadata(
+                            requestID: request.requestID,
+                            provider: .qwen,
+                            status: nil,
+                            attempt: 1,
+                            latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                            providerCode: "cancelled",
+                            model: descriptor.model
+                        )
+                    )
                     continuation.finish(throwing: ProviderError.cancelled)
                 } catch let error as ProviderError {
+                    logSink.record(
+                        ProviderLogRedactor.metadata(
+                            requestID: request.requestID,
+                            provider: .qwen,
+                            status: nil,
+                            attempt: 1,
+                            latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                            providerCode: ProviderLogRedactor.errorCode(for: error),
+                            model: descriptor.model
+                        )
+                    )
                     continuation.finish(throwing: error)
                 } catch {
+                    logSink.record(
+                        ProviderLogRedactor.metadata(
+                            requestID: request.requestID,
+                            provider: .qwen,
+                            status: nil,
+                            attempt: 1,
+                            latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                            providerCode: "malformed_response",
+                            model: descriptor.model
+                        )
+                    )
                     continuation.finish(throwing: ProviderError.malformedResponse)
                 }
             }

@@ -98,7 +98,13 @@ struct WatchCompanionView: View {
                             .font(.caption2)
                             .lineLimit(3)
                         HStack {
-                            Button("确认") { connectivity.confirm(actionID: action.actionID) }
+                            if action.requiresPhoneReview == true {
+                                Text("请在 iPhone 查看完整安排后确认")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Button("确认") { connectivity.confirm(actionID: action.actionID) }
+                            }
                             Button("拒绝", role: .destructive) { connectivity.reject(actionID: action.actionID) }
                         }
                         .font(.caption2)

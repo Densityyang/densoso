@@ -1,4 +1,5 @@
 import Foundation
+import DensosoDomain
 
 struct AgentDailyMetric: Codable, Equatable, Sendable {
     let date: Date
@@ -44,6 +45,13 @@ struct AgentRecentWorkout: Equatable, Sendable {
     let estimatedCaloriesKcal: Int?
 }
 
+/// Minimal confirmed user-preference content returned to an explicit on-demand query.
+/// It intentionally carries neither persistence identifiers nor source metadata.
+struct AgentUserPreference: Equatable, Sendable {
+    let category: UserPreferenceCategory
+    let statement: String
+}
+
 enum AgentRecentMealsLimits {
     static let maximumDays = 30
     static let maximumMealCount = 20
@@ -60,6 +68,14 @@ enum AgentRecentWorkoutsLimits {
     static let maximumQueryWorkoutCount = maximumWorkoutCount + 1
     static let maximumWorkoutTypeLength = 60
     static let maximumIntensityLength = 40
+    static let maximumOutputCharacters = 7_500
+}
+
+enum AgentUserPreferencesLimits {
+    static let defaultPreferenceCount = 10
+    static let maximumPreferenceCount = 20
+    static let maximumQueryPreferenceCount = maximumPreferenceCount + 1
+    static let maximumStatementLength = 500
     static let maximumOutputCharacters = 7_500
 }
 
@@ -161,12 +177,14 @@ struct AgentRequestSnapshot: Equatable, Sendable {
     let budget: AgentBudget
     let consumption: AgentBudgetConsumption
     let resumeCount: Int
+    let containsTransientImage: Bool
     let state: AgentRequestState
 }
 
 enum AgentRequestPersistenceError: Error, Equatable {
     case requestNotFound
     case conversationMismatch
+    case requestMediaMismatch
     case invalidState(String)
 }
 
@@ -175,6 +193,7 @@ protocol AgentReadRepository: Sendable {
     func schedule(on date: Date) async throws -> [AgentScheduleItem]
     func recentMeals(from startDate: Date, through endDate: Date, limit: Int) async throws -> [AgentRecentMeal]
     func recentWorkouts(from startDate: Date, through endDate: Date, limit: Int) async throws -> [AgentRecentWorkout]
+    func userPreferences(limit: Int) async throws -> [AgentUserPreference]
 }
 
 protocol ConversationRepository: Sendable {
@@ -182,7 +201,8 @@ protocol ConversationRepository: Sendable {
         requestID: UUID,
         conversationID: UUID,
         initialBudget: AgentBudget,
-        startedAt: Date
+        startedAt: Date,
+        containsTransientImage: Bool
     ) async throws -> AgentRequestSnapshot
     func updateAgentRequestConsumption(
         requestID: UUID,

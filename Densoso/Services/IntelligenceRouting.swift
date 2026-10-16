@@ -66,15 +66,18 @@ final class ProviderRegistry: ProviderSelecting {
     private let credentialSource: any ProviderCredentialSource
     private let configuration: ProviderConfigurationPreferences
     private let transport: any ProviderHTTPTransport
+    private let logSink: any ProviderLogSink
 
     init(
         credentialSource: any ProviderCredentialSource = KeychainStore.shared,
         configuration: ProviderConfigurationPreferences,
-        transport: any ProviderHTTPTransport = URLSessionProviderTransport()
+        transport: any ProviderHTTPTransport = URLSessionProviderTransport(),
+        logSink: any ProviderLogSink = NoOpProviderLogSink()
     ) {
         self.credentialSource = credentialSource
         self.configuration = configuration
         self.transport = transport
+        self.logSink = logSink
     }
 
     func provider(for mode: IntelligenceMode) throws -> any TextModelProvider {
@@ -82,14 +85,16 @@ final class ProviderRegistry: ProviderSelecting {
         case .cloudDeepSeek:
             return DeepSeekProvider(
                 credentialSource: credentialSource,
-                transport: transport
+                transport: transport,
+                logSink: logSink
             )
         case .cloudQwen:
             return QwenProvider(
                 endpoint: try configuration.qwenEndpoint(),
                 capabilities: configuration.qwenRegion.phase3Capabilities,
                 credentialSource: credentialSource,
-                transport: transport
+                transport: transport,
+                logSink: logSink
             )
         case .localOnly:
             throw ProviderError.unsupportedCapability(.text)

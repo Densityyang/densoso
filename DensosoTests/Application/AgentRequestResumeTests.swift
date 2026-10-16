@@ -55,6 +55,7 @@ final class AgentRequestResumeTests: XCTestCase {
         )
         let beforeResume = try XCTUnwrap(beforeResumeValue)
         XCTAssertEqual(beforeResume.state, .interrupted)
+        XCTAssertFalse(beforeResume.containsTransientImage)
         XCTAssertEqual(beforeResume.budget.deadline, deadline)
         XCTAssertEqual(beforeResume.consumption.providerRoundsUsed, 2)
         XCTAssertEqual(beforeResume.consumption.toolCallsUsed, 1)

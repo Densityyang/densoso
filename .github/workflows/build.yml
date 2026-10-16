@@ -48,6 +48,7 @@ jobs:
             scripts/validate_phase8_watch.py \
             scripts/validate_phase9_integration.py \
             scripts/validate_phase10_final_acceptance.py \
+            scripts/validate_phase11_14_gates.py \
             scripts/validate_voice_goldens.py
 
       - name: Validate bundled food database
@@ -327,6 +328,10 @@ jobs:
             -only-testing:DensosoTests/GetRecentMealsToolTests \
             -only-testing:DensosoTests/GetRecentWorkoutsToolTests \
             -only-testing:DensosoTests/GetGoalToolTests \
+            -only-testing:DensosoTests/DailyCheckInConfirmationTests \
+            -only-testing:DensosoTests/UserPreferenceConfirmationTests \
+            -only-testing:DensosoTests/GetUserPreferencesToolTests \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests \
             -resultBundlePath "$GATE03_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
             test 2>&1 | tee gate03-agent-provider-tests.log
@@ -932,3 +937,292 @@ jobs:
             docs/gates/gate-10-final-acceptance.md
           if-no-files-found: error
           retention-days: 30
+
+  gate-11-ai-native-health-loop:
+    name: gate-11-ai-native-health-loop
+    needs: final-acceptance
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 11 paths
+        run: |
+          echo "GATE11_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate11DerivedData" >> "$GITHUB_ENV"
+          echo "GATE11_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate11HealthLoopTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate focused historical domain contracts
+        run: |
+          set -euo pipefail
+          swift test --package-path Packages/DensosoDomain --filter EffectiveProfileTests 2>&1 | tee gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter WeightTimelineTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter HealthStateTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter DailyLoopSnapshotTests 2>&1 | tee -a gate11-domain-contracts.log
+
+      - name: Generate Xcode project and select iPhone Simulator
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run focused HealthKit projection and DailyLoop tests
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 1200 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$GATE11_DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay \
+            -only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics \
+            -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerUsesMatchingExistingBriefAndPreservesOptionalState \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary \
+            -resultBundlePath "$GATE11_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate11-health-loop-tests.log
+
+      - name: Export Gate 11 test summary
+        run: |
+          xcrun xcresulttool get test-results summary --path "$GATE11_RESULT_BUNDLE" > gate11-test-summary.json
+          grep -q '"result" : "Passed"' gate11-test-summary.json
+          python3 -m py_compile scripts/validate_phase11_14_gates.py
+          python3 scripts/validate_phase11_14_gates.py --gate 11 --report gate11-contract-summary.json
+
+      - name: Upload Gate 11 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-11-ai-native-health-loop-results
+          path: |
+            Gate11HealthLoopTests.xcresult
+            gate11-domain-contracts.log
+            gate11-health-loop-tests.log
+            gate11-test-summary.json
+            gate11-contract-summary.json
+            docs/gates/gate-11-ai-native-health-loop.md
+          if-no-files-found: error
+          retention-days: 14
+
+  gate-12-multimodal-agent:
+    name: gate-12-multimodal-agent
+    needs: gate-11-ai-native-health-loop
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 12 paths
+        run: |
+          echo "GATE12_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate12DerivedData" >> "$GITHUB_ENV"
+          echo "GATE12_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate12MultimodalAgentTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Generate Xcode project and select iPhone Simulator
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run focused unified text, voice, image and recovery tests
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 1500 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$GATE12_DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testImageInputUsesAgentSessionAndStagesMealWithoutDirectCommitOrRawMediaPersistence \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testInterruptedImageRequestFailsClosedUntilImageIsReattachedAndKeepsBudget \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testImageRequiresVisionCapabilityAndSeparateMealImageConsent \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testRealRoundAndToolCountsAndPendingAction \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testProviderReasoningContinuesInMemoryButIsNeverPersisted \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testCloudProviderRequiresExplicitConsent \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testNinthToolCallStopsRequest \
+            -only-testing:DensosoTests/AgentRequestResumeTests/testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage \
+            -only-testing:DensosoTests/DeepSeekProviderContractTests/testResponsesAPIRequestAndStreamingToolContract \
+            -only-testing:DensosoTests/DeepSeekProviderContractTests/testImageStructuredOutputAndStatelessToolHistoryEncoding \
+            -only-testing:DensosoTests/QwenASRProviderContractTests/testOpenAICompatibleAudioRequestAndResponseContract \
+            -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testImageRequestAndRestrictedObservationContract \
+            -only-testing:DensosoTests/SpeechCaptureStateMachineTests/testLocalFailureWithCapturedAudioUsesQwenOnceAndDeletesTemporaryAudio \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testOpenPhotoRequiresSeparateImageConsent \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testLowConfidenceVisionCannotStageFoodIDWithoutUserSelection \
+            -resultBundlePath "$GATE12_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate12-multimodal-agent-tests.log
+
+      - name: Export Gate 12 test summary and validate same-Agent privacy contract
+        run: |
+          xcrun xcresulttool get test-results summary --path "$GATE12_RESULT_BUNDLE" > gate12-test-summary.json
+          grep -q '"result" : "Passed"' gate12-test-summary.json
+          python3 -m py_compile scripts/validate_phase11_14_gates.py
+          python3 scripts/validate_phase11_14_gates.py --gate 12 --report gate12-contract-summary.json
+
+      - name: Upload Gate 12 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-12-multimodal-agent-results
+          path: |
+            Gate12MultimodalAgentTests.xcresult
+            gate12-multimodal-agent-tests.log
+            gate12-test-summary.json
+            gate12-contract-summary.json
+            docs/gates/gate-12-multimodal-agent.md
+          if-no-files-found: error
+          retention-days: 14
+
+  gate-13-energy-accounting:
+    name: gate-13-energy-accounting
+    needs: gate-12-multimodal-agent
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 13 paths
+        run: |
+          echo "GATE13_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate13DerivedData" >> "$GITHUB_ENV"
+          echo "GATE13_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate13EnergyAccountingTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Run focused EnergyAccounting domain contracts
+        run: swift test --package-path Packages/DensosoDomain --filter EnergyAccountingTests 2>&1 | tee gate13-domain-contracts.log
+
+      - name: Generate Xcode project and select iPhone Simulator
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run focused meal and expenditure estimate tests
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 1200 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$GATE13_DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/CaloricEnergySemanticsTests/testMeasuredActiveEnergyIsNotAddedToWorkoutEnergy \
+            -only-testing:DensosoTests/CaloricEnergySemanticsTests/testWorkoutPresenceDoesNotChangeEstimatedActiveEnergyFallback \
+            -only-testing:DensosoTests/CaloricEnergySemanticsTests/testMissingEffectiveProfileDoesNotInventEnergyExpenditure \
+            -only-testing:DensosoTests/CalorieEstimatorTests/testExplicitOilIsAddedOnceWithoutCookingMultiplier \
+            -only-testing:DensosoTests/CalorieEstimatorTests/testInferredOilProducesAnHonestInterval \
+            -resultBundlePath "$GATE13_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate13-energy-accounting-tests.log
+
+      - name: Export Gate 13 test summary and validate accounting contract
+        run: |
+          xcrun xcresulttool get test-results summary --path "$GATE13_RESULT_BUNDLE" > gate13-test-summary.json
+          grep -q '"result" : "Passed"' gate13-test-summary.json
+          python3 -m py_compile scripts/validate_phase11_14_gates.py
+          python3 scripts/validate_phase11_14_gates.py --gate 13 --report gate13-contract-summary.json
+
+      - name: Upload Gate 13 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-13-energy-accounting-results
+          path: |
+            Gate13EnergyAccountingTests.xcresult
+            gate13-domain-contracts.log
+            gate13-energy-accounting-tests.log
+            gate13-test-summary.json
+            gate13-contract-summary.json
+            docs/gates/gate-13-energy-accounting.md
+          if-no-files-found: error
+          retention-days: 14
+
+  gate-14-watch-daily-loop:
+    name: gate-14-watch-daily-loop
+    needs: gate-13-energy-accounting
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 14 paths
+        run: |
+          echo "GATE14_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate14DerivedData" >> "$GITHUB_ENV"
+          echo "GATE14_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate14WatchDailyLoopTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Run focused snapshot and Watch domain contracts
+        run: |
+          set -euo pipefail
+          swift test --package-path Packages/DensosoDomain --filter DailyLoopSnapshotTests 2>&1 | tee gate14-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter TrainingPlanDraftTests 2>&1 | tee -a gate14-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter WatchMessageOutboxTests 2>&1 | tee -a gate14-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter WatchWorkoutCoordinatorTests 2>&1 | tee -a gate14-domain-contracts.log
+
+      - name: Generate Xcode project and select iPhone Simulator
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run focused Watch inbox and offline replay tests
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 1200 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$GATE14_DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerUsesMatchingExistingBriefAndPreservesOptionalState \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary \
+            -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry \
+            -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays \
+            -only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testOutOfOrderMessagesAreReturnedInDurableArrivalOrder \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce \
+            -resultBundlePath "$GATE14_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate14-watch-daily-loop-tests.log
+
+      - name: Export Gate 14 test summary and validate manual acceptance boundary
+        run: |
+          xcrun xcresulttool get test-results summary --path "$GATE14_RESULT_BUNDLE" > gate14-test-summary.json
+          grep -q '"result" : "Passed"' gate14-test-summary.json
+          python3 -m py_compile scripts/validate_phase11_14_gates.py
+          python3 scripts/validate_phase11_14_gates.py --gate 14 --report gate14-contract-summary.json
+
+      - name: Upload Gate 14 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-14-watch-daily-loop-results
+          path: |
+            Gate14WatchDailyLoopTests.xcresult
+            gate14-domain-contracts.log
+            gate14-watch-daily-loop-tests.log
+            gate14-test-summary.json
+            gate14-contract-summary.json
+            docs/gates/gate-14-watch-daily-loop.md
+          if-no-files-found: error
+          retention-days: 14

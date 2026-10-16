@@ -21,3 +21,5 @@ typealias WatchMessageReceiptRecord = DensosoSchemaV4.WatchMessageReceiptRecord
 typealias ConsentRecord = DensosoSchemaV4.ConsentRecord
 typealias ProfileRevisionRecord = DensosoSchemaV4.ProfileRevisionRecord
 typealias AgentRequestRecord = DensosoSchemaV5.AgentRequestRecord
+typealias DailyCheckInRecord = DensosoSchemaV5.DailyCheckInRecord
+typealias UserPreferenceRecord = DensosoSchemaV5.UserPreferenceRecord

@@ -130,12 +130,19 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     func pendingActionSummaries() -> [WatchPendingActionSummary] {
         agentSession.pendingActions
             .filter { $0.state == .pending }
-            .map {
-                WatchPendingActionSummary(
-                    actionID: $0.id,
-                    title: $0.payload.title,
-                    summary: $0.payload.summary,
-                    expiresAt: $0.expiresAt
+            .map { action in
+                let requiresPhoneReview: Bool
+                if case .trainingPlan = action.payload {
+                    requiresPhoneReview = true
+                } else {
+                    requiresPhoneReview = false
+                }
+                return WatchPendingActionSummary(
+                    actionID: action.id,
+                    title: action.payload.title,
+                    summary: action.payload.summary,
+                    expiresAt: action.expiresAt,
+                    requiresPhoneReview: requiresPhoneReview
                 )
             }
     }
@@ -146,7 +153,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         let metrics = try context.fetch(FetchDescriptor<DailyMetrics>())
             .first(where: { Calendar.current.isDate($0.date, inSameDayAs: today) })
         let received = try inboxStore.recentReceivedMessageIDs()
-        let scheduledPlans = try workoutPlanSchedulingService.confirmedPlans().map {
+        let singleSessionPlans = try workoutPlanSchedulingService.confirmedPlans().map {
             WatchWorkoutPlanSummary(
                 actionID: $0.actionID,
                 title: $0.draft.name,
@@ -155,6 +162,22 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 lastError: $0.lastError
             )
         }
+        let multiDaySessionPlans = try workoutPlanSchedulingService.confirmedTrainingPlans().flatMap { entry in
+            entry.draft.sessions.compactMap { session -> WatchWorkoutPlanSummary? in
+                guard let activity = session.activity else { return nil }
+                return WatchWorkoutPlanSummary(
+                    actionID: session.id,
+                    title: "\(entry.draft.name) · \(activity.displayName)",
+                    scheduledAt: session.date,
+                    state: entry.state.rawValue,
+                    lastError: entry.lastError
+                )
+            }
+        }
+        let scheduledPlans = Array((singleSessionPlans + multiDaySessionPlans)
+            .filter { ($0.scheduledAt ?? .distantPast) >= today && $0.state != "terminal" }
+            .sorted { ($0.scheduledAt ?? .distantFuture) < ($1.scheduledAt ?? .distantFuture) }
+            .prefix(10))
         return WatchTodaySnapshot(
             generatedAt: Date(),
             summary: healthIntelligenceService.dailyBrief?.summary ?? "暂无本地健康摘要",
@@ -193,6 +216,18 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 refreshApplicationContext()
                 return acknowledgement(for: envelope.messageID, state: .processed, detail: "已更新 Today 摘要")
             case .confirm(let actionID):
+                if agentSession.pendingActions.contains(where: { action in
+                    guard action.id == actionID else { return false }
+                    if case .trainingPlan = action.payload { return true }
+                    return false
+                }) {
+                    try inboxStore.setState(WatchReceiptState.rejected, for: envelope.messageID)
+                    return acknowledgement(
+                        for: envelope.messageID,
+                        state: .rejected,
+                        detail: "多日训练计划请在 iPhone 查看完整安排后确认。"
+                    )
+                }
                 let receipt: CommitReceipt
                 do {
                     receipt = try await confirmationCoordinator.confirm(id: actionID)
@@ -208,7 +243,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                     throw error
                 }
                 var detail = "已在本机确认"
-                if receipt.actionType == .workoutPlan {
+                if receipt.actionType == .workoutPlan || receipt.actionType == .trainingPlan {
                     do {
                         try await workoutPlanSchedulingService.scheduleConfirmedPlan(actionID: actionID)
                         detail = "训练计划已确认并提交给 WorkoutKit"

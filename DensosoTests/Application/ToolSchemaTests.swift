@@ -7,7 +7,7 @@ import XCTest
 final class ToolSchemaTests: XCTestCase {
     func testEveryToolUsesClosedObjectSchemaAndLocalEffect() throws {
         let registry = ToolRegistry()
-        XCTAssertEqual(registry.toolDefinitions.count, 14)
+        XCTAssertEqual(registry.toolDefinitions.count, 18)
         for tool in registry.toolDefinitions {
             guard case .object(_, _, let additionalProperties, _) = tool.parameters else {
                 return XCTFail("\(tool.name) must use an object schema")
@@ -18,10 +18,14 @@ final class ToolSchemaTests: XCTestCase {
         XCTAssertEqual(registry.effect(for: "log_meal"), .stagesAction)
         XCTAssertEqual(registry.effect(for: "log_weight"), .stagesAction)
         XCTAssertEqual(registry.effect(for: "create_workout_plan"), .stagesAction)
+        XCTAssertEqual(registry.effect(for: "create_training_plan"), .stagesAction)
+        XCTAssertEqual(registry.effect(for: "stage_daily_checkin"), .stagesAction)
+        XCTAssertEqual(registry.effect(for: "stage_user_preference"), .stagesAction)
         XCTAssertEqual(registry.effect(for: "get_pending_actions"), .readOnly)
         XCTAssertEqual(registry.effect(for: "get_recent_meals"), .readOnly)
         XCTAssertEqual(registry.effect(for: "get_recent_workouts"), .readOnly)
         XCTAssertEqual(registry.effect(for: "get_goal"), .readOnly)
+        XCTAssertEqual(registry.effect(for: "get_user_preferences"), .readOnly)
         XCTAssertNil(registry.effect(for: "log_workout"))
     }
 
@@ -142,6 +146,50 @@ final class ToolSchemaTests: XCTestCase {
         var extra = valid.objectValue!
         extra["skipConfirmation"] = .boolean(true)
         XCTAssertThrowsError(try ToolSchemaValidator.validate(.object(extra), against: schema))
+    }
+
+    func testCreateTrainingPlanUsesBoundedStructuredWorkoutAndRestDays() throws {
+        let registry = ToolRegistry()
+        let definition = try XCTUnwrap(
+            registry.toolDefinitions.first(where: { $0.name == "create_training_plan" })
+        )
+        XCTAssertEqual(definition.effect, .stagesAction)
+        let valid: JSONValue = .object([
+            "name": .string("轻松计划"),
+            "sessions": .array([
+                .object([
+                    "date": .string("2027-01-01T18:00:00Z"),
+                    "activity": .string("walking"),
+                    "goalType": .string("time"),
+                    "durationMinutes": .integer(30),
+                    "distanceMeters": .null,
+                    "location": .string("outdoor"),
+                    "recommendedIntensity": .string("easy"),
+                    "reason": .string("以轻松步行保持活动。"),
+                ]),
+                .object([
+                    "date": .string("2027-01-02T00:00:00Z"),
+                    "activity": .string("rest"),
+                    "goalType": .null,
+                    "durationMinutes": .null,
+                    "distanceMeters": .null,
+                    "location": .null,
+                    "recommendedIntensity": .null,
+                    "reason": .string("安排休息。"),
+                ]),
+            ]),
+        ])
+        XCTAssertNoThrow(try ToolSchemaValidator.validate(valid, against: definition.parameters))
+
+        var invalid = valid.objectValue!
+        guard case .array(var sessions) = invalid["sessions"],
+              case .object(var first) = sessions[0] else {
+            return XCTFail("training plan should contain structured sessions")
+        }
+        first["skipConfirmation"] = .boolean(true)
+        sessions[0] = .object(first)
+        invalid["sessions"] = .array(sessions)
+        XCTAssertThrowsError(try ToolSchemaValidator.validate(.object(invalid), against: definition.parameters))
     }
 
     func testMissingAndOutOfRangeArgumentsFailLocally() {

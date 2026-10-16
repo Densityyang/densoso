@@ -124,6 +124,62 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(meals[0].totalCaloriesKcal, 777)
     }
 
+    func testRestoreRejectsInvalidUserPreferenceBackupFields() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        source.insert(UserPreferenceRecord(
+            sourceActionKey: "confirmed-preference-validation",
+            categoryRaw: UserPreferenceCategory.food.rawValue,
+            statement: "不吃香菜",
+            sourceRaw: UserPreferenceSource.userReported.rawValue
+        ))
+        try source.save()
+
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let originalObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: backupURL)) as? [String: Any]
+        )
+        let (targetContainer, target) = try makeContext()
+        _ = targetContainer
+        target.insert(MealRecord(totalCaloriesKcal: 777))
+        try target.save()
+
+        let invalidValues: [(String, Any)] = [
+            ("sourceRaw", "healthKit"),
+            ("categoryRaw", "healthKit"),
+            ("statement", String(repeating: "x", count: 501)),
+        ]
+        for (field, value) in invalidValues {
+            var payloadObject = try XCTUnwrap(originalObject["payload"] as? [String: Any])
+            var preferences = try XCTUnwrap(payloadObject["userPreferences"] as? [[String: Any]])
+            preferences[0][field] = value
+            payloadObject["userPreferences"] = preferences
+
+            let payloadData = try JSONSerialization.data(withJSONObject: payloadObject, options: [.sortedKeys])
+            let payload = try JSONDecoder().decode(ExportService.BackupPayload.self, from: payloadData)
+            let document = ExportService.BackupDocument(
+                formatVersion: 5,
+                checksum: try service.checksum(for: payload),
+                payload: payload
+            )
+            let invalidURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("invalid-preference-backup-\(UUID().uuidString).json")
+            try JSONEncoder().encode(document).write(to: invalidURL)
+
+            do {
+                _ = try await service.restoreJSON(url: invalidURL, context: target)
+                XCTFail("Expected invalid preference field \(field) to be rejected")
+            } catch {
+                XCTAssertEqual(error as? ExportService.BackupError, .invalidUserPreference)
+            }
+            try? FileManager.default.removeItem(at: invalidURL)
+        }
+
+        XCTAssertEqual(try target.fetch(FetchDescriptor<MealRecord>()).first?.totalCaloriesKcal, 777)
+    }
+
     func testLegacyV2DishPayloadDecodesWithNilGate5Ranges() throws {
         let legacyJSON = Data(
             #"{"dishName":"legacy","cookingMethod":"steam","ingredientJSON":"[]","estimatedCaloriesKcal":100,"estimatedProteinG":0,"estimatedFatG":0,"estimatedCarbsG":0,"confidenceScore":0.5,"userCorrectionFactor":null,"createdAt":0}"#.utf8
@@ -307,6 +363,38 @@ final class ExportServiceTests: XCTestCase {
             dailyProteinGrams: 90,
             effectiveFrom: date
         ))
+        source.insert(DailyCheckInRecord(
+            sourceActionKey: "confirmed-checkin-export",
+            occurredAt: date,
+            energyRaw: "low",
+            stressRaw: "elevated",
+            subjectiveSleepRaw: "poor",
+            note: "user-reported check-in",
+            sourceRaw: "userReported"
+        ))
+        source.insert(UserPreferenceRecord(
+            sourceActionKey: "confirmed-preference-export",
+            categoryRaw: UserPreferenceCategory.food.rawValue,
+            statement: "不吃香菜",
+            sourceRaw: UserPreferenceSource.userReported.rawValue,
+            createdAt: date
+        ))
+        let unconfirmedPreference = ActionPayload.userPreference(UserPreference(
+            category: .communication,
+            statement: "未确认的偏好",
+            createdAt: date
+        ))
+        let pendingEncoder = JSONEncoder()
+        pendingEncoder.dateEncodingStrategy = .millisecondsSince1970
+        source.insert(PendingActionRecord(
+            idempotencyKey: "unconfirmed-preference-export",
+            actionTypeRaw: ActionType.userPreference.rawValue,
+            canonicalPayloadData: try unconfirmedPreference.canonicalData(),
+            payloadData: try pendingEncoder.encode(unconfirmedPreference),
+            clientRequestID: UUID(),
+            createdAt: date,
+            expiresAt: date.addingTimeInterval(3_600)
+        ))
         let day = Calendar.current.startOfDay(for: date)
         let dayParts = Calendar.current.dateComponents([.year, .month, .day], from: day)
         let dayKey = String(format: "%04d-%02d-%02d", dayParts.year ?? 0, dayParts.month ?? 0, dayParts.day ?? 0)
@@ -368,6 +456,9 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(exported.payload.dailyMetricsProjection?.first?.sourceFingerprint, "fixture-fingerprint")
         XCTAssertEqual(exported.payload.dailyHealthSnapshots?.count, 1)
         XCTAssertEqual(exported.payload.goalProfiles?.count, 1)
+        XCTAssertEqual(exported.payload.dailyCheckIns?.count, 1)
+        XCTAssertEqual(exported.payload.userPreferences?.count, 1)
+        XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("未确认的偏好"))
         XCTAssertEqual(exported.payload.dailyBriefs?.count, 1)
         XCTAssertEqual(exported.payload.weeklyBriefs?.count, 1)
         XCTAssertEqual(exported.payload.scheduleEvents?.count, 1)
@@ -376,20 +467,159 @@ final class ExportServiceTests: XCTestCase {
         _ = targetContainer
         target.insert(HealthSyncOutboxEntry(operation: "upsertMeal", recordID: UUID()))
         target.insert(HealthKitImportCursor(stream: "workouts", anchorData: Data([9])))
+        let interruptedRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000951")!
+        let requestConversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000952")!
+        target.insert(ConversationRecord(id: requestConversationID))
+        target.insert(AgentRequestRecord(
+            requestID: interruptedRequestID,
+            conversationID: requestConversationID,
+            startedAt: date,
+            absoluteDeadline: date.addingTimeInterval(45),
+            maximumProviderRounds: 5,
+            maximumToolCalls: 8,
+            providerRoundsUsed: 1,
+            stateRaw: AgentRequestState.interrupted.rawValue
+        ))
+        target.insert(MessageRecord(
+            conversationID: requestConversationID,
+            roleRaw: ModelRole.user.rawValue,
+            contentData: Data("not-part-of-backup".utf8),
+            ordinal: 0,
+            requestID: interruptedRequestID
+        ))
         try target.save()
         let summary = try await service.restoreJSON(url: url, context: target)
 
         XCTAssertEqual(summary.weights, 1)
         XCTAssertEqual(summary.healthDays, 1)
+        XCTAssertEqual(summary.dailyCheckIns, 1)
+        XCTAssertEqual(summary.userPreferences, 1)
         XCTAssertEqual(summary.scheduledPlans, 0)
         XCTAssertEqual(try target.fetch(FetchDescriptor<WeightRecord>()).first?.kilograms, 70.5)
         XCTAssertEqual(try target.fetch(FetchDescriptor<WeightRecord>()).first?.confidence, 0.9)
         XCTAssertEqual(try target.fetch(FetchDescriptor<ProfileRevisionRecord>()).first?.heightCm, 165)
         XCTAssertEqual(try target.fetch(FetchDescriptor<GoalProfileRecord>()).first?.dailyProteinGrams, 90)
+        let restoredCheckIn = try XCTUnwrap(target.fetch(FetchDescriptor<DailyCheckInRecord>()).first)
+        XCTAssertEqual(restoredCheckIn.energyRaw, "low")
+        XCTAssertEqual(restoredCheckIn.stressRaw, "elevated")
+        XCTAssertEqual(restoredCheckIn.subjectiveSleepRaw, "poor")
+        XCTAssertEqual(restoredCheckIn.sourceRaw, "userReported")
+        let restoredPreference = try XCTUnwrap(target.fetch(FetchDescriptor<UserPreferenceRecord>()).first)
+        XCTAssertEqual(restoredPreference.categoryRaw, "food")
+        XCTAssertEqual(restoredPreference.statement, "不吃香菜")
+        XCTAssertEqual(restoredPreference.sourceRaw, "userReported")
         XCTAssertEqual(try target.fetch(FetchDescriptor<ScheduleEvent>()).first?.title, "药物提醒")
         XCTAssertEqual(try target.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
         XCTAssertEqual(try target.fetchCount(FetchDescriptor<HealthKitImportCursor>()), 0)
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<AgentRequestRecord>()), 0)
+        XCTAssertEqual(
+            try target.fetch(FetchDescriptor<MessageRecord>()).filter { $0.requestID == interruptedRequestID }.count,
+            0
+        )
         XCTAssertEqual(try target.fetch(FetchDescriptor<DailyBriefRecord>()).first?.payloadData, Data("daily-brief".utf8))
+    }
+
+    func testConfirmedTrainingPlanBackupRoundTripsScheduleNotesAndCountsPlan() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let tomorrow = start.addingTimeInterval(24 * 60 * 60)
+        let draft = TrainingPlanDraft(
+            name: "两日训练",
+            createdAt: start,
+            sessions: [
+                TrainingSessionDraft(
+                    date: start,
+                    activity: .running,
+                    goal: .timeMinutes(30),
+                    location: .outdoor,
+                    recommendedIntensity: .easy,
+                    reason: "轻松跑"
+                ),
+                TrainingSessionDraft(date: tomorrow, activity: nil, reason: "休息日"),
+            ]
+        )
+        let entry = ConfirmedTrainingPlanEntry(
+            actionID: UUID(),
+            idempotencyKey: "backup-training-plan",
+            draft: draft
+        )
+        let notes = try entry.encodedNotes()
+        source.insert(ScheduleEvent(date: start, title: draft.name, notes: notes, startTime: start))
+        try source.save()
+
+        let service = ExportService()
+        let url = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let document = try JSONDecoder().decode(
+            ExportService.BackupDocument.self,
+            from: Data(contentsOf: url)
+        )
+        XCTAssertEqual(document.payload.scheduleEvents?.first?.notes, notes)
+
+        let (targetContainer, target) = try makeContext()
+        _ = targetContainer
+        let summary = try await service.restoreJSON(url: url, context: target)
+        let restoredEvent = try XCTUnwrap(target.fetch(FetchDescriptor<ScheduleEvent>()).first)
+        XCTAssertEqual(summary.scheduledPlans, 1)
+        XCTAssertEqual(restoredEvent.notes, notes)
+        XCTAssertEqual(ConfirmedTrainingPlanEntry.decode(notes: restoredEvent.notes)?.draft, draft)
+    }
+
+    func testRestoreRejectsMalformedOrInvalidConfirmedTrainingPlanBeforeReplacingData() async throws {
+        let service = ExportService()
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        source.insert(ScheduleEvent(date: date, title: "source schedule", notes: "ordinary", startTime: date))
+        try source.save()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let originalObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: backupURL)) as? [String: Any]
+        )
+
+        let (targetContainer, target) = try makeContext()
+        _ = targetContainer
+        target.insert(MealRecord(date: date, totalCaloriesKcal: 777))
+        target.insert(ScheduleEvent(date: date, title: "preserve me", notes: "target", startTime: date))
+        try target.save()
+        let invalidDraft = TrainingPlanDraft(name: "", createdAt: date, sessions: [])
+        let invalidEntry = ConfirmedTrainingPlanEntry(
+            actionID: UUID(),
+            idempotencyKey: "invalid-training-plan",
+            draft: invalidDraft
+        )
+
+        for invalidNotes in [
+            ConfirmedTrainingPlanEntry.notesPrefix + "not-base64",
+            try invalidEntry.encodedNotes(),
+        ] {
+            var payloadObject = try XCTUnwrap(originalObject["payload"] as? [String: Any])
+            var scheduleEvents = try XCTUnwrap(payloadObject["scheduleEvents"] as? [[String: Any]])
+            scheduleEvents[0]["notes"] = invalidNotes
+            payloadObject["scheduleEvents"] = scheduleEvents
+            let payloadData = try JSONSerialization.data(withJSONObject: payloadObject, options: [.sortedKeys])
+            let payload = try JSONDecoder().decode(ExportService.BackupPayload.self, from: payloadData)
+            let document = ExportService.BackupDocument(
+                formatVersion: 5,
+                checksum: try service.checksum(for: payload),
+                payload: payload
+            )
+            let invalidURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("invalid-training-plan-backup-\(UUID().uuidString).json")
+            try JSONEncoder().encode(document).write(to: invalidURL)
+
+            do {
+                _ = try await service.restoreJSON(url: invalidURL, context: target)
+                XCTFail("Expected invalid training plan entry to be rejected")
+            } catch {
+                XCTAssertEqual(error as? ExportService.BackupError, .invalidTrainingPlan)
+            }
+            try? FileManager.default.removeItem(at: invalidURL)
+            XCTAssertEqual(try target.fetch(FetchDescriptor<MealRecord>()).first?.totalCaloriesKcal, 777)
+            XCTAssertEqual(try target.fetch(FetchDescriptor<ScheduleEvent>()).first?.title, "preserve me")
+        }
     }
 
     private func makeContext() throws -> (ModelContainer, ModelContext) {
@@ -397,6 +627,8 @@ final class ExportServiceTests: XCTestCase {
             for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, WeeklyReport.self,
             ScheduleEvent.self, WeightRecord.self, ProfileRevisionRecord.self, GoalProfileRecord.self, DailyHealthSnapshotRecord.self,
             DailyBriefRecord.self, WeeklyBriefRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
+            AgentRequestRecord.self, DailyCheckInRecord.self, UserPreferenceRecord.self,
+            PendingActionRecord.self, CommittedActionReceiptRecord.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         return (container, ModelContext(container))

@@ -25,6 +25,7 @@ struct WorkoutPlanScreen: View {
     @State private var isScheduling = false
     @State private var resultMessage: String?
     @State private var confirmedPlans: [ConfirmedWorkoutPlanEntry] = []
+    @State private var confirmedTrainingPlans: [ConfirmedTrainingPlanEntry] = []
 
     var body: some View {
         NavigationStack {
@@ -90,7 +91,7 @@ struct WorkoutPlanScreen: View {
                 }
 
                 Section("已确认的计划") {
-                    if confirmedPlans.isEmpty {
+                    if confirmedPlans.isEmpty && confirmedTrainingPlans.isEmpty {
                         Text("确认后的计划会显示在这里。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -111,6 +112,38 @@ struct WorkoutPlanScreen: View {
                                 }
                                 if entry.state == .queued || entry.state == .retryable {
                                     Button("继续同步到 WorkoutKit") {
+                                        Task { await schedule(actionID: entry.actionID) }
+                                    }
+                                    .disabled(isScheduling)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        ForEach(confirmedTrainingPlans, id: \.actionID) { entry in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(entry.draft.name).font(.subheadline.weight(.semibold))
+                                Text(trainingPlanSummary(entry.draft))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                ForEach(entry.draft.sessions) { session in
+                                    Text(confirmedSessionSummary(session))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Label(
+                                    queueStatus(entry),
+                                    systemImage: entry.state == .scheduled ? "checkmark.circle.fill" : "clock"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(entry.state == .scheduled ? OrbitPalette.green : OrbitPalette.gold)
+                                if let lastError = entry.lastError {
+                                    Text(lastError)
+                                        .font(.caption2)
+                                        .foregroundStyle(OrbitPalette.coral)
+                                }
+                                if entry.state == .queued || entry.state == .retryable {
+                                    Button("继续同步训练日到 WorkoutKit") {
                                         Task { await schedule(actionID: entry.actionID) }
                                     }
                                     .disabled(isScheduling)
@@ -215,6 +248,34 @@ struct WorkoutPlanScreen: View {
 
     private func refreshConfirmedPlans() {
         confirmedPlans = (try? dependencies.workoutPlanSchedulingService.confirmedPlans()) ?? []
+        confirmedTrainingPlans = (try? dependencies.workoutPlanSchedulingService.confirmedTrainingPlans()) ?? []
+    }
+
+    private func trainingPlanSummary(_ plan: TrainingPlanDraft) -> String {
+        let workoutCount = plan.sessions.filter { !$0.isRestDay }.count
+        let restCount = plan.sessions.count - workoutCount
+        let dates = plan.sessions.map(\.date)
+        guard let first = dates.min(), let last = dates.max() else {
+            return "\(workoutCount) 次训练 · \(restCount) 天休息"
+        }
+        let range: String
+        if Calendar.current.isDate(first, inSameDayAs: last) {
+            range = first.formatted(date: .abbreviated, time: .omitted)
+        } else {
+            range = "\(first.formatted(date: .abbreviated, time: .omitted)) – \(last.formatted(date: .abbreviated, time: .omitted))"
+        }
+        return "\(range) · \(workoutCount) 次训练 · \(restCount) 天休息"
+    }
+
+    private func confirmedSessionSummary(_ session: TrainingSessionDraft) -> String {
+        let date = session.date.formatted(date: .abbreviated, time: .shortened)
+        guard let activity = session.activity,
+              let goal = session.goal,
+              let location = session.location,
+              let intensity = session.recommendedIntensity else {
+            return "\(date) · 休息 · \(session.reason)"
+        }
+        return "\(date) · \(activity.displayName) · \(goal.displayName) · \(location.displayName) · \(intensity.displayName) · \(session.reason)"
     }
 
     private func apply(_ incomingDraft: WorkoutPlanDraft) {
@@ -240,6 +301,15 @@ struct WorkoutPlanScreen: View {
         case .retryable: "安排未完成，可重试"
         case .scheduled: "已安排"
         case .terminal: "此计划无法安排，请重新创建"
+        }
+    }
+
+    private func queueStatus(_ entry: ConfirmedTrainingPlanEntry) -> String {
+        switch entry.state {
+        case .queued: "已本机确认，等待同步"
+        case .retryable: "部分安排未完成，可重试"
+        case .scheduled: "训练计划已安排"
+        case .terminal: "此训练计划无法安排，请重新创建"
         }
     }
 }

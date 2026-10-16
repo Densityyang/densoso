@@ -56,14 +56,24 @@ public struct WatchPendingActionSummary: Codable, Equatable, Identifiable, Senda
     public let title: String
     public let summary: String
     public let expiresAt: Date
+    /// Multi-day plans need the full session list, which the Watch summary intentionally omits.
+    /// Optional keeps snapshots encoded by older app versions decodable.
+    public let requiresPhoneReview: Bool?
 
     public var id: UUID { actionID }
 
-    public init(actionID: UUID, title: String, summary: String, expiresAt: Date) {
+    public init(
+        actionID: UUID,
+        title: String,
+        summary: String,
+        expiresAt: Date,
+        requiresPhoneReview: Bool = false
+    ) {
         self.actionID = actionID
         self.title = String(title.prefix(80))
         self.summary = String(summary.prefix(240))
         self.expiresAt = expiresAt
+        self.requiresPhoneReview = requiresPhoneReview
     }
 }
 

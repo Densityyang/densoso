@@ -9,6 +9,9 @@ public enum ActionType: String, Codable, Sendable {
     case meal
     case weight
     case workoutPlan
+    case trainingPlan
+    case dailyCheckIn
+    case userPreference
 }
 
 public enum CanonicalizationError: Error, Equatable, Sendable {
@@ -20,12 +23,18 @@ public enum ActionPayload: Codable, Equatable, Sendable {
     case meal(MealDraft)
     case weight(WeightDraft)
     case workoutPlan(WorkoutPlanDraft)
+    case trainingPlan(TrainingPlanDraft)
+    case dailyCheckIn(DailyCheckIn)
+    case userPreference(UserPreference)
 
     public var actionType: ActionType {
         switch self {
         case .meal: .meal
         case .weight: .weight
         case .workoutPlan: .workoutPlan
+        case .trainingPlan: .trainingPlan
+        case .dailyCheckIn: .dailyCheckIn
+        case .userPreference: .userPreference
         }
     }
 
@@ -34,6 +43,9 @@ public enum ActionPayload: Codable, Equatable, Sendable {
         case .meal: "确认餐食记录"
         case .weight: "确认体重记录"
         case .workoutPlan: "确认训练计划"
+        case .trainingPlan: "确认多日训练计划"
+        case .dailyCheckIn: "确认每日状态"
+        case .userPreference: "确认用户偏好"
         }
     }
 
@@ -47,6 +59,37 @@ public enum ActionPayload: Codable, Equatable, Sendable {
             return String(format: "%.1f kg", draft.kilograms)
         case .workoutPlan(let draft):
             return draft.name
+        case .trainingPlan(let draft):
+            let workoutCount = draft.sessions.filter { !$0.isRestDay }.count
+            let restCount = draft.sessions.count - workoutCount
+            return "\(draft.name)：\(workoutCount) 次训练、\(restCount) 天休息"
+        case .dailyCheckIn(let checkIn):
+            let energy = switch checkIn.energy {
+            case .low: "精力偏低"
+            case .typical: "精力一般"
+            case .high: "精力较好"
+            }
+            let stress = switch checkIn.stress {
+            case .low: "压力较低"
+            case .typical: "压力一般"
+            case .elevated: "压力偏高"
+            }
+            let sleep = switch checkIn.subjectiveSleep {
+            case .poor: "主观睡眠较差"
+            case .fair: "主观睡眠一般"
+            case .good: "主观睡眠较好"
+            }
+            let summary = [energy, stress, sleep].joined(separator: "，")
+            let note = checkIn.note?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let note, !note.isEmpty else { return summary }
+            return "\(summary)；备注：\(note.prefix(120))"
+        case .userPreference(let preference):
+            let category = switch preference.category {
+            case .food: "饮食偏好"
+            case .exercise: "运动偏好"
+            case .communication: "沟通偏好"
+            }
+            return "\(category)：\(preference.statement.prefix(120))"
         }
     }
 
@@ -57,7 +100,7 @@ public enum ActionPayload: Codable, Equatable, Sendable {
                 .flatMap(\.evidence)
                 .compactMap(\.confidence)
                 .min() ?? 0
-        case .weight, .workoutPlan:
+        case .weight, .workoutPlan, .trainingPlan, .dailyCheckIn, .userPreference:
             return 1
         }
     }
@@ -174,13 +217,58 @@ private enum CanonicalPayload: Encodable {
     case meal(CanonicalMeal)
     case weight(CanonicalWeight)
     case workoutPlan(CanonicalWorkoutPlan)
+    case trainingPlan(CanonicalTrainingPlan)
+    case dailyCheckIn(CanonicalDailyCheckIn)
+    case userPreference(CanonicalUserPreference)
 
     init(_ payload: ActionPayload) throws {
         switch payload {
         case .meal(let meal): self = .meal(try CanonicalMeal(meal))
         case .weight(let weight): self = .weight(try CanonicalWeight(weight))
         case .workoutPlan(let plan): self = .workoutPlan(try CanonicalWorkoutPlan(plan))
+        case .trainingPlan(let plan): self = .trainingPlan(try CanonicalTrainingPlan(plan))
+        case .dailyCheckIn(let checkIn): self = .dailyCheckIn(try CanonicalDailyCheckIn(checkIn))
+        case .userPreference(let preference): self = .userPreference(try CanonicalUserPreference(preference))
         }
+    }
+}
+
+private struct CanonicalUserPreference: Encodable {
+    let category: String
+    let statement: String
+    let source: String
+
+    init(_ preference: UserPreference) throws {
+        let statement = preference.statement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !statement.isEmpty, statement.count <= 500 else {
+            throw CanonicalizationError.outOfRange(field: "userPreference.statement")
+        }
+        category = preference.category.rawValue
+        self.statement = statement
+        source = preference.source.rawValue
+    }
+}
+
+private struct CanonicalDailyCheckIn: Encodable {
+    let occurredAtMilliseconds: Int64
+    let energy: String
+    let stress: String
+    let subjectiveSleep: String
+    let note: String?
+
+    init(_ checkIn: DailyCheckIn) throws {
+        occurredAtMilliseconds = try CanonicalInteger.dateMilliseconds(
+            checkIn.occurredAt,
+            field: "dailyCheckIn.occurredAt"
+        )
+        energy = checkIn.energy.rawValue
+        stress = checkIn.stress.rawValue
+        subjectiveSleep = checkIn.subjectiveSleep.rawValue
+        let trimmedNote = checkIn.note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (trimmedNote?.count ?? 0) <= 500 else {
+            throw CanonicalizationError.outOfRange(field: "dailyCheckIn.note")
+        }
+        note = trimmedNote.flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
@@ -329,6 +417,48 @@ private struct CanonicalWorkoutPlan: Encodable {
             try CanonicalInteger.dateMilliseconds($0, field: "workoutPlan.scheduledAt")
         }
         strengthSets = try plan.strengthSets.map(CanonicalStrengthSet.init)
+    }
+}
+
+private struct CanonicalTrainingPlan: Encodable {
+    let name: String
+    let sessions: [CanonicalTrainingSession]
+
+    init(_ plan: TrainingPlanDraft) throws {
+        guard plan.validationError == nil else {
+            throw CanonicalizationError.outOfRange(field: "trainingPlan")
+        }
+        name = plan.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let keyedSessions = try plan.sessions.map { session -> (CanonicalTrainingSession, Data) in
+            let canonical = try CanonicalTrainingSession(session)
+            return (canonical, try encoder.encode(canonical))
+        }
+        sessions = keyedSessions.sorted { lhs, rhs in
+            if lhs.0.dateMilliseconds != rhs.0.dateMilliseconds {
+                return lhs.0.dateMilliseconds < rhs.0.dateMilliseconds
+            }
+            return lhs.1.lexicographicallyPrecedes(rhs.1)
+        }.map(\.0)
+    }
+}
+
+private struct CanonicalTrainingSession: Encodable {
+    let dateMilliseconds: Int64
+    let activity: String?
+    let goal: CanonicalWorkoutGoal?
+    let location: String?
+    let recommendedIntensity: String?
+    let reason: String
+
+    init(_ session: TrainingSessionDraft) throws {
+        dateMilliseconds = try CanonicalInteger.dateMilliseconds(session.date, field: "trainingPlan.session.date")
+        activity = session.activity?.rawValue
+        goal = try session.goal.map(CanonicalWorkoutGoal.init)
+        location = session.location?.rawValue
+        recommendedIntensity = session.recommendedIntensity?.rawValue
+        reason = session.reason.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

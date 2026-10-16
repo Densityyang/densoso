@@ -9,24 +9,19 @@ struct MealCaptureSheet: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(\.dismiss) private var dismiss
 
-    let onStaged: (PendingAction) -> Void
+    let onSendToAgent: (MultimodalModelRequest) -> Void
 
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showCamera = false
-    @State private var review: MealCaptureReview?
-    @State private var selectedFoodID: String?
-    @State private var correctedGrams = ""
-    @State private var oilAnswer: MealCaptureOilAnswer?
-    @State private var mealType = Self.defaultMealType()
-    @State private var isAnalyzing = false
-    @State private var isStaging = false
+    @State private var preparedRequest: MultimodalModelRequest?
+    @State private var isPreparing = false
     @State private var errorMessage: String?
-    @State private var analysisTask: Task<Void, Never>?
+    @State private var preparationTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("选择餐食照片") {
+                Section("餐食照片") {
                     PhotosPicker(
                         selection: $selectedPhoto,
                         matching: .images,
@@ -37,87 +32,41 @@ struct MealCaptureSheet: View {
                     Button("拍摄餐食", systemImage: "camera") {
                         Task { await openCamera() }
                     }
-                    Text("图片仅在内存中缩放到最长边 1280px 并移除元数据；原图不会保存。")
+                    Text("照片会先在本机缩放并移除元数据，再交给当前 Agent。原图和图像字节不会保存到对话历史。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
-                if isAnalyzing {
-                    Section { ProgressView("正在先检查本地条码和营养标签") }
+                if isPreparing {
+                    Section { ProgressView("正在本机清理照片并提取标签线索") }
                 }
 
-                if let review {
-                    Section("识别草稿") {
-                        LabeledContent("路径", value: routeName(review.route))
-                        Text(review.label).font(.headline)
-                        if let attribution = review.attribution {
-                            Text(attribution)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        Picker("餐次", selection: $mealType) {
-                            Text("早餐").tag("breakfast")
-                            Text("午餐").tag("lunch")
-                            Text("晚餐").tag("dinner")
-                            Text("加餐").tag("snack")
-                        }
-                        if !review.candidateNames.isEmpty {
-                            Picker("食物候选", selection: Binding(
-                                get: { selectedFoodID ?? review.resolution?.autoPreselect?.id },
-                                set: { selectedFoodID = $0 }
-                            )) {
-                                Text("请选择").tag(String?.none)
-                                ForEach(review.resolution?.candidates ?? []) { candidate in
-                                    Text("\(candidate.entry.name) · \(Int(candidate.score * 100))")
-                                        .tag(Optional(candidate.id))
-                                }
-                            }
-                            if let portion = review.portion {
-                                Text(
-                                    "约 \(Int(portion.likelyGrams.rounded()))g（\(Int(portion.lowGrams.rounded()))–\(Int(portion.highGrams.rounded()))g）"
-                                )
-                            }
-                            if let clarification = review.clarification {
-                                Label(clarification.prompt, systemImage: "questionmark.bubble")
-                                    .foregroundStyle(OrbitPalette.gold)
-                                if clarification.kind == .hiddenIngredient {
-                                    Picker("额外用油", selection: $oilAnswer) {
-                                        Text("请选择").tag(nil as MealCaptureOilAnswer?)
-                                        Text("没有额外用油")
-                                            .tag(MealCaptureOilAnswer.noAdditionalOil as MealCaptureOilAnswer?)
-                                        Text("采用估算范围")
-                                            .tag(MealCaptureOilAnswer.useEstimatedRange as MealCaptureOilAnswer?)
-                                    }
-                                }
-                            }
-                            TextField(
-                                review.clarification?.kind == .portion
-                                    ? "回答澄清：这一份大约多少克"
-                                    : "修正克重（可选）",
-                                text: $correctedGrams
-                            )
-                            .keyboardType(.decimalPad)
-                            Label("仍需在确认卡中再次确认后才会保存", systemImage: "checkmark.shield")
+                if let preparedRequest {
+                    Section("本机提取的线索") {
+                        if preparedRequest.mealEvidence.isEmpty {
+                            Text("未识别到条码或营养标签；Agent 会根据照片准备可检查的草稿。")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
-                            Button("生成待确认草稿", systemImage: "doc.badge.plus") {
-                                Task { await stage(review) }
-                            }
-                            .disabled(isStaging || !hasAnsweredClarification(for: review))
                         } else {
-                            Text("目前没有可供确认的食物候选。请返回对话，用语音或文字补充食物名称和大致份量。")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                            Button("返回对话补充描述", systemImage: "arrow.uturn.backward") {
-                                dismiss()
+                            ForEach(preparedRequest.mealEvidence) { evidence in
+                                LabeledContent(evidence.kind.rawValue, value: String(evidence.value.prefix(120)))
                             }
                         }
+                        Text("照片观察和 OCR 线索都属于不可信输入。涉及餐食写入时仍会由 Agent 生成待确认草稿，必须由你确认后保存。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Button("发送给 Agent 整理待确认草稿", systemImage: "paperplane") {
+                            onSendToAgent(preparedRequest)
+                            dismiss()
+                        }
+                        .disabled(isPreparing)
                     }
                 }
 
                 if let errorMessage {
                     Section("需要处理") {
-                        Text(errorMessage).foregroundStyle(OrbitPalette.coral)
+                        Text(errorMessage)
+                            .foregroundStyle(OrbitPalette.coral)
                     }
                 }
             }
@@ -130,14 +79,14 @@ struct MealCaptureSheet: View {
             }
             .onChange(of: selectedPhoto) { _, item in
                 guard let item else { return }
-                analysisTask?.cancel()
-                analysisTask = Task { @MainActor in
+                preparationTask?.cancel()
+                preparationTask = Task { @MainActor in
                     do {
                         guard let data = try await item.loadTransferable(type: Data.self) else {
                             throw MealCaptureApplicationError.noPhotoEvidence
                         }
                         try Task.checkCancellation()
-                        await analyze(data)
+                        await prepareForAgent(data)
                     } catch is CancellationError {
                         return
                     } catch {
@@ -147,8 +96,9 @@ struct MealCaptureSheet: View {
                 }
             }
             .onDisappear {
-                analysisTask?.cancel()
-                analysisTask = nil
+                preparationTask?.cancel()
+                preparationTask = nil
+                preparedRequest = nil
             }
             .sheet(isPresented: $showCamera) {
                 CameraImagePicker { result in
@@ -156,8 +106,8 @@ struct MealCaptureSheet: View {
                     switch result {
                     case .success(let data):
                         guard let data else { return }
-                        analysisTask?.cancel()
-                        analysisTask = Task { @MainActor in await analyze(data) }
+                        preparationTask?.cancel()
+                        preparationTask = Task { @MainActor in await prepareForAgent(data) }
                     case .failure(let error):
                         errorMessage = error.localizedDescription
                     }
@@ -166,45 +116,14 @@ struct MealCaptureSheet: View {
         }
     }
 
-    private func analyze(_ data: Data) async {
-        isAnalyzing = true
+    private func prepareForAgent(_ originalData: Data) async {
+        isPreparing = true
+        preparedRequest = nil
         errorMessage = nil
-        review = nil
-        selectedFoodID = nil
-        correctedGrams = ""
-        oilAnswer = nil
-        defer { isAnalyzing = false }
+        defer { isPreparing = false }
         do {
-            let result = try await dependencies.makeMealCaptureService().analyzePhoto(data)
-            review = result
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func stage(_ review: MealCaptureReview) async {
-        guard !isStaging else { return }
-        isStaging = true
-        defer { isStaging = false }
-        do {
-            let correction: PortionEstimate?
-            if let grams = Double(correctedGrams), grams.isFinite, grams > 0 {
-                correction = try PortionEstimator().estimate(
-                    evidence: [.userCorrection(low: grams, likely: grams, high: grams)],
-                    food: review.resolution?.candidates.first
-                )
-            } else {
-                correction = nil
-            }
-            let action = try await dependencies.makeMealCaptureService().stageMeal(
-                review: review,
-                selectedFoodID: selectedFoodID,
-                correctedPortion: correction,
-                oilAnswer: oilAnswer,
-                mealType: mealType
-            )
-            onStaged(action)
-            dismiss()
+            preparedRequest = try await dependencies.makeMealCaptureService()
+                .prepareForAgent(originalData: originalData)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -227,42 +146,6 @@ struct MealCaptureSheet: View {
         }
         if allowed { showCamera = true }
         else { errorMessage = "请在系统设置中允许相机权限。" }
-    }
-
-    private func hasAnsweredClarification(for review: MealCaptureReview) -> Bool {
-        guard selectedFoodID != nil || review.resolution?.autoPreselect != nil else {
-            return false
-        }
-        switch review.clarification?.kind {
-        case .foodIdentity, nil:
-            return true
-        case .portion:
-            guard let grams = Double(correctedGrams), grams.isFinite else { return false }
-            return grams > 0
-        case .hiddenIngredient:
-            return oilAnswer != nil
-        case .cookingMethod, .preparation:
-            return true
-        }
-    }
-
-    private func routeName(_ route: MealCaptureReview.Route) -> String {
-        switch route {
-        case .packagedBarcode: return "本地条码"
-        case .nutritionLabel: return "本地营养标签"
-        case .qwenVision: return "Qwen 菜品观察"
-        case .manualDescription: return "语音补充"
-        }
-    }
-
-    private static func defaultMealType(now: Date = Date()) -> String {
-        let hour = Calendar.current.component(.hour, from: now)
-        switch hour {
-        case 5..<10: return "breakfast"
-        case 10..<15: return "lunch"
-        case 17..<22: return "dinner"
-        default: return "snack"
-        }
     }
 }
 

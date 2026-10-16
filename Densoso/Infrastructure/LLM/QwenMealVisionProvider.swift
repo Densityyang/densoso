@@ -52,17 +52,34 @@ struct QwenMealVisionProvider: MealVisionProviding {
         request.httpBody = body
         let requestID = UUID()
         let startedAt = Date()
-        let result = try await executor.execute(
-            request,
-            deadline: Date().addingTimeInterval(45)
-        )
+        let result: ProviderHTTPResult
+        do {
+            result = try await executor.execute(
+                request,
+                deadline: Date().addingTimeInterval(45)
+            )
+        } catch {
+            logSink.record(
+                ProviderLogRedactor.metadata(
+                    requestID: requestID,
+                    provider: .qwen,
+                    status: nil,
+                    attempt: 1,
+                    latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                    providerCode: ProviderLogRedactor.errorCode(for: error),
+                    model: Self.model
+                )
+            )
+            throw error
+        }
         logSink.record(
             ProviderLogRedactor.metadata(
                 requestID: requestID,
                 provider: .qwen,
                 status: result.response.statusCode,
                 attempt: result.attempt,
-                latencyMilliseconds: Self.latencyMilliseconds(since: startedAt)
+                latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                model: Self.model
             )
         )
 
@@ -133,13 +150,16 @@ struct QwenMealVisionProvider: MealVisionProviding {
 struct ConfiguredQwenMealVisionProvider: MealVisionProviding {
     private let credentialSource: any ProviderCredentialSource
     private let transport: any ProviderHTTPTransport
+    private let logSink: any ProviderLogSink
 
     init(
         credentialSource: any ProviderCredentialSource = KeychainStore.shared,
-        transport: any ProviderHTTPTransport = URLSessionProviderTransport()
+        transport: any ProviderHTTPTransport = URLSessionProviderTransport(),
+        logSink: any ProviderLogSink = NoOpProviderLogSink()
     ) {
         self.credentialSource = credentialSource
         self.transport = transport
+        self.logSink = logSink
     }
 
     func analyze(imageJPEG: Data, locale: Locale) async throws -> MealVisionObservation {
@@ -160,7 +180,8 @@ struct ConfiguredQwenMealVisionProvider: MealVisionProviding {
         return try await QwenMealVisionProvider(
             endpoint: endpoint,
             credentialSource: credentialSource,
-            transport: transport
+            transport: transport,
+            logSink: logSink
         ).analyze(imageJPEG: imageJPEG, locale: locale)
     }
 }

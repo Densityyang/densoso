@@ -9,5 +9,6 @@ final class AgentPersistenceBoundaryTests: XCTestCase {
         XCTAssertTrue(registry.toolDefinitions.contains { $0.name == "log_meal" })
         XCTAssertTrue(registry.toolDefinitions.contains { $0.name == "log_weight" })
         XCTAssertTrue(registry.toolDefinitions.contains { $0.name == "create_workout_plan" })
+        XCTAssertTrue(registry.toolDefinitions.contains { $0.name == "create_training_plan" })
     }
 }

@@ -142,6 +142,10 @@ private actor PromptInjectionReadRepository: AgentReadRepository {
         []
     }
 
+    func userPreferences(limit: Int) -> [AgentUserPreference] {
+        []
+    }
+
     func schedule(on date: Date) -> [AgentScheduleItem] {
         guard let injectedScheduleText else { return [] }
         return [
