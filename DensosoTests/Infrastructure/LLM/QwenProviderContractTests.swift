@@ -89,6 +89,45 @@ final class QwenProviderContractTests: XCTestCase {
         XCTAssertEqual(requests.count, 0)
     }
 
+    func testGenericImageInputFailsLocallyInsteadOfBeingDropped() async throws {
+        let transport = ScriptedProviderHTTPTransport(steps: [])
+        let clock = TestProviderRetryClock()
+        let provider = QwenProvider(
+            endpoint: URL(string: "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions")!,
+            credentialSource: TestCredentialSource(values: [.qwen: "secret-qwen-key"]),
+            transport: transport,
+            clock: clock,
+            jitter: { _ in 0 }
+        )
+        let request = ModelRequest(
+            requestID: UUID(),
+            conversationID: UUID(),
+            systemPrompt: nil,
+            messages: [
+                ModelMessage(
+                    role: .user,
+                    content: [
+                        .text("辨认餐食"),
+                        .image(ImageInput(mimeType: "image/jpeg", base64Data: "AQ==")),
+                    ]
+                ),
+            ],
+            tools: [],
+            maxOutputTokens: 128,
+            thinking: .none,
+            deadline: clock.now().addingTimeInterval(45)
+        )
+
+        do {
+            _ = try await collect(provider.stream(request))
+            XCTFail("An unsupported image must not be silently omitted")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .unsupportedCapability(.vision))
+        }
+        let requests = await transport.recordedRequests()
+        XCTAssertTrue(requests.isEmpty)
+    }
+
     func testRequestLargerThanConservativePricingTierFailsLocally() async throws {
         let transport = ScriptedProviderHTTPTransport(
             steps: [.response(status: 200, data: Data("{}".utf8))]

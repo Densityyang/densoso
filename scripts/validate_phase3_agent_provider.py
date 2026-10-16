@@ -40,6 +40,7 @@ def main() -> int:
         "Densoso/Infrastructure/LLM/QwenProvider.swift",
         "Densoso/Infrastructure/LLM/ProviderConfiguration.swift",
         "Densoso/Application/Agent/AgentBudget.swift",
+        "Densoso/Application/Agent/AgentReasoningPolicy.swift",
         "Densoso/Application/Agent/AgentEvents.swift",
         "Densoso/Application/Agent/ToolSchemaValidator.swift",
         "Densoso/Application/Usage/ProviderUsageLedger.swift",
@@ -65,6 +66,16 @@ def main() -> int:
     require_text(
         ROOT / "Densoso" / "Infrastructure" / "LLM" / "ProviderHTTPTransport.swift",
         ["maximumRetries: Int = 2", "Retry-After", "Task.checkCancellation", "deadline"],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "LLM" / "DeepSeekProvider.swift",
+        ["https://api.deepseek.com/responses", "deepseek-flash", "input_image", "response.output_text.delta"],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Application" / "Agent" / "AgentReasoningPolicy.swift",
+        ["forUserMessage", "return .high", "return .max"],
         errors,
     )
     for provider_file in ("DeepSeekProvider.swift", "QwenProvider.swift"):
@@ -111,6 +122,7 @@ def main() -> int:
     )
 
     test_files = [
+        "DensosoTests/Application/AgentReasoningPolicyTests.swift",
         "DensosoTests/Infrastructure/LLM/DeepSeekProviderContractTests.swift",
         "DensosoTests/Infrastructure/LLM/QwenProviderContractTests.swift",
         "DensosoTests/Infrastructure/LLM/ProviderRetryPolicyTests.swift",
@@ -127,13 +139,27 @@ def main() -> int:
             errors.append(f"missing {relative}")
 
     fixture_paths = [
-        ROOT / "DensosoTests/Fixtures/Gate03/Providers/DeepSeek/deepseek-text-tool-response.json",
+        ROOT / "DensosoTests/Fixtures/Gate03/Providers/DeepSeek/deepseek-responses-stream.sse",
         ROOT / "DensosoTests/Fixtures/Gate03/Providers/Qwen/qwen-text-tool-response.json",
         ROOT / "DensosoTests/Fixtures/Gate03/Providers/malformed.json",
     ]
     for path in fixture_paths:
         if not path.is_file():
             errors.append(f"missing {path.relative_to(ROOT)}")
+        elif path.suffix == ".sse":
+            event_types: set[str] = set()
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    event = json.loads(line.removeprefix("data:").strip())
+                except json.JSONDecodeError as error:
+                    errors.append(f"invalid DeepSeek SSE data in {path.relative_to(ROOT)}: {error}")
+                    continue
+                if isinstance(event, dict) and isinstance(event.get("type"), str):
+                    event_types.add(event["type"])
+            if not {"response.output_text.delta", "response.completed"}.issubset(event_types):
+                errors.append("DeepSeek Responses fixture must cover text delta and completion events")
         else:
             json.loads(path.read_text(encoding="utf-8"))
 

@@ -416,6 +416,7 @@ public struct DailyHealthBrief: Codable, Equatable, Sendable {
     public let trainingLoad: TrainingLoadSummary
     public let contextSummary: HealthContextSummary
     public let algorithmVersion: String
+    public let healthState: HealthStateV2?
 
     public init(
         dayStart: Date,
@@ -426,7 +427,8 @@ public struct DailyHealthBrief: Codable, Equatable, Sendable {
         vitalTrends: [HealthVitalTrend],
         trainingLoad: TrainingLoadSummary,
         contextSummary: HealthContextSummary,
-        algorithmVersion: String
+        algorithmVersion: String,
+        healthState: HealthStateV2? = nil
     ) {
         self.dayStart = dayStart
         self.summary = summary
@@ -437,6 +439,7 @@ public struct DailyHealthBrief: Codable, Equatable, Sendable {
         self.trainingLoad = trainingLoad
         self.contextSummary = contextSummary
         self.algorithmVersion = algorithmVersion
+        self.healthState = healthState
     }
 }
 
@@ -494,7 +497,7 @@ public struct HealthIntelligenceResult: Codable, Equatable, Sendable {
 }
 
 public struct HealthIntelligenceEngine: Sendable {
-    public static let algorithmVersion = "health-intelligence-v1"
+    public static let algorithmVersion = "health-intelligence-v2"
     private let calendar: Calendar
 
     public init(calendar: Calendar = .current) {
@@ -742,7 +745,8 @@ public struct HealthIntelligenceEngine: Sendable {
 
     public func makeDailyBrief(
         days: [HealthIntelligenceDay],
-        goals: GoalProfile? = nil
+        goals: GoalProfile? = nil,
+        plannedWorkoutTomorrow: Bool? = nil
     ) -> HealthIntelligenceResult? {
         guard let current = days.max(by: { calendar.startOfDay(for: $0.dayStart) < calendar.startOfDay(for: $1.dayStart) }) else {
             return nil
@@ -784,13 +788,37 @@ public struct HealthIntelligenceEngine: Sendable {
                 evidenceKeys: value == nil ? [] : [evidenceKey]
             )
         }
-        let recommendations = RecommendationEngine().recommend(domains: domains, goal: goals)
-        let context = makeContextSummary(days: days, asOf: currentDay, goals: goals, recommendations: recommendations)
         let vitalTrends = makeVitalTrends(days: days, asOf: currentDay)
+        let recovery = HealthStatePolicy.recovery(
+            sleep: domains.first(where: { $0.domain == .sleep }),
+            restingHeartRate: vitalTrends.first(where: { $0.metric == .restingHeartRate }),
+            heartRateVariability: vitalTrends.first(where: { $0.metric == .heartRateVariability }),
+            trainingLoad: load
+        )
+        let tomorrowGuidance = HealthStatePolicy.tomorrowGuidance(
+            recovery: recovery,
+            trainingLoad: load,
+            plannedWorkout: plannedWorkoutTomorrow
+        )
+        let healthState = HealthStateV2(
+            domains: domains,
+            recovery: recovery,
+            trainingLoad: load,
+            tomorrowGuidance: tomorrowGuidance
+        )
+        let recommendations = RecommendationEngine().recommend(
+            domains: domains,
+            goal: goals,
+            recovery: recovery,
+            trainingLoad: load
+        )
+        let context = makeContextSummary(days: days, asOf: currentDay, goals: goals, recommendations: recommendations)
         let changedCount = domains.filter { $0.status == .changed || $0.status == .attention }.count
         let summary: String
         if domains.allSatisfy({ $0.status == .noData }) {
             summary = "目前没有足够的健康数据；可继续记录，空缺不会被当作零。"
+        } else if recovery.status == .insufficientEvidence {
+            summary = "部分数据还不够完整，我不会据此猜测你的恢复状态。"
         } else if changedCount == 0 {
             summary = "当前可用数据大致处于个人近期范围；这不是医学判断。"
         } else {
@@ -805,7 +833,8 @@ public struct HealthIntelligenceEngine: Sendable {
             vitalTrends: vitalTrends,
             trainingLoad: load,
             contextSummary: context,
-            algorithmVersion: Self.algorithmVersion
+            algorithmVersion: Self.algorithmVersion,
+            healthState: healthState
         )
         let weightTrend = weightTrendKilograms(in: days)
         return HealthIntelligenceResult(
@@ -1109,7 +1138,12 @@ public struct HealthIntelligenceEngine: Sendable {
 public struct RecommendationEngine: Sendable {
     public init() {}
 
-    public func recommend(domains: [HealthDomainResult], goal: GoalProfile? = nil) -> [HealthRecommendation] {
+    public func recommend(
+        domains: [HealthDomainResult],
+        goal: GoalProfile? = nil,
+        recovery: RecoveryAssessment? = nil,
+        trainingLoad: TrainingLoadSummary? = nil
+    ) -> [HealthRecommendation] {
         var candidates: [HealthRecommendation] = []
         for result in domains where result.status == .changed || result.status == .attention {
             guard let evidenceKey = result.evidenceKeys.first else { continue }
@@ -1159,6 +1193,29 @@ public struct RecommendationEngine: Sendable {
                 )
             }
             candidates.append(recommendation)
+        }
+
+        let changedSleepEvidence = domains.first {
+            $0.domain == .sleep && ($0.status == .changed || $0.status == .attention)
+        }?.evidenceKeys.first
+        let vitalEvidence = recovery?.evidence.first {
+            $0.source == "restingHeartRate" || $0.source == "heartRateVariability"
+        }?.key
+        let loadEvidence = recovery?.evidence.first(where: { $0.source == "trainingLoad" })?.key
+        if recovery?.status == .attention,
+           (trainingLoad?.band == .increased || trainingLoad?.band == .sharplyIncreased),
+           let evidenceKey = changedSleepEvidence ?? vitalEvidence ?? loadEvidence {
+            candidates.append(
+                HealthRecommendation(
+                    id: "recovery.reduce-training-load",
+                    domain: .activity,
+                    title: "今天降低训练强度",
+                    detail: "恢复相关数据偏离个人近期范围，可先选择轻量活动。",
+                    evidenceKey: evidenceKey,
+                    conflictGroup: "activity-load",
+                    score: 0.97
+                )
+            )
         }
 
         var usedGroups = Set<String>()

@@ -24,6 +24,31 @@ struct DailyHealthBriefCard: View {
                     }
                 }
 
+                if let state = brief.healthState {
+                    HStack(spacing: 8) {
+                        derivedStateTile(
+                            title: "恢复",
+                            value: recoveryName(state.recovery.status),
+                            tint: recoveryColor(state.recovery.status),
+                            symbol: "heart.text.square"
+                        )
+                        derivedStateTile(
+                            title: "训练负荷",
+                            value: trainingLoadName(state.trainingLoad.band),
+                            tint: state.trainingLoad.band == .sharplyIncreased || state.trainingLoad.band == .increased
+                                ? OrbitPalette.gold
+                                : OrbitPalette.blue,
+                            symbol: "figure.run"
+                        )
+                    }
+                    if let guidance = state.tomorrowGuidance,
+                       guidance.expectedState != .unknown {
+                        Text(guidance.conditionalNote)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 if let sleep = brief.sleep {
                     HStack(spacing: 10) {
                         Image(systemName: "bed.double.fill")
@@ -97,6 +122,21 @@ struct DailyHealthBriefCard: View {
         .accessibilityLabel("\(domainName(result.domain))：\(statusName(result.status))")
     }
 
+    private func derivedStateTile(title: String, value: String, tint: Color, symbol: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol).foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.caption.weight(.semibold))
+                Text(value).font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+    }
+
     private func domainName(_ domain: HealthDomain) -> String {
         switch domain {
         case .nutrition: "营养"
@@ -113,6 +153,34 @@ struct DailyHealthBriefCard: View {
         case .withinTypicalRange: "处于个人范围"
         case .changed: "与近期不同"
         case .attention: "值得留意"
+        }
+    }
+
+    private func recoveryName(_ status: RecoveryStatus) -> String {
+        switch status {
+        case .insufficientEvidence: "数据不足，不作判断"
+        case .withinTypicalRange: "处于个人范围"
+        case .attention: "建议降低强度"
+        }
+    }
+
+    private func recoveryColor(_ status: RecoveryStatus) -> Color {
+        switch status {
+        case .insufficientEvidence: .secondary
+        case .withinTypicalRange: OrbitPalette.green
+        case .attention: OrbitPalette.coral
+        }
+    }
+
+    private func trainingLoadName(_ band: TrainingLoadBand) -> String {
+        switch band {
+        case .unavailable: "暂无数据"
+        case .learning: "学习中"
+        case .belowTypical: "低于近期范围"
+        case .gradualReturn: "逐步恢复"
+        case .nearTypical: "接近近期范围"
+        case .increased: "有所上升"
+        case .sharplyIncreased: "明显上升"
         }
     }
 

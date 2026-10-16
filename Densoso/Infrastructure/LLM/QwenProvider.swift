@@ -45,6 +45,26 @@ struct QwenProvider: TextModelProvider {
                     guard request.tools.isEmpty || descriptor.capabilities.contains(.toolCalling) else {
                         throw ProviderError.unsupportedCapability(.toolCalling)
                     }
+                    guard request.thinking == .none || descriptor.capabilities.contains(.reasoning) else {
+                        throw ProviderError.unsupportedCapability(.reasoning)
+                    }
+                    guard !request.messages.contains(where: { message in
+                        message.content.contains { if case .reasoning = $0 { true } else { false } }
+                    }) else {
+                        throw ProviderError.unsupportedCapability(.reasoning)
+                    }
+                    guard !request.messages.contains(where: { message in
+                        message.content.contains { if case .image = $0 { true } else { false } }
+                    }) else {
+                        // Generic chat serialization is text/tool-only. Meal vision uses the
+                        // dedicated Qwen vision provider until this provider gains image parts.
+                        throw ProviderError.unsupportedCapability(.vision)
+                    }
+                    guard request.responseFormat == nil else {
+                        // This OpenAI-compatible path currently supports schema-bound tools,
+                        // but has no verified top-level JSON-schema response format.
+                        throw ProviderError.unsupportedCapability(.structuredOutput)
+                    }
                     guard let key = try credentialSource.credential(for: .qwen),
                           !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw ProviderError.configurationMissing(provider: .qwen)
@@ -153,7 +173,7 @@ private struct OpenAIRequest: Encodable {
         self.tools = request.tools.isEmpty ? nil : request.tools.map(OpenAITool.init)
         self.toolChoice = request.tools.isEmpty ? nil : "auto"
         self.parallelToolCalls = false
-        self.enableThinking = false
+        self.enableThinking = request.thinking != .none
         self.stream = false
         self.maxTokens = request.maxOutputTokens
     }

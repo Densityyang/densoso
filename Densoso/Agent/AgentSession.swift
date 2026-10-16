@@ -292,7 +292,9 @@ final class AgentSession {
                     messages: conversationHistory,
                     tools: registry.toolDefinitions,
                     maxOutputTokens: 2_048,
-                    thinking: .disabled,
+                    thinking: provider.descriptor.capabilities.contains(.reasoning)
+                        ? AgentReasoningPolicy.forUserMessage(userText)
+                        : .none,
                     deadline: tracker.budget.deadline
                 )
                 let result = try await performProviderRound(
@@ -305,6 +307,7 @@ final class AgentSession {
                 if !result.toolCalls.isEmpty {
                     var assistantContent: [ModelContent] = []
                     if !result.text.isEmpty { assistantContent.append(.text(result.text)) }
+                    assistantContent.append(contentsOf: result.reasoning.map(ModelContent.reasoning))
                     assistantContent.append(contentsOf: result.toolCalls.map(ModelContent.toolCall))
                     try await append(
                         ModelMessage(role: .assistant, content: assistantContent),
@@ -433,6 +436,7 @@ final class AgentSession {
         let task = Task<ProviderRoundResult, Error> {
             var text = ""
             var toolCalls: [ToolCall] = []
+            var reasoning: [JSONValue] = []
             for try await event in provider.stream(request) {
                 try Task.checkCancellation()
                 switch event {
@@ -444,6 +448,8 @@ final class AgentSession {
                     }
                 case .toolCall(let call):
                     toolCalls.append(call)
+                case .reasoning(let item):
+                    reasoning.append(item)
                 case .usage(let usage):
                     try await usageLedger.record(
                         usage,
@@ -468,7 +474,7 @@ final class AgentSession {
             // cancelled. Re-check here so cancellation cannot become an empty
             // successful Provider round.
             try Task.checkCancellation()
-            return ProviderRoundResult(text: text, toolCalls: toolCalls)
+            return ProviderRoundResult(text: text, toolCalls: toolCalls, reasoning: reasoning)
         }
         activeProviderTask = task
         defer { activeProviderTask = nil }
@@ -493,12 +499,17 @@ final class AgentSession {
     }
 
     private func append(_ message: ModelMessage, requestID: UUID?) async throws {
-        let data = try JSONEncoder().encode(message)
+        let persistedContent = message.content.filter { content in
+            if case .reasoning = content { return false }
+            return true
+        }
+        let persistedMessage = ModelMessage(role: message.role, content: persistedContent)
+        let data = try JSONEncoder().encode(persistedMessage)
         let summaries = message.content.compactMap { content -> String? in
             switch content {
             case .toolCall(let call): "call:\(call.name):\(call.id)"
             case .toolResult(let id, _): "result:\(id)"
-            case .text: nil
+            case .text, .image, .reasoning: nil
             }
         }
         let toolSummaryData = summaries.isEmpty ? nil : try JSONEncoder().encode(summaries)
@@ -601,6 +612,7 @@ private struct LegacyProviderMessage: Decodable {
 private struct ProviderRoundResult: Sendable {
     let text: String
     let toolCalls: [ToolCall]
+    let reasoning: [JSONValue]
 }
 
 struct PersistedChatMessage: Identifiable, Equatable {

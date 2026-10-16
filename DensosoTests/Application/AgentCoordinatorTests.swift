@@ -35,6 +35,39 @@ final class AgentCoordinatorTests: XCTestCase {
         XCTAssertEqual(usageCount, 1)
     }
 
+    func testProviderReasoningContinuesInMemoryButIsNeverPersisted() async throws {
+        let privateReasoning = JSONValue.object([
+            "type": .string("reasoning"),
+            "encrypted_content": .string("same-process-private-reasoning"),
+        ])
+        let provider = ScriptedTextProvider(
+            scripts: [
+                [
+                    .reasoning(privateReasoning),
+                    .toolCall(weightCall(id: "reasoning-weight")),
+                    .completed(.toolUse),
+                ],
+                [.textDelta("草稿已经准备好，请确认。"), .completed(.completed)],
+            ]
+        )
+        let harness = try await Harness(provider: provider)
+
+        _ = try await harness.session.send(userText: "记录体重 62.5kg")
+
+        let followUp = try XCTUnwrap(provider.recordedRequests().dropFirst().first)
+        XCTAssertTrue(followUp.messages.contains { message in
+            message.content.contains { content in
+                if case .reasoning(let item) = content {
+                    return item.objectValue?["encrypted_content"]?.stringValue == "same-process-private-reasoning"
+                }
+                return false
+            }
+        })
+        let persistedMessages = try ModelContext(harness.container).fetch(FetchDescriptor<MessageRecord>())
+        let persistedText = persistedMessages.compactMap { String(data: $0.contentData, encoding: .utf8) }.joined()
+        XCTAssertFalse(persistedText.contains("same-process-private-reasoning"))
+    }
+
     func testReplayedWatchRequestIDDoesNotStartAnotherProviderRound() async throws {
         let provider = ScriptedTextProvider(
             scripts: [[.textDelta("已生成可检查的草稿。"), .completed(.completed)]]

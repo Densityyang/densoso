@@ -103,7 +103,7 @@ struct DashboardScreen: View {
         let intakeValue = metrics.mealCount == 0 ? "未记录" : "\(metrics.totalIntakeKcal)"
         let expenditureValue = hasEnergyEstimate ? "\(energyPrefix)\(metrics.totalExpenditureKcal)" : "暂无"
         let balanceValue = hasEnergyEstimate ? "\(energyPrefix)\(metrics.deficitKcal)" : "暂无"
-        VStack(alignment: .leading, spacing: 18) {
+        return VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Text("今日热量")
                     .font(.headline)

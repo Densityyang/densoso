@@ -12,6 +12,8 @@ enum ProviderCapability: String, Codable, CaseIterable, Sendable {
     case structuredOutput
     case vision
     case speech
+    case reasoning
+    case streaming
 }
 
 struct ProviderDescriptor: Codable, Equatable, Sendable {
@@ -27,7 +29,12 @@ enum ProviderDataClass: String, Codable, CaseIterable, Sendable {
 }
 
 enum ThinkingPolicy: String, Codable, Sendable {
-    case disabled
+    case none
+    case low
+    case high
+    case max
+
+    static var disabled: ThinkingPolicy { .none }
 }
 
 enum ModelRole: String, Codable, Sendable {
@@ -53,8 +60,43 @@ struct ModelMessage: Codable, Equatable, Sendable {
 
 enum ModelContent: Codable, Equatable, Sendable {
     case text(String)
+    case image(ImageInput)
     case toolCall(ToolCall)
     case toolResult(toolCallID: String, content: String)
+    /// Opaque provider reasoning returned for a same-process tool continuation.
+    /// AgentSession removes this item before persisting conversation history.
+    case reasoning(JSONValue)
+}
+
+enum ImageDetail: String, Codable, Sendable {
+    case low
+    case high
+    case original
+    case auto
+}
+
+struct ImageInput: Codable, Equatable, Sendable {
+    let mimeType: String
+    let base64Data: String
+    let detail: ImageDetail
+
+    init(mimeType: String, base64Data: String, detail: ImageDetail = .high) {
+        self.mimeType = mimeType
+        self.base64Data = base64Data
+        self.detail = detail
+    }
+}
+
+struct StructuredOutputFormat: Equatable, Sendable {
+    let name: String
+    let schema: JSONSchemaNode
+    let strict: Bool
+
+    init(name: String, schema: JSONSchemaNode, strict: Bool = true) {
+        self.name = name
+        self.schema = schema
+        self.strict = strict
+    }
 }
 
 struct ToolCall: Codable, Equatable, Sendable {
@@ -248,6 +290,7 @@ struct ModelRequest: Sendable {
     let tools: [ToolSchema]
     let maxOutputTokens: Int
     let thinking: ThinkingPolicy
+    var responseFormat: StructuredOutputFormat? = nil
     let deadline: Date
 }
 
@@ -270,11 +313,14 @@ enum ProviderStopReason: String, Codable, Sendable {
 enum ProviderEvent: Equatable, Sendable {
     case textDelta(String)
     case toolCall(ToolCall)
+    case reasoning(JSONValue)
     case usage(ProviderUsage)
     case completed(ProviderStopReason)
 }
 
-protocol TextModelProvider: Sendable {
+protocol MultimodalModelProvider: Sendable {
     var descriptor: ProviderDescriptor { get }
     func stream(_ request: ModelRequest) -> AsyncThrowingStream<ProviderEvent, Error>
 }
+
+typealias TextModelProvider = MultimodalModelProvider

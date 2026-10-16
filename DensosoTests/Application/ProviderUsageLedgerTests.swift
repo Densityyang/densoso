@@ -115,7 +115,7 @@ final class ProviderUsageLedgerTests: XCTestCase {
         try await ledger.record(
             ProviderUsage(
                 provider: .deepSeek,
-                model: "deepseek-v4-flash",
+                model: "deepseek-flash",
                 capability: .text,
                 inputTokens: 1_000_000,
                 outputTokens: 1_000_000,

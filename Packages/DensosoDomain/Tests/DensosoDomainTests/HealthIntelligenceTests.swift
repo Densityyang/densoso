@@ -278,6 +278,9 @@ final class HealthIntelligenceTests: XCTestCase {
             goals: GoalProfile(effectiveFrom: today, targetWeightKilograms: 68, dailyDeficitKcal: 400)
         ))
         XCTAssertEqual(result.dailyBrief.domains.map(\.domain), HealthDomain.allCases)
+        XCTAssertEqual(result.dailyBrief.healthState?.domains.map(\.domain), HealthDomain.allCases)
+        XCTAssertEqual(result.dailyBrief.healthState?.recovery.status, .insufficientEvidence)
+        XCTAssertEqual(result.dailyBrief.healthState?.recovery.recommendedAction, .collectData)
         XCTAssertLessThanOrEqual(result.dailyBrief.recommendations.count, 2)
         XCTAssertEqual(
             Set(result.dailyBrief.recommendations.map(\.conflictGroup)).count,

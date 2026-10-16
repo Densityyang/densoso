@@ -45,8 +45,8 @@ final class ExportService {
             let dailyDeficitTarget: Int
             let createdAt: Date
             let updatedAt: Date
-            let profileNeedsCompletion: Bool? = nil
-            let profileKey: String? = nil
+            var profileNeedsCompletion: Bool? = nil
+            var profileKey: String? = nil
         }
 
         struct MealRecordExport: Codable {
@@ -337,8 +337,8 @@ final class ExportService {
             let source: String
             let algorithmVersion: String
             let createdAt: Date
-            let confidence: Double? = nil
-            let healthKitSyncIdentifier: String? = nil
+            var confidence: Double? = nil
+            var healthKitSyncIdentifier: String? = nil
         }
 
         struct ProfileRevisionExport: Codable {

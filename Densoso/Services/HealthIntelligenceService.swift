@@ -28,11 +28,21 @@ final class HealthIntelligenceService {
             let context = ModelContext(modelContainer)
             let days = try loadDays(through: date, in: context)
             let goal = try goalProfile(asOf: date, in: context)
-            guard let result = engine.makeDailyBrief(days: days, goals: goal) else {
+            let plannedWorkout = try plannedWorkoutTomorrow(asOf: date, in: context)
+            guard let result = engine.makeDailyBrief(
+                days: days,
+                goals: goal,
+                plannedWorkoutTomorrow: plannedWorkout
+            ) else {
                 dailyBrief = nil
                 return nil
             }
-            let snapshotHash = try hash(days: days, goal: goal, algorithmVersion: result.dailyBrief.algorithmVersion)
+            let snapshotHash = try hash(
+                days: days,
+                goal: goal,
+                algorithmVersion: result.dailyBrief.algorithmVersion,
+                plannedWorkoutTomorrow: plannedWorkout
+            )
             dailyBrief = try cachedDailyBrief(
                 result.dailyBrief,
                 snapshotHash: snapshotHash,
@@ -75,9 +85,11 @@ final class HealthIntelligenceService {
     func healthContextSummary(asOf date: Date = Date()) throws -> HealthContextSummary? {
         let context = ModelContext(modelContainer)
         let days = try loadDays(through: date, in: context)
+        let plannedWorkout = try plannedWorkoutTomorrow(asOf: date, in: context)
         guard let result = engine.makeDailyBrief(
             days: days,
-            goals: try goalProfile(asOf: date, in: context)
+            goals: try goalProfile(asOf: date, in: context),
+            plannedWorkoutTomorrow: plannedWorkout
         ) else { return nil }
         return result.dailyBrief.contextSummary
     }
@@ -120,6 +132,21 @@ final class HealthIntelligenceService {
                     dailyProteinGrams: $0.dailyProteinGrams
                 )
             }
+    }
+
+    private func plannedWorkoutTomorrow(asOf date: Date, in context: ModelContext) throws -> Bool? {
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date))
+            ?? calendar.startOfDay(for: date)
+        let end = calendar.date(byAdding: .day, value: 1, to: tomorrow) ?? tomorrow
+        let predicate = #Predicate<ScheduleEvent> { event in
+            event.startTime >= tomorrow && event.startTime < end
+        }
+        let events = try context.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
+        guard !events.isEmpty else { return nil }
+        return events.contains {
+            guard let entry = ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) else { return false }
+            return entry.state != .terminal
+        }
     }
 
     private func loadDays(through date: Date, in context: ModelContext) throws -> [HealthIntelligenceDay] {
@@ -298,12 +325,20 @@ final class HealthIntelligenceService {
     private func hash(
         days: [HealthIntelligenceDay],
         goal: GoalProfile?,
-        algorithmVersion: String
+        algorithmVersion: String,
+        plannedWorkoutTomorrow: Bool? = nil
     ) throws -> String {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(CacheInput(days: days, goal: goal, algorithmVersion: algorithmVersion))
+        let data = try encoder.encode(
+            CacheInput(
+                days: days,
+                goal: goal,
+                algorithmVersion: algorithmVersion,
+                plannedWorkoutTomorrow: plannedWorkoutTomorrow
+            )
+        )
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
@@ -354,4 +389,5 @@ private struct CacheInput: Codable {
     let days: [HealthIntelligenceDay]
     let goal: GoalProfile?
     let algorithmVersion: String
+    let plannedWorkoutTomorrow: Bool?
 }
