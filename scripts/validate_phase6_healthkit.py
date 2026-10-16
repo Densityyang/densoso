@@ -128,7 +128,8 @@ def main() -> int:
         (
             "healthKitActiveEnergyKcal",
             "healthKitRestingEnergyKcal",
-            "max(tdee(bmr: bmrValue, activityLevel: userProfile.activityLevel) - bmrValue, 0)",
+            "EnergyAccounting.expenditure(",
+            "max($0.likely - (basal ?? 0), 0)",
             "workoutCount: dayWorkouts.count",
         ),
         errors,
