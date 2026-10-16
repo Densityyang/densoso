@@ -11,6 +11,13 @@ protocol MultiDayWorkoutSchedulingClient {
     func schedule(_ plan: WorkoutPlan, at date: Date) async throws
 }
 
+@concurrent
+private func multiDayWorkoutPlanIsAlreadyScheduled(_ planID: UUID) async -> Bool {
+    let scheduler = WorkoutScheduler.shared
+    let scheduledWorkouts = await scheduler.scheduledWorkouts
+    return scheduledWorkouts.contains { $0.plan.id == planID }
+}
+
 @MainActor
 struct WorkoutKitMultiDaySchedulingClient: MultiDayWorkoutSchedulingClient {
     func authorize() async throws {
@@ -23,8 +30,7 @@ struct WorkoutKitMultiDaySchedulingClient: MultiDayWorkoutSchedulingClient {
     }
 
     func isScheduled(planID: UUID) async -> Bool {
-        let scheduledWorkouts = await WorkoutScheduler.shared.scheduledWorkouts
-        return scheduledWorkouts.contains { $0.plan.id == planID }
+        await multiDayWorkoutPlanIsAlreadyScheduled(planID)
     }
 
     func schedule(_ plan: WorkoutPlan, at date: Date) async throws {

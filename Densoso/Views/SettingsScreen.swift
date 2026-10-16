@@ -532,16 +532,18 @@ struct SettingsScreen: View {
         granted: Bool
     ) async {
         do {
+            let policyVersion: String
+            switch (provider, dataClass) {
+            case (.qwen, .speechAudio): policyVersion = "qwen-single-audio-v1"
+            case (.qwen, .mealImage): policyVersion = "qwen-sanitized-meal-image-v1"
+            case (.deepSeek, .mealImage): policyVersion = "deepseek-sanitized-meal-image-v1"
+            default: policyVersion = "cloud-health-text-v1"
+            }
             try await dependencies.providerGovernanceRepository.setConsent(
                 provider: provider,
                 dataClass: dataClass,
                 granted: granted,
-                policyVersion: switch (provider, dataClass) {
-                case (.qwen, .speechAudio): "qwen-single-audio-v1"
-                case (.qwen, .mealImage): "qwen-sanitized-meal-image-v1"
-                case (.deepSeek, .mealImage): "deepseek-sanitized-meal-image-v1"
-                default: "cloud-health-text-v1"
-                }
+                policyVersion: policyVersion
             )
         } catch {
             healthAuthorizationError = "无法保存云端同意状态：\(error.localizedDescription)"
