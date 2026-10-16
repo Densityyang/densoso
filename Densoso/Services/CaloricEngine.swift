@@ -1,38 +1,9 @@
 import Foundation
+import CryptoKit
+import DensosoDomain
 
 /// 热量计算引擎 —— 全部纯函数，无副作用
 enum CaloricEngine {
-
-    // MARK: - BMR
-
-    /// Mifflin-St Jeor 方程
-    /// - Parameters:
-    ///   - sex: "male" 或 "female"
-    ///   - weightKg: 体重 (kg)
-    ///   - heightCm: 身高 (cm)
-    ///   - age: 年龄 (岁)
-    /// - Returns: BMR (kcal/day)
-    static func bmr(sex: String, weightKg: Double, heightCm: Double, age: Int) -> Int {
-        let base = 10.0 * weightKg + 6.25 * heightCm - 5.0 * Double(age)
-        let result = sex == "male" ? base + 5.0 : base - 161.0
-        return Int(round(result))
-    }
-
-    // MARK: - TDEE
-
-    /// TDEE = BMR × 活动系数
-    static func tdee(bmr: Int, activityLevel: String) -> Int {
-        let multiplier: Double
-        switch activityLevel {
-        case "sedentary":  multiplier = 1.2
-        case "light":      multiplier = 1.375
-        case "moderate":   multiplier = 1.55
-        case "active":     multiplier = 1.725
-        case "veryActive": multiplier = 1.9
-        default:           multiplier = 1.2
-        }
-        return Int(round(Double(bmr) * multiplier))
-    }
 
     // MARK: - 运动消耗估算
 
@@ -77,12 +48,15 @@ enum CaloricEngine {
     }
 
     static func weeklySummary(dailyMetrics: [DailyMetrics]) -> WeeklySummary {
-        let totalDeficit = dailyMetrics.map(\.deficitKcal).reduce(0, +)
-        let days = max(dailyMetrics.count, 1)
+        let usableMetrics = dailyMetrics.filter {
+            $0.energyQuality != "unavailable" && !$0.requiresRecompute
+        }
+        let totalDeficit = usableMetrics.map(\.deficitKcal).reduce(0, +)
+        let days = max(usableMetrics.count, 1)
         let avgDaily = Double(totalDeficit) / Double(days)
         let projectedLoss = Double(totalDeficit) / 7700.0
-        let best = dailyMetrics.max(by: { $0.deficitKcal < $1.deficitKcal })
-        let worst = dailyMetrics.min(by: { $0.deficitKcal < $1.deficitKcal })
+        let best = usableMetrics.max(by: { $0.deficitKcal < $1.deficitKcal })
+        let worst = usableMetrics.min(by: { $0.deficitKcal < $1.deficitKcal })
         let totalMeals = dailyMetrics.map(\.mealCount).reduce(0, +)
         let totalWorkouts = dailyMetrics.map(\.workoutCount).reduce(0, +)
 
@@ -94,7 +68,7 @@ enum CaloricEngine {
             worstDay: worst,
             totalMeals: totalMeals,
             totalWorkouts: totalWorkouts,
-            daysWithData: dailyMetrics.count
+            daysWithData: usableMetrics.count
         )
     }
 
@@ -121,56 +95,189 @@ enum CaloricEngine {
         date: Date,
         meals: [MealRecord],
         workouts: [WorkoutRecord],
-        userProfile: UserProfile,
+        effectiveProfile: EffectiveProfile?,
+        effectiveWeight: EffectiveWeight?,
         healthKitActiveEnergyKcal: Double? = nil,
-        healthKitRestingEnergyKcal: Double? = nil
+        healthKitRestingEnergyKcal: Double? = nil,
+        healthKitSteps: Double? = nil,
+        healthKitExerciseMinutes: Double? = nil
     ) -> DailyMetrics {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
-        let age = calendar.dateComponents([.year], from: userProfile.dateOfBirth, to: Date()).year ?? 30
-
-        let bmrValue = bmr(
-            sex: userProfile.biologicalSex,
-            weightKg: userProfile.weightKg,
-            heightCm: userProfile.heightCm,
-            age: age
-        )
 
         let dayMeals = meals.filter { calendar.isDate($0.date, inSameDayAs: startOfDay) }
         let dayWorkouts = workouts.filter { calendar.isDate($0.date, inSameDayAs: startOfDay) }
 
-        let totalIntake = dayMeals.map(\.totalCaloriesKcal).reduce(0, +)
+        let intakeRanges = dayMeals.compactMap { meal in
+            try? EstimateRange(
+                low: meal.energyLowKcal,
+                likely: meal.energyLikelyKcal,
+                high: meal.energyHighKcal
+            )
+        }
+        let totalIntake = Double(dayMeals.map(\.totalCaloriesKcal).reduce(0, +))
+        let intake = (try? EstimateRange.sum(intakeRanges))
+            ?? (try! EstimateRange.point(max(totalIntake, 0)))
         // V3 DailyMetrics macros are compatibility aggregates. A meal's zero
         // mirror can mean unknown; use the optional meal ranges for evidence.
         let totalProtein = dayMeals.map(\.proteinG).reduce(0, +)
         let totalFat = dayMeals.map(\.fatG).reduce(0, +)
         let totalCarbs = dayMeals.map(\.carbsG).reduce(0, +)
 
-        // HealthKit's daily active-energy aggregate already includes workout activity.
-        // A workout record is descriptive and must never be added to that aggregate.
-        let activeCal = validEnergy(healthKitActiveEnergyKcal)
-            ?? max(tdee(bmr: bmrValue, activityLevel: userProfile.activityLevel) - bmrValue, 0)
-        let basalCal = validEnergy(healthKitRestingEnergyKcal) ?? bmrValue
-        let totalExpenditure = basalCal + activeCal
-        let deficit = dailyDeficit(totalExpenditure: totalExpenditure, totalIntake: totalIntake)
+        let expenditure = EnergyAccounting.expenditure(
+            observedBasalEnergyKcal: healthKitRestingEnergyKcal,
+            observedActiveEnergyKcal: healthKitActiveEnergyKcal,
+            profile: effectiveProfile,
+            effectiveWeightKg: effectiveWeight?.kilograms
+        )
+        let estimatedBasal: Double? = {
+            guard let profile = effectiveProfile,
+                  let age = profile.age,
+                  let weightKg = effectiveWeight?.kilograms
+            else {
+                return nil
+            }
+            return EnergyAccounting.basalMetabolicRate(
+                sex: profile.biologicalSex,
+                weightKg: weightKg,
+                heightCm: profile.heightCm,
+                age: age
+            )
+        }()
+        let basal = validEnergy(healthKitRestingEnergyKcal) ?? estimatedBasal
+        let active = validEnergy(healthKitActiveEnergyKcal)
+            ?? expenditure.map { max($0.likely - (basal ?? 0), 0) }
+        let energyQuality: String
+        switch expenditure?.source {
+        case .some(.observed): energyQuality = "observed"
+        case .some(.estimated): energyQuality = "estimated"
+        case .none: energyQuality = "unavailable"
+        }
+
+        let balanceLow = expenditure.map { $0.low - intake.high } ?? 0
+        let balanceLikely = expenditure.map { $0.likely - intake.likely } ?? 0
+        let balanceHigh = expenditure.map { $0.high - intake.low } ?? 0
+        let coverageJSON = makeCoverageJSON(
+            intakePresent: !dayMeals.isEmpty,
+            profileAvailable: effectiveProfile != nil,
+            weightAvailable: effectiveWeight != nil,
+            basalObserved: validEnergy(healthKitRestingEnergyKcal) != nil,
+            activeObserved: validEnergy(healthKitActiveEnergyKcal) != nil,
+            stepsObserved: validEnergy(healthKitSteps) != nil,
+            exerciseObserved: validEnergy(healthKitExerciseMinutes) != nil
+        )
+        let fingerprint = sourceFingerprint(
+            day: startOfDay,
+            meals: dayMeals,
+            workouts: dayWorkouts,
+            profile: effectiveProfile,
+            weight: effectiveWeight,
+            activeEnergy: healthKitActiveEnergyKcal,
+            basalEnergy: healthKitRestingEnergyKcal,
+            steps: healthKitSteps,
+            exerciseMinutes: healthKitExerciseMinutes
+        )
 
         return DailyMetrics(
             date: startOfDay,
-            bmrKcal: basalCal,
-            activeCaloriesKcal: activeCal,
-            totalExpenditureKcal: totalExpenditure,
-            totalIntakeKcal: totalIntake,
-            deficitKcal: deficit,
+            bmrKcal: roundedInteger(basal ?? 0),
+            activeCaloriesKcal: roundedInteger(active ?? 0),
+            totalExpenditureKcal: roundedInteger(expenditure?.likely ?? 0),
+            totalIntakeKcal: roundedInteger(intake.likely),
+            deficitKcal: roundedInteger(balanceLikely),
             proteinG: totalProtein,
             fatG: totalFat,
             carbsG: totalCarbs,
             mealCount: dayMeals.count,
-            workoutCount: dayWorkouts.count
+            workoutCount: dayWorkouts.count,
+            intakeEnergyLowKcal: intake.low,
+            intakeEnergyLikelyKcal: intake.likely,
+            intakeEnergyHighKcal: intake.high,
+            expenditureEnergyLowKcal: expenditure?.low ?? 0,
+            expenditureEnergyLikelyKcal: expenditure?.likely ?? 0,
+            expenditureEnergyHighKcal: expenditure?.high ?? 0,
+            energyBalanceLowKcal: balanceLow,
+            energyBalanceLikelyKcal: balanceLikely,
+            energyBalanceHighKcal: balanceHigh,
+            activeEnergyKcal: validEnergy(healthKitActiveEnergyKcal),
+            basalEnergyKcal: validEnergy(healthKitRestingEnergyKcal),
+            steps: validEnergy(healthKitSteps),
+            exerciseMinutes: validEnergy(healthKitExerciseMinutes),
+            weightKg: effectiveWeight?.kilograms,
+            energyQuality: energyQuality,
+            dataCoverageJSON: coverageJSON,
+            projectionVersion: "energy-accounting-v2",
+            sourceFingerprint: fingerprint,
+            requiresRecompute: false
         )
     }
 
-    private static func validEnergy(_ value: Double?) -> Int? {
-        guard let value, value.isFinite, value >= 0, value < Double(Int.max) else { return nil }
+    private static func validEnergy(_ value: Double?) -> Double? {
+        value.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+    }
+
+    private static func roundedInteger(_ value: Double) -> Int {
+        guard value.isFinite, value < Double(Int.max), value > Double(Int.min) else { return 0 }
         return Int(value.rounded())
+    }
+
+    private static func makeCoverageJSON(
+        intakePresent: Bool,
+        profileAvailable: Bool,
+        weightAvailable: Bool,
+        basalObserved: Bool,
+        activeObserved: Bool,
+        stepsObserved: Bool,
+        exerciseObserved: Bool
+    ) -> String {
+        let values = [
+            "intake": intakePresent,
+            "profile": profileAvailable,
+            "weight": weightAvailable,
+            "basalEnergy": basalObserved,
+            "activeEnergy": activeObserved,
+            "steps": stepsObserved,
+            "exerciseMinutes": exerciseObserved,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]),
+              let value = String(data: data, encoding: .utf8)
+        else {
+            return "{}"
+        }
+        return value
+    }
+
+    private static func sourceFingerprint(
+        day: Date,
+        meals: [MealRecord],
+        workouts: [WorkoutRecord],
+        profile: EffectiveProfile?,
+        weight: EffectiveWeight?,
+        activeEnergy: Double?,
+        basalEnergy: Double?,
+        steps: Double?,
+        exerciseMinutes: Double?
+    ) -> String {
+        let mealKeys = meals.map {
+            "meal:\($0.id.uuidString.lowercased()):\($0.energyLowKcal):\($0.energyLikelyKcal):\($0.energyHighKcal):\($0.proteinG):\($0.fatG):\($0.carbsG)"
+        }.sorted()
+        let workoutKeys = workouts.map {
+            "workout:\($0.id.uuidString.lowercased()):\($0.type):\($0.durationMinutes)"
+        }.sorted()
+        let material = ([
+            "day:\(day.timeIntervalSince1970)",
+            "profile:\(profile?.sourceRevisionID.uuidString.lowercased() ?? "none")",
+            "profile-date:\(profile?.dateOfBirth.timeIntervalSince1970 ?? -1)",
+            "profile-sex:\(profile?.biologicalSex.rawValue ?? "none")",
+            "profile-height:\(profile?.heightCm ?? -1)",
+            "profile-activity:\(profile?.activityLevel.rawValue ?? "none")",
+            "weight:\(weight?.measuredAt.timeIntervalSince1970 ?? -1):\(weight?.kilograms ?? -1):\(weight?.source.rawValue ?? "none")",
+            "active:\(activeEnergy ?? -1)",
+            "basal:\(basalEnergy ?? -1)",
+            "steps:\(steps ?? -1)",
+            "exercise:\(exerciseMinutes ?? -1)",
+        ] + mealKeys + workoutKeys).joined(separator: "\n")
+        let digest = SHA256.hash(data: Data(material.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }

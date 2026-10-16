@@ -143,7 +143,7 @@ final class HealthIntelligenceServiceTests: XCTestCase {
     }
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV3.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [configuration])
     }

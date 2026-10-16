@@ -1,6 +1,6 @@
 import Foundation
 
-extension DensosoSchemaV3.DishEntry {
+extension DensosoSchemaV4.DishEntry {
     var ingredients: [IngredientEstimate] {
         guard let data = ingredientJSON.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([IngredientEstimate].self, from: data)) ?? []

@@ -203,14 +203,19 @@ final class HealthIntelligenceService {
                 : nil
             let energyIntake = snapshot.flatMap { $0.energyIntakeKcal?.likely }
                 ?? metric.flatMap { $0.mealCount > 0 ? Double($0.totalIntakeKcal) : nil }
+            let dailyDeficit = metric.flatMap { value in
+                value.energyQuality != "unavailable" && !value.requiresRecompute
+                    ? Double(value.deficitKcal)
+                    : nil
+            }
             days.append(HealthIntelligenceDay(
                 dayStart: dayStart,
                 energyIntakeKcal: energyIntake,
                 proteinGrams: proteinGrams,
-                dailyDeficitKcal: energyIntake == nil ? nil : metric.map { Double($0.deficitKcal) },
+                dailyDeficitKcal: energyIntake == nil ? nil : dailyDeficit,
                 activeEnergyKcal: snapshot?.activeEnergyForProjection,
-                stepCount: snapshot?.stepCount,
-                exerciseMinutes: snapshot?.exerciseMinutes,
+                stepCount: snapshot?.stepCountForProjection,
+                exerciseMinutes: snapshot?.exerciseMinutesForProjection,
                 weightSamplesKilograms: weightSamples,
                 sleepSamples: sleep,
                 heartRateSamples: samples.filter { $0.metric == .heartRate }.compactMap(\.value),

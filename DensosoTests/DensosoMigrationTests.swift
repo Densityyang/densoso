@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class DensosoMigrationTests: XCTestCase {
-    func testV1DiskFixtureMigratesToV3WithoutRecalculation() throws {
+    func testV1DiskFixtureMigratesToV4WithoutRecalculation() throws {
         let seed = try Gate02FixtureLoader.load("v1-seed", as: Gate02Seed.self)
         let expected = try Gate02FixtureLoader.load(
             "expected-migration",
@@ -15,7 +15,7 @@ final class DensosoMigrationTests: XCTestCase {
         defer { location.remove() }
         try createV1Store(seed: seed, at: location.storeURL)
 
-        let container = try openV3Store(at: location.storeURL)
+        let container = try openV4Store(at: location.storeURL)
         let context = ModelContext(container)
         let meal = try XCTUnwrap(context.fetch(FetchDescriptor<MealRecord>()).first)
         let dish = try XCTUnwrap(context.fetch(FetchDescriptor<DishEntry>()).first)
@@ -46,7 +46,12 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(workout.dataQuality, expected.v1WorkoutDataQuality)
         XCTAssertEqual(workout.routeStatus, expected.v1WorkoutRouteStatus)
         XCTAssertEqual(profile.name, "fixture")
+        XCTAssertNil(profile.dateOfBirth)
+        XCTAssertTrue(profile.profileNeedsCompletion)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyMetrics>()), 1)
+        let migratedMetric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(migratedMetric.intakeEnergyLikelyKcal, Double(migratedMetric.totalIntakeKcal))
+        XCTAssertTrue(migratedMetric.requiresRecompute)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyReport>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScheduleEvent>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
@@ -62,7 +67,7 @@ final class DensosoMigrationTests: XCTestCase {
         )
     }
 
-    func testV2DiskFixtureMigratesToV3AndPreservesCursorAndOutbox() throws {
+    func testV2DiskFixtureMigratesToV4AndPreservesCursorAndOutbox() throws {
         let seed = try Gate02FixtureLoader.load("v2-seed", as: Gate02Seed.self)
         let expected = try Gate02FixtureLoader.load(
             "expected-migration",
@@ -72,7 +77,7 @@ final class DensosoMigrationTests: XCTestCase {
         defer { location.remove() }
         try createV2Store(seed: seed, at: location.storeURL)
 
-        var container: ModelContainer? = try openV3Store(at: location.storeURL)
+        var container: ModelContainer? = try openV4Store(at: location.storeURL)
         var context: ModelContext? = ModelContext(container!)
         let meal = try XCTUnwrap(context!.fetch(FetchDescriptor<MealRecord>()).first)
         let dish = try XCTUnwrap(context!.fetch(FetchDescriptor<DishEntry>()).first)
@@ -99,7 +104,7 @@ final class DensosoMigrationTests: XCTestCase {
 
         context = nil
         container = nil
-        container = try openV3Store(at: location.storeURL)
+        container = try openV4Store(at: location.storeURL)
         context = ModelContext(container!)
         XCTAssertEqual(try context!.fetchCount(FetchDescriptor<MealRecord>()), 1)
         XCTAssertEqual(try context!.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
@@ -113,6 +118,67 @@ final class DensosoMigrationTests: XCTestCase {
                 "cursorBytes": String(seed.cursorBytes?.count ?? 0),
             ]
         )
+    }
+
+    func testV3MigrationCreatesTimeAwareProfileAndWeightRecords() throws {
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        var container: ModelContainer? = try makeContainer(
+            version: DensosoSchemaV3.self,
+            url: location.storeURL
+        )
+        var context: ModelContext? = ModelContext(container!)
+        let measuredAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let profile = DensosoSchemaV3.UserProfile(
+            name: "fixture",
+            biologicalSex: "female",
+            dateOfBirth: Date(timeIntervalSince1970: 631_152_000),
+            heightCm: 165,
+            weightKg: 62,
+            activityLevel: "moderate"
+        )
+        profile.createdAt = Date(timeIntervalSince1970: 1_600_000_000)
+        profile.updatedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let history = [
+            MigrationWeightEntry(date: measuredAt, kg: 64.5),
+            MigrationWeightEntry(date: measuredAt, kg: 64.5),
+        ]
+        profile.weightHistoryJSON = String(data: try JSONEncoder().encode(history), encoding: .utf8)!
+        context!.insert(profile)
+        context!.insert(
+            DensosoSchemaV3.DailyMetrics(
+                date: measuredAt,
+                totalIntakeKcal: 700,
+                totalExpenditureKcal: 1_800,
+                deficitKcal: 1_100
+            )
+        )
+        try context!.save()
+        context = nil
+        container = nil
+
+        container = try openV4Store(at: location.storeURL)
+        context = ModelContext(container!)
+        let migratedProfile = try XCTUnwrap(context!.fetch(FetchDescriptor<UserProfile>()).first)
+        let revision = try XCTUnwrap(context!.fetch(FetchDescriptor<ProfileRevisionRecord>()).first)
+        let weight = try XCTUnwrap(context!.fetch(FetchDescriptor<WeightRecord>()).first)
+        XCTAssertEqual(try context!.fetchCount(FetchDescriptor<WeightRecord>()), 1)
+        let metric = try XCTUnwrap(context!.fetch(FetchDescriptor<DailyMetrics>()).first)
+
+        XCTAssertEqual(migratedProfile.dateOfBirth, Date(timeIntervalSince1970: 631_152_000))
+        XCTAssertFalse(migratedProfile.profileNeedsCompletion)
+        XCTAssertEqual(revision.dateOfBirth, migratedProfile.dateOfBirth)
+        XCTAssertEqual(revision.effectiveFrom, migratedProfile.updatedAt)
+        XCTAssertEqual(revision.source, "legacyMigration")
+        XCTAssertEqual(weight.measuredAt, measuredAt)
+        XCTAssertEqual(weight.kilograms, 64.5)
+        XCTAssertEqual(weight.source, "densoso")
+        XCTAssertEqual(weight.confidence, 0.75)
+        XCTAssertEqual(metric.intakeEnergyLowKcal, 700)
+        XCTAssertEqual(metric.intakeEnergyLikelyKcal, 700)
+        XCTAssertEqual(metric.intakeEnergyHighKcal, 700)
+        XCTAssertEqual(metric.energyQuality, "legacy")
+        XCTAssertTrue(metric.requiresRecompute)
     }
 
     func testFaultingMigrationRestoresOriginalAndEntersReadOnlyRecovery() async throws {
@@ -356,8 +422,8 @@ final class DensosoMigrationTests: XCTestCase {
         return try ModelContainer(for: schema, configurations: [configuration])
     }
 
-    private func openV3Store(at url: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV3.self)
+    private func openV4Store(at url: URL) throws -> ModelContainer {
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let configuration = ModelConfiguration("Densoso", schema: schema, url: url)
         return try ModelContainer(
             for: schema,
@@ -440,13 +506,18 @@ private struct TemporaryStoreLocation {
     }
 }
 
+private struct MigrationWeightEntry: Codable {
+    let date: Date
+    let kg: Double
+}
+
 private enum Gate02Fault: Error {
     case injected
 }
 
 private enum Gate02FaultingMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [DensosoSchemaV2.self, DensosoSchemaV3.self]
+        [DensosoSchemaV2.self, DensosoSchemaV3.self, DensosoSchemaV4.self]
     }
 
     static var stages: [MigrationStage] {
@@ -461,7 +532,8 @@ private enum Gate02FaultingMigrationPlan: SchemaMigrationPlan {
                     throw Gate02Fault.injected
                 },
                 didMigrate: nil
-            )
+            ),
+            .lightweight(fromVersion: DensosoSchemaV3.self, toVersion: DensosoSchemaV4.self)
         ]
     }
 }

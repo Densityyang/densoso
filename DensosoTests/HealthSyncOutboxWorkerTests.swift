@@ -13,7 +13,7 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         previousConnectionPreference = HealthKitConnectionPreference.hasRequestedAuthorization
         container = try ModelContainer(
             for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self,
-                DailyHealthSnapshotRecord.self, WeightRecord.self, HealthSyncOutboxEntry.self,
+                DailyHealthSnapshotRecord.self, WeightRecord.self, ProfileRevisionRecord.self, HealthSyncOutboxEntry.self,
                 HealthKitImportCursor.self, CommittedActionReceiptRecord.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )

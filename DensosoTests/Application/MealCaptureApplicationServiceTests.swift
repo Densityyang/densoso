@@ -366,7 +366,7 @@ private struct MealCaptureHarness {
         imageEnabled: Bool,
         qualityGate: MealVisionQualityGate = .syntheticContractV1
     ) async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV3.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

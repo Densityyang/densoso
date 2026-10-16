@@ -325,7 +325,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
     }
 
     private func makeDiskContainer(at url: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV3.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let configuration = ModelConfiguration("Gate02Confirmation", schema: schema, url: url)
         return try ModelContainer(for: schema, configurations: [configuration])
     }
@@ -345,7 +345,7 @@ private struct Harness {
     let coordinator: ConfirmationCoordinator
 
     init(timeToLive: TimeInterval = 24 * 60 * 60) throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV3.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         container = try ModelContainer(for: schema, configurations: [configuration])
         repository = SwiftDataConfirmationRepository(modelContainer: container)

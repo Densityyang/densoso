@@ -73,6 +73,31 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.totalDeficitKcal, 0)
     }
 
+    func testUnavailableAndLegacyRecomputeDaysAreExcludedFromEnergyTotals() throws {
+        let reference = makeDate(year: 2026, month: 7, day: 29)
+        let observed = metric(daysBefore: 0, reference: reference, deficit: 300, meals: 2, workouts: 0)
+        let unavailable = metric(daysBefore: 1, reference: reference, deficit: 0, meals: 1, workouts: 0)
+        unavailable.energyQuality = "unavailable"
+        let legacy = metric(daysBefore: 2, reference: reference, deficit: 900, meals: 3, workouts: 1)
+        legacy.requiresRecompute = true
+        context.insert(observed)
+        context.insert(unavailable)
+        context.insert(legacy)
+        try context.save()
+
+        let snapshot = try WeeklyAnalyticsService(calendar: calendar).load(
+            referenceDate: reference,
+            profile: nil,
+            in: context
+        )
+
+        XCTAssertEqual(snapshot.recordedDays, 1)
+        XCTAssertEqual(snapshot.totalDeficitKcal, 300)
+        XCTAssertTrue(snapshot.points.first?.hasData == true)
+        XCTAssertFalse(snapshot.points[1].hasData)
+        XCTAssertFalse(snapshot.points[2].hasData)
+    }
+
     private func metric(
         daysBefore: Int,
         reference: Date,
@@ -92,6 +117,7 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
             mealCount: meals,
             workoutCount: workouts
         )
+        metric.energyQuality = "observed"
         // DailyMetrics normalizes with Calendar.current. Pin the stored value to
         // this test's calendar so the assertions remain timezone-independent.
         metric.date = calendar.startOfDay(for: date)

@@ -136,7 +136,7 @@ final class ProviderUsageLedgerTests: XCTestCase {
     }
 
     func testSwiftDataLedgerSurvivesRepositoryRecreation() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV3.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

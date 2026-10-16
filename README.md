@@ -118,6 +118,7 @@ GitHub Actions 工作流位于 `.github/workflows/`：
 
 ## 文档索引
 
+- [AI-native Personal Health Loop 主 PR](docs/AI-NATIVE-PERSONAL-HEALTH-LOOP-MAIN-PR.md)
 - [Orbit UI v1.2 实现说明](docs/orbit-ui-v1.2.md)
 - [语音评测基线](docs/speech-evaluation.md)
 - [PR-001 历史设计与审计基线](docs/PR-001-stabilize-agent-and-calorie-pipeline.md)

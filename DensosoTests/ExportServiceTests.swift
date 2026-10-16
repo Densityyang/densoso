@@ -62,7 +62,7 @@ final class ExportServiceTests: XCTestCase {
             ExportService.BackupDocument.self,
             from: Data(contentsOf: url)
         )
-        XCTAssertEqual(exportedDocument.formatVersion, 4)
+        XCTAssertEqual(exportedDocument.formatVersion, 5)
 
         let (targetContainer, target) = try makeContext()
         _ = targetContainer
@@ -85,8 +85,9 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(metrics.count, 1)
         XCTAssertEqual(metrics[0].totalIntakeKcal, 640)
         // Workout energy is descriptive in Phase 6; it is not daily active energy.
-        // With this fixed 30-year-old default profile, projection uses the TDEE-BMR fallback.
-        XCTAssertEqual(metrics[0].activeCaloriesKcal, 324)
+        // A current profile revision cannot be projected backward into 2023.
+        XCTAssertEqual(metrics[0].activeCaloriesKcal, 0)
+        XCTAssertEqual(metrics[0].energyQuality, "unavailable")
         let workouts = try target.fetch(FetchDescriptor<WorkoutRecord>())
         XCTAssertEqual(workouts.count, 1)
         XCTAssertEqual(workouts[0].healthKitUUID, healthKitUUID)
@@ -142,7 +143,15 @@ final class ExportServiceTests: XCTestCase {
     func testLegacyV2BackupStillRestoresAfterGate5EvidenceFieldsWereAdded() async throws {
         let (sourceContainer, source) = try makeContext()
         _ = sourceContainer
-        source.insert(UserProfile())
+        let profile = UserProfile(
+            biologicalSex: "female",
+            dateOfBirth: Date(timeIntervalSince1970: 631_152_000),
+            heightCm: 165,
+            weightKg: 70.5,
+            activityLevel: "moderate"
+        )
+        profile.profileNeedsCompletion = false
+        source.insert(profile)
         source.insert(MealRecord(totalCaloriesKcal: 350, proteinG: 12, fatG: 8, carbsG: 54))
         try source.save()
 
@@ -265,7 +274,7 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(restored.evidenceData, evidence)
     }
 
-    func testV4BackupRestoresHealthDataGoalsAndReportsWithoutSyncQueueState() async throws {
+    func testV5BackupRestoresProfileHistoryAndHealthDataWithoutSyncQueueState() async throws {
         let (sourceContainer, source) = try makeContext()
         _ = sourceContainer
         let date = Date(timeIntervalSince1970: 1_800_000_000)
@@ -274,6 +283,22 @@ final class ExportServiceTests: XCTestCase {
             sourceActionKey: "v4-weight-action",
             measuredAt: date,
             kilograms: 70.5
+        ))
+        source.insert(DailyMetrics(
+            date: date,
+            projectionVersion: "energy-accounting-v2",
+            sourceFingerprint: "fixture-fingerprint",
+            energyQuality: "observed"
+        ))
+        source.insert(ProfileRevisionRecord(
+            profileKey: "primary",
+            effectiveFrom: date,
+            dateOfBirth: Date(timeIntervalSince1970: 631_152_000),
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 70.5,
+            activityLevel: "moderate",
+            source: "userEdited"
         ))
         source.insert(GoalProfileRecord(
             profileKey: "primary",
@@ -337,8 +362,10 @@ final class ExportServiceTests: XCTestCase {
             ExportService.BackupDocument.self,
             from: Data(contentsOf: url)
         )
-        XCTAssertEqual(exported.formatVersion, 4)
+        XCTAssertEqual(exported.formatVersion, 5)
         XCTAssertEqual(exported.payload.weightRecords?.count, 1)
+        XCTAssertEqual(exported.payload.profileRevisions?.count, 1)
+        XCTAssertEqual(exported.payload.dailyMetricsProjection?.first?.sourceFingerprint, "fixture-fingerprint")
         XCTAssertEqual(exported.payload.dailyHealthSnapshots?.count, 1)
         XCTAssertEqual(exported.payload.goalProfiles?.count, 1)
         XCTAssertEqual(exported.payload.dailyBriefs?.count, 1)
@@ -356,6 +383,8 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(summary.healthDays, 1)
         XCTAssertEqual(summary.scheduledPlans, 0)
         XCTAssertEqual(try target.fetch(FetchDescriptor<WeightRecord>()).first?.kilograms, 70.5)
+        XCTAssertEqual(try target.fetch(FetchDescriptor<WeightRecord>()).first?.confidence, 0.9)
+        XCTAssertEqual(try target.fetch(FetchDescriptor<ProfileRevisionRecord>()).first?.heightCm, 165)
         XCTAssertEqual(try target.fetch(FetchDescriptor<GoalProfileRecord>()).first?.dailyProteinGrams, 90)
         XCTAssertEqual(try target.fetch(FetchDescriptor<ScheduleEvent>()).first?.title, "药物提醒")
         XCTAssertEqual(try target.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
@@ -366,7 +395,7 @@ final class ExportServiceTests: XCTestCase {
     private func makeContext() throws -> (ModelContainer, ModelContext) {
         let container = try ModelContainer(
             for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, WeeklyReport.self,
-            ScheduleEvent.self, WeightRecord.self, GoalProfileRecord.self, DailyHealthSnapshotRecord.self,
+            ScheduleEvent.self, WeightRecord.self, ProfileRevisionRecord.self, GoalProfileRecord.self, DailyHealthSnapshotRecord.self,
             DailyBriefRecord.self, WeeklyBriefRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )

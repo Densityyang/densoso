@@ -10,6 +10,7 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
             DensosoSchemaV2.self,
             DensosoSchemaV2Bridge.self,
             DensosoSchemaV3.self,
+            DensosoSchemaV4.self,
         ]
     }
 
@@ -114,6 +115,96 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                 },
                 didMigrate: nil
             ),
+            .custom(
+                fromVersion: DensosoSchemaV3.self,
+                toVersion: DensosoSchemaV4.self,
+                willMigrate: nil,
+                didMigrate: { context in
+                    let profiles = try context.fetch(
+                        FetchDescriptor<DensosoSchemaV4.UserProfile>()
+                    )
+                    var migratedWeights = try context.fetch(
+                        FetchDescriptor<DensosoSchemaV4.WeightRecord>()
+                    )
+                    let legacyEpoch = Date(timeIntervalSince1970: 0)
+
+                    for profile in profiles {
+                        let validBirthDate = profile.dateOfBirth.flatMap { date -> Date? in
+                            date != legacyEpoch && date <= profile.updatedAt ? date : nil
+                        }
+                        profile.dateOfBirth = validBirthDate
+                        profile.profileNeedsCompletion = validBirthDate == nil
+                        profile.profileKey = "primary"
+
+                        context.insert(
+                            DensosoSchemaV4.ProfileRevisionRecord(
+                                profileKey: profile.profileKey,
+                                effectiveFrom: profile.updatedAt,
+                                dateOfBirth: validBirthDate,
+                                biologicalSex: profile.biologicalSex,
+                                heightCm: profile.heightCm,
+                                weightKg: profile.weightKg,
+                                activityLevel: profile.activityLevel,
+                                source: "legacyMigration",
+                                createdAt: profile.updatedAt
+                            )
+                        )
+
+                        let history = try JSONDecoder().decode(
+                            [LegacyProfileWeightEntry].self,
+                            from: Data(profile.weightHistoryJSON.utf8)
+                        )
+
+                        for entry in history
+                        where entry.date.timeIntervalSince1970.isFinite && entry.kg.isFinite && entry.kg > 0 {
+                            let alreadyStored = migratedWeights.contains {
+                                $0.measuredAt == entry.date && $0.kilograms == entry.kg
+                            }
+                            guard !alreadyStored else { continue }
+
+                            let observation = DensosoSchemaV4.WeightRecord(
+                                sourceActionKey: "legacy-profile-weight-\(UUID().uuidString.lowercased())",
+                                measuredAt: entry.date,
+                                kilograms: entry.kg,
+                                source: "densoso",
+                                algorithmVersion: "v4-migration",
+                                confidence: 0.75
+                            )
+                            context.insert(observation)
+                            migratedWeights.append(observation)
+                        }
+                    }
+
+                    let metrics = try context.fetch(
+                        FetchDescriptor<DensosoSchemaV4.DailyMetrics>()
+                    )
+                    for metric in metrics {
+                        let intake = Double(metric.totalIntakeKcal)
+                        let expenditure = Double(metric.totalExpenditureKcal)
+                        let balance = Double(metric.deficitKcal)
+                        metric.intakeEnergyLowKcal = intake
+                        metric.intakeEnergyLikelyKcal = intake
+                        metric.intakeEnergyHighKcal = intake
+                        metric.expenditureEnergyLowKcal = expenditure
+                        metric.expenditureEnergyLikelyKcal = expenditure
+                        metric.expenditureEnergyHighKcal = expenditure
+                        metric.energyBalanceLowKcal = balance
+                        metric.energyBalanceLikelyKcal = balance
+                        metric.energyBalanceHighKcal = balance
+                        metric.energyQuality = "legacy"
+                        metric.projectionVersion = "v3-legacy"
+                        metric.sourceFingerprint = ""
+                        metric.requiresRecompute = true
+                    }
+
+                    try context.save()
+                }
+            ),
         ]
     }
+}
+
+private struct LegacyProfileWeightEntry: Decodable {
+    let date: Date
+    let kg: Double
 }

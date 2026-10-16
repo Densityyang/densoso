@@ -12,6 +12,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         container = try ModelContainer(
             for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self,
                 DailyHealthSnapshotRecord.self, DailyBriefRecord.self, WeeklyBriefRecord.self, GoalProfileRecord.self,
+                ProfileRevisionRecord.self,
                 WeightRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
@@ -98,7 +99,8 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(metrics.activeCaloriesKcal, 640)
         XCTAssertEqual(metrics.workoutCount, 1)
-        XCTAssertEqual(metrics.totalExpenditureKcal, metrics.bmrKcal + 640)
+        XCTAssertEqual(metrics.totalExpenditureKcal, 0)
+        XCTAssertEqual(metrics.energyQuality, "unavailable")
         XCTAssertTrue(report.failedStreams.isEmpty)
     }
 

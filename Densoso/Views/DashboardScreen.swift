@@ -98,6 +98,11 @@ struct DashboardScreen: View {
     }
 
     private func todayCard(_ metrics: DailyMetrics) -> some View {
+        let hasEnergyEstimate = metrics.energyQuality != "unavailable" && !metrics.requiresRecompute
+        let energyPrefix = metrics.energyQuality == "estimated" ? "约 " : ""
+        let intakeValue = metrics.mealCount == 0 ? "未记录" : "\(metrics.totalIntakeKcal)"
+        let expenditureValue = hasEnergyEstimate ? "\(energyPrefix)\(metrics.totalExpenditureKcal)" : "暂无"
+        let balanceValue = hasEnergyEstimate ? "\(energyPrefix)\(metrics.deficitKcal)" : "暂无"
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Text("今日热量")
@@ -107,22 +112,33 @@ struct DashboardScreen: View {
             }
 
             HStack(spacing: 12) {
-                OrbitMetric(value: "\(metrics.totalIntakeKcal)", label: "摄入 kcal")
-                OrbitMetric(value: "\(metrics.totalExpenditureKcal)", label: "消耗 kcal")
+                OrbitMetric(value: intakeValue, label: "摄入 kcal")
+                OrbitMetric(value: expenditureValue, label: "消耗 kcal")
                 OrbitMetric(
-                    value: "\(metrics.deficitKcal)",
+                    value: balanceValue,
                     label: "缺口 kcal",
-                    tint: metrics.deficitKcal >= 0 ? OrbitPalette.green : OrbitPalette.coral
+                    tint: hasEnergyEstimate
+                        ? (metrics.deficitKcal >= 0 ? OrbitPalette.green : OrbitPalette.coral)
+                        : Color.gray
                 )
             }
 
-            if metrics.totalExpenditureKcal > 0 {
+            if hasEnergyEstimate, metrics.totalExpenditureKcal > 0 {
                 ProgressView(
                     value: Double(max(metrics.totalIntakeKcal, 0)),
                     total: Double(metrics.totalExpenditureKcal)
                 )
                 .tint(OrbitPalette.blue)
                 .accessibilityLabel("今日摄入占总消耗")
+            }
+            if !hasEnergyEstimate {
+                Text("个人资料或健康数据还不完整，暂时无法估算今日消耗。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else if metrics.energyQuality == "estimated" {
+                Text("消耗根据个人资料估算。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
         .orbitCard(emphasized: true)

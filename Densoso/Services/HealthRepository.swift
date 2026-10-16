@@ -41,6 +41,15 @@ final class HealthRepository: HealthSyncRepository {
         }
     }
 
+    func insert(_ weight: WeightRecord) throws {
+        guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
+        try write(affecting: [weight.measuredAt]) { _ in
+            modelContext.insert(weight)
+            try enqueue(operation: "upsertWeight", recordID: weight.id, syncType: "weight")
+            try refreshDailyWeightSnapshot(on: weight.measuredAt)
+        }
+    }
+
     func delete(_ weight: WeightRecord) throws {
         guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
         try write(affecting: [weight.measuredAt]) { _ in

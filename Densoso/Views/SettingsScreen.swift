@@ -675,7 +675,10 @@ private struct ProfileEditorSheet: View {
 
     @State private var name: String
     @State private var sex: String
-    @State private var dateOfBirth: Date
+    @State private var dateOfBirth: Date?
+    @State private var dateOfBirthDraft: Date
+    @State private var hasEditedDateOfBirth = false
+    @State private var showingDateOfBirthPicker = false
     @State private var height: String
     @State private var weight: String
     @State private var activity: String
@@ -687,6 +690,11 @@ private struct ProfileEditorSheet: View {
         _name = State(initialValue: profile.name)
         _sex = State(initialValue: profile.biologicalSex)
         _dateOfBirth = State(initialValue: profile.dateOfBirth)
+        _dateOfBirthDraft = State(
+            initialValue: profile.dateOfBirth
+                ?? Calendar.current.date(byAdding: .year, value: -30, to: Date())
+                ?? Date()
+        )
         _height = State(initialValue: String(format: "%.1f", profile.heightCm))
         _weight = State(initialValue: String(format: "%.1f", profile.weightKg))
         _activity = State(initialValue: profile.activityLevel)
@@ -703,7 +711,17 @@ private struct ProfileEditorSheet: View {
                             Text("女").tag("female")
                             Text("其他").tag("other")
                         }
-                        DatePicker("出生日期", selection: $dateOfBirth, in: ...Date(), displayedComponents: .date)
+                        Button {
+                            dateOfBirthDraft = dateOfBirth
+                                ?? (Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date())
+                            hasEditedDateOfBirth = false
+                            showingDateOfBirthPicker = true
+                        } label: {
+                            LabeledContent(
+                                "出生日期",
+                                value: dateOfBirth?.formatted(date: .abbreviated, time: .omitted) ?? "未填写"
+                            )
+                        }
                         TextField("身高 (cm)", text: $height)
                             .keyboardType(.decimalPad)
                         TextField("体重 (kg)", text: $weight)
@@ -733,6 +751,39 @@ private struct ProfileEditorSheet: View {
             .orbitScrollBackground()
             .navigationTitle("编辑个人资料")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showingDateOfBirthPicker) {
+                NavigationStack {
+                    Form {
+                        DatePicker(
+                            "出生日期",
+                            selection: $dateOfBirthDraft,
+                            in: ...Date(),
+                            displayedComponents: .date
+                        )
+                        Button("清除出生日期", role: .destructive) {
+                            dateOfBirth = nil
+                            showingDateOfBirthPicker = false
+                        }
+                    }
+                    .navigationTitle("选择出生日期")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("取消") { showingDateOfBirthPicker = false }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("保存") {
+                                dateOfBirth = dateOfBirthDraft
+                                showingDateOfBirthPicker = false
+                            }
+                            .disabled(!hasEditedDateOfBirth)
+                        }
+                    }
+                    .onChange(of: dateOfBirthDraft) { _, _ in
+                        hasEditedDateOfBirth = true
+                    }
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消", systemImage: "xmark") { dismiss() }
@@ -752,19 +803,59 @@ private struct ProfileEditorSheet: View {
             return
         }
 
-        profile.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let now = Date()
+        let weightChanged = abs(profile.weightKg - weightValue) > 0.001
+        let revisionChanged = profile.name != trimmedName
+            || profile.biologicalSex != sex
+            || profile.dateOfBirth != dateOfBirth
+            || abs(profile.heightCm - heightValue) > 0.001
+            || weightChanged
+            || profile.activityLevel != activity
+            || profile.dailyDeficitTarget != targetValue
+
+        profile.name = trimmedName
         profile.biologicalSex = sex
         profile.dateOfBirth = dateOfBirth
+        profile.profileNeedsCompletion = dateOfBirth == nil
         profile.heightCm = heightValue
-        if abs(profile.weightKg - weightValue) > 0.001 {
-            profile.updateWeight(weightValue)
-        }
+        profile.weightKg = weightValue
         profile.activityLevel = activity
         profile.dailyDeficitTarget = targetValue
-        profile.updatedAt = Date()
+        profile.updatedAt = now
+
+        if revisionChanged {
+            modelContext.insert(
+                ProfileRevisionRecord(
+                    profileKey: profile.profileKey,
+                    effectiveFrom: now,
+                    dateOfBirth: dateOfBirth,
+                    biologicalSex: sex,
+                    heightCm: heightValue,
+                    weightKg: weightValue,
+                    activityLevel: activity,
+                    source: "userEdited",
+                    createdAt: now
+                )
+            )
+        }
 
         do {
-            try modelContext.save()
+            if weightChanged {
+                try HealthRepository(modelContext: modelContext).insert(
+                    WeightRecord(
+                        sourceActionKey: "settings-weight-\(UUID().uuidString.lowercased())",
+                        measuredAt: now,
+                        kilograms: weightValue,
+                        source: "manual",
+                        algorithmVersion: "weight-v2",
+                        confidence: 0.9
+                    )
+                )
+            } else {
+                try DailyMetricsProjector.reproject(on: now, in: modelContext)
+                try modelContext.save()
+            }
             dismiss()
         } catch {
             validationError = "保存失败：\(error.localizedDescription)"

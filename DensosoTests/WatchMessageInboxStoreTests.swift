@@ -90,7 +90,7 @@ final class WatchMessageInboxStoreTests: XCTestCase {
     }
 
     private func makeStore() throws -> WatchMessageInboxStore {
-        let schema = Schema(versionedSchema: DensosoSchemaV3.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         return WatchMessageInboxStore(modelContainer: container)

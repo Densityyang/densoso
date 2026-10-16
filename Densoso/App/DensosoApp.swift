@@ -103,8 +103,38 @@ struct AppRoot: View {
                 dailyDeficitTarget: 400
             )
             modelContext.insert(profile)
-            try? modelContext.save()
         }
+        if (try? modelContext.fetch(FetchDescriptor<ProfileRevisionRecord>()).isEmpty) == true,
+           let dateOfBirth = profile.dateOfBirth {
+            let now = Date()
+            modelContext.insert(
+                ProfileRevisionRecord(
+                    profileKey: profile.profileKey,
+                    effectiveFrom: now,
+                    dateOfBirth: dateOfBirth,
+                    biologicalSex: profile.biologicalSex,
+                    heightCm: profile.heightCm,
+                    weightKg: profile.weightKg,
+                    activityLevel: profile.activityLevel,
+                    source: "onboarding",
+                    createdAt: now
+                )
+            )
+        }
+        if (try? modelContext.fetch(FetchDescriptor<WeightRecord>()).isEmpty) == true {
+            let now = Date()
+            modelContext.insert(
+                WeightRecord(
+                    sourceActionKey: "gate01-fixture-weight",
+                    measuredAt: now,
+                    kilograms: profile.weightKg,
+                    source: "manual",
+                    algorithmVersion: "weight-v2",
+                    confidence: 0.9
+                )
+            )
+        }
+        try? modelContext.save()
         appState.isOnboarded = true
         appState.userProfile = profile
     }

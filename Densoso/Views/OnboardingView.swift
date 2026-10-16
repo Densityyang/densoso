@@ -20,11 +20,15 @@ struct OnboardingView: View {
     @State private var cloudTextConsent = false
     @State private var qwenSpeechConsent = false
     @State private var name = ""
-    @State private var sex = "male"
-    @State private var height = "170"
-    @State private var weight = "70"
-    @State private var activity = "sedentary"
-    @State private var deficitTarget = "500"
+    @State private var sex = ""
+    @State private var dateOfBirth: Date?
+    @State private var dateOfBirthDraft = Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date()
+    @State private var hasEditedDateOfBirth = false
+    @State private var showingDateOfBirthPicker = false
+    @State private var height = ""
+    @State private var weight = ""
+    @State private var activity = ""
+    @State private var deficitTarget = ""
     @State private var intelligenceMode: IntelligenceMode = .localOnly
     @State private var errorMessage: String?
     @State private var isSaving = false
@@ -95,6 +99,7 @@ struct OnboardingView: View {
                         }
                         .disabled(
                             (step == .intelligence && !cloudConfigurationIsValid)
+                                || (step == .profile && !profileFieldsAreValid)
                                 || isSaving
                         )
                     }
@@ -102,6 +107,35 @@ struct OnboardingView: View {
             .orbitScrollBackground()
             .navigationTitle("欢迎使用 densoso")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showingDateOfBirthPicker) {
+                NavigationStack {
+                    Form {
+                        DatePicker(
+                            "出生日期",
+                            selection: $dateOfBirthDraft,
+                            in: ...Date(),
+                            displayedComponents: .date
+                        )
+                    }
+                    .navigationTitle("选择出生日期")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("取消") { showingDateOfBirthPicker = false }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("保存") {
+                                dateOfBirth = dateOfBirthDraft
+                                showingDateOfBirthPicker = false
+                            }
+                            .disabled(!hasEditedDateOfBirth)
+                        }
+                    }
+                    .onChange(of: dateOfBirthDraft) { _, _ in
+                        hasEditedDateOfBirth = true
+                    }
+                }
+            }
             .toolbar {
                 if step == .profile {
                     ToolbarItem(placement: .topBarLeading) {
@@ -173,9 +207,20 @@ struct OnboardingView: View {
         Section("基础资料") {
             TextField("怎么称呼你", text: $name)
             Picker("性别", selection: $sex) {
+                Text("请选择").tag("")
                 Text("男").tag("male")
                 Text("女").tag("female")
                 Text("其他").tag("other")
+            }
+            Button {
+                dateOfBirthDraft = dateOfBirth ?? (Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date())
+                hasEditedDateOfBirth = false
+                showingDateOfBirthPicker = true
+            } label: {
+                LabeledContent(
+                    "出生日期",
+                    value: dateOfBirth?.formatted(date: .abbreviated, time: .omitted) ?? "请选择"
+                )
             }
             TextField("身高 (cm)", text: $height)
                 .keyboardType(.decimalPad)
@@ -185,6 +230,7 @@ struct OnboardingView: View {
 
         Section("目标") {
             Picker("日常活动量", selection: $activity) {
+                Text("请选择").tag("")
                 Text("久坐不动").tag("sedentary")
                 Text("轻度活动").tag("light")
                 Text("中度活动").tag("moderate")
@@ -193,7 +239,24 @@ struct OnboardingView: View {
             }
             TextField("每日目标缺口 (kcal)", text: $deficitTarget)
                 .keyboardType(.numberPad)
+            Text("出生日期、身高、体重和日常活动量用于估算能量；数据缺失时不会生成虚假的消耗值。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
+    }
+
+    private var profileFieldsAreValid: Bool {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              dateOfBirth != nil,
+              ["male", "female", "other"].contains(sex),
+              let heightValue = Double(height), (80...250).contains(heightValue),
+              let weightValue = Double(weight), (20...500).contains(weightValue),
+              ["sedentary", "light", "moderate", "active", "veryActive"].contains(activity),
+              let targetValue = Int(deficitTarget), (0...5_000).contains(targetValue)
+        else {
+            return false
+        }
+        return true
     }
 
     private var intelligenceExplanation: String {
@@ -221,6 +284,15 @@ struct OnboardingView: View {
     }
 
     private func save() async {
+        guard profileFieldsAreValid,
+              let birthDate = dateOfBirth,
+              let heightValue = Double(height),
+              let weightValue = Double(weight),
+              let targetValue = Int(deficitTarget)
+        else {
+            errorMessage = "请补全称呼、出生日期、性别、身高、体重、活动水平和目标。"
+            return
+        }
         isSaving = true
         errorMessage = nil
         defer { isSaving = false }
@@ -253,16 +325,43 @@ struct OnboardingView: View {
             }
             dependencies.intelligencePreferences.mode = intelligenceMode
 
+            let now = Date()
             let profile = UserProfile(
                 name: name,
                 biologicalSex: sex,
-                dateOfBirth: Date(timeIntervalSince1970: 0),
-                heightCm: Double(height) ?? 170,
-                weightKg: Double(weight) ?? 70,
+                dateOfBirth: birthDate,
+                heightCm: heightValue,
+                weightKg: weightValue,
                 activityLevel: activity,
-                dailyDeficitTarget: Int(deficitTarget) ?? 500
+                dailyDeficitTarget: targetValue
             )
+            profile.profileNeedsCompletion = false
+            profile.profileKey = "primary"
+            profile.updatedAt = now
             modelContext.insert(profile)
+            modelContext.insert(
+                ProfileRevisionRecord(
+                    profileKey: profile.profileKey,
+                    effectiveFrom: now,
+                    dateOfBirth: birthDate,
+                    biologicalSex: sex,
+                    heightCm: heightValue,
+                    weightKg: weightValue,
+                    activityLevel: activity,
+                    source: "onboarding",
+                    createdAt: now
+                )
+            )
+            modelContext.insert(
+                WeightRecord(
+                    sourceActionKey: "onboarding-initial-weight-\(UUID().uuidString.lowercased())",
+                    measuredAt: now,
+                    kilograms: weightValue,
+                    source: "manual",
+                    algorithmVersion: "weight-v2",
+                    confidence: 0.9
+                )
+            )
             try modelContext.save()
 
             appState.isOnboarded = true

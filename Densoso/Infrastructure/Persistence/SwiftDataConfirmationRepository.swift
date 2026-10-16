@@ -161,7 +161,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                         source: draft.source
                     )
                     modelContext.insert(weight)
-                    try updateProfileWeight(draft.kilograms)
+                    try updateProfileWeight(draft.kilograms, measuredAt: draft.measuredAt)
                     localRecordID = weight.id
                     affectedDate = draft.measuredAt
                     healthSyncState = .pending
@@ -347,55 +347,37 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         return meal
     }
 
-    private func updateProfileWeight(_ kilograms: Double) throws {
-        if let profile = try modelContext.fetch(FetchDescriptor<UserProfile>()).first {
-            profile.updateWeight(kilograms)
+    private func updateProfileWeight(_ kilograms: Double, measuredAt: Date) throws {
+        let profile: UserProfile
+        if let existing = try modelContext.fetch(FetchDescriptor<UserProfile>()).first {
+            profile = existing
         } else {
-            let profile = UserProfile(weightKg: kilograms)
-            profile.updateWeight(kilograms)
+            profile = UserProfile(weightKg: kilograms)
             modelContext.insert(profile)
         }
+
+        guard measuredAt >= profile.updatedAt else { return }
+        let now = Date()
+        profile.weightKg = kilograms
+        profile.updatedAt = now
+        profile.profileNeedsCompletion = profile.dateOfBirth == nil
+        modelContext.insert(
+            ProfileRevisionRecord(
+                profileKey: profile.profileKey,
+                effectiveFrom: now,
+                dateOfBirth: profile.dateOfBirth,
+                biologicalSex: profile.biologicalSex,
+                heightCm: profile.heightCm,
+                weightKg: kilograms,
+                activityLevel: profile.activityLevel,
+                source: "userEdited",
+                createdAt: now
+            )
+        )
     }
 
     private func reprojectDaily(on date: Date) throws {
-        let calendar = Calendar.current
-        let day = calendar.startOfDay(for: date)
-        let nextDay = calendar.date(byAdding: .day, value: 1, to: day)!
-        let meals = try modelContext.fetch(FetchDescriptor<MealRecord>()).filter { $0.date >= day && $0.date < nextDay }
-        let workouts = try modelContext.fetch(FetchDescriptor<WorkoutRecord>()).filter { $0.date >= day && $0.date < nextDay }
-        let profile = try modelContext.fetch(FetchDescriptor<UserProfile>()).first ?? UserProfile()
-        let components = calendar.dateComponents([.year, .month, .day], from: day)
-        let dayKey = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
-        let snapshotRecord = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
-            .first(where: { $0.dayKey == dayKey })
-        let snapshotDecoder = JSONDecoder()
-        snapshotDecoder.dateDecodingStrategy = .millisecondsSince1970
-        let healthSnapshot = try snapshotRecord.map {
-            try snapshotDecoder.decode(DailyHealthSnapshot.self, from: $0.payloadData)
-        }
-        let projected = CaloricEngine.computeDailyMetrics(
-            date: day,
-            meals: meals,
-            workouts: workouts,
-            userProfile: profile,
-            healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
-            healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection
-        )
-        if let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>()).first(where: { $0.date == day }) {
-            existing.bmrKcal = projected.bmrKcal
-            existing.activeCaloriesKcal = projected.activeCaloriesKcal
-            existing.totalExpenditureKcal = projected.totalExpenditureKcal
-            existing.totalIntakeKcal = projected.totalIntakeKcal
-            existing.deficitKcal = projected.deficitKcal
-            existing.proteinG = projected.proteinG
-            existing.fatG = projected.fatG
-            existing.carbsG = projected.carbsG
-            existing.mealCount = projected.mealCount
-            existing.workoutCount = projected.workoutCount
-            existing.computedAt = projected.computedAt
-        } else {
-            modelContext.insert(projected)
-        }
+        try DailyMetricsProjector.reproject(on: date, in: modelContext)
     }
 
     private func reprojectWeek(containing date: Date) throws {

@@ -11,7 +11,8 @@ final class HealthRepositoryTests: XCTestCase {
     override func setUpWithError() throws {
         container = try ModelContainer(
             for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self,
-                DailyHealthSnapshotRecord.self, WeightRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
+                DailyHealthSnapshotRecord.self, WeightRecord.self, ProfileRevisionRecord.self,
+                HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         context = ModelContext(container)
@@ -262,14 +263,9 @@ final class HealthRepositoryTests: XCTestCase {
         )
         XCTAssertEqual(savedSnapshot.activeEnergyKcal, 640)
         XCTAssertEqual(savedSnapshot.healthReadStates?[HealthMetricID.activeEnergy.rawValue], .dataUnavailableOrReadScopeUnknown)
-        let profile = try XCTUnwrap(context.fetch(FetchDescriptor<UserProfile>()).first)
-        let expectedFallback = CaloricEngine.computeDailyMetrics(
-            date: day,
-            meals: [],
-            workouts: [],
-            userProfile: profile
-        ).activeCaloriesKcal
-        XCTAssertEqual(try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first).activeCaloriesKcal, expectedFallback)
+        let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(metric.activeCaloriesKcal, 0)
+        XCTAssertEqual(metric.energyQuality, "unavailable")
     }
 }
 

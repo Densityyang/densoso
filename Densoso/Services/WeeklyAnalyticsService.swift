@@ -55,11 +55,12 @@ struct WeeklyAnalyticsService {
         let points = (0..<7).compactMap { offset -> WeeklyTrendPoint? in
             guard let date = calendar.date(byAdding: .day, value: offset, to: rollingStart) else { return nil }
             let metric = metricsByDay[date]
+            let hasEnergy = metric.map { isEnergyUsable($0) } ?? false
             return WeeklyTrendPoint(
                 date: date,
-                deficitKcal: metric?.deficitKcal ?? 0,
+                deficitKcal: hasEnergy ? (metric?.deficitKcal ?? 0) : 0,
                 targetDeficitKcal: target,
-                hasData: metric != nil
+                hasData: hasEnergy
             )
         }
         let recorded = points.filter(\.hasData)
@@ -98,8 +99,9 @@ struct WeeklyAnalyticsService {
             modelContext.insert(report)
         }
 
-        let count = metrics.count
-        let totalDeficit = metrics.reduce(0) { $0 + $1.deficitKcal }
+        let energyMetrics = metrics.filter { isEnergyUsable($0) }
+        let count = energyMetrics.count
+        let totalDeficit = energyMetrics.reduce(0) { $0 + $1.deficitKcal }
         report.weekEndDate = interval.end.addingTimeInterval(-1)
         report.totalDeficitKcal = totalDeficit
         report.avgDailyDeficitKcal = count == 0 ? 0 : Double(totalDeficit) / Double(count)
@@ -107,16 +109,20 @@ struct WeeklyAnalyticsService {
         report.avgProteinG = average(metrics.map(\.proteinG))
         report.avgFatG = average(metrics.map(\.fatG))
         report.avgCarbsG = average(metrics.map(\.carbsG))
-        report.bestDay = metrics.max(by: { $0.deficitKcal < $1.deficitKcal })?.date
-        report.worstDay = metrics.min(by: { $0.deficitKcal < $1.deficitKcal })?.date
+        report.bestDay = energyMetrics.max(by: { $0.deficitKcal < $1.deficitKcal })?.date
+        report.worstDay = energyMetrics.min(by: { $0.deficitKcal < $1.deficitKcal })?.date
         report.mealsCount = metrics.reduce(0) { $0 + $1.mealCount }
         report.workoutsCount = metrics.reduce(0) { $0 + $1.workoutCount }
-        report.compliance = count == 0 ? 0 : Double(metrics.filter { $0.deficitKcal >= target }.count) / Double(count)
+        report.compliance = count == 0 ? 0 : Double(energyMetrics.filter { $0.deficitKcal >= target }.count) / Double(count)
         report.generatedAt = Date()
         try modelContext.save()
     }
 
     private func average(_ values: [Double]) -> Double {
         values.isEmpty ? 0 : values.reduce(0, +) / Double(values.count)
+    }
+
+    private func isEnergyUsable(_ metric: DailyMetrics) -> Bool {
+        metric.energyQuality != "unavailable" && !metric.requiresRecompute
     }
 }

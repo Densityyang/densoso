@@ -5,7 +5,7 @@ enum PersistenceEnumError: Error, Equatable {
     case unknownValue(field: String, rawValue: String)
 }
 
-extension DensosoSchemaV3.PendingActionRecord {
+extension DensosoSchemaV4.PendingActionRecord {
     var state: PendingActionState {
         get throws {
             guard let state = PendingActionState(rawValue: stateRaw) else {
@@ -16,7 +16,7 @@ extension DensosoSchemaV3.PendingActionRecord {
     }
 }
 
-extension DensosoSchemaV3.HealthSyncOutboxEntry {
+extension DensosoSchemaV4.HealthSyncOutboxEntry {
     var syncState: HealthSyncState {
         get throws {
             guard let state = HealthSyncState(rawValue: self.state) else {
@@ -27,7 +27,7 @@ extension DensosoSchemaV3.HealthSyncOutboxEntry {
     }
 }
 
-extension DensosoSchemaV3.CommittedActionReceiptRecord {
+extension DensosoSchemaV4.CommittedActionReceiptRecord {
     var healthSyncState: HealthSyncState {
         get throws {
             guard let state = HealthSyncState(rawValue: healthSyncStateRaw) else {

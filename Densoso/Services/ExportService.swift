@@ -10,8 +10,8 @@ final class ExportService {
     var isExporting = false
     var lastError: String?
 
-    private static let formatVersion = 4
-    private static let supportedFormatVersions: Set<Int> = [2, 3, 4]
+    private static let formatVersion = 5
+    private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5]
 
     struct BackupDocument: Codable {
         let formatVersion: Int
@@ -31,11 +31,13 @@ final class ExportService {
         let dailyBriefs: [DailyBriefExport]?
         let weeklyBriefs: [WeeklyBriefExport]?
         let weeklyReports: [WeeklyReportExport]?
+        let profileRevisions: [ProfileRevisionExport]?
+        let dailyMetricsProjection: [DailyMetricsProjectionExport]?
 
         struct UserProfileExport: Codable {
             let name: String
             let biologicalSex: String
-            let dateOfBirth: Date
+            let dateOfBirth: Date?
             let heightCm: Double
             let weightKg: Double
             let weightHistoryJSON: String
@@ -43,6 +45,8 @@ final class ExportService {
             let dailyDeficitTarget: Int
             let createdAt: Date
             let updatedAt: Date
+            let profileNeedsCompletion: Bool? = nil
+            let profileKey: String? = nil
         }
 
         struct MealRecordExport: Codable {
@@ -333,6 +337,29 @@ final class ExportService {
             let source: String
             let algorithmVersion: String
             let createdAt: Date
+            let confidence: Double? = nil
+            let healthKitSyncIdentifier: String? = nil
+        }
+
+        struct ProfileRevisionExport: Codable {
+            let id: UUID
+            let profileKey: String
+            let effectiveFrom: Date
+            let dateOfBirth: Date?
+            let biologicalSex: String
+            let heightCm: Double
+            let weightKg: Double?
+            let activityLevel: String
+            let source: String
+            let createdAt: Date
+        }
+
+        struct DailyMetricsProjectionExport: Codable {
+            let date: Date
+            let projectionVersion: String
+            let sourceFingerprint: String
+            let energyQuality: String
+            let requiresRecompute: Bool
         }
 
         struct GoalProfileExport: Codable {
@@ -447,9 +474,25 @@ final class ExportService {
         guard try checksum(for: document.payload) == document.checksum else {
             throw BackupError.checksumMismatch
         }
+        let profileSource = document.payload.userProfile
+        let restoredBirthDate: Date?
+        if let profileSource,
+           let dateOfBirth = profileSource.dateOfBirth,
+           dateOfBirth.timeIntervalSince1970 != 0,
+           dateOfBirth <= profileSource.updatedAt {
+            restoredBirthDate = dateOfBirth
+        } else {
+            restoredBirthDate = nil
+        }
+        let restoredProfileKey = profileSource?.profileKey ?? "primary"
+        let legacyWeightEntries: [UserProfile.WeightEntry] = profileSource.flatMap { source in
+            guard let data = source.weightHistoryJSON.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode([UserProfile.WeightEntry].self, from: data)
+        } ?? []
 
         do {
             try context.delete(model: UserProfile.self)
+            try context.delete(model: ProfileRevisionRecord.self)
             try context.delete(model: MealRecord.self)
             try context.delete(model: WorkoutRecord.self)
             try context.delete(model: WeightRecord.self)
@@ -463,11 +506,11 @@ final class ExportService {
             try context.delete(model: HealthSyncOutboxEntry.self)
             try context.delete(model: HealthKitImportCursor.self)
 
-            if let source = document.payload.userProfile {
+            if let source = profileSource {
                 let profile = UserProfile(
                     name: source.name,
                     biologicalSex: source.biologicalSex,
-                    dateOfBirth: source.dateOfBirth,
+                    dateOfBirth: restoredBirthDate,
                     heightCm: source.heightCm,
                     weightKg: source.weightKg,
                     activityLevel: source.activityLevel,
@@ -476,7 +519,42 @@ final class ExportService {
                 profile.weightHistoryJSON = source.weightHistoryJSON
                 profile.createdAt = source.createdAt
                 profile.updatedAt = source.updatedAt
+                profile.profileNeedsCompletion = restoredBirthDate == nil || (source.profileNeedsCompletion ?? false)
+                profile.profileKey = restoredProfileKey
                 context.insert(profile)
+            }
+
+            let sourceRevisions = document.payload.profileRevisions ?? []
+            for source in sourceRevisions {
+                context.insert(
+                    ProfileRevisionRecord(
+                        id: source.id,
+                        profileKey: source.profileKey,
+                        effectiveFrom: source.effectiveFrom,
+                        dateOfBirth: source.dateOfBirth,
+                        biologicalSex: source.biologicalSex,
+                        heightCm: source.heightCm,
+                        weightKg: source.weightKg,
+                        activityLevel: source.activityLevel,
+                        source: source.source,
+                        createdAt: source.createdAt
+                    )
+                )
+            }
+            if sourceRevisions.isEmpty, let source = profileSource {
+                context.insert(
+                    ProfileRevisionRecord(
+                        profileKey: restoredProfileKey,
+                        effectiveFrom: source.updatedAt,
+                        dateOfBirth: restoredBirthDate,
+                        biologicalSex: source.biologicalSex,
+                        heightCm: source.heightCm,
+                        weightKg: source.weightKg,
+                        activityLevel: source.activityLevel,
+                        source: "legacyMigration",
+                        createdAt: source.updatedAt
+                    )
+                )
             }
 
             let snapshots = document.payload.dailyHealthSnapshots ?? []
@@ -490,6 +568,7 @@ final class ExportService {
                 document.payload.mealRecords.map(\.date)
                     + document.payload.workoutRecords.map(\.date)
                     + weights.map(\.measuredAt)
+                    + legacyWeightEntries.map(\.date)
                     + snapshotDates
             )
             for source in document.payload.mealRecords {
@@ -583,6 +662,7 @@ final class ExportService {
                 context.insert(workout)
             }
 
+            var restoredWeights: [WeightRecord] = []
             for source in weights {
                 let weight = WeightRecord(
                     id: source.id,
@@ -590,10 +670,31 @@ final class ExportService {
                     measuredAt: source.measuredAt,
                     kilograms: source.kilograms,
                     source: source.source,
-                    algorithmVersion: source.algorithmVersion
+                    algorithmVersion: source.algorithmVersion,
+                    confidence: source.confidence ?? 0.9,
+                    healthKitSyncIdentifier: source.healthKitSyncIdentifier
                 )
                 weight.createdAt = source.createdAt
                 context.insert(weight)
+                restoredWeights.append(weight)
+            }
+            for (index, entry) in legacyWeightEntries.enumerated()
+            where entry.date.timeIntervalSince1970.isFinite && entry.kg.isFinite && entry.kg > 0 {
+                guard !restoredWeights.contains(where: {
+                    $0.measuredAt == entry.date && $0.kilograms == entry.kg
+                }) else {
+                    continue
+                }
+                let weight = WeightRecord(
+                    sourceActionKey: "backup-profile-weight-\(index)-\(UUID().uuidString.lowercased())",
+                    measuredAt: entry.date,
+                    kilograms: entry.kg,
+                    source: "densoso",
+                    algorithmVersion: "v4-backup-migration",
+                    confidence: 0.75
+                )
+                context.insert(weight)
+                restoredWeights.append(weight)
             }
 
             for source in document.payload.goalProfiles ?? [] {
@@ -710,6 +811,8 @@ final class ExportService {
 
     private func makePayload(context: ModelContext) throws -> BackupPayload {
         let profile = try context.fetch(FetchDescriptor<UserProfile>()).first
+        let profileRevisions = try context.fetch(FetchDescriptor<ProfileRevisionRecord>())
+            .sorted { $0.effectiveFrom == $1.effectiveFrom ? $0.id.uuidString < $1.id.uuidString : $0.effectiveFrom < $1.effectiveFrom }
         let meals = try context.fetch(FetchDescriptor<MealRecord>())
             .sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }
         let workouts = try context.fetch(FetchDescriptor<WorkoutRecord>())
@@ -728,6 +831,8 @@ final class ExportService {
             .sorted { $0.weekKey < $1.weekKey }
         let weeklyReports = try context.fetch(FetchDescriptor<WeeklyReport>())
             .sorted { $0.weekStartDate < $1.weekStartDate }
+        let dailyMetrics = try context.fetch(FetchDescriptor<DailyMetrics>())
+            .sorted { $0.date < $1.date }
 
         return BackupPayload(
             exportedAt: Date(),
@@ -742,7 +847,9 @@ final class ExportService {
                     activityLevel: source.activityLevel,
                     dailyDeficitTarget: source.dailyDeficitTarget,
                     createdAt: source.createdAt,
-                    updatedAt: source.updatedAt
+                    updatedAt: source.updatedAt,
+                    profileNeedsCompletion: source.profileNeedsCompletion,
+                    profileKey: source.profileKey
                 )
             },
             mealRecords: meals.map { source in
@@ -839,7 +946,9 @@ final class ExportService {
                     kilograms: source.kilograms,
                     source: source.source,
                     algorithmVersion: source.algorithmVersion,
-                    createdAt: source.createdAt
+                    createdAt: source.createdAt,
+                    confidence: source.confidence,
+                    healthKitSyncIdentifier: source.healthKitSyncIdentifier
                 )
             },
             goalProfiles: goals.map { source in
@@ -912,6 +1021,29 @@ final class ExportService {
                     workoutsCount: source.workoutsCount,
                     compliance: source.compliance,
                     generatedAt: source.generatedAt
+                )
+            },
+            profileRevisions: profileRevisions.map { source in
+                .init(
+                    id: source.id,
+                    profileKey: source.profileKey,
+                    effectiveFrom: source.effectiveFrom,
+                    dateOfBirth: source.dateOfBirth,
+                    biologicalSex: source.biologicalSex,
+                    heightCm: source.heightCm,
+                    weightKg: source.weightKg,
+                    activityLevel: source.activityLevel,
+                    source: source.source,
+                    createdAt: source.createdAt
+                )
+            },
+            dailyMetricsProjection: dailyMetrics.map { source in
+                .init(
+                    date: source.date,
+                    projectionVersion: source.projectionVersion,
+                    sourceFingerprint: source.sourceFingerprint,
+                    energyQuality: source.energyQuality,
+                    requiresRecompute: source.requiresRecompute
                 )
             }
         )

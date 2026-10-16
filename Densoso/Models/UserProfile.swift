@@ -1,6 +1,6 @@
 import Foundation
 
-extension DensosoSchemaV3.UserProfile {
+extension DensosoSchemaV4.UserProfile {
     struct WeightEntry: Codable, Equatable {
         var date: Date
         var kg: Double
@@ -19,15 +19,4 @@ extension DensosoSchemaV3.UserProfile {
         }
     }
 
-    func updateWeight(_ newKg: Double) {
-        var history = weightHistory
-        history.append(WeightEntry(date: Date(), kg: newKg))
-        weightHistory = history
-        weightKg = newKg
-        updatedAt = Date()
-    }
-
-    var age: Int {
-        Calendar.current.dateComponents([.year], from: dateOfBirth, to: Date()).year ?? 30
-    }
 }

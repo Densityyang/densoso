@@ -148,6 +148,16 @@ public struct DailyHealthSnapshot: Codable, Equatable, Sendable {
         return restingEnergyKcal
     }
 
+    public var stepCountForProjection: Double? {
+        guard healthReadStates?[HealthMetricID.stepCount.rawValue] == .available else { return nil }
+        return stepCount
+    }
+
+    public var exerciseMinutesForProjection: Double? {
+        guard healthReadStates?[HealthMetricID.exerciseMinutes.rawValue] == .available else { return nil }
+        return exerciseMinutes
+    }
+
     public init(
         dayStart: Date,
         timezoneIdentifier: String,
