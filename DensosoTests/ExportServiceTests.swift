@@ -286,9 +286,9 @@ final class ExportServiceTests: XCTestCase {
         ))
         source.insert(DailyMetrics(
             date: date,
+            energyQuality: "observed",
             projectionVersion: "energy-accounting-v2",
-            sourceFingerprint: "fixture-fingerprint",
-            energyQuality: "observed"
+            sourceFingerprint: "fixture-fingerprint"
         ))
         source.insert(ProfileRevisionRecord(
             profileKey: "primary",

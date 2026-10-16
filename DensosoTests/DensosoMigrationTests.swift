@@ -148,8 +148,8 @@ final class DensosoMigrationTests: XCTestCase {
         context!.insert(
             DensosoSchemaV3.DailyMetrics(
                 date: measuredAt,
-                totalIntakeKcal: 700,
                 totalExpenditureKcal: 1_800,
+                totalIntakeKcal: 700,
                 deficitKcal: 1_100
             )
         )

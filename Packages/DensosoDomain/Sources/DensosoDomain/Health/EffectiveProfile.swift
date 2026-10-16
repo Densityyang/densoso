@@ -72,6 +72,28 @@ public struct EffectiveProfile: Codable, Equatable, Sendable {
     public let weightKg: Double?
     public let activityLevel: ActivityLevel
 
+    public init(
+        profileKey: String,
+        sourceRevisionID: UUID,
+        sourceEffectiveFrom: Date,
+        effectiveAt: Date,
+        dateOfBirth: Date,
+        biologicalSex: BiologicalSex,
+        heightCm: Double,
+        weightKg: Double?,
+        activityLevel: ActivityLevel
+    ) {
+        self.profileKey = profileKey
+        self.sourceRevisionID = sourceRevisionID
+        self.sourceEffectiveFrom = sourceEffectiveFrom
+        self.effectiveAt = effectiveAt
+        self.dateOfBirth = dateOfBirth
+        self.biologicalSex = biologicalSex
+        self.heightCm = heightCm
+        self.weightKg = weightKg
+        self.activityLevel = activityLevel
+    }
+
     public var age: Int? {
         age(in: .current)
     }
