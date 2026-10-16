@@ -93,9 +93,13 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
 
         XCTAssertEqual(snapshot.recordedDays, 1)
         XCTAssertEqual(snapshot.totalDeficitKcal, 300)
-        XCTAssertTrue(snapshot.points.first?.hasData == true)
-        XCTAssertFalse(snapshot.points[1].hasData)
-        XCTAssertFalse(snapshot.points[2].hasData)
+        let pointsByDay = Dictionary(uniqueKeysWithValues: snapshot.points.map { ($0.date, $0) })
+        let today = calendar.startOfDay(for: reference)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+        let twoDaysAgo = calendar.date(byAdding: .day, value: -2, to: today)!
+        XCTAssertTrue(pointsByDay[today]?.hasData == true)
+        XCTAssertFalse(pointsByDay[yesterday]?.hasData ?? true)
+        XCTAssertFalse(pointsByDay[twoDaysAgo]?.hasData ?? true)
     }
 
     private func metric(
