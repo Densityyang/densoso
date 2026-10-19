@@ -315,6 +315,8 @@ jobs:
             -only-testing:DensosoTests/QwenProviderContractTests \
             -only-testing:DensosoTests/ProviderRetryPolicyTests \
             -only-testing:DensosoTests/AgentCoordinatorTests \
+            -only-testing:DensosoTests/AgentTurnContractTests \
+            -only-testing:DensosoTests/LocalIntelligenceSuggestionTests \
             -only-testing:DensosoTests/PromptInjectionEvalTests \
             -only-testing:DensosoTests/AgentBudgetTests \
             -only-testing:DensosoTests/AgentRequestResumeTests \

@@ -479,15 +479,13 @@ struct ChatScreen: View {
             switch path {
             case .localOnDevice:
                 let result = try await dependencies.localIntelligence.extract(from: userText)
-                addMessage(text: result.reply, isUser: false)
-                if let suggestion = result.suggestion {
-                    let amount = suggestion.amount.map { "（\($0)）" } ?? ""
-                    addMessage(
-                        text: "已生成本地\(suggestion.kind == .meal ? "餐食" : "训练")草稿：\(suggestion.item)\(amount)。尚未保存，请在确认界面补全并确认。",
-                        isUser: false
-                    )
-                }
+                present(
+                    AgentTurnContract.local(result),
+                    originalText: userText,
+                    source: sourceForRequest
+                )
             case .cloudDeepSeek, .cloudQwen:
+                let pendingActionIDsBeforeTurn = Set(dependencies.agentSession.pendingActions.map(\.id))
                 let response: AgentResponse
                 if let multimodalRequest {
                     response = try await dependencies.agentSession.send(
@@ -505,15 +503,51 @@ struct ChatScreen: View {
                         requestID: agentRequestID
                     )
                 }
+                let stagedActions = dependencies.agentSession.pendingActions.filter {
+                    !pendingActionIDsBeforeTurn.contains($0.id)
+                }
+                present(
+                    AgentTurnContract.cloud(reply: response.text, stagedActions: stagedActions),
+                    originalText: userText,
+                    source: sourceForRequest
+                )
                 watchTranscriptWasDurablyHandled = watchMessageID != nil
                 refreshDailyLoopSnapshot()
-                addMessage(text: response.text, isUser: false)
             case .manual:
                 addMessage(text: "本地智能当前不可用；你的输入尚未保存。可在设置中选择 DeepSeek 云端处理，或继续手动编辑。", isUser: false)
             }
         } catch {
             addMessage(text: "处理失败：\(error.localizedDescription)。你的记录尚未保存。", isUser: false)
         }
+    }
+
+    private func present(
+        _ turn: AgentTurnResult,
+        originalText: String,
+        source: VoiceCommandEnvelope.Source
+    ) {
+        addMessage(text: turn.text, isUser: false)
+        let proposal = turn.intents.compactMap { intent -> LocalRecordSuggestion? in
+            guard case .captureProposal(let suggestion) = intent else { return nil }
+            return suggestion
+        }.first
+        guard let suggestion = proposal else {
+            // PendingActionConfirmationCard reads the shared AgentSession queue.
+            return
+        }
+
+        let subject = switch suggestion.kind {
+        case .meal: "餐食"
+        case .workoutPlan: "未来训练计划"
+        }
+        let amount = suggestion.amount.map { "（\($0)）" } ?? ""
+        inputText = originalText
+        inputSource = source
+        showTextEditor = true
+        addMessage(
+            text: "本机识别到可能的\(subject)意图（\(suggestion.item)\(amount)），目前还没有待确认草稿，也没有保存数据。原话保留在编辑框，可修改后切换云端代理继续生成统一确认草稿。",
+            isUser: false
+        )
     }
 
     private func addMessage(text: String, isUser: Bool) {

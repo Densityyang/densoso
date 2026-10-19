@@ -27,6 +27,14 @@ domain-persistence pass on the same head, and does not authorize Speech work.
 - Persist provider-neutral conversations, real tool counts, consent and usage.
 - Expose an ordered `AsyncThrowingStream<AgentEvent>` for each request, including
   a typed cancellation event; the legacy final-response API remains available.
+- Normalize local and cloud turns as `AgentTurnResult` with a typed
+  `AgentIntent`. Local capture detection is a proposal only: it preserves the
+  editable user text and never fabricates a `PendingAction`; only cloud tools
+  stage typed `ActionPayload` values in the shared AgentSession confirmation
+  queue. A completed workout cannot be classified as a future workout plan.
+  Health-question and history-query intent cases remain reserved until the
+  session exposes structured read-intent metadata; free-form reply wording is
+  not used to infer them.
 - Add soft monthly budget reminders without interrupting an active request.
   Estimates resolve through a versioned `PricingDescriptor` matched by exact
   provider, model and capability. DeepSeek Flash uses the 2026-09-01
@@ -63,6 +71,8 @@ the confirmation-required tool can create a `PendingAction`. A missing or
 contradictory field, a note absent from the user's words, or a check-in about
 another person produces a tool error and no pending action. Confirmed check-ins
 stay in the local user-reported ledger and do not enter HealthKit projections.
+Local turn contract tests verify answer, non-persisting capture proposal, and
+cloud-staged action outcomes use the same typed result boundary.
 
 The `agent-provider` job has `needs: domain-persistence` and must prove:
 

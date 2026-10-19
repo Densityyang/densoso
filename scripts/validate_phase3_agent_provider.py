@@ -42,6 +42,8 @@ def main() -> int:
         "Densoso/Application/Agent/AgentBudget.swift",
         "Densoso/Application/Agent/AgentReasoningPolicy.swift",
         "Densoso/Application/Agent/AgentEvents.swift",
+        "Densoso/Application/Agent/AgentIntent.swift",
+        "Densoso/Application/Agent/AgentTurnContract.swift",
         "Densoso/Application/Agent/ToolSchemaValidator.swift",
         "Densoso/Application/Usage/ProviderUsageLedger.swift",
         "Densoso/Application/Usage/PricingDescriptorCatalog.swift",
@@ -64,6 +66,9 @@ def main() -> int:
             "PricingDescriptor",
             "exact provider, model and capability",
             "retain unknown cost",
+            "Normalize local and cloud turns as `AgentTurnResult`",
+            "Local capture detection is a proposal only",
+            "workout cannot be classified as a future workout plan",
         ],
         errors,
     )
@@ -114,6 +119,55 @@ def main() -> int:
     require_text(
         ROOT / "Densoso" / "Application" / "Agent" / "AgentReasoningPolicy.swift",
         ["forUserMessage", "return .high", "return .max"],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso/Application/Agent/AgentTurnContract.swift",
+        [
+            "static func local",
+            "static func cloud",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso/Application/Agent/AgentIntent.swift",
+        [
+            "struct HealthQuestion: Codable",
+            "struct HistoryQuery: Codable",
+            "enum AgentIntent: Codable, Equatable, Sendable",
+            "case answerHealthQuestion(HealthQuestion)",
+            "case recordMeal(MealIntent)",
+            "case recordWeight(WeightIntent)",
+            "case createWorkoutPlan(WorkoutIntent)",
+            "case createTrainingPlan(TrainingPlanIntent)",
+            "case dailyCheckIn(CheckInIntent)",
+            "case queryHistory(HistoryQuery)",
+            "case recordUserPreference(UserPreferenceIntent)",
+            "case captureProposal(LocalRecordSuggestion)",
+            "case answer(String)",
+            "Read-intent cases require explicit adapter metadata",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso/Services/LocalIntelligenceService.swift",
+        [
+            "case workoutPlan = \"workoutplan\"",
+            "hasMatchingUserIntent",
+            "case .workoutPlan:",
+            "Never classify a completed workout as a plan",
+            "userText: text",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso/Views/ChatScreen.swift",
+        [
+            "AgentTurnContract.local(result)",
+            "AgentTurnContract.cloud(reply: response.text, stagedActions: stagedActions)",
+            "case .captureProposal(let suggestion)",
+            "原话保留在编辑框",
+        ],
         errors,
     )
     for provider_file in ("DeepSeekProvider.swift", "QwenProvider.swift"):
@@ -504,6 +558,8 @@ def main() -> int:
 
     test_files = [
         "DensosoTests/Application/AgentReasoningPolicyTests.swift",
+        "DensosoTests/Application/AgentTurnContractTests.swift",
+        "DensosoTests/LocalIntelligenceSuggestionTests.swift",
         "DensosoTests/Infrastructure/LLM/DeepSeekProviderContractTests.swift",
         "DensosoTests/Infrastructure/LLM/QwenProviderContractTests.swift",
         "DensosoTests/Infrastructure/LLM/ProviderRetryPolicyTests.swift",
@@ -535,6 +591,23 @@ def main() -> int:
             "testMissingCachedPriceAndUnlistedVisionModelKeepCostUnknown",
             "testQwenSpeechUsageWithoutPricingDescriptorKeepsCostUnknown",
         ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests/Application/AgentTurnContractTests.swift",
+        [
+            "testLocalRecordSuggestionRemainsAProposalInsteadOfAStagedAction",
+            "testCloudConfirmationActionsUseTheSameTypedTurnContract",
+            "testTurnsWithoutActionsUseTheAnswerIntent",
+            "testLocalFutureWorkoutIntentStaysDistinctFromCompletedWorkout",
+            "testDomainIntentUsesClosedCodableContract",
+            "testCaptureProposalCodableDoesNotPromoteItToAnAction",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests/LocalIntelligenceSuggestionTests.swift",
+        ["testDoesNotTurnCompletedWorkoutOrUneatenMealIntoCaptureProposal"],
         errors,
     )
 
@@ -619,6 +692,8 @@ def main() -> int:
             "validate_phase3_agent_provider.py", "Gate03AgentProviderTests.xcresult",
             "gate-03-agent-provider-results",
             "-only-testing:DensosoTests/AgentReasoningPolicyTests",
+            "-only-testing:DensosoTests/AgentTurnContractTests",
+            "-only-testing:DensosoTests/LocalIntelligenceSuggestionTests",
             "-only-testing:DensosoTests/UserPreferenceConfirmationTests",
             "-only-testing:DensosoTests/GetUserPreferencesToolTests",
             "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests",

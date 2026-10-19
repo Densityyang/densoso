@@ -198,22 +198,22 @@ enum DailyCheckInSelfReportError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .emptyReport:
-            "没有可核对的用户自述；请先询问用户，不要依据健康数据补全每日状态。"
+            return "没有可核对的用户自述；请先询问用户，不要依据健康数据补全每日状态。"
         case .reportTooLong:
-            "本轮自述过长，无法安全核对每日状态字段；请用户简要描述后再试。"
+            return "本轮自述过长，无法安全核对每日状态字段；请用户简要描述后再试。"
         case .otherPerson:
-            "当前文字描述的是其他人，不能作为用户本人的每日状态记录。"
+            return "当前文字描述的是其他人，不能作为用户本人的每日状态记录。"
         case .missing(let fields):
             let names = fields.map(\.displayName).joined(separator: "、")
-            "用户原话没有明确说明\(names)；请只询问缺少的主观感受，收到回答后再准备草稿。"
+            return "用户原话没有明确说明\(names)；请只询问缺少的主观感受，收到回答后再准备草稿。"
         case .conflicting(let field):
-            "用户原话对\(field.displayName)的描述有冲突；请先请用户澄清，再准备草稿。"
+            return "用户原话对\(field.displayName)的描述有冲突；请先请用户澄清，再准备草稿。"
         case .modelValueNotSupported(let field):
-            "模型填写的\(field.displayName)等级与用户原话不一致；请只询问该主观感受并等待回答，不得推断或生成草稿。"
+            return "模型填写的\(field.displayName)等级与用户原话不一致；请只询问该主观感受并等待回答，不得推断或生成草稿。"
         case .noteNotReported:
-            "每日状态备注必须来自用户原话，不能由模型补写。"
+            return "每日状态备注必须来自用户原话，不能由模型补写。"
         case .dateNotSupported:
-            "自述日期无法由用户原话支持；请按当前日期记录或先询问用户。"
+            return "自述日期无法由用户原话支持；请按当前日期记录或先询问用户。"
         }
     }
 }

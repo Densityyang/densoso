@@ -3006,21 +3006,47 @@ Qwen → another flow
 Local → another flow
 ```
 
+The app boundary normalizes turns through `AgentTurnResult` and typed
+`AgentIntent` values. Cloud tools return the newly staged intent payloads and
+request IDs from the shared `AgentSession`; the existing confirmation cards are the only write path. The
+current on-device model may return a typed capture proposal, but it remains a
+non-persistent proposal until the common tool flow can prepare a valid domain
+action. The original text stays editable so the user can continue deliberately.
+Completed-workout language never becomes a workout-plan intent.
+
 ---
 
 # 67. AgentIntent
 
 ```swift
 enum AgentIntent: Codable, Sendable {
+    case answer(String)
     case answerHealthQuestion(HealthQuestion)
     case recordMeal(MealIntent)
     case recordWeight(WeightIntent)
     case createWorkoutPlan(WorkoutIntent)
+    case createTrainingPlan(TrainingPlanIntent)
     case dailyCheckIn(CheckInIntent)
     case queryHistory(HistoryQuery)
+    case recordUserPreference(UserPreferenceIntent)
+    case captureProposal(LocalRecordSuggestion)
+    case answer(String)
     case unsupported
 }
+
+struct AgentTurnResult {
+    let text: String
+    let intents: [AgentIntent]
+    let stagedActionIDs: [UUID]
+}
 ```
+
+`AgentTurnResult` carries the reply alongside this typed intent. Local capture
+proposals remain non-persistent; cloud tool results carry the exact staged
+`ActionPayload` values. `AgentTurnContractTests` verifies its Codable contract.
+`answerHealthQuestion` and `queryHistory` remain reserved until AgentSession
+provides explicit structured read-intent metadata; free-form wording or tool
+call counts do not reclassify an answer as a read intent.
 
 ---
 
