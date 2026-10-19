@@ -140,6 +140,141 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(laterMetric.weightKg, 65)
     }
 
+    func testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays() throws {
+        let calendar = Calendar.current
+        let targetDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let olderDay = calendar.date(byAdding: .day, value: -200, to: targetDay)!
+        let tombstoneDay = calendar.date(byAdding: .day, value: -140, to: targetDay)!
+        let unknownDay = calendar.date(byAdding: .day, value: -150, to: targetDay)!
+        let olderSample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000039")!,
+            metric: .bodyMass,
+            startDate: calendar.date(byAdding: .hour, value: 12, to: olderDay)!,
+            endDate: calendar.date(byAdding: .hour, value: 12, to: olderDay)!,
+            value: 70
+        )
+        let deletedSample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000000003B")!,
+            metric: .bodyMass,
+            startDate: calendar.date(byAdding: .hour, value: 12, to: tombstoneDay)!,
+            endDate: calendar.date(byAdding: .hour, value: 12, to: tombstoneDay)!,
+            value: 88
+        )
+        let unknownSample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000000003A")!,
+            metric: .bodyMass,
+            startDate: calendar.date(byAdding: .hour, value: 12, to: unknownDay)!,
+            endDate: calendar.date(byAdding: .hour, value: 12, to: unknownDay)!,
+            value: 95
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        for (day, sample, state) in [
+            (olderDay, olderSample, HealthReadState.available),
+            (tombstoneDay, deletedSample, HealthReadState.available),
+            (unknownDay, unknownSample, HealthReadState.dataUnavailableOrReadScopeUnknown),
+        ] {
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                healthKitSampleSummary: DailyHealthSampleSummary(samples: [sample], dayStart: day),
+                healthReadStates: [HealthMetricID.bodyMass.rawValue: state],
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: Self.dayKey(day),
+                timezoneID: snapshot.timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "weight-index-\(Self.dayKey(day))",
+                algorithmVersion: snapshot.algorithmVersion
+            ))
+        }
+        context.insert(HealthKitSampleIndexRecord(
+            sampleID: olderSample.id,
+            stream: HealthMetricID.bodyMass.rawValue,
+            dayKey: Self.dayKey(olderDay),
+            startDate: olderSample.startDate,
+            endDate: olderSample.endDate
+        ))
+        context.insert(HealthKitSampleIndexRecord(
+            sampleID: deletedSample.id,
+            stream: HealthMetricID.bodyMass.rawValue,
+            dayKey: Self.dayKey(tombstoneDay),
+            startDate: deletedSample.startDate,
+            endDate: deletedSample.endDate,
+            needsRequery: true,
+            pendingDayKeys: [Self.dayKey(tombstoneDay)],
+            isDeleted: true
+        ))
+        context.insert(HealthKitSampleIndexRecord(
+            sampleID: unknownSample.id,
+            stream: HealthMetricID.bodyMass.rawValue,
+            dayKey: Self.dayKey(unknownDay),
+            startDate: unknownSample.startDate,
+            endDate: unknownSample.endDate,
+            needsRequery: true,
+            pendingDayKeys: [Self.dayKey(unknownDay)]
+        ))
+        for offset in 1...130 {
+            let day = calendar.date(byAdding: .day, value: -offset, to: targetDay)!
+            let measuredAt = calendar.date(byAdding: .hour, value: 12, to: day)!
+            context.insert(HealthKitSampleIndexRecord(
+                sampleID: UUID(),
+                stream: HealthMetricID.bodyMass.rawValue,
+                dayKey: Self.dayKey(day),
+                startDate: measuredAt,
+                endDate: measuredAt,
+                needsRequery: true,
+                pendingDayKeys: [Self.dayKey(day)]
+            ))
+        }
+        try context.save()
+
+        try DailyMetricsProjector.reproject(on: targetDay, in: context)
+
+        let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(metric.weightKg, 70)
+    }
+
+    func testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner() throws {
+        let calendar = Calendar.current
+        let targetDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        for offset in 1...130 {
+            let day = calendar.date(byAdding: .day, value: -offset, to: targetDay)!
+            context.insert(WeightRecord(
+                sourceActionKey: "invalid-source-\(offset)",
+                measuredAt: calendar.date(byAdding: .hour, value: 12, to: day)!,
+                kilograms: 88,
+                source: "unrecognized",
+                confidence: 0.9
+            ))
+        }
+        let tiedAt = calendar.date(byAdding: .day, value: -200, to: targetDay)!
+            .addingTimeInterval(12 * 60 * 60)
+        context.insert(WeightRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000051")!,
+            sourceActionKey: "valid-lower-id",
+            measuredAt: tiedAt,
+            kilograms: 65,
+            source: "manual",
+            confidence: 0.9
+        ))
+        context.insert(WeightRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000052")!,
+            sourceActionKey: "valid-higher-id",
+            measuredAt: tiedAt,
+            kilograms: 66,
+            source: "manual",
+            confidence: 0.9
+        ))
+        try context.save()
+
+        try DailyMetricsProjector.reproject(on: targetDay, in: context)
+
+        let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(metric.weightKg, 66)
+    }
+
     func testImportedWorkoutDeduplicatesByHealthKitUUIDAndPersistsAnchor() throws {
         let repository = HealthRepository(modelContext: context)
         let healthKitUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000020")!

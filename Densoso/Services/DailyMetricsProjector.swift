@@ -31,8 +31,9 @@ enum DailyMetricsProjector {
                 return $0.id.uuidString < $1.id.uuidString
             }
             .last
-        let weightObservations = try localWeightObservations(in: modelContext, effectiveAt: day)
-            + healthKitWeightObservations(in: modelContext, effectiveAt: day)
+        let localWeight = try LocalWeightObservationReader.latestObservation(in: modelContext, effectiveAt: day)
+        let healthKitWeight = try HealthKitWeightObservationReader.latestObservation(in: modelContext, effectiveAt: day)
+        let weightObservations = [localWeight, healthKitWeight].compactMap { $0 }
         let effectiveWeight = WeightTimeline(observations: weightObservations).effectiveWeight(
             at: day,
             profileWeightKg: effectiveRevision?.weightKg,
@@ -74,56 +75,12 @@ enum DailyMetricsProjector {
         )
     }
 
-    private static func localWeightObservations(
-        in modelContext: ModelContext,
-        effectiveAt day: Date
-    ) throws -> [WeightObservation] {
-        let minimumConfidence = WeightTimeline.defaultMinimumConfidence
-        let predicate = #Predicate<WeightRecord> {
-            $0.measuredAt <= day && $0.confidence >= minimumConfidence
-        }
-        return try modelContext.fetch(FetchDescriptor<WeightRecord>(predicate: predicate)).compactMap { record in
-            guard let source = WeightSource(rawValue: record.source) else { return nil }
-            return WeightObservation(
-                id: record.id,
-                measuredAt: record.measuredAt,
-                kilograms: record.kilograms,
-                source: source,
-                confidence: record.confidence,
-                healthKitSyncIdentifier: record.healthKitSyncIdentifier
-            )
-        }
-    }
-
     private static func healthKitWeightObservations(
         in modelContext: ModelContext,
         effectiveAt day: Date
     ) throws -> [WeightObservation] {
-        let lastDayKey = dayKey(for: day)
-        let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey <= lastDayKey }
-        let records = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate))
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .millisecondsSince1970
-        return records.compactMap { record -> WeightObservation? in
-            guard let snapshot = try? decoder.decode(DailyHealthSnapshot.self, from: record.payloadData) else {
-                return nil
-            }
-            if let state = snapshot.healthReadStates?[HealthMetricID.bodyMass.rawValue], state != .available {
-                return nil
-            }
-            guard let aggregate = snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass),
-                  let id = aggregate.latestSampleID,
-                  let measuredAt = aggregate.latestSampleAt,
-                  let kilograms = aggregate.latestValue,
-                  kilograms.isFinite, kilograms > 0 else { return nil }
-            return WeightObservation(
-                id: id,
-                measuredAt: measuredAt,
-                kilograms: kilograms,
-                source: .healthKit,
-                confidence: 1
-            )
-        }
+        try HealthKitWeightObservationReader.latestObservation(in: modelContext, effectiveAt: day)
+            .map { [$0] } ?? []
     }
 
     private static func healthSnapshot(for day: Date, in modelContext: ModelContext) throws -> DailyHealthSnapshot? {

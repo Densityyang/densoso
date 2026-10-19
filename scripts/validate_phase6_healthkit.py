@@ -180,6 +180,31 @@ def main() -> int:
     if 'enqueue(operation: "upsertWorkout"' in repository or 'enqueue(operation: "deleteWorkout"' in repository:
         errors.append("workouts must never enter the HealthKit outbox")
 
+    weight_reader = require_text(
+        "Densoso/Services/HealthKitWeightObservationReader.swift",
+        (
+            "enum HealthKitWeightObservationReader",
+            "private static let batchSize = 128",
+            "descriptor.fetchLimit = batchSize",
+            "descriptor.fetchOffset = offset",
+            "HealthKitSampleIndexRecord",
+            "isDeleted == false",
+            "healthReadStates",
+        ),
+        errors,
+    )
+    require_text(
+        "Densoso/Services/LocalWeightObservationReader.swift",
+        (
+            "enum LocalWeightObservationReader",
+            "private static let batchSize = 128",
+            "descriptor.fetchLimit = batchSize",
+            "descriptor.fetchOffset = offset",
+            "observation.isValid",
+        ),
+        errors,
+    )
+
     sync_coordinator = require_text(
         "Densoso/Application/Health/HealthKitSyncCoordinator.swift",
         (
@@ -311,6 +336,8 @@ def main() -> int:
             "testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches",
             "testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown",
             "testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable",
+            "testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays",
+            "testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner",
         ),
         errors,
     )
@@ -369,6 +396,8 @@ def main() -> int:
             "testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches",
             "testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown",
             "testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable",
+            "testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays",
+            "testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner",
         ),
         errors,
     )
