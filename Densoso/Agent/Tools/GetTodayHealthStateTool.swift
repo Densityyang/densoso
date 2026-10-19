@@ -1,7 +1,7 @@
 import DensosoDomain
 import Foundation
 
-typealias TodayHealthStateProvider = @MainActor (Date) throws -> HealthStateV2?
+typealias TodayHealthStateProvider = @Sendable (Date) async throws -> HealthStateV2?
 
 @MainActor
 struct GetTodayHealthStateTool: AgentTool {
@@ -25,11 +25,15 @@ struct GetTodayHealthStateTool: AgentTool {
         context: AgentSession,
         clientRequestID: UUID
     ) async throws -> String {
-        try response(asOf: Date())
+        try await response(asOf: Date())
     }
 
-    func response(asOf date: Date) throws -> String {
-        let state = try stateProvider(date)
+    func response(asOf date: Date) async throws -> String {
+        let state = try await stateProvider(date)
+        return try response(asOf: date, state: state)
+    }
+
+    func response(asOf date: Date, state: HealthStateV2?) throws -> String {
         let output = TodayHealthStateToolOutput(
             status: Self.status(for: state),
             asOf: date,

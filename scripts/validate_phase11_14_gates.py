@@ -39,6 +39,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay",
                 "CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
                 "HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches",
+                "HealthProjectionActorTests",
                 "DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState",
                 "DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
                 "HealthNarrativePolicyTests",
@@ -104,6 +105,63 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "Densoso/Services/HealthIntelligenceService.swift",
             ("func healthNarrativeContext(asOf date: Date = Date())", "never refreshes or writes"),
+            errors,
+        )
+        require(
+            "Densoso/Services/HealthProjectionActor.swift",
+            (
+                "@ModelActor",
+                "func todayHealthState(asOf date: Date = Date())",
+                "func healthHistory(from startDate: Date, through endDate: Date)",
+                "func healthNarrativeContext(asOf date: Date = Date())",
+                "HealthIntelligenceReadModel(calendar: calendar)",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/HealthIntelligenceReadModel.swift",
+            (
+                "struct HealthIntelligenceReadModel",
+                "func todayHealthState(asOf date: Date, in context: ModelContext)",
+                "func healthHistory(",
+                "HealthIntelligenceEngine(calendar: calendar)",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/App/Dependencies.swift",
+            (
+                "let healthProjectionActor: HealthProjectionActor",
+                "try await healthProjectionActor.todayHealthState(asOf: date)",
+                "try await healthProjectionActor.healthHistory(from: start, through: end)",
+                "try? await healthProjectionActor.healthNarrativeContext()",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Agent/AgentSession.swift",
+            (
+                "(@Sendable () async -> HealthNarrativeContext?)?",
+                "let narrativeContext = await healthNarrativeContextProvider?()",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Agent/Tools/GetTodayHealthStateTool.swift",
+            ("@Sendable (Date) async throws -> HealthStateV2?", "let state = try await stateProvider(date)"),
+            errors,
+        )
+        require(
+            "Densoso/Agent/Tools/GetHealthHistoryTool.swift",
+            ("@Sendable (Date, Date) async throws -> [HealthStateHistoryPoint]", "let points = try await historyProvider(startDay, endDay)"),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/HealthProjectionActorTests.swift",
+            (
+                "testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites",
+                "testActorHistoryRetainsExistingRangeValidation",
+            ),
             errors,
         )
         require(
@@ -524,6 +582,7 @@ def main() -> int:
                 "--filter HealthNarrativeTests",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay",
                 "-only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
+                "-only-testing:DensosoTests/HealthProjectionActorTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
                 "-only-testing:DensosoTests/HealthNarrativePolicyTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary",

@@ -12,7 +12,10 @@ structured health-narrative boundary. DeepSeek health summaries validate
 evidence keys against local recommendation evidence; metric values remain
 deterministically rendered by the app. Narrative validation rejects numeric
 claims written with digits or Chinese or English quantity/unit words. Providers
-without verified structured output use a deterministic local response.
+without verified structured output use a deterministic local response. Agent
+today-state, bounded-history, and narrative-context reads now share one
+read-only data model inside `HealthProjectionActor`; results cross back as
+Sendable domain snapshots, with the UI refresh/cache-write path left separate.
 
 ## Focused tests
 
@@ -21,6 +24,8 @@ without verified structured output use a deterministic local response.
 - iOS tests: `HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay`,
   `CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics`,
   `HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches`,
+  `HealthProjectionActorTests.testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites`,
+  `HealthProjectionActorTests.testActorHistoryRetainsExistingRangeValidation`,
   `HealthNarrativePolicyTests`,
   `DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState`,
   and `DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays`.

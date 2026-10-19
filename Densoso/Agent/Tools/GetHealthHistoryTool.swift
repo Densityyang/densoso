@@ -1,7 +1,7 @@
 import DensosoDomain
 import Foundation
 
-typealias HealthHistoryProvider = @MainActor (Date, Date) throws -> [HealthStateHistoryPoint]
+typealias HealthHistoryProvider = @Sendable (Date, Date) async throws -> [HealthStateHistoryPoint]
 
 @MainActor
 struct GetHealthHistoryTool: AgentTool {
@@ -45,10 +45,11 @@ struct GetHealthHistoryTool: AgentTool {
         let startDay = calendar.startOfDay(for: startDate)
         let endDay = calendar.startOfDay(for: endDate)
         try Self.validateRange(start: startDay, end: endDay, calendar: calendar)
+        let points = try await historyProvider(startDay, endDay)
         return try response(
             from: startDay,
             through: endDay,
-            points: historyProvider(startDay, endDay)
+            points: points
         )
     }
 

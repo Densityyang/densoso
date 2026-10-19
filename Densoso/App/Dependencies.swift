@@ -18,6 +18,7 @@ final class Dependencies {
     let healthKitService: HealthKitService
     let healthKitSyncCoordinator: HealthKitSyncCoordinator
     let healthIntelligenceService: HealthIntelligenceService
+    let healthProjectionActor: HealthProjectionActor
     let dailyLoopSnapshotService: DailyLoopSnapshotService
     let briefNotificationScheduler: BriefNotificationScheduler
     let dailyLoopBackgroundScheduler: DailyLoopBackgroundScheduler
@@ -60,6 +61,8 @@ final class Dependencies {
         )
         let healthIntelligenceService = HealthIntelligenceService(modelContainer: modelContainer)
         self.healthIntelligenceService = healthIntelligenceService
+        let healthProjectionActor = HealthProjectionActor(modelContainer: modelContainer)
+        self.healthProjectionActor = healthProjectionActor
         self.briefNotificationScheduler = BriefNotificationScheduler()
         let workoutPlanSchedulingService = WorkoutPlanSchedulingService(modelContainer: modelContainer)
         self.workoutPlanSchedulingService = workoutPlanSchedulingService
@@ -88,13 +91,17 @@ final class Dependencies {
         } else {
             packagedFoodProvider = nil
         }
-        let toolRegistry = ToolRegistry(todayHealthStateProvider: { date in
-            try healthIntelligenceService.todayHealthState(asOf: date)
-        }, healthHistoryProvider: { start, end in
-            try healthIntelligenceService.healthHistory(from: start, through: end)
-        }, goalProfileProvider: { date in
-            try healthIntelligenceService.goalProfile(asOf: date)
-        })
+        let toolRegistry = ToolRegistry(
+            todayHealthStateProvider: { date in
+                try await healthProjectionActor.todayHealthState(asOf: date)
+            },
+            healthHistoryProvider: { start, end in
+                try await healthProjectionActor.healthHistory(from: start, through: end)
+            },
+            goalProfileProvider: { date in
+                try healthIntelligenceService.goalProfile(asOf: date)
+            }
+        )
         self.intelligencePreferences = intelligencePreferences
         self.providerConfiguration = providerConfiguration
         self.providerRegistry = providerRegistry
@@ -134,7 +141,7 @@ final class Dependencies {
             conversationRepository: agentRepository,
             confirmedFoodHistory: confirmedFoodHistory,
             healthNarrativeContextProvider: {
-                try? healthIntelligenceService.healthNarrativeContext()
+                try? await healthProjectionActor.healthNarrativeContext()
             },
             confirmedWorkoutPlanHandler: { actionID in
                 try await workoutPlanSchedulingService.scheduleConfirmedPlan(actionID: actionID)

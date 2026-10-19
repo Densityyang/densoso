@@ -8,10 +8,10 @@ import XCTest
 final class GetTodayHealthStateToolTests: XCTestCase {
     func testToolReturnsStateAndDeduplicatedEvidenceReferences() throws {
         let expected = makeState()
-        let tool = GetTodayHealthStateTool(stateProvider: { _ in expected })
+        let tool = GetTodayHealthStateTool()
         let date = Date(timeIntervalSince1970: 1_800_000_000)
 
-        let response = try tool.response(asOf: date)
+        let response = try tool.response(asOf: date, state: expected)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
         XCTAssertEqual(object["status"] as? String, "available")
         XCTAssertNotNil(object["asOf"] as? String)
@@ -28,9 +28,9 @@ final class GetTodayHealthStateToolTests: XCTestCase {
     }
 
     func testMissingStateIsExplicitlyUnavailableAndHasNoEvidence() throws {
-        let tool = GetTodayHealthStateTool(stateProvider: { _ in nil })
+        let tool = GetTodayHealthStateTool()
 
-        let response = try tool.response(asOf: Date(timeIntervalSince1970: 1_800_000_000))
+        let response = try tool.response(asOf: Date(timeIntervalSince1970: 1_800_000_000), state: nil)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
 
         XCTAssertEqual(object["status"] as? String, "unavailable")
@@ -57,17 +57,17 @@ final class GetTodayHealthStateToolTests: XCTestCase {
         ))
     }
 
-    func testServiceBackedReadDoesNotWriteBriefCaches() throws {
+    func testModelActorBackedReadDoesNotWriteBriefCaches() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
-        let service = HealthIntelligenceService(modelContainer: container)
+        let projectionActor = HealthProjectionActor(modelContainer: container)
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let tool = GetTodayHealthStateTool(stateProvider: { date in
-            try service.todayHealthState(asOf: date)
+            try await projectionActor.todayHealthState(asOf: date)
         })
 
-        let response = try tool.response(asOf: date)
+        let response = try await tool.response(asOf: date)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
         let context = ModelContext(container)
 

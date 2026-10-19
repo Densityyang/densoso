@@ -78,7 +78,7 @@ final class AgentSession {
     private let readRepository: any AgentReadRepository
     private let conversationRepository: any ConversationRepository
     private let confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)?
-    private let healthNarrativeContextProvider: (@MainActor () -> HealthNarrativeContext?)?
+    private let healthNarrativeContextProvider: (@Sendable () async -> HealthNarrativeContext?)?
     private let confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)?
     private let conversationID: UUID
     private let budgetFactory: @Sendable () -> AgentBudget
@@ -114,7 +114,7 @@ final class AgentSession {
         conversationID: UUID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
         confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)? = nil,
-        healthNarrativeContextProvider: (@MainActor () -> HealthNarrativeContext?)? = nil,
+        healthNarrativeContextProvider: (@Sendable () async -> HealthNarrativeContext?)? = nil,
         confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)? = nil
     ) {
         self.providerSelector = providerSelector
@@ -407,7 +407,7 @@ final class AgentSession {
             let promptUserText = conversationHistory.last(where: { $0.role == .user })
                 .flatMap { Self.visibleMessage($0)?.text }
                 ?? userText
-            let narrativeContext = healthNarrativeContextProvider?()
+            let narrativeContext = await healthNarrativeContextProvider?()
             let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(for: promptUserText)
             let healthSummary = narrativeContext?.aggregateSummary
             let allowedEvidenceKeys = Set(narrativeContext?.allowedEvidenceKeys ?? [])

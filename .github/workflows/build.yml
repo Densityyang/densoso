@@ -990,6 +990,7 @@ jobs:
             -only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay \
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \
+            -only-testing:DensosoTests/HealthProjectionActorTests \
             -only-testing:DensosoTests/HealthNarrativePolicyTests \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerUsesMatchingExistingBriefAndPreservesOptionalState \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays \
