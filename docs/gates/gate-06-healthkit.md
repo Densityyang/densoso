@@ -124,6 +124,7 @@ unknown so the live projection does not reuse it as current.
     `HealthRepositoryTests.testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays`,
     `HealthRepositoryTests.testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner`,
     `HealthRepositoryTests.testDuplicateHealthAggregateBucketsKeepLastBucketPerDay`,
+    `ConfirmationCoordinatorTests.testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision`,
     `HealthRepositoryTests.testImportedWorkoutDedupProcessesUUIDGroupsAcrossFetchBatchBoundary`,
     `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
     and `HealthRepositoryTests.testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval`.

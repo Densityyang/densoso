@@ -211,6 +211,17 @@ def main() -> int:
         ),
         errors,
     )
+    require_text(
+        "Densoso/Services/EffectiveProfileRevisionReader.swift",
+        (
+            "enum EffectiveProfileRevisionReader",
+            r"SortDescriptor(\ProfileRevisionRecord.effectiveFrom, order: .reverse)",
+            r"SortDescriptor(\ProfileRevisionRecord.createdAt, order: .reverse)",
+            r"SortDescriptor(\ProfileRevisionRecord.id, order: .reverse)",
+            "descriptor.fetchLimit = 1",
+        ),
+        errors,
+    )
 
     sync_coordinator = require_text(
         "Densoso/Application/Health/HealthKitSyncCoordinator.swift",
@@ -371,7 +382,11 @@ def main() -> int:
     )
     require_text(
         "DensosoTests/ConfirmationCoordinatorTests.swift",
-        ("testMealConfirmationPreservesMeasuredHealthKitEnergyProjection", "restingEnergyKcal: 1_410"),
+        (
+            "testMealConfirmationPreservesMeasuredHealthKitEnergyProjection",
+            "testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision",
+            "restingEnergyKcal: 1_410",
+        ),
         errors,
     )
     watch_app = require_text(

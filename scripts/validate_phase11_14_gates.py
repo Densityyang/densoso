@@ -46,6 +46,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "HealthRepositoryTests.testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown",
                 "HealthRepositoryTests.testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays",
                 "HealthRepositoryTests.testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner",
+                "ConfirmationCoordinatorTests.testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision",
                 "CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
                 "HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
                 "HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches",
@@ -230,6 +231,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown",
                 "testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays",
                 "testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner",
+                "testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision",
             ),
             errors,
         )
@@ -740,6 +742,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/HealthRepositoryTests/testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner",
+                "-only-testing:DensosoTests/ConfirmationCoordinatorTests/testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision",
                 "-only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
                 "-only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
                 "-only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",

@@ -459,22 +459,20 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let meals = try modelContext.fetch(FetchDescriptor<MealRecord>(predicate: mealPredicate))
         let workouts = try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: workoutPredicate))
         let profileKey = try modelContext.fetch(FetchDescriptor<UserProfile>()).first?.profileKey ?? "primary"
-        let revisionPredicate = #Predicate<ProfileRevisionRecord> {
-            $0.profileKey == profileKey && $0.effectiveFrom <= day
-        }
-        let revisionRecords = try modelContext.fetch(
-            FetchDescriptor<ProfileRevisionRecord>(predicate: revisionPredicate)
+        let effectiveRevision = try EffectiveProfileRevisionReader.latest(
+            in: modelContext,
+            profileKey: profileKey,
+            effectiveAt: day
         )
-        let revisions = revisionRecords.map(domainRevision)
-        let effectiveProfile = EffectiveProfileResolver(profileKey: profileKey, revisions: revisions).profile(at: day)
-        let effectiveRevision = revisionRecords
-            .filter { $0.profileKey == profileKey && $0.effectiveFrom <= day }
-            .sorted {
-                if $0.effectiveFrom != $1.effectiveFrom { return $0.effectiveFrom < $1.effectiveFrom }
-                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-                return $0.id.uuidString < $1.id.uuidString
-            }
-            .last
+        let effectiveProfile: EffectiveProfile?
+        if let effectiveRevision {
+            effectiveProfile = EffectiveProfileResolver(
+                profileKey: profileKey,
+                revisions: [domainRevision(effectiveRevision)]
+            ).profile(at: day)
+        } else {
+            effectiveProfile = nil
+        }
         let localWeight = try LocalWeightObservationReader.latestObservation(in: modelContext, effectiveAt: day)
         let healthKitWeight = try HealthKitWeightObservationReader.latestObservation(in: modelContext, effectiveAt: day)
         let weightObservations = [localWeight, healthKitWeight].compactMap { $0 }

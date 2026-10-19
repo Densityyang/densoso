@@ -998,6 +998,7 @@ jobs:
             -only-testing:DensosoTests/HealthRepositoryTests/testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown \
             -only-testing:DensosoTests/HealthRepositoryTests/testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays \
             -only-testing:DensosoTests/HealthRepositoryTests/testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests/testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision \
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \

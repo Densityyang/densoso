@@ -149,6 +149,76 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(savedSnapshot.restingEnergyKcal, 1_410)
     }
 
+    func testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision() async throws {
+        let harness = try Harness()
+        let calendar = Calendar.current
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let day = calendar.startOfDay(for: date)
+        let birthDate = Date(timeIntervalSince1970: 315_532_800)
+        let sharedCreatedAt = date.addingTimeInterval(-60)
+        let context = ModelContext(harness.container)
+        context.insert(ProfileRevisionRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000400")!,
+            effectiveFrom: calendar.date(byAdding: .day, value: -10, to: day)!,
+            dateOfBirth: birthDate,
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 70,
+            activityLevel: "moderate",
+            source: "userEdited",
+            createdAt: sharedCreatedAt
+        ))
+        context.insert(ProfileRevisionRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000401")!,
+            effectiveFrom: day,
+            dateOfBirth: birthDate,
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 80,
+            activityLevel: "moderate",
+            source: "userEdited",
+            createdAt: sharedCreatedAt
+        ))
+        context.insert(ProfileRevisionRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000402")!,
+            effectiveFrom: day,
+            dateOfBirth: birthDate,
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 85,
+            activityLevel: "active",
+            source: "userEdited",
+            createdAt: sharedCreatedAt
+        ))
+        context.insert(ProfileRevisionRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000403")!,
+            effectiveFrom: calendar.date(byAdding: .day, value: 1, to: day)!,
+            dateOfBirth: birthDate,
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 95,
+            activityLevel: "active",
+            source: "userEdited",
+            createdAt: sharedCreatedAt
+        ))
+        try context.save()
+
+        try DailyMetricsProjector.reproject(on: day, in: context)
+        try context.save()
+        let standaloneMetric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(standaloneMetric.weightKg, 85)
+
+        let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
+        _ = try await harness.coordinator.confirm(id: action.id)
+
+        let confirmationContext = ModelContext(harness.container)
+        let confirmationMetric = try XCTUnwrap(
+            confirmationContext.fetch(FetchDescriptor<DailyMetrics>()).first
+        )
+        XCTAssertEqual(confirmationMetric.weightKg, standaloneMetric.weightKg)
+        XCTAssertEqual(confirmationMetric.weightKg, 85)
+    }
+
     func testConfirmationWeeklyReportUsesOnlyMetricsInsideItsWeek() async throws {
         let harness = try Harness()
         let date = Date(timeIntervalSince1970: 1_700_000_000)
