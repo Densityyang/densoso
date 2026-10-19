@@ -3332,8 +3332,9 @@ raw samples 只在 HealthKit 中。
 
 本地 daily cache 只保留按日聚合后的指标、睡眠摘要和训练负荷摘要。SwiftData
 V6 的 `HealthKitSampleIndexRecord` 仅保存 sample ID、stream、projection day key、
-sample 时间区间及待重查标记，用来从 anchored deletion 找到需要重建的日期；V5→V6
-迁移会从旧快照移除 raw sample payload。每次新增、更新或删除后，先重查完整受影响日
+sample 时间区间、未确认投影日集合和删除标记，用来从 anchored update/delete 找到
+需要重建的所有日期。V5→V6 迁移会从旧快照移除 raw sample payload。每次新增、更新或删除后，
+先重查完整受影响日
 （睡眠按 wake-date window），再将摘要、索引和 cursor 一起提交。完整日读取状态不明时，
 保留旧摘要作历史记录、标记该 stream unknown，并保留待重查索引；后续完整日读取确认后
 再收敛。

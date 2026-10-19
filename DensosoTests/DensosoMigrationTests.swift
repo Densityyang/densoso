@@ -263,6 +263,9 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(sampleIndex.dayKey, Self.dayKey(day))
         XCTAssertEqual(sampleIndex.startDate, sample.startDate)
         XCTAssertEqual(sampleIndex.endDate, sample.endDate)
+        XCTAssertEqual(sampleIndex.pendingDayKeysJSON, "[]")
+        XCTAssertFalse(sampleIndex.needsRequery)
+        XCTAssertFalse(sampleIndex.isDeleted)
         XCTAssertEqual(try migratedContext.fetchCount(FetchDescriptor<HealthKitSampleIndexRecord>()), 2)
         let wakeDayKey = Self.dayKey(wakeDay)
         let wakePredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == wakeDayKey }

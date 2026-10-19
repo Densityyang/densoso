@@ -336,7 +336,9 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                             stream: location.stream,
                             dayKey: location.dayKey,
                             startDate: location.startDate,
-                            endDate: location.endDate
+                            endDate: location.endDate,
+                            pendingDayKeys: [],
+                            isDeleted: false
                         ))
                     }
                     try context.save()

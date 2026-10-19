@@ -235,10 +235,14 @@ struct HealthIntelligenceReadModel: Sendable {
                 return [value]
             }
             let localWeightPoints = (weightsByDay[dayStart] ?? []).map { (date: $0.measuredAt, value: $0.kilograms) }
-            let healthWeightPoints = availableAggregate(.bodyMass).flatMap { aggregate in
-                guard let date = aggregate.latestSampleAt, let value = aggregate.latestValue else { return nil }
-                return [(date: date, value: value)]
-            } ?? []
+            let healthWeightPoints: [(date: Date, value: Double)]
+            if let aggregate = availableAggregate(.bodyMass),
+               let date = aggregate.latestSampleAt,
+               let value = aggregate.latestValue {
+                healthWeightPoints = [(date: date, value: value)]
+            } else {
+                healthWeightPoints = []
+            }
             var weightPoints = localWeightPoints + healthWeightPoints
             let bodyMassReadState = snapshot?.healthReadStates?[HealthMetricID.bodyMass.rawValue]
             if weightPoints.isEmpty,

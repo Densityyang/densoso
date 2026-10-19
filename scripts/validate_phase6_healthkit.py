@@ -89,6 +89,8 @@ def main() -> int:
             "var startDate: Date",
             "var endDate: Date",
             "var needsRequery: Bool",
+            "var pendingDayKeysJSON: String",
+            "var isDeleted: Bool",
         ),
         errors,
     )
@@ -165,6 +167,9 @@ def main() -> int:
             "private func forEachPendingHealthKitSampleIndex(",
             "descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize",
             "descriptor.fetchOffset = offset",
+            "pendingDayKeysJSON",
+            "record.isDeleted",
+            "availableDayKeys",
         ),
         errors,
     )
@@ -300,6 +305,8 @@ def main() -> int:
             "testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
             "testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval",
             "testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches",
+            "testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown",
+            "testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable",
         ),
         errors,
     )
@@ -355,6 +362,8 @@ def main() -> int:
             "testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
             "testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
             "testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches",
+            "testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown",
+            "testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable",
         ),
         errors,
     )

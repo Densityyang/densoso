@@ -19,9 +19,9 @@ Sendable domain snapshots, with the UI refresh/cache-write path left separate.
 DailyMetrics projection bounds profile revisions, local weights, and HealthKit
 snapshot reads by the effective day and uses a keyed single-row lookup for the
 target snapshot. HealthKit sample values and device metadata are reduced to
-daily summaries before persistence; a minimal sample-ID interval index supports
-deletion rebuilds. Ambiguous full-day reads retain history but suppress it from
-the live projection.
+daily summaries before persistence; a sample-ID interval index with unresolved
+projection-day keys supports deletion and moved-sample rebuilds. Ambiguous
+full-day reads retain history but suppress it from the live projection.
 
 ## Focused tests
 
@@ -34,6 +34,8 @@ the live projection.
   `HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor`,
   `HealthKitSyncCoordinatorTests.testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder`,
   `HealthRepositoryTests.testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches`,
+  `HealthRepositoryTests.testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable`,
+  `HealthRepositoryTests.testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown`,
   `CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics`,
   `HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash`,
   `HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches`,

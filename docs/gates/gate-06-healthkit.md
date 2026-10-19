@@ -74,12 +74,13 @@ below without changing V1–V5 schema identities.
 V6 rewrites V5 `DailyHealthSnapshot` payloads so raw HealthKit sample values,
 source/device details and sync metadata are not stored in the daily cache. The
 cache retains per-metric daily aggregates and sleep summaries. A separate index
-keeps only sample ID, stream and date interval so anchored additions/deletions
-can locate affected days. After a change, the coordinator re-queries each
-affected projection day (sleep uses its wake-date window) before the summary,
-index and anchor commit together. If the full-day read is ambiguous, the prior
-summary remains stored and that stream is marked unknown so the live projection
-does not reuse it as current.
+keeps sample ID, stream, current day key, date interval, unresolved projection
+day keys and deletion state so anchored additions/deletions can locate every
+affected day, including both sides of a moved sample. After a change, the
+coordinator re-queries each affected projection day (sleep uses its wake-date
+window) before the summary, index and anchor commit together. If the full-day
+read is ambiguous, the prior summary remains stored and that stream is marked
+unknown so the live projection does not reuse it as current.
 
 ## Gate contract
 
@@ -116,6 +117,8 @@ does not reuse it as current.
     `HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor`,
     `HealthKitSyncCoordinatorTests.testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder`,
     `HealthRepositoryTests.testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches`,
+    `HealthRepositoryTests.testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown`,
+    `HealthRepositoryTests.testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable`,
     `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
     and `HealthRepositoryTests.testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval`.
 

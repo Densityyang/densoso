@@ -412,6 +412,11 @@ final class HealthRepositoryTests: XCTestCase {
         let pendingIndex = try XCTUnwrap(context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).first)
         XCTAssertEqual(pendingIndex.sampleID, sampleID)
         XCTAssertTrue(pendingIndex.needsRequery)
+        XCTAssertTrue(pendingIndex.isDeleted)
+        XCTAssertEqual(
+            try JSONDecoder().decode([String].self, from: Data(pendingIndex.pendingDayKeysJSON.utf8)),
+            [Self.dayKey(day)]
+        )
 
         try repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], nextAnchorData: Data([3]), readState: .available),
@@ -457,12 +462,103 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(index.sampleID, sampleID)
         XCTAssertEqual(index.dayKey, Self.dayKey(day))
         XCTAssertTrue(index.needsRequery)
+        XCTAssertFalse(index.isDeleted)
+        XCTAssertEqual(
+            try JSONDecoder().decode([String].self, from: Data(index.pendingDayKeysJSON.utf8)),
+            [Self.dayKey(day)]
+        )
         let stored = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: stored.payloadData)
         XCTAssertEqual(snapshot.healthReadStates?[HealthMetricID.bodyMass.rawValue], .dataUnavailableOrReadScopeUnknown)
         XCTAssertNil(snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass))
+    }
+
+    func testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown() throws {
+        let repository = HealthRepository(modelContext: context)
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let secondDay = calendar.date(byAdding: .day, value: 1, to: firstDay)!
+        let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000000036")!
+        let tiedID = UUID(uuidString: "00000000-0000-0000-0000-000000000037")!
+        let olderVersion = HealthSampleSnapshot(
+            id: firstID,
+            metric: .bodyMass,
+            startDate: calendar.date(byAdding: .hour, value: 8, to: firstDay)!,
+            endDate: calendar.date(byAdding: .hour, value: 8, to: firstDay)!,
+            value: 69,
+            syncVersion: 1
+        )
+        let newerVersion = HealthSampleSnapshot(
+            id: firstID,
+            metric: .bodyMass,
+            startDate: calendar.date(byAdding: .hour, value: 8, to: secondDay)!,
+            endDate: calendar.date(byAdding: .hour, value: 8, to: secondDay)!,
+            value: 70,
+            syncVersion: 2
+        )
+        let laterTie = HealthSampleSnapshot(
+            id: tiedID,
+            metric: .bodyMass,
+            startDate: calendar.date(byAdding: .hour, value: 9, to: secondDay)!,
+            endDate: calendar.date(byAdding: .hour, value: 9, to: secondDay)!,
+            value: 72,
+            syncVersion: 7
+        )
+        let earlierTie = HealthSampleSnapshot(
+            id: tiedID,
+            metric: .bodyMass,
+            startDate: calendar.date(byAdding: .hour, value: 9, to: firstDay)!,
+            endDate: calendar.date(byAdding: .hour, value: 9, to: firstDay)!,
+            value: 71,
+            syncVersion: 7
+        )
+        let unknownReplacements = [
+            HealthSampleDaySnapshot(dayStart: firstDay, samples: [], readState: .dataUnavailableOrReadScopeUnknown),
+            HealthSampleDaySnapshot(dayStart: secondDay, samples: [], readState: .dataUnavailableOrReadScopeUnknown),
+        ]
+
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(
+                samples: [olderVersion, newerVersion, laterTie, earlierTie],
+                nextAnchorData: Data([1]),
+                readState: .available
+            ),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: firstDay,
+            lookbackStart: firstDay,
+            replacements: unknownReplacements
+        )
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(
+                samples: [earlierTie, laterTie, newerVersion, olderVersion],
+                nextAnchorData: Data([2]),
+                readState: .available
+            ),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: secondDay,
+            lookbackStart: firstDay,
+            replacements: unknownReplacements
+        )
+
+        let indexes = try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>())
+        let indexByID = Dictionary(uniqueKeysWithValues: indexes.map { ($0.sampleID, $0) })
+        let versionedIndex = try XCTUnwrap(indexByID[firstID])
+        XCTAssertEqual(versionedIndex.dayKey, Self.dayKey(secondDay))
+        XCTAssertEqual(versionedIndex.startDate, newerVersion.startDate)
+        XCTAssertTrue(versionedIndex.needsRequery)
+        let tiedIndex = try XCTUnwrap(indexByID[tiedID])
+        XCTAssertEqual(tiedIndex.dayKey, Self.dayKey(firstDay))
+        XCTAssertEqual(tiedIndex.startDate, earlierTie.startDate)
+        XCTAssertTrue(tiedIndex.needsRequery)
+        XCTAssertEqual(
+            try repository.affectedHealthSampleDays(
+                for: HealthSamplePage(samples: [], nextAnchorData: Data([3]), readState: .available),
+                stream: HealthMetricID.bodyMass.rawValue
+            ),
+            [firstDay, secondDay]
+        )
     }
 
     func testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches() throws {
@@ -597,6 +693,111 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(movedDay.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestSampleID, sampleID)
         XCTAssertEqual(movedDay.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestValue, 72)
         XCTAssertEqual(movedDay.weightKilograms, 72)
+    }
+
+    func testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable() throws {
+        let repository = HealthRepository(modelContext: context)
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let secondDay = calendar.date(byAdding: .day, value: 1, to: firstDay)!
+        let sampleID = UUID(uuidString: "00000000-0000-0000-0000-000000000038")!
+        let original = HealthSampleSnapshot(
+            id: sampleID,
+            metric: .bodyMass,
+            startDate: calendar.date(byAdding: .hour, value: 8, to: firstDay)!,
+            endDate: calendar.date(byAdding: .hour, value: 8, to: firstDay)!,
+            value: 70,
+            syncVersion: 1
+        )
+        let moved = HealthSampleSnapshot(
+            id: sampleID,
+            metric: .bodyMass,
+            startDate: calendar.date(byAdding: .hour, value: 8, to: secondDay)!,
+            endDate: calendar.date(byAdding: .hour, value: 8, to: secondDay)!,
+            value: 72,
+            syncVersion: 2
+        )
+
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [original], nextAnchorData: Data([1]), readState: .available),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: firstDay,
+            lookbackStart: firstDay,
+            replacements: [HealthSampleDaySnapshot(dayStart: firstDay, samples: [original], readState: .available)]
+        )
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [moved], nextAnchorData: Data([2]), readState: .available),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: secondDay,
+            lookbackStart: firstDay,
+            replacements: [
+                HealthSampleDaySnapshot(
+                    dayStart: firstDay,
+                    samples: [],
+                    readState: .dataUnavailableOrReadScopeUnknown
+                ),
+                HealthSampleDaySnapshot(
+                    dayStart: secondDay,
+                    samples: [moved],
+                    readState: .dataUnavailableOrReadScopeUnknown
+                ),
+            ]
+        )
+
+        let movedIndex = try XCTUnwrap(context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).first)
+        XCTAssertEqual(movedIndex.dayKey, Self.dayKey(secondDay))
+        XCTAssertFalse(movedIndex.isDeleted)
+        XCTAssertTrue(movedIndex.needsRequery)
+        XCTAssertEqual(
+            try JSONDecoder().decode([String].self, from: Data(movedIndex.pendingDayKeysJSON.utf8)),
+            [Self.dayKey(firstDay), Self.dayKey(secondDay)].sorted()
+        )
+        XCTAssertEqual(
+            try repository.affectedHealthSampleDays(
+                for: HealthSamplePage(samples: [], nextAnchorData: Data([3]), readState: .available),
+                stream: HealthMetricID.bodyMass.rawValue
+            ),
+            [firstDay, secondDay]
+        )
+
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [], nextAnchorData: Data([3]), readState: .available),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: secondDay.addingTimeInterval(60),
+            lookbackStart: firstDay,
+            replacements: [
+                HealthSampleDaySnapshot(
+                    dayStart: firstDay,
+                    samples: [],
+                    readState: .dataUnavailableOrReadScopeUnknown
+                ),
+                HealthSampleDaySnapshot(dayStart: secondDay, samples: [moved], readState: .available),
+            ]
+        )
+        let partiallyResolvedIndex = try XCTUnwrap(
+            context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).first
+        )
+        XCTAssertTrue(partiallyResolvedIndex.needsRequery)
+        XCTAssertEqual(
+            try JSONDecoder().decode([String].self, from: Data(partiallyResolvedIndex.pendingDayKeysJSON.utf8)),
+            [Self.dayKey(firstDay)]
+        )
+
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [], nextAnchorData: Data([4]), readState: .available),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: secondDay.addingTimeInterval(120),
+            lookbackStart: firstDay,
+            replacements: [HealthSampleDaySnapshot(dayStart: firstDay, samples: [], readState: .available)]
+        )
+        let resolvedIndex = try XCTUnwrap(context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).first)
+        XCTAssertFalse(resolvedIndex.needsRequery)
+        XCTAssertFalse(resolvedIndex.isDeleted)
+        XCTAssertEqual(
+            try JSONDecoder().decode([String].self, from: Data(resolvedIndex.pendingDayKeysJSON.utf8)),
+            []
+        )
+        XCTAssertEqual(resolvedIndex.dayKey, Self.dayKey(secondDay))
     }
 
     func testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue() throws {

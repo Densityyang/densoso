@@ -5,7 +5,50 @@ import DensosoDomain
 
 private struct HealthKitSampleIndexUpdate {
     let sample: HealthSampleSnapshot
-    let needsRequery: Bool
+    let pendingDayKeys: Set<String>
+
+    func merged(with other: Self) -> Self {
+        let preferredSample = Self.prefers(other.sample, over: sample) ? other.sample : sample
+        return Self(
+            sample: preferredSample,
+            // Each unresolved day survives duplicate page ordering until it is read completely.
+            pendingDayKeys: pendingDayKeys.union(other.pendingDayKeys)
+        )
+    }
+
+    private static func prefers(_ candidate: HealthSampleSnapshot, over current: HealthSampleSnapshot) -> Bool {
+        switch (candidate.syncVersion, current.syncVersion) {
+        case let (.some(candidateVersion), .some(currentVersion)) where candidateVersion != currentVersion:
+            return candidateVersion > currentVersion
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        default:
+            return stableSampleOrder(candidate, current)
+        }
+    }
+
+    private static func stableSampleOrder(_ lhs: HealthSampleSnapshot, _ rhs: HealthSampleSnapshot) -> Bool {
+        if lhs.startDate != rhs.startDate { return lhs.startDate < rhs.startDate }
+        if lhs.endDate != rhs.endDate { return lhs.endDate < rhs.endDate }
+        if lhs.metric != rhs.metric { return lhs.metric.rawValue < rhs.metric.rawValue }
+        if lhs.value != rhs.value { return optionalValueOrder(lhs.value, rhs.value) }
+        if lhs.categoryValue != rhs.categoryValue { return optionalValueOrder(lhs.categoryValue, rhs.categoryValue) }
+        if lhs.sourceBundleIdentifier != rhs.sourceBundleIdentifier {
+            return optionalValueOrder(lhs.sourceBundleIdentifier, rhs.sourceBundleIdentifier)
+        }
+        if lhs.deviceName != rhs.deviceName { return optionalValueOrder(lhs.deviceName, rhs.deviceName) }
+        if lhs.deviceModel != rhs.deviceModel { return optionalValueOrder(lhs.deviceModel, rhs.deviceModel) }
+        return optionalValueOrder(lhs.syncIdentifier, rhs.syncIdentifier)
+    }
+
+    private static func optionalValueOrder<Value: Comparable>(_ lhs: Value?, _ rhs: Value?) -> Bool {
+        guard lhs != rhs else { return false }
+        guard let lhs else { return false }
+        guard let rhs else { return true }
+        return lhs < rhs
+    }
 }
 
 /// Coordinates local health-record writes and their derived daily metrics.
@@ -191,11 +234,7 @@ final class HealthRepository: HealthSyncRepository {
                     $0.stream == stream && sampleIDs.contains($0.sampleID)
                 }
                 for record in try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate)) {
-                    if stream == HealthMetricID.sleepAnalysis.rawValue {
-                        days.formUnion(Self.sleepWakeDays(startDate: record.startDate, endDate: record.endDate))
-                    } else if let day = Self.date(fromDayKey: record.dayKey) {
-                        days.insert(day)
-                    }
+                    days.formUnion(Self.indexedProjectionDays(for: record, stream: stream))
                 }
                 offset = batchEnd
             }
@@ -209,11 +248,7 @@ final class HealthRepository: HealthSyncRepository {
         }
         try forEachPendingHealthKitSampleIndex(stream: stream) { records in
             for record in records {
-                if stream == HealthMetricID.sleepAnalysis.rawValue {
-                    days.formUnion(Self.sleepWakeDays(startDate: record.startDate, endDate: record.endDate))
-                } else if let day = Self.date(fromDayKey: record.dayKey) {
-                    days.insert(day)
-                }
+                days.formUnion(Self.pendingDays(for: record))
             }
         }
         return days.sorted()
@@ -311,41 +346,59 @@ final class HealthRepository: HealthSyncRepository {
             )
             var sampleIndexUpdates: [UUID: HealthKitSampleIndexUpdate] = [:]
             for sample in page.samples where sample.metric.rawValue == stream {
-                let requiredDays = Self.sampleProjectionDays(for: sample, stream: stream)
-                let needsRequery = requiredDays.isEmpty || !requiredDays.allSatisfy {
-                    replacementsByDay[$0]?.readState == .available
-                }
-                sampleIndexUpdates[sample.id] = HealthKitSampleIndexUpdate(
+                let update = HealthKitSampleIndexUpdate(
                     sample: sample,
-                    needsRequery: needsRequery
+                    pendingDayKeys: Self.unresolvedDayKeys(
+                        for: sample,
+                        stream: stream,
+                        replacementsByDay: replacementsByDay
+                    )
                 )
+                if let existing = sampleIndexUpdates[sample.id] {
+                    sampleIndexUpdates[sample.id] = existing.merged(with: update)
+                } else {
+                    sampleIndexUpdates[sample.id] = update
+                }
             }
             for replacement in replacements {
                 for sample in replacement.samples where sample.metric.rawValue == stream {
-                    let requiredDays = Self.sampleProjectionDays(for: sample, stream: stream)
-                    sampleIndexUpdates[sample.id] = HealthKitSampleIndexUpdate(
+                    let update = HealthKitSampleIndexUpdate(
                         sample: sample,
-                        needsRequery: requiredDays.isEmpty || !requiredDays.allSatisfy {
-                            replacementsByDay[$0]?.readState == .available
-                        }
+                        pendingDayKeys: Self.unresolvedDayKeys(
+                            for: sample,
+                            stream: stream,
+                            replacementsByDay: replacementsByDay
+                        )
                     )
+                    if let existing = sampleIndexUpdates[sample.id] {
+                        sampleIndexUpdates[sample.id] = existing.merged(with: update)
+                    } else {
+                        sampleIndexUpdates[sample.id] = update
+                    }
                 }
             }
-            try upsertHealthKitSampleIndexes(sampleIndexUpdates, stream: stream)
-            var confirmedDeletedSampleIDs = Set<UUID>()
+            try upsertHealthKitSampleIndexes(
+                sampleIndexUpdates,
+                stream: stream,
+                replacementsByDay: replacementsByDay
+            )
+            var pendingDayKeyUpdates: [UUID: Set<String>] = [:]
+            var deletedTombstoneIDs = Set<UUID>()
+            let availableDayKeys = Self.availableDayKeys(in: replacementsByDay)
             try forEachPendingHealthKitSampleIndex(stream: stream) { records in
                 for record in records {
-                    let requiredDays = stream == HealthMetricID.sleepAnalysis.rawValue
-                        ? Self.sleepWakeDays(startDate: record.startDate, endDate: record.endDate)
-                        : Set([Self.date(fromDayKey: record.dayKey)].compactMap { $0 })
-                    guard !requiredDays.isEmpty,
-                          requiredDays.allSatisfy({ replacementsByDay[$0]?.readState == .available }) else {
-                        continue
+                    let pendingDayKeys = Self.pendingDayKeys(for: record)
+                    let remainingDayKeys = pendingDayKeys.subtracting(availableDayKeys)
+                    guard remainingDayKeys != pendingDayKeys else { continue }
+                    if remainingDayKeys.isEmpty, record.isDeleted {
+                        deletedTombstoneIDs.insert(record.sampleID)
+                    } else {
+                        pendingDayKeyUpdates[record.sampleID] = remainingDayKeys
                     }
-                    confirmedDeletedSampleIDs.insert(record.sampleID)
                 }
             }
-            try deleteHealthKitSampleIndexes(sampleIDs: confirmedDeletedSampleIDs, stream: stream)
+            try updatePendingHealthKitSampleIndexes(pendingDayKeys: pendingDayKeyUpdates, stream: stream)
+            try deleteHealthKitSampleIndexes(sampleIDs: deletedTombstoneIDs, stream: stream)
             if let cursor = try cursorRecord(stream: stream) {
                 cursor.anchorData = nextAnchorData
                 cursor.lastSuccessfulAt = lastSuccessfulAt
@@ -543,7 +596,8 @@ final class HealthRepository: HealthSyncRepository {
 
     private func upsertHealthKitSampleIndexes(
         _ updates: [UUID: HealthKitSampleIndexUpdate],
-        stream: String
+        stream: String,
+        replacementsByDay: [Date: HealthSampleDaySnapshot]
     ) throws {
         let orderedUpdates = updates.values.sorted {
             $0.sample.id.uuidString < $1.sample.id.uuidString
@@ -565,24 +619,34 @@ final class HealthRepository: HealthSyncRepository {
             offset = batchEnd
         }
 
+        let availableDayKeys = Self.availableDayKeys(in: replacementsByDay)
         for update in orderedUpdates {
             let sample = update.sample
             let sampleID = sample.id
             let dayKey = Self.dayKey(for: sample.startDate)
             if let record = existingByID[sampleID] {
+                let unresolvedDayKeys = Self.pendingDayKeys(for: record)
+                    .union(Self.projectionDayKeys(for: record, stream: stream))
+                    .union(Self.projectionDayKeys(for: sample, stream: stream))
+                    .union(update.pendingDayKeys)
+                    .subtracting(availableDayKeys)
                 record.stream = stream
                 record.dayKey = dayKey
                 record.startDate = sample.startDate
                 record.endDate = sample.endDate
-                record.needsRequery = update.needsRequery
+                record.isDeleted = false
+                Self.setPendingDayKeys(unresolvedDayKeys, on: record)
             } else {
+                let unresolvedDayKeys = update.pendingDayKeys.subtracting(availableDayKeys)
                 modelContext.insert(HealthKitSampleIndexRecord(
                     sampleID: sampleID,
                     stream: stream,
                     dayKey: dayKey,
                     startDate: sample.startDate,
                     endDate: sample.endDate,
-                    needsRequery: update.needsRequery
+                    needsRequery: !unresolvedDayKeys.isEmpty,
+                    pendingDayKeys: Array(unresolvedDayKeys),
+                    isDeleted: false
                 ))
             }
         }
@@ -598,7 +662,32 @@ final class HealthRepository: HealthSyncRepository {
                 $0.stream == stream && batchIDs.contains($0.sampleID)
             }
             let records = try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate))
-            for record in records { record.needsRequery = true }
+            for record in records {
+                let pendingDayKeys = Self.pendingDayKeys(for: record)
+                    .union(Self.projectionDayKeys(for: record, stream: stream))
+                record.isDeleted = true
+                Self.setPendingDayKeys(pendingDayKeys, on: record)
+            }
+            offset = batchEnd
+        }
+    }
+
+    private func updatePendingHealthKitSampleIndexes(
+        pendingDayKeys: [UUID: Set<String>],
+        stream: String
+    ) throws {
+        let orderedIDs = pendingDayKeys.keys.sorted { $0.uuidString < $1.uuidString }
+        var offset = 0
+        while offset < orderedIDs.count {
+            let batchEnd = min(offset + Self.healthKitSampleIndexBatchSize, orderedIDs.count)
+            let batchIDs = Array(orderedIDs[offset..<batchEnd])
+            let predicate = #Predicate<HealthKitSampleIndexRecord> {
+                $0.stream == stream && batchIDs.contains($0.sampleID)
+            }
+            for record in try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate)) {
+                guard let remainingDayKeys = pendingDayKeys[record.sampleID] else { continue }
+                Self.setPendingDayKeys(remainingDayKeys, on: record)
+            }
             offset = batchEnd
         }
     }
@@ -610,7 +699,7 @@ final class HealthRepository: HealthSyncRepository {
             let batchEnd = min(offset + Self.healthKitSampleIndexBatchSize, orderedIDs.count)
             let batchIDs = Array(orderedIDs[offset..<batchEnd])
             let predicate = #Predicate<HealthKitSampleIndexRecord> {
-                $0.stream == stream && $0.needsRequery && batchIDs.contains($0.sampleID)
+                $0.stream == stream && $0.isDeleted && batchIDs.contains($0.sampleID)
             }
             let records = try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate))
             for record in records { modelContext.delete(record) }
@@ -705,6 +794,74 @@ final class HealthRepository: HealthSyncRepository {
             return sleepWakeDays(startDate: sample.startDate, endDate: sample.endDate)
         }
         return [Calendar.current.startOfDay(for: sample.startDate)]
+    }
+
+    private static func unresolvedDayKeys(
+        for sample: HealthSampleSnapshot,
+        stream: String,
+        replacementsByDay: [Date: HealthSampleDaySnapshot]
+    ) -> Set<String> {
+        let days = sampleProjectionDays(for: sample, stream: stream)
+        guard !days.isEmpty else { return [dayKey(for: sample.startDate)] }
+        return Set(days.filter { replacementsByDay[$0]?.readState != .available }.map { dayKey(for: $0) })
+    }
+
+    private static func projectionDayKeys(for sample: HealthSampleSnapshot, stream: String) -> Set<String> {
+        let days = sampleProjectionDays(for: sample, stream: stream)
+        guard !days.isEmpty else { return [dayKey(for: sample.startDate)] }
+        return Set(days.map { dayKey(for: $0) })
+    }
+
+    private static func projectionDayKeys(for record: HealthKitSampleIndexRecord, stream: String) -> Set<String> {
+        let days: Set<Date>
+        if stream == HealthMetricID.sleepAnalysis.rawValue {
+            days = sleepWakeDays(startDate: record.startDate, endDate: record.endDate)
+        } else if let day = date(fromDayKey: record.dayKey) {
+            days = [day]
+        } else {
+            days = []
+        }
+        guard !days.isEmpty else { return [record.dayKey] }
+        return Set(days.map { dayKey(for: $0) })
+    }
+
+    private static func indexedProjectionDays(for record: HealthKitSampleIndexRecord, stream: String) -> Set<Date> {
+        let projectionDayKeys = projectionDayKeys(for: record, stream: stream)
+        let keys = pendingDayKeys(for: record).union(projectionDayKeys)
+        return Set(keys.compactMap { date(fromDayKey: $0) })
+    }
+
+    private static func pendingDays(for record: HealthKitSampleIndexRecord) -> Set<Date> {
+        let keys = pendingDayKeys(for: record)
+        return Set(keys.compactMap { date(fromDayKey: $0) })
+    }
+
+    private static func pendingDayKeys(for record: HealthKitSampleIndexRecord) -> Set<String> {
+        let data = Data(record.pendingDayKeysJSON.utf8)
+        if let keys = try? JSONDecoder().decode([String].self, from: data), !keys.isEmpty {
+            return Set(keys)
+        }
+        guard record.needsRequery else { return [] }
+        return projectionDayKeys(for: record, stream: record.stream)
+    }
+
+    private static func setPendingDayKeys(_ keys: Set<String>, on record: HealthKitSampleIndexRecord) {
+        let sortedKeys = keys.sorted()
+        if let data = try? JSONEncoder().encode(sortedKeys),
+           let encoded = String(data: data, encoding: .utf8) {
+            record.pendingDayKeysJSON = encoded
+        } else {
+            record.pendingDayKeysJSON = "[]"
+        }
+        record.needsRequery = !sortedKeys.isEmpty
+    }
+
+    private static func availableDayKeys(
+        in replacementsByDay: [Date: HealthSampleDaySnapshot]
+    ) -> Set<String> {
+        Set(replacementsByDay.compactMap { entry in
+            entry.value.readState == .available ? dayKey(for: entry.key) : nil
+        })
     }
 
     private static func emptyHealthSnapshot(for day: Date) -> DailyHealthSnapshot {

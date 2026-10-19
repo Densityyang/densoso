@@ -101,7 +101,7 @@ final class WatchMessageInboxStore {
         let pendingIDs = try pendingMessageIDs(in: context)
         let messages = try pendingInboxMessages(matching: pendingIDs, in: context)
         return messages.compactMap { message -> WatchMessageEnvelope? in
-            guard let id = message.requestID,
+            guard message.requestID != nil,
                   let envelope = try? WatchMessageCodec.decode(message.contentData) else { return nil }
             if case .transcript = envelope.payload { return nil }
             return envelope

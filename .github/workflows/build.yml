@@ -994,6 +994,8 @@ jobs:
             -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor \
             -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder \
             -only-testing:DensosoTests/HealthRepositoryTests/testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches \
+            -only-testing:DensosoTests/HealthRepositoryTests/testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable \
+            -only-testing:DensosoTests/HealthRepositoryTests/testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown \
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \
