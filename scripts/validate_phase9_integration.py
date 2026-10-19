@@ -96,6 +96,59 @@ def main() -> int:
         ),
         errors,
     )
+    history_screen = require_text(
+        "Densoso/Views/HistoryScreen.swift",
+        (
+            "HistoryRecordPageReader",
+            ".refreshable { reload() }",
+            "NotificationCenter.default.publisher(for: ModelContext.didSave)",
+            ".receive(on: DispatchQueue.main)",
+            "handleModelContextSave(notification)",
+            "changedEntityNames.formUnion(identifiers.map(\\.entityName))",
+            ".invalidatedAllIdentifiers",
+            "shouldRefreshSelectedRecordsFromNewest",
+            "potentiallyNewRecordKeys",
+            "potentiallyNewEntityNames.contains(selectedEntity)",
+            "@State private var hasNewerRecords = false",
+            "if hasNewerRecords",
+            "Button(\"记录已更新，刷新列表\") { reloadSelectedRecords() }",
+            "hasNewerRecords = false",
+            "hasNewerRecords = true",
+            "pageReader.syncSummary(in: modelContext)",
+            "pageReader.meals(in: modelContext, during: selectedDateRange)",
+            "pageReader.workouts(in: modelContext, during: selectedDateRange)",
+            "pageReader.weights(in: modelContext, during: selectedDateRange)",
+            "Button(\"加载更早餐食\")",
+            "Button(\"加载更早运动\")",
+            "Button(\"加载更早体重\")",
+        ),
+        errors,
+    )
+    if "@Query" in history_screen:
+        errors.append("Records history must not materialize all record kinds through @Query")
+    require_text(
+        "Densoso/Services/HistoryRecordPageReader.swift",
+        (
+            "static let pageSize = 64",
+            "func meals(",
+            "func workouts(",
+            "func weights(",
+            "descriptor.fetchLimit = Self.pageSize",
+            "lookAhead.fetchLimit = 1",
+            "context.fetchCount(FetchDescriptor(predicate: pendingPredicate))",
+            "context.fetchCount(FetchDescriptor(predicate: failedPredicate))",
+            "cursorDescriptor.fetchLimit = 1",
+        ),
+        errors,
+    )
+    require_text(
+        "DensosoTests/HistoryRecordPageReaderTests.swift",
+        (
+            "testRecordHistoryPagesByDayAndKeepsOlderRowsReachable",
+            "testSyncSummaryCountsOutboxStatesAndFindsLatestImportWithoutLoadingRows",
+        ),
+        errors,
+    )
     screenshot_tests = require_text(
         "DensosoUITests/Gate09IntegrationScreenshotsTests.swift",
         (
@@ -413,6 +466,9 @@ def main() -> int:
             "DiagnosticsExportPrivacyTests",
             "Export reads every collection in ordered 64-row SwiftData pages",
             "Restore likewise pages request/message history in batches",
+            "Records history queries only the selected record kind and optional day",
+            "while preserving the current page, it shows a \"记录已更新，刷新列表\" action",
+            "after model-context saves and supports pull-to-refresh",
         ),
         errors,
     )

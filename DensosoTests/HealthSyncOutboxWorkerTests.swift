@@ -184,7 +184,7 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
             syncIdentifier: syncIdentifier,
             syncVersion: 2
         )
-        newer.createdAt = now.addingTimeInterval(HealthSyncOutboxWorker.outboxBatchSize + 1)
+        newer.createdAt = now.addingTimeInterval(TimeInterval(HealthSyncOutboxWorker.outboxBatchSize + 1))
         context.insert(newer)
         try context.save()
 

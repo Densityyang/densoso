@@ -17,6 +17,15 @@ acceptance.
   weights and sync state. Settings covers permissions, provider consent,
   diagnostics/cost, goal confirmation, notification settings, export and
   restore.
+- Records history queries only the selected record kind and optional day
+  window in stable 64-row pages, with an explicit load-older action. It reloads
+  the selected records after relevant saves when no older page remains; while
+  older rows remain, inserts, updates and invalidations preserve the reader
+  position and show a
+  "记录已更新，刷新列表" action to return to the newest page. Refresh and
+  filter changes clear the action; deletes do not show a misleading newer-row
+  action. Outbox/cursor saves refresh sync status only. Counts use database
+  counts instead of materializing the full HealthKit outbox.
 - Backups use format version 5 for profile history, weights, goals, health
   snapshots, schedules, cached briefs and weekly reports while preserving
   V2/V3/V4 import.
@@ -51,6 +60,8 @@ acceptance.
    secrets, consent, cursors and active outbox state are excluded/reset; a
    65-meal export fixture and 65-request restore fixture cross their page
    boundaries without losing eligible records.
+   Records history also retains 65 selected-day records of each kind across its
+   page boundaries.
 5. The complete Densoso unit suite and UI suite run on the iPhone 17 simulator
    with coverage, `.xcresult` bundles, logs and four-screen captures retained.
 6. Integration evidence is uploaded as `gate-09-integration-results`.
