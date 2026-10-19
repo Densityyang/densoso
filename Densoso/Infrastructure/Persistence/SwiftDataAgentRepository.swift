@@ -4,7 +4,10 @@ import SwiftData
 
 @ModelActor
 actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
+    static let dailyMetricFetchBatchSize = 64
+    static let messageFetchBatchSize = 64
     static let userPreferenceFetchBatchSize = 64
+    static let scheduleEventFetchBatchSize = 64
 
     private struct UserPreferenceCursor {
         let createdAt: Date
@@ -15,6 +18,11 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         let record: UserPreferenceRecord
         let category: UserPreferenceCategory
         let statement: String
+    }
+
+    private struct MessageCursor {
+        let ordinal: Int
+        let id: UUID
     }
 
     func beginAgentRequest(
@@ -118,23 +126,40 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
 
     func dailyMetrics(from startDate: Date, through endDate: Date) throws -> [AgentDailyMetric] {
         guard startDate <= endDate else { return [] }
-        let predicate = #Predicate<DailyMetrics> { metric in
-            metric.date >= startDate && metric.date <= endDate
-        }
-        let descriptor = FetchDescriptor<DailyMetrics>(
-            predicate: predicate,
-            sortBy: [SortDescriptor(\DailyMetrics.date)]
-        )
-        return try modelContext.fetch(descriptor).map {
-            AgentDailyMetric(
-                date: $0.date,
-                deficitKcal: $0.deficitKcal,
-                intakeKcal: $0.totalIntakeKcal,
-                expenditureKcal: $0.totalExpenditureKcal,
-                mealCount: $0.mealCount,
-                workoutCount: $0.workoutCount
+        var cursor: Date?
+        var metrics: [AgentDailyMetric] = []
+        while true {
+            let predicate: Predicate<DailyMetrics>
+            if let cursor {
+                let cursorDate = cursor
+                predicate = #Predicate<DailyMetrics> { metric in
+                    metric.date >= startDate && metric.date <= endDate && metric.date > cursorDate
+                }
+            } else {
+                predicate = #Predicate<DailyMetrics> { metric in
+                    metric.date >= startDate && metric.date <= endDate
+                }
+            }
+            var descriptor = FetchDescriptor<DailyMetrics>(
+                predicate: predicate,
+                sortBy: [SortDescriptor(\DailyMetrics.date)]
             )
+            descriptor.fetchLimit = Self.dailyMetricFetchBatchSize
+            let batch = try modelContext.fetch(descriptor)
+            guard let last = batch.last else { break }
+            metrics.append(contentsOf: batch.map {
+                AgentDailyMetric(
+                    date: $0.date,
+                    deficitKcal: $0.deficitKcal,
+                    intakeKcal: $0.totalIntakeKcal,
+                    expenditureKcal: $0.totalExpenditureKcal,
+                    mealCount: $0.mealCount,
+                    workoutCount: $0.workoutCount
+                )
+            })
+            cursor = last.date
         }
+        return metrics
     }
 
     func schedule(on date: Date) throws -> [AgentScheduleItem] {
@@ -146,51 +171,68 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
             (event.date >= start && event.date < end)
                 || (event.notes ?? "").contains(trainingPlanPrefix)
         }
+        let eventSortBy = [
+            SortDescriptor(\ScheduleEvent.date),
+            SortDescriptor(\ScheduleEvent.startTime),
+            SortDescriptor(\ScheduleEvent.createdAt),
+            SortDescriptor(\ScheduleEvent.title),
+            SortDescriptor(\ScheduleEvent.notes),
+        ]
         var scheduleItems: [AgentScheduleItem] = []
-        for event in try modelContext.fetch(FetchDescriptor<ScheduleEvent>(predicate: eventPredicate)) {
-            if let trainingPlan = ConfirmedTrainingPlanEntry.decode(notes: event.notes) {
-                guard trainingPlan.state != .terminal else { continue }
-                scheduleItems.append(contentsOf: trainingPlan.draft.sessions.compactMap { session in
-                    guard calendar.isDate(session.date, inSameDayAs: date) else { return nil }
-                    let planName = String(trainingPlan.draft.name.prefix(80))
-                    let title = session.activity.map {
-                        "\(planName) · \($0.displayName)"
-                    } ?? "\(planName) · 休息日"
-                    let reason = String(session.reason.prefix(240))
-                    let notes: String
-                    if session.activity == nil {
-                        notes = reason
-                    } else {
-                        var details: [String] = []
-                        if let goal = session.goal { details.append("目标：\(goal.displayName)") }
-                        if let location = session.location { details.append("地点：\(location.displayName)") }
-                        if let intensity = session.recommendedIntensity {
-                            details.append("建议强度：\(intensity.displayName)")
-                        }
-                        details.append("理由：\(reason)")
-                        notes = String(details.joined(separator: "；").prefix(600))
-                    }
-                    return AgentScheduleItem(
-                        title: title,
-                        startTime: session.date,
-                        endTime: nil,
-                        notes: notes
-                    )
-                })
-                continue
-            }
+        var eventOffset = 0
+        while true {
+            var descriptor = FetchDescriptor<ScheduleEvent>(predicate: eventPredicate, sortBy: eventSortBy)
+            descriptor.fetchLimit = Self.scheduleEventFetchBatchSize
+            descriptor.fetchOffset = eventOffset
+            let events = try modelContext.fetch(descriptor)
+            guard !events.isEmpty else { break }
+            eventOffset += events.count
 
-            guard event.date >= start, event.date < end else { continue }
-            scheduleItems.append(
-                AgentScheduleItem(
-                    title: event.title,
-                    startTime: event.startTime,
-                    endTime: event.endTime,
-                    notes: ConfirmedWorkoutPlanEntry.decode(notes: event.notes) == nil
-                        ? event.notes
-                        : nil
+            for event in events {
+                if let trainingPlan = ConfirmedTrainingPlanEntry.decode(notes: event.notes) {
+                    guard trainingPlan.state != .terminal else { continue }
+                    scheduleItems.append(contentsOf: trainingPlan.draft.sessions.compactMap { session in
+                        guard calendar.isDate(session.date, inSameDayAs: date) else { return nil }
+                        let planName = String(trainingPlan.draft.name.prefix(80))
+                        let title = session.activity.map {
+                            "\(planName) · \($0.displayName)"
+                        } ?? "\(planName) · 休息日"
+                        let reason = String(session.reason.prefix(240))
+                        let notes: String
+                        if session.activity == nil {
+                            notes = reason
+                        } else {
+                            var details: [String] = []
+                            if let goal = session.goal { details.append("目标：\(goal.displayName)") }
+                            if let location = session.location { details.append("地点：\(location.displayName)") }
+                            if let intensity = session.recommendedIntensity {
+                                details.append("建议强度：\(intensity.displayName)")
+                            }
+                            details.append("理由：\(reason)")
+                            notes = String(details.joined(separator: "；").prefix(600))
+                        }
+                        return AgentScheduleItem(
+                            title: title,
+                            startTime: session.date,
+                            endTime: nil,
+                            notes: notes
+                        )
+                    })
+                    continue
+                }
+
+                guard event.date >= start, event.date < end else { continue }
+                scheduleItems.append(
+                    AgentScheduleItem(
+                        title: event.title,
+                        startTime: event.startTime,
+                        endTime: event.endTime,
+                        notes: ConfirmedWorkoutPlanEntry.decode(notes: event.notes) == nil
+                            ? event.notes
+                            : nil
+                    )
                 )
-            )
+            }
         }
         return scheduleItems.sorted {
             if $0.startTime != $1.startTime { return $0.startTime < $1.startTime }
@@ -394,22 +436,61 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
     }
 
     func messageData(conversationID: UUID) throws -> [Data] {
-        let descriptor = FetchDescriptor<MessageRecord>(
-            predicate: #Predicate { $0.conversationID == conversationID },
-            sortBy: [SortDescriptor(\MessageRecord.ordinal)]
-        )
-        return try modelContext.fetch(descriptor).map(\.contentData)
+        try fetchMessageData(conversationID: conversationID, excludingRequestID: nil)
     }
 
     func resumeHistory(conversationID: UUID, requestID: UUID) throws -> [Data] {
-        let descriptor = FetchDescriptor<MessageRecord>(
-            predicate: #Predicate {
-                $0.conversationID == conversationID
-                    && ($0.requestID == nil || $0.requestID != requestID || $0.roleRaw == "user")
-            },
-            sortBy: [SortDescriptor(\MessageRecord.ordinal)]
-        )
-        return try modelContext.fetch(descriptor).map(\.contentData)
+        try fetchMessageData(conversationID: conversationID, excludingRequestID: requestID)
+    }
+
+    private func fetchMessageData(conversationID: UUID, excludingRequestID: UUID?) throws -> [Data] {
+        let sortBy = [
+            SortDescriptor(\MessageRecord.ordinal),
+            SortDescriptor(\MessageRecord.id),
+        ]
+        var cursor: MessageCursor?
+        var contentData: [Data] = []
+        while true {
+            let predicate: Predicate<MessageRecord>
+            if let cursor {
+                let cursorOrdinal = cursor.ordinal
+                let cursorID = cursor.id
+                if let excludingRequestID {
+                    predicate = #Predicate<MessageRecord> { message in
+                        message.conversationID == conversationID
+                            && (message.requestID == nil
+                                || message.requestID != excludingRequestID
+                                || message.roleRaw == "user")
+                            && (message.ordinal > cursorOrdinal
+                                || (message.ordinal == cursorOrdinal && message.id > cursorID))
+                    }
+                } else {
+                    predicate = #Predicate<MessageRecord> { message in
+                        message.conversationID == conversationID
+                            && (message.ordinal > cursorOrdinal
+                                || (message.ordinal == cursorOrdinal && message.id > cursorID))
+                    }
+                }
+            } else if let excludingRequestID {
+                predicate = #Predicate<MessageRecord> { message in
+                    message.conversationID == conversationID
+                        && (message.requestID == nil
+                            || message.requestID != excludingRequestID
+                            || message.roleRaw == "user")
+                }
+            } else {
+                predicate = #Predicate<MessageRecord> { message in
+                    message.conversationID == conversationID
+                }
+            }
+            var descriptor = FetchDescriptor<MessageRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.messageFetchBatchSize
+            let batch = try modelContext.fetch(descriptor)
+            guard let last = batch.last else { break }
+            contentData.append(contentsOf: batch.map(\.contentData))
+            cursor = MessageCursor(ordinal: last.ordinal, id: last.id)
+        }
+        return contentData
     }
 
     func containsRequestID(_ requestID: UUID, conversationID: UUID) throws -> Bool {

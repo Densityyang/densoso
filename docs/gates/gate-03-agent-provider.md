@@ -32,8 +32,13 @@ domain-persistence pass on the same head, and does not authorize Speech work.
   64-row keyset pages; a cross-page currency fixture preserves the existing
   unknown/mixed-currency result rules.
 - Scope the Agent's daily-metrics read to the requested inclusive date range in
-  SwiftData and return rows in ascending date order; focused tests cover both
-  range boundaries, ordering and an inverted-range empty result.
+  SwiftData with stable 64-row date pages and return rows in ascending date
+  order; focused tests cover both range boundaries, ordering, cross-page rows
+  and an inverted-range empty result.
+- Read today's normal schedule and active historical training plans in stable
+  64-row pages so a plan beginning earlier can still contribute a session today.
+- Read visible and resumable conversation messages in stable 64-row ordinal
+  pages while preserving message order and the current-request resume filter.
 - Read confirmed user-reported preferences newest-first in stable 64-row
   keyset pages, retaining only the requested top-K results while preserving the
   existing ID tie-break at the cutoff timestamp; the focused fixture covers

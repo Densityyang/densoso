@@ -7,6 +7,7 @@ import SwiftData
 /// the SwiftData model actor executor. Read-only Agent queries do not refresh or write caches.
 @ModelActor
 actor HealthProjectionActor {
+    private static let confirmedPlanFetchBatchSize = 64
     private var calendar: Calendar = .current
 
     init(modelContainer: ModelContainer, calendar: Calendar = .current) {
@@ -137,15 +138,84 @@ actor HealthProjectionActor {
     }
 
     func confirmedPlanEntries() throws -> ConfirmedDailyLoopPlans {
+        try loadConfirmedPlanEntries(asOf: nil)
+    }
+
+    private func loadConfirmedPlanEntries(asOf date: Date?) throws -> ConfirmedDailyLoopPlans {
         let workoutPlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix
         let trainingPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
         let predicate = #Predicate<ScheduleEvent> {
             ($0.notes ?? "").contains(workoutPlanPrefix)
                 || ($0.notes ?? "").contains(trainingPlanPrefix)
         }
-        let events = try modelContext.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
-        let workoutPlans = events
-            .compactMap { ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) }
+
+        let planWindow: Range<Date>? = {
+            guard let date else { return nil }
+            let dayStart = calendar.startOfDay(for: date)
+            guard let throughTomorrow = calendar.date(byAdding: .day, value: 2, to: dayStart) else {
+                return dayStart..<dayStart
+            }
+            return dayStart..<throughTomorrow
+        }()
+        let sortDescriptors: [SortDescriptor<ScheduleEvent>] = [
+            SortDescriptor(\ScheduleEvent.date),
+            SortDescriptor(\ScheduleEvent.startTime),
+            SortDescriptor(\ScheduleEvent.createdAt),
+            SortDescriptor(\ScheduleEvent.title),
+            SortDescriptor(\ScheduleEvent.notes),
+        ]
+        var descriptor = FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)
+        descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize
+        var offset = 0
+        var workoutPlans: [ConfirmedWorkoutPlanEntry] = []
+        var trainingPlans: [ConfirmedTrainingPlanEntry] = []
+
+        while true {
+            descriptor.fetchOffset = offset
+            let page = try modelContext.fetch(descriptor)
+            guard !page.isEmpty else { break }
+
+            for event in page {
+                if let entry = ConfirmedWorkoutPlanEntry.decode(notes: event.notes) {
+                    guard let planWindow else {
+                        workoutPlans.append(entry)
+                        continue
+                    }
+                    guard entry.state != .terminal,
+                          let scheduledAt = entry.draft.scheduledAt,
+                          planWindow.contains(scheduledAt) else { continue }
+                    workoutPlans.append(entry)
+                    continue
+                }
+
+                guard let entry = ConfirmedTrainingPlanEntry.decode(notes: event.notes) else { continue }
+                guard let planWindow else {
+                    trainingPlans.append(entry)
+                    continue
+                }
+                guard entry.state != .terminal else { continue }
+
+                var plan = entry.draft
+                plan.sessions = entry.draft.sessions.filter { session in
+                    !session.isRestDay && planWindow.contains(session.date)
+                }
+                guard !plan.sessions.isEmpty else { continue }
+                let retainedSessionIDs = Set(plan.sessions.map(\.id))
+                trainingPlans.append(ConfirmedTrainingPlanEntry(
+                    actionID: entry.actionID,
+                    idempotencyKey: entry.idempotencyKey,
+                    draft: plan,
+                    scheduledSessionIDs: entry.scheduledSessionIDs.filter { retainedSessionIDs.contains($0) },
+                    state: entry.state,
+                    lastError: entry.lastError
+                ))
+            }
+
+            guard page.count == Self.confirmedPlanFetchBatchSize else { break }
+            offset += page.count
+        }
+
+        let sortedWorkoutPlans = workoutPlans
             .sorted {
                 let leftDate = $0.draft.scheduledAt ?? .distantPast
                 let rightDate = $1.draft.scheduledAt ?? .distantPast
@@ -153,15 +223,14 @@ actor HealthProjectionActor {
                     ? $0.actionID.uuidString < $1.actionID.uuidString
                     : leftDate > rightDate
             }
-        let trainingPlans = events
-            .compactMap { ConfirmedTrainingPlanEntry.decode(notes: $0.notes) }
+        let sortedTrainingPlans = trainingPlans
             .sorted { lhs, rhs in
                 if lhs.draft.createdAt != rhs.draft.createdAt {
                     return lhs.draft.createdAt > rhs.draft.createdAt
                 }
                 return lhs.draft.id.uuidString < rhs.draft.id.uuidString
             }
-        return ConfirmedDailyLoopPlans(workoutPlans: workoutPlans, trainingPlans: trainingPlans)
+        return ConfirmedDailyLoopPlans(workoutPlans: sortedWorkoutPlans, trainingPlans: sortedTrainingPlans)
     }
 
     func dailyLoopSnapshot(
@@ -169,7 +238,7 @@ actor HealthProjectionActor {
         dailyBrief: DailyHealthBrief?,
         pendingActions: [PendingAction]
     ) throws -> DailyLoopSnapshot {
-        let plans = try confirmedPlanEntries()
+        let plans = try loadConfirmedPlanEntries(asOf: date)
         return DailyLoopSnapshotComposer(calendar: calendar).compose(
             asOf: date,
             dailyBrief: dailyBrief,

@@ -334,6 +334,7 @@ jobs:
             -only-testing:DensosoTests/DailyCheckInConfirmationTests \
             -only-testing:DensosoTests/UserPreferenceConfirmationTests \
             -only-testing:DensosoTests/GetUserPreferencesToolTests \
+            -only-testing:DensosoTests/GetTodayPlanToolTests \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests \
             -only-testing:DensosoTests/SwiftDataProviderGovernanceQueryTests \
             -only-testing:DensosoTests/AgentDailyMetricsRepositoryTests \
@@ -1237,6 +1238,7 @@ jobs:
             -only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testConfirmedScheduleIsIdempotentAcrossRetries \
             -only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay \
             -only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents \
+            -only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testOutOfOrderMessagesAreReturnedInDurableArrivalOrder \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder \

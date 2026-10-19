@@ -8,6 +8,7 @@ struct HealthIntelligenceReadModel: Sendable {
     static let mealFetchBatchSize = 64
     static let workoutFetchBatchSize = 64
     static let weightFetchBatchSize = 64
+    static let schedulePlanFetchBatchSize = 64
 
     private let calendar: Calendar
     private let engine: HealthIntelligenceEngine
@@ -136,15 +137,61 @@ struct HealthIntelligenceReadModel: Sendable {
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date))
             ?? calendar.startOfDay(for: date)
         let end = calendar.date(byAdding: .day, value: 1, to: tomorrow) ?? tomorrow
-        let predicate = #Predicate<ScheduleEvent> { event in
+        let workoutPlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix
+        let trainingPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
+        let ordinaryEventPredicate = #Predicate<ScheduleEvent> { event in
             event.startTime >= tomorrow && event.startTime < end
+                && !((event.notes ?? "").contains(workoutPlanPrefix))
+                && !((event.notes ?? "").contains(trainingPlanPrefix))
         }
-        let events = try context.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
-        guard !events.isEmpty else { return nil }
-        return events.contains {
-            guard let entry = ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) else { return false }
-            return entry.state != .terminal
+
+        var ordinaryEventDescriptor = FetchDescriptor<ScheduleEvent>(predicate: ordinaryEventPredicate)
+        ordinaryEventDescriptor.fetchLimit = 1
+        let ordinaryEvents = try context.fetch(ordinaryEventDescriptor)
+        let hasOrdinaryEvent = !ordinaryEvents.isEmpty
+
+        let planPredicate = #Predicate<ScheduleEvent> { event in
+            event.startTime >= tomorrow && event.startTime < end
+                && ((event.notes ?? "").contains(workoutPlanPrefix)
+                    || (event.notes ?? "").contains(trainingPlanPrefix))
         }
+        let planSortDescriptors: [SortDescriptor<ScheduleEvent>] = [
+            SortDescriptor(\ScheduleEvent.startTime),
+            SortDescriptor(\ScheduleEvent.date),
+            SortDescriptor(\ScheduleEvent.createdAt),
+            SortDescriptor(\ScheduleEvent.title),
+            SortDescriptor(\ScheduleEvent.notes),
+        ]
+        var planDescriptor = FetchDescriptor<ScheduleEvent>(
+            predicate: planPredicate,
+            sortBy: planSortDescriptors
+        )
+        planDescriptor.fetchLimit = Self.schedulePlanFetchBatchSize
+        var planOffset = 0
+        var hasPlanEvent = false
+
+        while true {
+            planDescriptor.fetchOffset = planOffset
+            let page = try context.fetch(planDescriptor)
+            guard !page.isEmpty else { break }
+            hasPlanEvent = true
+
+            for event in page {
+                if let entry = ConfirmedWorkoutPlanEntry.decode(notes: event.notes),
+                   entry.state != .terminal {
+                    return true
+                }
+                if let entry = ConfirmedTrainingPlanEntry.decode(notes: event.notes),
+                   entry.state != .terminal {
+                    return true
+                }
+            }
+
+            guard page.count == Self.schedulePlanFetchBatchSize else { break }
+            planOffset += page.count
+        }
+
+        return (hasOrdinaryEvent || hasPlanEvent) ? false : nil
     }
 
     private func loadDays(

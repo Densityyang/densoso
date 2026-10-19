@@ -149,6 +149,77 @@ final class ConversationPersistenceTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<MessageRecord>()), 2)
     }
 
+    func testMessagePagesPreserveOrdinalAndResumeFilterAcrossPageBoundary() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000421")!
+        let otherConversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000422")!
+        let currentRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000423")!
+        let previousRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000424")!
+        let messageCount = SwiftDataAgentRepository.messageFetchBatchSize
+
+        for ordinal in 0..<messageCount {
+            context.insert(MessageRecord(
+                id: fixtureUUID(50_000 + ordinal),
+                conversationID: conversationID,
+                roleRaw: "assistant",
+                contentData: Data("previous-\(ordinal)".utf8),
+                ordinal: ordinal,
+                requestID: previousRequestID
+            ))
+        }
+        context.insert(MessageRecord(
+            id: fixtureUUID(51_000),
+            conversationID: conversationID,
+            roleRaw: "assistant",
+            contentData: Data("current-tool".utf8),
+            ordinal: messageCount,
+            requestID: currentRequestID
+        ))
+        context.insert(MessageRecord(
+            id: fixtureUUID(51_001),
+            conversationID: conversationID,
+            roleRaw: "assistant",
+            contentData: Data("previous-answer".utf8),
+            ordinal: messageCount + 1,
+            requestID: previousRequestID
+        ))
+        context.insert(MessageRecord(
+            id: fixtureUUID(51_002),
+            conversationID: conversationID,
+            roleRaw: "user",
+            contentData: Data("current-user".utf8),
+            ordinal: messageCount + 2,
+            requestID: currentRequestID
+        ))
+        context.insert(MessageRecord(
+            id: fixtureUUID(51_003),
+            conversationID: otherConversationID,
+            roleRaw: "assistant",
+            contentData: Data("other-conversation".utf8),
+            ordinal: messageCount + 3,
+            requestID: previousRequestID
+        ))
+        try context.save()
+
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let messages = try await repository.messageData(conversationID: conversationID)
+        let resumeHistory = try await repository.resumeHistory(
+            conversationID: conversationID,
+            requestID: currentRequestID
+        )
+
+        XCTAssertEqual(messages.count, messageCount + 3)
+        XCTAssertEqual(messages.map { String(decoding: $0, as: UTF8.self) },
+                        (0..<messageCount).map { "previous-\($0)" } + ["current-tool", "previous-answer", "current-user"])
+        XCTAssertEqual(resumeHistory.map { String(decoding: $0, as: UTF8.self) },
+                        (0..<messageCount).map { "previous-\($0)" } + ["previous-answer", "current-user"])
+    }
+
     func testAgentRestorePublishesUserVisibleConversationMessages() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let container = try ModelContainer(
@@ -192,5 +263,9 @@ final class ConversationPersistenceTests: XCTestCase {
 
         XCTAssertEqual(session.restoredVisibleMessages.map(\.text), ["记录午餐", "请确认草稿"])
         XCTAssertEqual(session.restoredVisibleMessages.map(\.isUser), [true, false])
+    }
+
+    private func fixtureUUID(_ suffix: Int) -> UUID {
+        UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", suffix))!
     }
 }

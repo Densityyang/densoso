@@ -372,10 +372,12 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         return MealQuantityHarness(container: container, session: session)
     }
 
-    private static let foodSeed = #"[
+    private static let foodSeed = #"""
+    [
       {"id":2,"name":"米饭(熟)","alias":"米饭|熟米饭|白米饭","preparation":"cooked","category":"谷类及制品","edible":100,"energyKcal":116,"proteinG":2.6,"fatG":0.3,"carbohydrateG":25.9,"fiberG":0.3},
       {"id":3,"name":"牛肉","alias":"牛肉|牛肉(熟)","preparation":"cooked","category":"肉类及制品","edible":100,"energyKcal":250,"proteinG":26,"fatG":15,"carbohydrateG":0,"fiberG":0}
-    ]"#
+    ]
+    """#
 }
 
 @MainActor

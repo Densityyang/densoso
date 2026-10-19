@@ -71,6 +71,9 @@ def main() -> int:
             "Normalize local and cloud turns as `AgentTurnResult`",
             "Local capture detection is a proposal only",
             "workout cannot be classified as a future workout plan",
+            "Read today's normal schedule and active historical training plans",
+            "visible and resumable conversation messages",
+            "current-request resume filter",
             "stable 64-row",
             "invalid rows and valid ties across the page boundary",
         ],
@@ -360,6 +363,16 @@ def main() -> int:
         errors,
     )
     require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataAgentRepository.swift",
+        [
+            "func schedule(on date: Date)",
+            "static let scheduleEventFetchBatchSize = 64",
+            "descriptor.fetchLimit = Self.scheduleEventFetchBatchSize",
+            "descriptor.fetchOffset = eventOffset",
+        ],
+        errors,
+    )
+    require_text(
         ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataProviderGovernanceRepository.swift",
         [
             "predicate: #Predicate { $0.consentKey == key }",
@@ -387,7 +400,19 @@ def main() -> int:
             "guard startDate <= endDate else { return [] }",
             "#Predicate<DailyMetrics>",
             "metric.date >= startDate && metric.date <= endDate",
+            "static let dailyMetricFetchBatchSize = 64",
+            "descriptor.fetchLimit = Self.dailyMetricFetchBatchSize",
             r"SortDescriptor(\DailyMetrics.date)",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataAgentRepository.swift",
+        [
+            "static let messageFetchBatchSize = 64",
+            "private func fetchMessageData(conversationID: UUID, excludingRequestID: UUID?)",
+            "descriptor.fetchLimit = Self.messageFetchBatchSize",
+            "message.id > cursorID",
         ],
         errors,
     )
@@ -395,8 +420,14 @@ def main() -> int:
         ROOT / "DensosoTests" / "Application" / "AgentDailyMetricsRepositoryTests.swift",
         [
             "testRepositoryFiltersToInclusiveDateRangeAndSortsResults",
+            "testRepositoryPagesAllMetricsAcrossStableDatePages",
             "testRepositoryReturnsEmptyForInvertedDateRange",
         ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "ConversationPersistenceTests.swift",
+        ["testMessagePagesPreserveOrdinalAndResumeFilterAcrossPageBoundary"],
         errors,
     )
     require_text(
@@ -427,6 +458,11 @@ def main() -> int:
     require_text(
         ROOT / "Densoso" / "Agent" / "Tools" / "GetGoalTool.swift",
         ["get_goal", "goalProvider", "unavailable"],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "GetTodayPlanToolTests.swift",
+        ["testScheduleFindsHistoricalTrainingSessionAfterFirstPage"],
         errors,
     )
     require_text(
@@ -624,6 +660,7 @@ def main() -> int:
         "DensosoTests/Application/AgentCoordinatorTests.swift",
         "DensosoTests/Application/SwiftDataProviderGovernanceQueryTests.swift",
         "DensosoTests/Application/AgentDailyMetricsRepositoryTests.swift",
+        "DensosoTests/ConversationPersistenceTests.swift",
         "DensosoTests/Application/AgentRequestResumeTests.swift",
         "DensosoTests/Application/PromptInjectionEvalTests.swift",
         "DensosoTests/Application/AgentBudgetTests.swift",
@@ -631,6 +668,7 @@ def main() -> int:
         "DensosoTests/Application/GetRecentMealsToolTests.swift",
         "DensosoTests/Application/GetRecentWorkoutsToolTests.swift",
         "DensosoTests/Application/GetGoalToolTests.swift",
+        "DensosoTests/Application/GetTodayPlanToolTests.swift",
         "DensosoTests/Application/DailyCheckInConfirmationTests.swift",
         "DensosoTests/Application/UserPreferenceConfirmationTests.swift",
         "DensosoTests/Application/GetUserPreferencesToolTests.swift",
@@ -756,9 +794,11 @@ def main() -> int:
             "-only-testing:DensosoTests/LocalIntelligenceSuggestionTests",
             "-only-testing:DensosoTests/UserPreferenceConfirmationTests",
             "-only-testing:DensosoTests/GetUserPreferencesToolTests",
+            "-only-testing:DensosoTests/GetTodayPlanToolTests",
             "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests",
             "-only-testing:DensosoTests/SwiftDataProviderGovernanceQueryTests",
             "-only-testing:DensosoTests/AgentDailyMetricsRepositoryTests",
+            "-only-testing:DensosoTests/ConversationPersistenceTests",
         ],
         errors,
     )

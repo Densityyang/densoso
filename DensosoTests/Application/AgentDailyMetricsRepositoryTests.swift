@@ -40,6 +40,34 @@ final class AgentDailyMetricsRepositoryTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyMetrics>()), countBefore)
     }
 
+    func testRepositoryPagesAllMetricsAcrossStableDatePages() async throws {
+        var calendar = Calendar.current
+        calendar.timeZone = .current
+        let base = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let metricCount = SwiftDataAgentRepository.dailyMetricFetchBatchSize + 1
+        var dates: [Date] = []
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        for index in 0..<metricCount {
+            let date = try XCTUnwrap(calendar.date(byAdding: .day, value: index, to: base))
+            dates.append(date)
+            context.insert(metric(at: date, deficit: 100 + index))
+        }
+        try context.save()
+
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let end = try XCTUnwrap(dates.last)
+        let results = try await repository.dailyMetrics(from: base, through: end)
+
+        XCTAssertEqual(results.count, metricCount)
+        XCTAssertEqual(results.map(\.date), dates)
+        XCTAssertEqual(results.map(\.deficitKcal), (0..<metricCount).map { 100 + $0 })
+    }
+
     func testRepositoryReturnsEmptyForInvertedDateRange() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let container = try ModelContainer(

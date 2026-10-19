@@ -139,6 +139,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "func healthHistory(from startDate: Date, through endDate: Date)",
                 "func healthNarrativeContext(asOf date: Date = Date())",
                 "func confirmedPlanEntries() throws -> ConfirmedDailyLoopPlans",
+                "private static let confirmedPlanFetchBatchSize = 64",
+                "loadConfirmedPlanEntries(asOf: date)",
+                "descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize",
+                "descriptor.fetchOffset = offset",
                 "HealthIntelligenceReadModel(calendar: calendar)",
             ),
             errors,
@@ -164,6 +168,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "descriptor.fetchLimit = Self.mealFetchBatchSize",
                 "descriptor.fetchLimit = Self.workoutFetchBatchSize",
                 "descriptor.fetchLimit = Self.weightFetchBatchSize",
+                "static let schedulePlanFetchBatchSize = 64",
+                "ordinaryEventDescriptor.fetchLimit = 1",
+                "planDescriptor.fetchLimit = Self.schedulePlanFetchBatchSize",
+                "planDescriptor.fetchOffset = planOffset",
                 "func todayHealthState(asOf date: Date, in context: ModelContext)",
                 "func healthHistory(",
                 "HealthIntelligenceEngine(calendar: calendar)",
@@ -207,8 +215,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testHealthContextSummaryAggregatesMealProteinAcrossStableFetchPages",
                 "testLoadDaysIncludesAllWorkoutsAcrossStableFetchPages",
                 "testLoadDaysIncludesAllWeightsAcrossStableFetchPages",
+                "testPlannedWorkoutTomorrowPagesTerminalPlansUntilActiveTrainingPlan",
                 "testActorHistoryRetainsExistingRangeValidation",
                 "testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
+                "testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions",
             ),
             errors,
         )
@@ -217,7 +227,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "($0.notes ?? \"\").contains(workoutPlanPrefix)",
                 "($0.notes ?? \"\").contains(trainingPlanPrefix)",
-                "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
+                "FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)",
             ),
             errors,
         )
@@ -691,15 +701,23 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     )
     require(
         "DensosoTests/Application/HealthProjectionActorTests.swift",
-        ("testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",),
+        (
+            "testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
+            "testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions",
+        ),
         errors,
     )
     require(
         "Densoso/Services/HealthProjectionActor.swift",
         (
             "func confirmedPlanEntries() throws -> ConfirmedDailyLoopPlans",
-            "ConfirmedWorkoutPlanEntry.decode(notes: $0.notes)",
-            "ConfirmedTrainingPlanEntry.decode(notes: $0.notes)",
+            "private static let confirmedPlanFetchBatchSize = 64",
+            "loadConfirmedPlanEntries(asOf: date)",
+            "descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize",
+            "descriptor.fetchOffset = offset",
+            "ConfirmedWorkoutPlanEntry.decode(notes: event.notes)",
+            "ConfirmedTrainingPlanEntry.decode(notes: event.notes)",
+            "FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)",
         ),
         errors,
     )
@@ -707,7 +725,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         "Densoso/Application/DailyLoop/DailyLoopSnapshotService.swift",
         (
             "func snapshot(asOf date: Date = Date()) async throws -> DailyLoopSnapshot",
-            "try await healthProjectionActor.confirmedPlanEntries()",
+            "try await healthProjectionActor.dailyLoopSnapshot(",
             "pendingActions: agentSession.pendingActions",
         ),
         errors,
@@ -821,6 +839,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testConfirmedScheduleIsIdempotentAcrossRetries",
                 "-only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
+                "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder",
                 "-only-testing:DensosoTests/AgentCoordinatorTests/testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce",

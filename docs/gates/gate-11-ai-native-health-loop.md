@@ -26,6 +26,10 @@ projection-day keys supports deletion and moved-sample rebuilds. Ambiguous
 full-day reads retain history but suppress it from the live projection.
 HealthIntelligenceReadModel pages daily meal protein, weight and workout history
 inside its bounded date window.
+Daily-loop plan loading pages stored plan events and retains only active sessions
+that can appear in today's or tomorrow's snapshot.
+Tomorrow-plan inference first checks for any event, then pages confirmed plan
+markers and returns on the first non-terminal plan.
 Historical HealthKit weight lookup walks the V6 bodyMass index in bounded,
 newest-first batches, fetches each batch's daily snapshots together, and skips
 deleted or unknown summaries.
@@ -54,8 +58,10 @@ deleted or unknown summaries.
   `HealthProjectionActorTests.testHealthContextSummaryAggregatesMealProteinAcrossStableFetchPages`,
   `HealthProjectionActorTests.testLoadDaysIncludesAllWorkoutsAcrossStableFetchPages`,
   `HealthProjectionActorTests.testLoadDaysIncludesAllWeightsAcrossStableFetchPages`,
+  `HealthProjectionActorTests.testPlannedWorkoutTomorrowPagesTerminalPlansUntilActiveTrainingPlan`,
   `HealthProjectionActorTests.testActorHistoryRetainsExistingRangeValidation`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents`,
+  `HealthProjectionActorTests.testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions`,
   `HealthNarrativePolicyTests`,
   `DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState`,
   and `DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays`.

@@ -348,6 +348,153 @@ final class HealthProjectionActorTests: XCTestCase {
         )
     }
 
+    func testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 16)))
+        let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: today))
+        let afterTomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 2, to: today))
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+
+        let historicalPlanCount = 65
+        var historicalActionIDs: [UUID] = []
+        for index in 0..<historicalPlanCount {
+            let actionID = try XCTUnwrap(UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", index + 1_000)))
+            historicalActionIDs.append(actionID)
+            let scheduledAt = try XCTUnwrap(calendar.date(byAdding: .day, value: -200 + index, to: today))
+                .addingTimeInterval(12 * 60 * 60)
+            let entry = ConfirmedWorkoutPlanEntry(
+                actionID: actionID,
+                idempotencyKey: "daily-loop-historical-\(index)",
+                draft: WorkoutPlanDraft(name: "历史计划 \(index)", activity: .walking, scheduledAt: scheduledAt)
+            )
+            context.insert(ScheduleEvent(
+                date: scheduledAt,
+                title: entry.draft.name,
+                notes: try entry.encodedNotes(),
+                startTime: scheduledAt
+            ))
+        }
+
+        let todaySessionID = UUID(uuidString: "00000000-0000-0000-0000-00000000B001")!
+        let todaySessionDate = today.addingTimeInterval(11 * 60 * 60)
+        let trainingEntry = ConfirmedTrainingPlanEntry(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-00000000B002")!,
+            idempotencyKey: "daily-loop-current-training-plan",
+            draft: TrainingPlanDraft(
+                name: "当前多日计划",
+                createdAt: today,
+                sessions: [
+                    TrainingSessionDraft(id: todaySessionID, date: todaySessionDate, activity: .cycling, reason: "今日骑行"),
+                    TrainingSessionDraft(date: tomorrow, activity: nil, reason: "明日休息"),
+                    TrainingSessionDraft(
+                        date: afterTomorrow.addingTimeInterval(12 * 60 * 60),
+                        activity: .walking,
+                        reason: "后日步行"
+                    ),
+                ]
+            )
+        )
+        context.insert(ScheduleEvent(
+            date: today,
+            title: trainingEntry.draft.name,
+            notes: try trainingEntry.encodedNotes(),
+            startTime: todaySessionDate
+        ))
+        try context.save()
+        let eventCountBefore = try context.fetchCount(FetchDescriptor<ScheduleEvent>())
+
+        let actor = HealthProjectionActor(modelContainer: container, calendar: calendar)
+        let allPlans = try await actor.confirmedPlanEntries()
+        XCTAssertEqual(allPlans.workoutPlans.count, historicalPlanCount)
+        XCTAssertEqual(allPlans.workoutPlans.first?.actionID, historicalActionIDs.last)
+        XCTAssertEqual(allPlans.workoutPlans.last?.actionID, historicalActionIDs.first)
+        XCTAssertEqual(allPlans.trainingPlans.map(\.actionID), [trainingEntry.actionID])
+        XCTAssertEqual(allPlans.trainingPlans.first?.draft.sessions.count, 3)
+
+        let snapshot = try await actor.dailyLoopSnapshot(
+            asOf: today.addingTimeInterval(10 * 60 * 60),
+            dailyBrief: nil,
+            pendingActions: []
+        )
+        XCTAssertEqual(snapshot.workoutPlans.map(\.actionID), [todaySessionID])
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScheduleEvent>()), eventCountBefore)
+    }
+
+    func testPlannedWorkoutTomorrowPagesTerminalPlansUntilActiveTrainingPlan() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 16)))
+        let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: today))
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let readModel = HealthIntelligenceReadModel(calendar: calendar)
+
+        XCTAssertNil(try readModel.plannedWorkoutTomorrow(asOf: today, in: context))
+
+        let ordinaryEventTime = tomorrow.addingTimeInterval(30 * 60)
+        context.insert(ScheduleEvent(
+            date: ordinaryEventTime,
+            title: "普通日程",
+            notes: "普通日程备注",
+            startTime: ordinaryEventTime
+        ))
+        try context.save()
+        XCTAssertEqual(try readModel.plannedWorkoutTomorrow(asOf: today, in: context), Optional(false))
+
+        for index in 0..<HealthIntelligenceReadModel.schedulePlanFetchBatchSize {
+            let actionID = try XCTUnwrap(UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", index + 2_000)))
+            let scheduledAt = tomorrow.addingTimeInterval(Double(index + 1) * 60)
+            let entry = ConfirmedWorkoutPlanEntry(
+                actionID: actionID,
+                idempotencyKey: "planned-tomorrow-terminal-\(index)",
+                draft: WorkoutPlanDraft(name: "已终止计划 \(index)", activity: .walking, scheduledAt: scheduledAt),
+                state: .terminal
+            )
+            context.insert(ScheduleEvent(
+                date: scheduledAt,
+                title: entry.draft.name,
+                notes: try entry.encodedNotes(),
+                startTime: scheduledAt
+            ))
+        }
+        try context.save()
+        XCTAssertEqual(try readModel.plannedWorkoutTomorrow(asOf: today, in: context), Optional(false))
+
+        let activeSessionTime = tomorrow.addingTimeInterval(
+            Double(HealthIntelligenceReadModel.schedulePlanFetchBatchSize + 1) * 60
+        )
+        let activeTrainingEntry = ConfirmedTrainingPlanEntry(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-00000000C001")!,
+            idempotencyKey: "planned-tomorrow-active-training",
+            draft: TrainingPlanDraft(
+                name: "有效多日计划",
+                createdAt: today,
+                sessions: [
+                    TrainingSessionDraft(date: activeSessionTime, activity: .cycling, reason: "明日骑行"),
+                ]
+            )
+        )
+        context.insert(ScheduleEvent(
+            date: activeSessionTime,
+            title: activeTrainingEntry.draft.name,
+            notes: try activeTrainingEntry.encodedNotes(),
+            startTime: activeSessionTime
+        ))
+        try context.save()
+
+        XCTAssertEqual(try readModel.plannedWorkoutTomorrow(asOf: today, in: context), Optional(true))
+    }
+
     private func dayKey(_ date: Date, calendar: Calendar) -> String {
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
