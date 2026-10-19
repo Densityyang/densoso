@@ -190,6 +190,8 @@ def main() -> int:
             "HealthKitSampleIndexRecord",
             "isDeleted == false",
             "healthReadStates",
+            "batchDayKeys.contains($0.dayKey)",
+            "let snapshotRecords = try modelContext.fetch(",
         ),
         errors,
     )

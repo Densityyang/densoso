@@ -31,28 +31,34 @@ enum HealthKitWeightObservationReader {
             let indexes = try modelContext.fetch(descriptor)
             guard !indexes.isEmpty else { return nil }
 
-            for index in indexes where inspectedDayKeys.insert(index.dayKey).inserted {
-                let targetDayKey = index.dayKey
+            let batchDayKeys = Array(Set(indexes.map(\.dayKey)).subtracting(inspectedDayKeys)).sorted()
+            var snapshotsByDayKey: [String: DailyHealthSnapshotRecord] = [:]
+            if !batchDayKeys.isEmpty {
                 let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord> {
-                    $0.dayKey == targetDayKey
+                    batchDayKeys.contains($0.dayKey)
                 }
-                var snapshotDescriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: snapshotPredicate)
-                snapshotDescriptor.fetchLimit = 1
-                guard let snapshotRecord = try modelContext.fetch(snapshotDescriptor).first,
+                let snapshotRecords = try modelContext.fetch(
+                    FetchDescriptor<DailyHealthSnapshotRecord>(predicate: snapshotPredicate)
+                )
+                for record in snapshotRecords {
+                    snapshotsByDayKey[record.dayKey] = record
+                }
+            }
+            var visitedBatchDays = Set<String>()
+            for index in indexes {
+                guard !inspectedDayKeys.contains(index.dayKey),
+                      visitedBatchDays.insert(index.dayKey).inserted,
+                      let snapshotRecord = snapshotsByDayKey[index.dayKey],
                       let snapshot = try? decoder.decode(DailyHealthSnapshot.self, from: snapshotRecord.payloadData) else {
                     continue
                 }
-                if let readState = snapshot.healthReadStates?[stream], readState != .available {
-                    continue
-                }
+                if let readState = snapshot.healthReadStates?[stream], readState != .available { continue }
                 guard let aggregate = snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass),
                       let sampleID = aggregate.latestSampleID,
                       let measuredAt = aggregate.latestSampleAt,
                       measuredAt <= date,
                       let kilograms = aggregate.latestValue,
-                      kilograms.isFinite, kilograms > 0 else {
-                    continue
-                }
+                      kilograms.isFinite, kilograms > 0 else { continue }
                 return WeightObservation(
                     id: sampleID,
                     measuredAt: measuredAt,
@@ -61,6 +67,7 @@ enum HealthKitWeightObservationReader {
                     confidence: 1
                 )
             }
+            inspectedDayKeys.formUnion(batchDayKeys)
 
             offset += indexes.count
             if indexes.count < batchSize { return nil }

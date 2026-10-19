@@ -23,7 +23,8 @@ daily summaries before persistence; a sample-ID interval index with unresolved
 projection-day keys supports deletion and moved-sample rebuilds. Ambiguous
 full-day reads retain history but suppress it from the live projection.
 Historical HealthKit weight lookup walks the V6 bodyMass index in bounded,
-newest-first batches and skips deleted or unknown daily summaries.
+newest-first batches, fetches each batch's daily snapshots together, and skips
+deleted or unknown summaries.
 
 ## Focused tests
 
