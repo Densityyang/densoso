@@ -85,6 +85,34 @@ final class AgentCoordinatorTests: XCTestCase {
         XCTAssertEqual(messages.count, 2)
     }
 
+    func testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages() async throws {
+        let provider = ScriptedTextProvider(
+            scripts: [[.textDelta("我会按这段转写继续处理。"), .completed(.completed)]]
+        )
+        let harness = try await Harness(provider: provider)
+        let transcript = "我刚刚吃了一碗牛肉面。"
+        let envelope = VoiceCommandEnvelope(
+            text: transcript,
+            locale: Locale(identifier: "zh-CN"),
+            source: .qwenASR
+        ).asInputEnvelope()
+
+        _ = try await harness.session.send(userText: transcript, inputEnvelope: envelope)
+
+        let providerMessage = try XCTUnwrap(provider.recordedRequests().first?.messages.first(where: { $0.role == .user }))
+        XCTAssertNil(providerMessage.inputEnvelope)
+        let storedMessages = try ModelContext(harness.container).fetch(FetchDescriptor<MessageRecord>())
+        let storedUser = try XCTUnwrap(storedMessages.compactMap {
+            try? JSONDecoder().decode(ModelMessage.self, from: $0.contentData)
+        }.first(where: { $0.role == .user }))
+        XCTAssertEqual(storedUser.inputEnvelope, envelope)
+        let storedText = storedMessages.compactMap { String(data: $0.contentData, encoding: .utf8) }.joined()
+        XCTAssertTrue(storedText.contains("qwenASR"))
+        XCTAssertTrue(storedText.contains("zh-CN"))
+        XCTAssertFalse(storedText.contains("base64Data"))
+        XCTAssertFalse(storedText.contains("audioBuffer"))
+    }
+
     func testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce() async throws {
         let provider = FailOnceScriptedTextProvider(scripts: [
             [

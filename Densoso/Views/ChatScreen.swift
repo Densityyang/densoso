@@ -148,7 +148,10 @@ struct ChatScreen: View {
                 MealCaptureSheet(
                     supplementalText: inputText,
                     onSendToAgent: { request in
-                        let requestWithSupplement = request.includingSupplementalText(inputText)
+                        let requestWithSupplement = request.includingSupplementalText(
+                            inputText,
+                            source: inputSource
+                        )
                         Task {
                             await send(
                                 text: requestWithSupplement.userText,
@@ -338,6 +341,7 @@ struct ChatScreen: View {
         }
         if let pendingMealText = appState.pendingMealText {
             inputText = pendingMealText
+            inputSource = .appIntent
             showTextEditor = true
             appState.pendingMealText = nil
             addMessage(text: "已收到系统语音转写草稿，请检查后再发送；尚未保存任何餐食记录。", isUser: false)
@@ -491,8 +495,13 @@ struct ChatScreen: View {
                         requestID: agentRequestID
                     )
                 } else {
+                    let inputEnvelope = VoiceCommandEnvelope(
+                        text: userText,
+                        source: sourceForRequest
+                    ).asInputEnvelope()
                     response = try await dependencies.agentSession.send(
                         userText: userText,
+                        inputEnvelope: inputEnvelope,
                         requestID: agentRequestID
                     )
                 }

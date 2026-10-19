@@ -162,6 +162,18 @@ final class AgentSession {
         return try await awaitRequest(request.task, requestID: request.id)
     }
 
+    func send(
+        userText: String,
+        inputEnvelope: InputEnvelope,
+        requestID: UUID? = nil
+    ) async throws -> AgentResponse {
+        let request = try startRequest(
+            multimodalRequest: MultimodalModelRequest(userText: userText, inputEnvelope: inputEnvelope),
+            requestID: requestID
+        )
+        return try await awaitRequest(request.task, requestID: request.id)
+    }
+
     func send(multimodalRequest: MultimodalModelRequest, requestID: UUID? = nil) async throws -> AgentResponse {
         let request = try startRequest(multimodalRequest: multimodalRequest, requestID: requestID)
         return try await awaitRequest(request.task, requestID: request.id)
@@ -223,6 +235,12 @@ final class AgentSession {
         observer: AsyncThrowingStream<AgentEvent, Error>.Continuation? = nil
     ) throws -> (id: UUID, task: Task<AgentResponse, Error>) {
         guard activeAgentTask == nil else { throw AgentError.requestAlreadyRunning }
+        guard !multimodalRequest.userText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              multimodalRequest.inputEnvelope.isWellFormed,
+              multimodalRequest.inputEnvelope.text == multimodalRequest.userText,
+              multimodalRequest.inputEnvelope.imageAttachments.isEmpty == (multimodalRequest.image == nil) else {
+            throw AgentError.invalidInputEnvelope
+        }
         let requestID = requestedID ?? UUID()
         let task = Task<AgentResponse, Error> {
             try await run(multimodalRequest: multimodalRequest, requestID: requestID)
@@ -369,13 +387,21 @@ final class AgentSession {
                     let priorUserMessage = conversationHistory[userIndex]
                     conversationHistory[userIndex] = ModelMessage(
                         role: .user,
-                        content: priorUserMessage.content + [.image(image)]
+                        content: priorUserMessage.content + [.image(image)],
+                        inputEnvelope: priorUserMessage.inputEnvelope
                     )
                 }
             } else {
                 var userContent: [ModelContent] = [.text(userText)]
                 if let image = multimodalRequest.image { userContent.append(.image(image)) }
-                try await append(ModelMessage(role: .user, content: userContent), requestID: requestID)
+                try await append(
+                    ModelMessage(
+                        role: .user,
+                        content: userContent,
+                        inputEnvelope: multimodalRequest.inputEnvelope
+                    ),
+                    requestID: requestID
+                )
             }
 
             let promptUserText = conversationHistory.last(where: { $0.role == .user })
@@ -783,11 +809,14 @@ final class AgentSession {
     }
 
     private func providerMessagesIncludingTransientMealEvidence() -> [ModelMessage] {
-        guard let evidenceMessage = Self.transientMealEvidenceMessage(transientMealImageEvidence),
-              let userIndex = conversationHistory.lastIndex(where: { $0.role == .user }) else {
-            return conversationHistory
+        let messagesWithoutLocalMetadata = conversationHistory.map { message in
+            ModelMessage(role: message.role, content: message.content)
         }
-        var providerMessages = conversationHistory
+        guard let evidenceMessage = Self.transientMealEvidenceMessage(transientMealImageEvidence),
+              let userIndex = messagesWithoutLocalMetadata.lastIndex(where: { $0.role == .user }) else {
+            return messagesWithoutLocalMetadata
+        }
+        var providerMessages = messagesWithoutLocalMetadata
         providerMessages.insert(evidenceMessage, at: userIndex + 1)
         return providerMessages
     }
@@ -989,7 +1018,11 @@ final class AgentSession {
             case .text, .toolCall, .toolResult: return true
             }
         }
-        let persistedMessage = ModelMessage(role: message.role, content: persistedContent)
+        let persistedMessage = ModelMessage(
+            role: message.role,
+            content: persistedContent,
+            inputEnvelope: message.inputEnvelope
+        )
         let data = try JSONEncoder().encode(persistedMessage)
         let summaries = message.content.compactMap { content -> String? in
             switch content {
@@ -1015,7 +1048,8 @@ final class AgentSession {
             content: message.content.filter { content in
                 if case .image = content { return false }
                 return true
-            }
+            },
+            inputEnvelope: message.inputEnvelope
         )
     }
 
@@ -1123,12 +1157,14 @@ enum AgentError: Error, LocalizedError, Equatable, Sendable {
     case requestAlreadyRunning
     case requestAlreadyCompleted
     case transientImageRequired
+    case invalidInputEnvelope
     var errorDescription: String? {
         switch self {
         case .emptyResponse: "Agent 未返回有效响应"
         case .requestAlreadyRunning: "已有 Agent 请求正在运行"
         case .requestAlreadyCompleted: "Agent 请求已完成，无法继续恢复"
         case .transientImageRequired: "这条请求依赖临时照片或本机扫描线索，原请求不能仅靠文本恢复。请重新选择照片或重新扫描并发起新请求；本机没有保存原图或识别文本。"
+        case .invalidInputEnvelope: "输入草稿的文字、来源和临时附件不匹配，请检查后重新发送。"
         }
     }
 }

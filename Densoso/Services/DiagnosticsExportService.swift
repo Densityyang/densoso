@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import DensosoDomain
 
 struct DiagnosticsRuntimeInfo: Codable, Equatable, Sendable {
     let osVersion: String
@@ -80,6 +81,13 @@ struct DiagnosticsSyncStatus: Codable, Equatable, Sendable {
     let outboxStates: [String: Int]
     let importCursorCount: Int
     let latestSuccessfulImportAt: Date?
+    let importCursors: [DiagnosticsImportCursorStatus]
+}
+
+struct DiagnosticsImportCursorStatus: Codable, Equatable, Sendable {
+    let stream: String
+    let lastSuccessfulAt: Date?
+    let lookbackStart: Date?
 }
 
 struct DiagnosticsProjectionStatus: Codable, Equatable, Sendable {
@@ -103,6 +111,13 @@ struct DiagnosticsWatchStatus: Codable, Equatable, Sendable {
     }
 }
 
+struct DiagnosticsDailyLoopStatus: Codable, Equatable, Sendable {
+    let lastGeneratedAt: Date?
+    let nextRefreshEarliestAt: Date?
+
+    static let unavailable = Self(lastGeneratedAt: nil, nextRefreshEarliestAt: nil)
+}
+
 /// This is an explicit whitelist. Never add user records, payloads, messages, permissions,
 /// credentials, endpoints, workspace identifiers, or consent details to this document.
 struct DiagnosticsExportDocument: Codable, Equatable, Sendable {
@@ -115,6 +130,7 @@ struct DiagnosticsExportDocument: Codable, Equatable, Sendable {
     let sync: DiagnosticsSyncStatus
     let projections: DiagnosticsProjectionStatus
     let watch: DiagnosticsWatchStatus
+    let dailyLoop: DiagnosticsDailyLoopStatus
 }
 
 @MainActor
@@ -131,6 +147,7 @@ final class DiagnosticsExportService {
         context: ModelContext,
         mode: IntelligenceMode,
         watch: DiagnosticsWatchStatus,
+        dailyLoop: DiagnosticsDailyLoopStatus = .unavailable,
         now: Date = Date(),
         runtime: DiagnosticsRuntimeInfo = .current()
     ) throws -> DiagnosticsExportDocument {
@@ -160,7 +177,8 @@ final class DiagnosticsExportService {
             usage: usage,
             sync: sync,
             projections: projections,
-            watch: watch
+            watch: watch,
+            dailyLoop: dailyLoop
         )
     }
 
@@ -168,9 +186,16 @@ final class DiagnosticsExportService {
         context: ModelContext,
         mode: IntelligenceMode,
         watch: DiagnosticsWatchStatus,
+        dailyLoop: DiagnosticsDailyLoopStatus = .unavailable,
         now: Date = Date()
     ) throws -> URL {
-        let document = try makeDocument(context: context, mode: mode, watch: watch, now: now)
+        let document = try makeDocument(
+            context: context,
+            mode: mode,
+            watch: watch,
+            dailyLoop: dailyLoop,
+            now: now
+        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -245,12 +270,23 @@ final class DiagnosticsExportService {
         }
 
         let cursors = try context.fetch(FetchDescriptor<HealthKitImportCursor>())
+        let importCursors = cursors
+            .sorted { $0.stream < $1.stream }
+            .prefix(64)
+            .map { cursor in
+                DiagnosticsImportCursorStatus(
+                    stream: Self.safeHealthStream(cursor.stream),
+                    lastSuccessfulAt: cursor.lastSuccessfulAt,
+                    lookbackStart: cursor.lookbackStart
+                )
+            }
         return DiagnosticsSyncStatus(
             sampledOutboxEntries: outbox.count,
             hasMoreOutboxEntries: fetchedOutbox.count > 5_000,
             outboxStates: states,
             importCursorCount: cursors.count,
-            latestSuccessfulImportAt: cursors.compactMap(\.lastSuccessfulAt).max()
+            latestSuccessfulImportAt: cursors.compactMap(\.lastSuccessfulAt).max(),
+            importCursors: importCursors
         )
     }
 
@@ -304,6 +340,11 @@ final class DiagnosticsExportService {
             raw.lowercased()
         default: "other"
         }
+    }
+
+    private static func safeHealthStream(_ raw: String) -> String {
+        if raw == "workouts" { return "workouts" }
+        return HealthMetricID(rawValue: raw)?.rawValue ?? "other"
     }
 
     private static func saturatingAdd(_ lhs: Int, _ rhs: Int) -> Int {

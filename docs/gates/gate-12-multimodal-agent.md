@@ -25,6 +25,14 @@ as supplemental text in the same user turn as the sanitized image. It is sent
 once to the same AgentSession; if no text was supplied, the photo request keeps
 its default prompt.
 
+Each turn also carries a Codable `InputEnvelope` with a request ID, local
+timestamp, coarse source, user text, locale and bounded image attachment
+metadata. The envelope stores no image bytes, filenames, temporary paths or
+audio. Conversation storage keeps this safe envelope with the user text; the
+provider request omits local envelope metadata and receives image bytes only
+through the transient multimodal input. Speech and photo use `voiceAndImage`;
+manually edited text and photo use `textAndImage`.
+
 For images, DeepSeek must be the explicitly selected provider; a text-only or
 Qwen provider is rejected without fallback.
 Interrupted requests that depended on transient input fail closed. An image
@@ -33,6 +41,9 @@ a new request ID because OCR and candidate text are not persisted.
 
 ## Focused tests
 
+- DensosoDomain: `InputEnvelopeTests.testVoiceTextImageAndCombinedEnvelopeRoundTripOnlySafeMetadata`,
+  `InputEnvelopeTests.testEnvelopeRejectsSourceAndPayloadMismatches`, and
+  `InputEnvelopeTests.testVoiceCommandOriginMapsToCoarseEnvelopeSourceWithoutLosingLocale`.
 - `MultimodalAgentImageTests.testImageInputUsesAgentSessionAndStagesMealWithoutDirectCommitOrRawMediaPersistence`
 - `MultimodalAgentImageTests.testInterruptedImageRequestFailsClosedUntilImageIsReattachedAndKeepsBudget`
 - `MultimodalAgentImageTests.testImageRequiresVisionCapabilityAndSeparateMealImageConsent`
@@ -40,6 +51,7 @@ a new request ID because OCR and candidate text are not persisted.
 - `MultimodalAgentImageTests.testInterruptedEvidenceOnlyRequestRequiresNewRequestToReprovideEvidence`
 - `MultimodalAgentImageTests.testEvidenceOnlyRequestBoundsTransientEvidence`
 - `AgentCoordinatorTests.testRealRoundAndToolCountsAndPendingAction`
+- `AgentCoordinatorTests.testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages`
 - `AgentCoordinatorTests.testProviderReasoningContinuesInMemoryButIsNeverPersisted`
 - `AgentCoordinatorTests.testCloudProviderRequiresExplicitConsent`
 - `AgentCoordinatorTests.testNinthToolCallStopsRequest`

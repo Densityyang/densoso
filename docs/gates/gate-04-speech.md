@@ -18,9 +18,12 @@ It repairs speech capture only and does not authorize Phase 5 meal/photo work.
 - Route SpeechAnalyzer → legacy Speech → one Qwen ASR request → editable manual
   input. Qwen is eligible only when local transcription failed, audio frames exist,
   and `.speechAudio` consent plus the explicit fallback switch are both enabled.
-- Send a protected 16 kHz mono WAV to the independent `qwen3-asr-flash` adapter;
-  never send audio through the text/tool provider.
-- Delete temporary WAV data after success, failure, cancellation and cold launch.
+- Build a bounded 16 kHz mono WAV in memory for the independent
+  `qwen3-asr-flash` adapter; never write the production fallback buffer to disk
+  or send audio through the text/tool provider.
+- Clear the in-memory audio buffer after success, failure, cancellation and
+  capture restart. The older protected file store remains covered as a standalone
+  compatibility fixture but is not the production speech-service default.
 - Export redacted diagnostics containing stage, route type, format, backend,
   engine state and numeric errors, never keys, audio or transcript text.
 - Xcode 26.6 does not expose the online-documented `AnalyzerInputConverter` symbol;
@@ -49,17 +52,26 @@ The `speech` job has `needs: agent-provider` and must prove:
 7. audio consent is separate from health-text consent;
 8. the Qwen request uses `input_audio`, `qwen3-asr-flash`, Beijing workspace,
    Base64 WAV and `usage.seconds`;
-9. protected WAV and diagnostics are removed or redacted across every terminal path;
+9. the production audio buffer stays in memory, enforces the sixty-second size
+   ceiling and clears across every terminal path; diagnostics remain redacted;
 10. `.xcresult`, logs, summaries, routing matrix and provisional device matrix are retained.
+
+## Focused audio-buffer tests
+
+- `InMemorySpeechAudioStoreTests.testCreatesBoundedWAVInMemoryAndDiscardClearsIt`
+- `InMemorySpeechAudioStoreTests.testSixtySecondMemoryCeilingFailsClosedWithoutPartialAudio`
+- `ProtectedSpeechAudioStoreTests` continues to exercise the legacy protected
+  file-store implementation, which is not used as the production default.
 
 ## Real-device boundary
 
 The required iPhone 17 / iOS 26.6 built-in-microphone 20-cycle run remains
 provisional because the local app cannot currently be signed. The checked-in
 `gate-04-device-matrix.json` records zero executed cycles and makes no pass claim.
-Simulator tests accept either Complete or CompleteUntilFirstUserAuthentication
-because iOS 26 Simulator maps the requested protected class to the latter; the
-signed physical-device matrix must still verify the exact Complete class.
+The standalone legacy file-store fixture accepts either Complete or
+CompleteUntilFirstUserAuthentication because iOS 26 Simulator maps the requested
+protected class to the latter; the in-memory production path does not rely on
+file-protection behavior.
 The existing `blocked-by-signing` label must remain until signed evidence shows
 zero `OSStatus -50` and zero recording failures.
 
@@ -77,7 +89,7 @@ zero `OSStatus -50` and zero recording failures.
 | State/session | Failure stages, repeat/cancel/events/tap tests pass | Passed in Gate 4 job |
 | Routing | SpeechAnalyzer → legacy → Qwen → manual tests pass | Passed in Gate 4 job |
 | Qwen contract | Audio request/response/usage fixtures pass | Passed in Gate 4 job |
-| Privacy | WAV cleanup/protection and diagnostics redaction pass | Passed in Gate 4 job; Simulator protection mapping is documented below |
+| Privacy | Historical protected-store tests and redacted diagnostics pass; current in-memory default awaits Gate 4 CI on the updated head | New implementation uses a bounded in-memory WAV buffer |
 | Artifact | `.xcresult`, logs and JSON matrices retained | `gate-04-speech-results` — artifact ID `9837055363` |
 | Device | 20 physical cycles | Provisional; blocked by signing |
 | User decision | Approve or reject entry to Phase 5 | Approved 2026-09-08 |

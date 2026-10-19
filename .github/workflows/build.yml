@@ -409,6 +409,7 @@ jobs:
             -derivedDataPath "$DERIVED_DATA_PATH" \
             -only-testing:DensosoTests/SpeechCaptureStateMachineTests \
             -only-testing:DensosoTests/ProtectedSpeechAudioStoreTests \
+            -only-testing:DensosoTests/InMemorySpeechAudioStoreTests \
             -only-testing:DensosoTests/QwenASRProviderContractTests \
             -only-testing:DensosoTests/SpeechDiagnosticsRedactionTests \
             -only-testing:DensosoTests/SpeechBenchmarkEvaluatorTests \
@@ -1029,6 +1030,11 @@ jobs:
           echo "GATE12_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate12DerivedData" >> "$GITHUB_ENV"
           echo "GATE12_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate12MultimodalAgentTests.xcresult" >> "$GITHUB_ENV"
 
+      - name: Test focused InputEnvelope domain contract
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter InputEnvelopeTests 2>&1 | tee gate12-input-envelope-domain.log
+
       - name: Generate Xcode project and select iPhone Simulator
         run: |
           set -euo pipefail
@@ -1055,6 +1061,7 @@ jobs:
             -only-testing:DensosoTests/MultimodalAgentImageTests/testEvidenceOnlyRequestBoundsTransientEvidence \
             -only-testing:DensosoTests/MultimodalAgentImageTests/testImageRequiresVisionCapabilityAndSeparateMealImageConsent \
             -only-testing:DensosoTests/AgentCoordinatorTests/testRealRoundAndToolCountsAndPendingAction \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages \
             -only-testing:DensosoTests/AgentCoordinatorTests/testProviderReasoningContinuesInMemoryButIsNeverPersisted \
             -only-testing:DensosoTests/AgentCoordinatorTests/testCloudProviderRequiresExplicitConsent \
             -only-testing:DensosoTests/AgentCoordinatorTests/testNinthToolCallStopsRequest \
@@ -1088,6 +1095,7 @@ jobs:
           name: gate-12-multimodal-agent-results
           path: |
             Gate12MultimodalAgentTests.xcresult
+            gate12-input-envelope-domain.log
             gate12-multimodal-agent-tests.log
             gate12-test-summary.json
             gate12-contract-summary.json

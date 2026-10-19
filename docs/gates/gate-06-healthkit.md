@@ -29,6 +29,10 @@ change the V3 persistent schema.
 - Observer updates are only wakeups. The coordinator drains the relevant query
   before calling HealthKit's completion handler, guarded to complete once; an
   observer error completes without starting a sync or advancing a cursor.
+- The AI-native loop adds an opportunistic `BGAppRefreshTask` retry path for
+  local HealthKit synchronization, health-state projection, notification copy,
+  and Watch context. HealthKit observers remain the primary change signal; iOS
+  chooses whether and when to run the refresh.
 - A failure in one stream does not abort other independent streams; only the
   failed stream retains its prior cursor, and Settings reports partial completion.
 - After a prior user-initiated HealthKit request, app launch reinstalls observers
@@ -76,7 +80,10 @@ change the V3 persistent schema.
 8. No-data/read-scope ambiguity never becomes a false “read denied” state.
 9. Fake observer delivery verifies anchored synchronization occurs before the
    background completion callback.
-10. macOS CI retains the result bundle, test summary, logs and static-contract
+10. Background refresh registration is allowlisted in the generated app plist,
+    reschedules after each run, cancels on task expiration, and does not invoke
+    a model provider.
+11. macOS CI retains the result bundle, test summary, logs and static-contract
     report under `gate-06-healthkit-results`.
 
 ## Evidence record

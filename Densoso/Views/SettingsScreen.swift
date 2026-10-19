@@ -700,6 +700,10 @@ struct SettingsScreen: View {
                     isAvailable: watch.isAvailable,
                     isActivated: watch.isActivated,
                     hasError: watch.lastError != nil
+                ),
+                dailyLoop: DiagnosticsDailyLoopStatus(
+                    lastGeneratedAt: dependencies.dailyLoopSnapshotService.lastGeneratedAt,
+                    nextRefreshEarliestAt: dependencies.dailyLoopBackgroundScheduler.nextRefreshEarliestAt
                 )
             )
             healthAuthorizationError = nil
@@ -722,6 +726,7 @@ struct SettingsScreen: View {
 
         do {
             try await dependencies.healthKitService.requestAuthorization()
+            dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
             let healthRepository = HealthRepository(modelContext: modelContext)
             let backgroundDeliveryEnabled = try await dependencies.healthKitSyncCoordinator
                 .startBackgroundObservers(using: healthRepository)

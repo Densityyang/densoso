@@ -108,6 +108,34 @@ def main() -> int:
     if "import SwiftData" in sync_coordinator:
         errors.append("application HealthKit coordinator must depend on a persistence protocol, not SwiftData")
 
+    background_refresh = require_text(
+        "Densoso/Application/DailyLoop/DailyLoopBackgroundScheduler.swift",
+        (
+            "BGTaskScheduler.shared.register(",
+            "BGAppRefreshTaskRequest(identifier: Self.taskIdentifier)",
+            "task.expirationHandler",
+            "syncAvailableData(using: repository)",
+            "self.healthIntelligenceService.refresh()",
+            "self.dailyLoopSnapshotService.snapshot()",
+            "updateSnapshot(snapshot)",
+            "refreshApplicationContext()",
+            "guard isHealthAuthorized() else",
+        ),
+        errors,
+    )
+    if "ProviderRegistry" in background_refresh or "providerRegistry" in background_refresh:
+        errors.append("background health refresh must not route through an AI provider")
+    require_text(
+        "project.yml",
+        (
+            "BGTaskSchedulerPermittedIdentifiers:",
+            "com.densoso.densoso.daily-loop.refresh",
+            "UIBackgroundModes:",
+            "- fetch",
+        ),
+        errors,
+    )
+
     outbox = require_text(
         "Densoso/Services/HealthSyncOutboxWorker.swift",
         (

@@ -20,6 +20,7 @@ final class Dependencies {
     let healthIntelligenceService: HealthIntelligenceService
     let dailyLoopSnapshotService: DailyLoopSnapshotService
     let briefNotificationScheduler: BriefNotificationScheduler
+    let dailyLoopBackgroundScheduler: DailyLoopBackgroundScheduler
     let workoutPlanSchedulingService: WorkoutPlanSchedulingService
     let watchConnectivityCoordinator: PhoneWatchConnectivityCoordinator
     let healthSyncOutboxWorker: HealthSyncOutboxWorker
@@ -157,6 +158,15 @@ final class Dependencies {
             _ = try? healthIntelligenceService.refresh()
             watchConnectivityCoordinator.refreshApplicationContext()
         }
+        self.dailyLoopBackgroundScheduler = DailyLoopBackgroundScheduler(
+            modelContainer: modelContainer,
+            healthSyncCoordinator: healthKitSyncCoordinator,
+            healthIntelligenceService: healthIntelligenceService,
+            dailyLoopSnapshotService: dailyLoopSnapshotService,
+            notificationScheduler: briefNotificationScheduler,
+            watchConnectivityCoordinator: watchConnectivityCoordinator,
+            isHealthAuthorized: { healthKitService.hasRequestedAuthorization }
+        )
 
         // 尝试加载食材库
         if automaticallyLoadFoodDatabase {

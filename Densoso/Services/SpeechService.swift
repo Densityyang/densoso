@@ -64,7 +64,7 @@ final class SpeechService {
         governanceRepository: (any ProviderGovernanceRepository)? = nil,
         usageLedger: ProviderUsageLedger? = nil,
         providerConfiguration: ProviderConfigurationPreferences? = nil,
-        audioStore: any SpeechAudioStoring = ProtectedSpeechAudioStore(),
+        audioStore: any SpeechAudioStoring = InMemorySpeechAudioStore(),
         diagnostics: any SpeechDiagnosticsRecording = SpeechDiagnosticsStore(),
         policy: SpeechCapturePolicy = .phase4
     ) {

@@ -10,15 +10,17 @@ struct DensosoApp: App {
     init() {
         let launchConfiguration = AppLaunchConfiguration.current
         let persistence = PersistenceBootstrap.make(inMemory: launchConfiguration.isUITesting)
+        let dependencies = Dependencies(
+            automaticallyLoadFoodDatabase: !launchConfiguration.isUITesting,
+            modelContainer: persistence.container,
+            persistenceState: persistence.state
+        )
         self.launchConfiguration = launchConfiguration
         self.persistence = persistence
-        self._dependencies = State(
-            initialValue: Dependencies(
-                automaticallyLoadFoodDatabase: !launchConfiguration.isUITesting,
-                modelContainer: persistence.container,
-                persistenceState: persistence.state
-            )
-        )
+        self._dependencies = State(initialValue: dependencies)
+        if !launchConfiguration.isUITesting {
+            dependencies.dailyLoopBackgroundScheduler.register()
+        }
         AppState.shared.startupWarning = persistence.warning
     }
 
@@ -38,6 +40,7 @@ struct AppRoot: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AppState.self) private var appState
     @Environment(Dependencies.self) private var dependencies
+    @Environment(\.scenePhase) private var scenePhase
 
     @ViewBuilder
     var body: some View {
@@ -57,12 +60,12 @@ struct AppRoot: View {
                         try? await dependencies.healthKitSyncCoordinator.startBackgroundObservers(using: healthRepository)
                         _ = try? await dependencies.healthKitSyncCoordinator.syncAvailableData(using: healthRepository)
                     }
+                    dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
                     await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
                     dependencies.healthIntelligenceService.loadCachedBriefs()
                     _ = try? dependencies.healthIntelligenceService.refresh()
-                    await dependencies.briefNotificationScheduler.restoreSchedules(
-                        snapshot: try? dependencies.dailyLoopSnapshotService.snapshot()
-                    )
+                    let dailyLoopSnapshot = try? dependencies.dailyLoopSnapshotService.snapshot()
+                    await dependencies.briefNotificationScheduler.restoreSchedules(snapshot: dailyLoopSnapshot)
                     dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                     appState.pendingWorkoutPlan = AppIntentInbox.consumeWorkoutPlan()
                     appState.pendingMealText = AppIntentInbox.consumeMealText()
@@ -73,6 +76,11 @@ struct AppRoot: View {
                 }
                 .onChange(of: dependencies.healthIntelligenceService.dailyBrief) { _, _ in
                     Task { await refreshNotificationSnapshot() }
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active {
+                        dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
+                    }
                 }
         } else {
             PersistenceRecoveryView(

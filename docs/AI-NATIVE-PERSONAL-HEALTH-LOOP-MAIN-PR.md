@@ -1867,6 +1867,9 @@ image
 voiceAndImage
 ```
 
+如果图片配的是手动编辑文字，使用 `textAndImage`，避免把文字来源误标为语音。
+`imageAttachments` 只保存附件 ID 和媒体类型等安全元数据；图片字节与音频帧只在内存中传递。
+
 ---
 
 # 34. Voice-first Interaction

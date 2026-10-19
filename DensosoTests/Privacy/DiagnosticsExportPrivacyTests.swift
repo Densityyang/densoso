@@ -143,10 +143,15 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
             )
         )
 
+        let dailyLoopStatus = DiagnosticsDailyLoopStatus(
+            lastGeneratedAt: now.addingTimeInterval(-120),
+            nextRefreshEarliestAt: now.addingTimeInterval(3_600)
+        )
         let document = try DiagnosticsExportService(providerLogs: logs).makeDocument(
             context: context,
             mode: .cloudQwen,
             watch: DiagnosticsWatchStatus(isAvailable: true, isActivated: false, hasError: true),
+            dailyLoop: dailyLoopStatus,
             now: now,
             runtime: DiagnosticsRuntimeInfo(
                 osVersion: "18.0.1",
@@ -160,6 +165,7 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
             context: context,
             mode: .cloudQwen,
             watch: DiagnosticsWatchStatus(isAvailable: true, isActivated: false, hasError: true),
+            dailyLoop: dailyLoopStatus,
             now: now
         )
         defer { try? FileManager.default.removeItem(at: exportedURL) }
@@ -180,6 +186,17 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
         XCTAssertTrue(json.contains("retryable"))
         XCTAssertTrue(json.contains("complete"))
         XCTAssertTrue(json.contains("watch_error"))
+        XCTAssertEqual(document.dailyLoop, dailyLoopStatus)
+        XCTAssertEqual(document.sync.importCursorCount, 1)
+        XCTAssertEqual(
+            document.sync.importCursors,
+            [DiagnosticsImportCursorStatus(
+                stream: "other",
+                lastSuccessfulAt: now.addingTimeInterval(-120),
+                lookbackStart: nil
+            )]
+        )
+        XCTAssertTrue(json.contains("dailyLoop"))
         XCTAssertTrue(json.contains("redacted"))
 
         for forbidden in [

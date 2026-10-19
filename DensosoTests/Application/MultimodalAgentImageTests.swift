@@ -32,7 +32,10 @@ final class MultimodalAgentImageTests: XCTestCase {
         )
         let harness = try makeHarness(provider: provider, grantMealImage: true)
         let supplementalText = "配菜只有少量，不要额外加辣椒。"
-        let request = try imageRequest().includingSupplementalText(supplementalText)
+        let request = try imageRequest().includingSupplementalText(supplementalText, source: .qwenASR)
+        XCTAssertEqual(request.inputEnvelope.source, .voiceAndImage)
+        XCTAssertTrue(request.inputEnvelope.isWellFormed)
+        XCTAssertEqual(request.inputEnvelope.imageAttachments.map(\.mediaType), [.jpeg])
         let requestID = UUID()
 
         _ = try await harness.session.send(multimodalRequest: request, requestID: requestID)
@@ -53,6 +56,9 @@ final class MultimodalAgentImageTests: XCTestCase {
                 if case .image = content { return true }
                 return false
             }
+        })
+        XCTAssertTrue(requests.allSatisfy { request in
+            request.messages.allSatisfy { $0.inputEnvelope == nil }
         })
         let userMessages = requests[0].messages.filter { $0.role == .user }
         XCTAssertEqual(userMessages.count, 2)
@@ -79,6 +85,13 @@ final class MultimodalAgentImageTests: XCTestCase {
         let storedMessages = try context.fetch(FetchDescriptor<MessageRecord>())
         let storedText = storedMessages.compactMap { String(data: $0.contentData, encoding: .utf8) }.joined()
         XCTAssertTrue(storedText.contains(supplementalText))
+        let decodedStoredMessages = storedMessages.compactMap {
+            try? JSONDecoder().decode(ModelMessage.self, from: $0.contentData)
+        }
+        let storedUserEnvelope = try XCTUnwrap(decodedStoredMessages.first(where: { $0.role == .user })?.inputEnvelope)
+        XCTAssertEqual(storedUserEnvelope.source, .voiceAndImage)
+        XCTAssertEqual(storedUserEnvelope.text?.contains(supplementalText), true)
+        XCTAssertEqual(storedUserEnvelope.imageAttachments.count, 1)
         XCTAssertFalse(storedText.contains(request.image!.base64Data))
         XCTAssertFalse(storedText.contains("PRIVATE-IMAGE-BYTES"))
         XCTAssertFalse(storedText.contains(privateOCRText))

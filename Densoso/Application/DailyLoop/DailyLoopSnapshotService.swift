@@ -136,6 +136,7 @@ final class DailyLoopSnapshotService {
     private let agentSession: AgentSession
     private let workoutPlanSchedulingService: WorkoutPlanSchedulingService
     private let composer: DailyLoopSnapshotComposer
+    private(set) var lastGeneratedAt: Date?
 
     init(
         healthIntelligenceService: HealthIntelligenceService,
@@ -150,12 +151,14 @@ final class DailyLoopSnapshotService {
     }
 
     func snapshot(asOf date: Date = Date()) throws -> DailyLoopSnapshot {
-        composer.compose(
+        let snapshot = composer.compose(
             asOf: date,
             dailyBrief: healthIntelligenceService.dailyBrief,
             pendingActions: agentSession.pendingActions,
             workoutPlans: try workoutPlanSchedulingService.confirmedPlans(),
             trainingPlans: try workoutPlanSchedulingService.confirmedTrainingPlans()
         )
+        lastGeneratedAt = snapshot.generatedAt
+        return snapshot
     }
 }

@@ -45,6 +45,7 @@ def main() -> int:
             "minimumCloudFallbackSeconds", "interruptionBegan", "routeChanged",
             "mediaServicesReset", "warningAfterSeconds", "maximumDurationSeconds",
             "cleanupStaleTemporaryAudio", "capability: .speech",
+            "audioStore: any SpeechAudioStoring = InMemorySpeechAudioStore()",
         ],
         errors,
     )
@@ -79,6 +80,11 @@ def main() -> int:
         errors,
     )
     require_text(
+        ROOT / "Densoso/Infrastructure/Audio/InMemorySpeechAudioStore.swift",
+        ["maximumPCMBytes", "durationExceeded", "pcmData", "audio/wav", "wavHeader"],
+        errors,
+    )
+    require_text(
         ROOT / "Densoso/Infrastructure/Diagnostics/SpeechDiagnosticsStore.swift",
         ["allowlisted", "redacted", "completeFileProtection"],
         errors,
@@ -110,12 +116,22 @@ def main() -> int:
     test_files = [
         "DensosoTests/Application/SpeechCaptureStateMachineTests.swift",
         "DensosoTests/Application/ProtectedSpeechAudioStoreTests.swift",
+        "DensosoTests/Application/InMemorySpeechAudioStoreTests.swift",
         "DensosoTests/Infrastructure/LLM/QwenASRProviderContractTests.swift",
         "DensosoTests/Privacy/SpeechDiagnosticsRedactionTests.swift",
     ]
     for relative in test_files:
         if not (ROOT / relative).is_file():
             errors.append(f"missing {relative}")
+
+    require_text(
+        ROOT / "DensosoTests/Application/InMemorySpeechAudioStoreTests.swift",
+        [
+            "testCreatesBoundedWAVInMemoryAndDiscardClearsIt",
+            "testSixtySecondMemoryCeilingFailsClosedWithoutPartialAudio",
+        ],
+        errors,
+    )
 
     fixtures = [
         ROOT / "DensosoTests/Fixtures/Gate04/Providers/Qwen/qwen3-asr-flash-response.json",
@@ -156,6 +172,7 @@ def main() -> int:
             "validate_phase4_speech.py", "Gate04SpeechTests.xcresult",
             "gate-04-speech-results",
             "gate-04-routing-matrix.json",
+            "-only-testing:DensosoTests/InMemorySpeechAudioStoreTests",
         ],
         errors,
     )
@@ -173,6 +190,7 @@ def main() -> int:
         "audioSessionCategory": "record",
         "audioSessionMode": "measurement",
         "maximumCaptureSeconds": 60,
+        "productionAudioBuffer": "in-memory-only",
         "deviceEvidence": "provisional-blocked-by-signing",
         "protectedOCRRead": False,
     }

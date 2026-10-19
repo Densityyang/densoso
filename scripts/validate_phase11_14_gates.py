@@ -144,6 +144,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "evidence-only input must be rescanned under",
                 "supplemental text in the same user turn",
                 "same AgentSession",
+                "textAndImage",
+                "The envelope stores no image bytes",
                 "a text-only or Qwen provider is rejected without fallback",
             ),
             errors,
@@ -154,8 +156,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "inputText = speech.transcribedText",
                 "dependencies.agentSession.send(userText:",
                 "MealCaptureSheet(",
-                "request.includingSupplementalText(inputText)",
+                "request.includingSupplementalText(",
+                "inputText,",
                 "multimodalRequest: requestWithSupplement",
+                "inputEnvelope = VoiceCommandEnvelope(",
+                "asInputEnvelope()",
                 "onLocalPendingAction:",
                 "path != .cloudDeepSeek",
             ),
@@ -204,6 +209,48 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "transientMealImageEvidence = multimodalRequest.mealEvidence",
                 "providerMessagesIncludingTransientMealEvidence()",
                 "transientMealEvidenceMessage",
+                "messagesWithoutLocalMetadata",
+                "inputEnvelope: message.inputEnvelope",
+                "multimodalRequest.inputEnvelope.isWellFormed",
+                "case invalidInputEnvelope",
+            ),
+            errors,
+        )
+        require(
+            "Packages/DensosoDomain/Sources/DensosoDomain/InputEnvelope.swift",
+            (
+                "public struct InputEnvelope:",
+                "case voiceAndImage",
+                "imageAttachments: [ImageAttachment]",
+                "public let locale: String",
+                "asInputEnvelope(",
+            ),
+            errors,
+        )
+        require(
+            "Packages/DensosoDomain/Tests/DensosoDomainTests/InputEnvelopeTests.swift",
+            (
+                "testVoiceTextImageAndCombinedEnvelopeRoundTripOnlySafeMetadata",
+                "testEnvelopeRejectsSourceAndPayloadMismatches",
+                "testVoiceCommandOriginMapsToCoarseEnvelopeSourceWithoutLosingLocale",
+                "source: .textAndImage",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Infrastructure/LLM/LLMTypes.swift",
+            (
+                "let inputEnvelope: InputEnvelope",
+                "source: .image",
+                "private init(\n        userText: String,\n        image: ImageInput?",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/MultimodalAgentImageTests.swift",
+            (
+                "storedUserEnvelope.source, .voiceAndImage",
+                "request.messages.allSatisfy { $0.inputEnvelope == nil }",
             ),
             errors,
         )
@@ -257,6 +304,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "DensosoTests/Application/AgentCoordinatorTests.swift",
             (
                 "testRealRoundAndToolCountsAndPendingAction",
+                "testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages",
                 "testProviderReasoningContinuesInMemoryButIsNeverPersisted",
                 "testCloudProviderRequiresExplicitConsent",
                 "testNinthToolCallStopsRequest",
@@ -486,7 +534,9 @@ def main() -> int:
         12: (
             "gate-12-multimodal-agent",
             (
+                "--filter InputEnvelopeTests",
                 "-only-testing:DensosoTests/MultimodalAgentImageTests/testImageInputUsesAgentSessionAndStagesMealWithoutDirectCommitOrRawMediaPersistence",
+                "-only-testing:DensosoTests/AgentCoordinatorTests/testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages",
                 "-only-testing:DensosoTests/MultimodalAgentImageTests/testInterruptedImageRequestFailsClosedUntilImageIsReattachedAndKeepsBudget",
                 "-only-testing:DensosoTests/MultimodalAgentImageTests/testEvidenceOnlyRequestUsesEphemeralProviderMessageWithoutImageConsentOrPersistence",
                 "-only-testing:DensosoTests/MultimodalAgentImageTests/testInterruptedEvidenceOnlyRequestRequiresNewRequestToReprovideEvidence",

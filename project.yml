@@ -14,6 +14,12 @@ targets:
     resources:
       - path: Densoso/Resources
         type: folder
+    info:
+      properties:
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.densoso.densoso.daily-loop.refresh
+        UIBackgroundModes:
+          - fetch
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso

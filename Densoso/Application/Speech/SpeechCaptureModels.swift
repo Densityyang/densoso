@@ -65,7 +65,7 @@ struct SpeechCaptureFailure: Error, LocalizedError, Codable, Equatable, Sendable
         case .cloudUnavailable: "云端语音兜底当前不可用，可继续手动编辑。"
         case .cloudRejected: "云端语音服务未能处理本次音频。"
         case .cancelled: "录音已取消。"
-        case .temporaryAudio: "临时音频处理失败；文件已安排清理。"
+        case .temporaryAudio: "临时语音缓冲已清除；请缩短内容后重试。"
         }
     }
 }

@@ -46,15 +46,18 @@ enum ModelRole: String, Codable, Sendable {
 struct ModelMessage: Codable, Equatable, Sendable {
     let role: ModelRole
     let content: [ModelContent]
+    let inputEnvelope: InputEnvelope?
 
     init(role: ModelRole, text: String) {
         self.role = role
         self.content = [.text(text)]
+        self.inputEnvelope = nil
     }
 
-    init(role: ModelRole, content: [ModelContent]) {
+    init(role: ModelRole, content: [ModelContent], inputEnvelope: InputEnvelope? = nil) {
         self.role = role
         self.content = content
+        self.inputEnvelope = inputEnvelope
     }
 }
 
@@ -87,9 +90,9 @@ struct ImageInput: Codable, Equatable, Sendable {
     }
 }
 
-/// One user-initiated multimodal turn. The sanitized image and extracted local
-/// evidence are held only in memory; AgentSession persists the text turn and
-/// later attaches bounded evidence to a pending meal action.
+/// One user-initiated multimodal turn. The envelope contains only serializable
+/// safe metadata; sanitized image bytes and extracted local evidence stay in
+/// memory while AgentSession persists the text and envelope metadata.
 struct MultimodalModelRequest: Sendable {
     static let maximumJPEGBytes = 5_000_000
     static let maximumMealEvidenceCount = 12
@@ -97,11 +100,13 @@ struct MultimodalModelRequest: Sendable {
     let userText: String
     let image: ImageInput?
     let mealEvidence: [MealEvidence]
+    let inputEnvelope: InputEnvelope
 
     init(userText: String) {
         self.userText = userText
         self.image = nil
         self.mealEvidence = []
+        self.inputEnvelope = InputEnvelope(source: .text, text: userText)
     }
 
     /// Evidence-only requests keep local scanner output in memory for this
@@ -110,6 +115,7 @@ struct MultimodalModelRequest: Sendable {
         self.userText = userText
         self.image = nil
         self.mealEvidence = Self.boundedMealEvidence(mealEvidence)
+        self.inputEnvelope = InputEnvelope(source: .text, text: userText)
     }
 
     init(userText: String, imageJPEG: Data, mealEvidence: [MealEvidence]) throws {
@@ -126,22 +132,64 @@ struct MultimodalModelRequest: Sendable {
             detail: .high
         )
         self.mealEvidence = Self.boundedMealEvidence(mealEvidence)
-    }
-
-    func includingSupplementalText(_ supplementalText: String) -> MultimodalModelRequest {
-        let supplemental = supplementalText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !supplemental.isEmpty else { return self }
-        return MultimodalModelRequest(
-            userText: "\(userText)\n\n用户补充说明：\(supplemental)",
-            image: image,
-            mealEvidence: mealEvidence
+        self.inputEnvelope = InputEnvelope(
+            source: .image,
+            text: userText,
+            imageAttachments: [InputEnvelope.ImageAttachment(mediaType: .jpeg)]
         )
     }
 
-    private init(userText: String, image: ImageInput?, mealEvidence: [MealEvidence]) {
+    func includingSupplementalText(
+        _ supplementalText: String,
+        source: VoiceCommandEnvelope.Source = .manualText
+    ) -> MultimodalModelRequest {
+        let supplemental = supplementalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !supplemental.isEmpty else { return self }
+        let combinedText = "\(userText)\n\n用户补充说明：\(supplemental)"
+        let voiceCommand = VoiceCommandEnvelope(text: combinedText, source: source)
+        let envelope = voiceCommand.asInputEnvelope(imageAttachments: inputEnvelope.imageAttachments)
+        return MultimodalModelRequest(
+            userText: combinedText,
+            image: image,
+            mealEvidence: mealEvidence,
+            inputEnvelope: envelope
+        )
+    }
+
+    func applying(source: VoiceCommandEnvelope.Source) -> MultimodalModelRequest {
+        let voiceCommand = VoiceCommandEnvelope(text: userText, source: source)
+        return MultimodalModelRequest(
+            userText: userText,
+            image: image,
+            mealEvidence: mealEvidence,
+            inputEnvelope: voiceCommand.asInputEnvelope(imageAttachments: inputEnvelope.imageAttachments)
+        )
+    }
+
+    init(inputEnvelope: InputEnvelope) {
+        self.userText = inputEnvelope.text ?? ""
+        self.image = nil
+        self.mealEvidence = []
+        self.inputEnvelope = inputEnvelope
+    }
+
+    init(userText: String, inputEnvelope: InputEnvelope) {
+        self.userText = userText
+        self.image = nil
+        self.mealEvidence = []
+        self.inputEnvelope = inputEnvelope
+    }
+
+    private init(
+        userText: String,
+        image: ImageInput?,
+        mealEvidence: [MealEvidence],
+        inputEnvelope: InputEnvelope
+    ) {
         self.userText = userText
         self.image = image
         self.mealEvidence = Self.boundedMealEvidence(mealEvidence)
+        self.inputEnvelope = inputEnvelope
     }
 
     private static func boundedMealEvidence(_ evidence: [MealEvidence]) -> [MealEvidence] {

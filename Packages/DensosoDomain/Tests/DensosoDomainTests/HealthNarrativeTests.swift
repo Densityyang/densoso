@@ -7,7 +7,7 @@ final class HealthNarrativeTests: XCTestCase {
             headline: "今天可以按舒适节奏安排",
             summary: "目前可用证据没有显示明显偏离个人近期状态。",
             recommendations: ["继续留意睡眠后的感受。"],
-            tomorrowGuidance: nil,
+            tomorrowGuidance: "根据今晚休息再安排明天运动。",
             evidenceKeys: ["sleep.consistency"]
         )
 
