@@ -5,7 +5,7 @@ struct StageDailyCheckInTool: ConfirmationRequiredTool {
     var definition: ToolSchema {
         .strictObject(
             name: "stage_daily_checkin",
-            description: "根据用户明确自述准备每日状态待确认草稿，只允许记录用户说出的精力、压力和主观睡眠；不得依据 HealthKit 或其他生理指标推断。此工具不会保存，必须由用户确认。",
+            description: "根据本轮用户原话准备每日状态待确认草稿。精力、压力、主观睡眠和备注都必须能从原话核对；未提及或有冲突的字段不能猜测，需先向用户澄清。不得依据 HealthKit 或其他生理指标推断。此工具不会保存，必须由用户确认。",
             effect: .stagesAction,
             properties: [
                 "energy": .string(allowedValues: UserReportedEnergy.allCases.map(\.rawValue)),
@@ -25,7 +25,14 @@ struct StageDailyCheckInTool: ConfirmationRequiredTool {
     }
 
     func prepare(argumentsJSON: String, context: AgentSession) async throws -> ActionPayload {
-        .dailyCheckIn(try draft(argumentsJSON: argumentsJSON, asOf: Date()))
+        let asOf = Date()
+        let checkIn = try draft(argumentsJSON: argumentsJSON, asOf: asOf)
+        try DailyCheckInSelfReportResolver().validate(
+            checkIn,
+            userText: context.currentMealUserText(),
+            asOf: asOf
+        )
+        return .dailyCheckIn(checkIn)
     }
 
     /// Parses a self-report into a domain fact; it does not persist the fact.

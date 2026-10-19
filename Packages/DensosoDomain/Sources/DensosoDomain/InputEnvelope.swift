@@ -43,11 +43,11 @@ public struct InputEnvelope: Codable, Equatable, Sendable {
         let hasImages = !imageAttachments.isEmpty
         switch source {
         case .voice, .text:
-            hasText && !hasImages
+            return hasText && !hasImages
         case .image:
-            hasImages
+            return hasImages
         case .voiceAndImage, .textAndImage:
-            hasText && hasImages
+            return hasText && hasImages
         }
     }
 

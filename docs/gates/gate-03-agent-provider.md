@@ -20,6 +20,10 @@ domain-persistence pass on the same head, and does not authorize Speech work.
 - Enforce five Provider rounds and eight actually executed tool calls.
 - Replace stringified meal JSON with closed nested object/array schemas and local
   validation; add `create_workout_plan` as a staged action.
+- Stage daily check-ins only when the proposed energy, stress, subjective sleep,
+  note and date are supported by the current user's own words; missing or
+  conflicting subjective fields must be clarified and never inferred from
+  HealthKit.
 - Persist provider-neutral conversations, real tool counts, consent and usage.
 - Expose an ordered `AsyncThrowingStream<AgentEvent>` for each request, including
   a typed cancellation event; the legacy final-response API remains available.
@@ -50,6 +54,12 @@ pages as checked on 2026-09-01.
 
 ## Gate contract
 
+Daily-check-in tool arguments are checked against the current user turn before
+the confirmation-required tool can create a `PendingAction`. A missing or
+contradictory field, a note absent from the user's words, or a check-in about
+another person produces a tool error and no pending action. Confirmed check-ins
+stay in the local user-reported ledger and do not enter HealthKit projections.
+
 The `agent-provider` job has `needs: domain-persistence` and must prove:
 
 1. DeepSeek and Qwen request/response/tool/usage fixture contracts;
@@ -76,6 +86,7 @@ The `agent-provider` job has `needs: domain-persistence` and must prove:
 | Provider contracts | DeepSeek/Qwen fixtures pass | [Job 100092358853](https://github.com/Densityyang/densoso/actions/runs/33577727374/job/100092358853) — success |
 | Agent governance | 5/8/45, consent and injection tests pass | Gate3 selected tests — success |
 | Tool schemas | Closed schemas and typed meal arrays pass | Gate3 selected tests — success |
+| Daily check-in | User-reported values are locally checked against the current turn before staging | Added focused resolver coverage; pending CI on the updated head |
 | Usage/privacy | Ledger, budget and redaction tests pass | Gate3 selected tests — success |
 | Markdown | Restricted renderer tests pass | Gate3 selected tests — success |
 | Fixture packaging | Prompt-injection fixture is in the test bundle | `CpResource .../prompt-injection-phase3.yaml .../DensosoTests.xctest` observed in Gate3 build log |

@@ -145,6 +145,175 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         ))
     }
 
+    func testSelfReportResolverAcceptsExplicitFieldsAndVerbatimNote() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let checkIn = DailyCheckIn(
+            occurredAt: date,
+            energy: .low,
+            stress: .elevated,
+            subjectiveSleep: .poor,
+            note: "昨晚醒了几次"
+        )
+
+        XCTAssertNoThrow(try DailyCheckInSelfReportResolver().validate(
+            checkIn,
+            userText: "今天感觉特别累，压力很大，昨晚没睡好，备注昨晚醒了几次。",
+            asOf: date
+        ))
+    }
+
+    func testSelfReportResolverDoesNotInferStressFromFatigueAndSleep() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let checkIn = DailyCheckIn(
+            occurredAt: date,
+            energy: .low,
+            stress: .elevated,
+            subjectiveSleep: .poor
+        )
+
+        XCTAssertThrowsError(try DailyCheckInSelfReportResolver().validate(
+            checkIn,
+            userText: "今天感觉特别累，昨晚也没睡好。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .missing([.stress]))
+        }
+    }
+
+    func testSelfReportResolverRejectsContradictionsOtherPeopleAndInventedNotes() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let resolver = DailyCheckInSelfReportResolver()
+        let contradictory = DailyCheckIn(
+            occurredAt: date,
+            energy: .low,
+            stress: .elevated,
+            subjectiveSleep: .poor
+        )
+        XCTAssertThrowsError(try resolver.validate(
+            contradictory,
+            userText: "今天精力很好、压力不大，昨晚睡得很好。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .modelValueNotSupported(.energy))
+        }
+
+        XCTAssertThrowsError(try resolver.validate(
+            DailyCheckIn(
+                occurredAt: date,
+                energy: .low,
+                stress: .elevated,
+                subjectiveSleep: .poor
+            ),
+            userText: "我朋友今天很累、压力很大，昨晚没睡好。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .otherPerson)
+        }
+
+        XCTAssertThrowsError(try resolver.validate(
+            DailyCheckIn(
+                occurredAt: date,
+                energy: .low,
+                stress: .elevated,
+                subjectiveSleep: .poor,
+                note: "模型补出来的备注"
+            ),
+            userText: "今天感觉特别累，压力很大，昨晚没睡好。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .noteNotReported)
+        }
+    }
+
+    func testSelfReportResolverRejectsUnsupportedDateAndHonorsNegation() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let resolver = DailyCheckInSelfReportResolver()
+        XCTAssertThrowsError(try resolver.validate(
+            DailyCheckIn(
+                occurredAt: date.addingTimeInterval(-86_400),
+                energy: .typical,
+                stress: .low,
+                subjectiveSleep: .fair
+            ),
+            userText: "今天不太累，压力不大，昨晚睡得一般。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+        }
+
+        XCTAssertNoThrow(try resolver.validate(
+            DailyCheckIn(
+                occurredAt: date,
+                energy: .typical,
+                stress: .low,
+                subjectiveSleep: .fair
+            ),
+            userText: "今天不太累，压力不大，昨晚睡得一般。",
+            asOf: date
+        ))
+    }
+
+    func testAgentDoesNotStageInferredStressButStagesAndCommitsExplicitCheckIn() async throws {
+        let inferredProvider = ScriptedTextProvider(scripts: [
+            [
+                .toolCall(dailyCheckInCall(energy: "low", stress: "elevated", sleep: "poor")),
+                .completed(.toolUse),
+            ],
+            [.textDelta("请补充今天的压力感受，我再准备草稿。"), .completed(.completed)],
+        ])
+        let inferredContainer = try makeV5Container()
+        let inferredSession = makeAgentSession(provider: inferredProvider, container: inferredContainer)
+        _ = try await inferredSession.send(
+            userText: "请记录我的每日状态：今天感觉特别累，昨晚睡眠不好。"
+        )
+
+        XCTAssertTrue(inferredSession.pendingActions.isEmpty)
+        XCTAssertEqual(
+            try ModelContext(inferredContainer).fetchCount(FetchDescriptor<DailyCheckInRecord>()),
+            0
+        )
+        let secondRequest = try XCTUnwrap(inferredProvider.recordedRequests().dropFirst().first)
+        let toolResult = secondRequest.messages.flatMap(\.content)
+            .compactMap { content -> String? in
+                if case .toolResult(_, let value) = content { return value }
+                return nil
+            }
+            .first
+        let errorText = try XCTUnwrap(toolResult)
+        XCTAssertTrue(errorText.contains("压力"))
+
+        let explicitProvider = ScriptedTextProvider(scripts: [
+            [
+                .toolCall(dailyCheckInCall(
+                    energy: "low",
+                    stress: "elevated",
+                    sleep: "poor",
+                    note: "昨晚醒了几次"
+                )),
+                .completed(.toolUse),
+            ],
+            [.textDelta("每日状态草稿已准备，请确认。"), .completed(.completed)],
+        ])
+        let explicitContainer = try makeV5Container()
+        let explicitSession = makeAgentSession(provider: explicitProvider, container: explicitContainer)
+        _ = try await explicitSession.send(
+            userText: "请记录我的每日状态：今天感觉特别累，压力很大，昨晚睡眠不好，备注昨晚醒了几次。"
+        )
+
+        let context = ModelContext(explicitContainer)
+        XCTAssertEqual(explicitSession.pendingActions.count, 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyCheckInRecord>()), 0)
+        _ = try await explicitSession.confirmPendingAction(id: try XCTUnwrap(explicitSession.pendingActions.first?.id))
+        let saved = try XCTUnwrap(context.fetch(FetchDescriptor<DailyCheckInRecord>()).first)
+        XCTAssertEqual(saved.sourceRaw, "userReported")
+        XCTAssertEqual(saved.energyRaw, "low")
+        XCTAssertEqual(saved.stressRaw, "elevated")
+        XCTAssertEqual(saved.subjectiveSleepRaw, "poor")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyMetrics>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
+    }
+
     func testV4StoreMigratesToV5WithAnEmptyCheckInLedger() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("densoso-checkin-migration-\(UUID().uuidString)", isDirectory: true)
@@ -181,6 +350,50 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         let context = ModelContext(container)
         context.insert(ConversationRecord())
         try context.save()
+    }
+
+    private func makeAgentSession(
+        provider: any TextModelProvider,
+        container: ModelContainer
+    ) -> AgentSession {
+        let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: container)
+        let agentRepository = SwiftDataAgentRepository(modelContainer: container)
+        let governance = InMemoryProviderGovernanceRepository(granted: [(.deepSeek, .healthText)])
+        let preferences = IntelligencePreferences()
+        preferences.mode = .cloudDeepSeek
+        return AgentSession(
+            providerSelector: TestProviderSelector(provider),
+            intelligencePreferences: preferences,
+            providerConfiguration: ProviderConfigurationPreferences(),
+            governanceRepository: governance,
+            usageLedger: ProviderUsageLedger(repository: governance),
+            registry: ToolRegistry(),
+            confirmationCoordinator: ConfirmationCoordinator(
+                repository: confirmationRepository,
+                writeGate: PersistenceWriteGate(state: .writable)
+            ),
+            readRepository: agentRepository,
+            conversationRepository: agentRepository
+        )
+    }
+
+    private func dailyCheckInCall(
+        energy: String,
+        stress: String,
+        sleep: String,
+        note: String? = nil
+    ) -> ToolCall {
+        var arguments: [String: JSONValue] = [
+            "energy": .string(energy),
+            "stress": .string(stress),
+            "subjectiveSleep": .string(sleep),
+        ]
+        if let note { arguments["note"] = .string(note) }
+        return ToolCall(
+            id: "daily-check-in",
+            name: "stage_daily_checkin",
+            arguments: .object(arguments)
+        )
     }
 }
 

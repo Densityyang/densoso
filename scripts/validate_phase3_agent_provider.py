@@ -55,6 +55,16 @@ def main() -> int:
             errors.append(f"missing {relative}")
 
     require_text(
+        ROOT / "docs/gates/gate-03-agent-provider.md",
+        [
+            "Daily-check-in tool arguments are checked against the current user turn",
+            "a note absent from the user's words",
+            "do not enter HealthKit projections",
+        ],
+        errors,
+    )
+
+    require_text(
         ROOT / "Densoso" / "Infrastructure" / "LLM" / "ProviderError.swift",
         [
             "configurationMissing", "consentRequired", "unauthorized", "rateLimited",
@@ -290,7 +300,29 @@ def main() -> int:
     )
     require_text(
         ROOT / "Densoso" / "Agent" / "Tools" / "StageDailyCheckInTool.swift",
-        ["stage_daily_checkin", "ConfirmationRequiredTool", "UserReportedEnergy", "DailyCheckIn"],
+        [
+            "stage_daily_checkin",
+            "ConfirmationRequiredTool",
+            "UserReportedEnergy",
+            "DailyCheckIn",
+            "DailyCheckInSelfReportResolver().validate",
+            "context.currentMealUserText()",
+            "let asOf = Date()",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Agent" / "Tools" / "DailyCheckInSelfReportResolver.swift",
+        [
+            "containsUnnegated",
+            "modelValueNotSupported",
+            "noteNotReported",
+            "otherPerson",
+            "dateNotSupported",
+            "压力",
+            "notstressed",
+            "nottired",
+        ],
         errors,
     )
     require_text(
@@ -309,6 +341,11 @@ def main() -> int:
             "testToolCreatesOnlyPendingActionUntilUserConfirms",
             "testRejectingCheckInNeverPersistsTheUserReportedFact",
             "testV4StoreMigratesToV5WithAnEmptyCheckInLedger",
+            "testSelfReportResolverAcceptsExplicitFieldsAndVerbatimNote",
+            "testSelfReportResolverDoesNotInferStressFromFatigueAndSleep",
+            "testSelfReportResolverRejectsContradictionsOtherPeopleAndInventedNotes",
+            "testSelfReportResolverRejectsUnsupportedDateAndHonorsNegation",
+            "testAgentDoesNotStageInferredStressButStagesAndCommitsExplicitCheckIn",
         ],
         errors,
     )

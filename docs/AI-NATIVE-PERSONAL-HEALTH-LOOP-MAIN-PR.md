@@ -1984,6 +1984,8 @@ note = ...
 user-reported facts
 ```
 
+`stage_daily_checkin` 只能将本轮原话明确支持的字段放入待确认草稿。缺失、含糊、相互矛盾或涉及他人的字段必须先向用户澄清；不得从 HealthKit、生理指标或模型猜测补齐。备注必须来自原话，日期必须有原话依据。确认后只保存在本地 `DailyCheckInRecord`，来源标记为 `userReported`，不进入 HealthKit 或客观健康投影。
+
 不能被误当作：
 
 ```text
