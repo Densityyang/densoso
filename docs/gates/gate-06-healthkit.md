@@ -74,6 +74,10 @@ change the V3 persistent schema.
 3. Late samples are accepted into their local day and reprojected; empty pages
    advance their cursor and an explicit settings resync rebaselines read streams.
 4. One HealthKit Workout UUID yields at most one local Workout record.
+   The repository pushes the non-null HealthKit UUID filter into SwiftData,
+   collapses duplicate imported rows to the oldest record (then lowest record
+   UUID), leaves local workouts untouched, and reprojects every affected day;
+   imported changes and their cursor save together.
 5. A measured active-energy aggregate is not increased by Workout energy; the
    fallback active-energy interpretation is identical with or without a Workout.
 6. Meal/weight retries reuse their sync identifier and version; optional macros

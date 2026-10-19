@@ -87,13 +87,14 @@ final class HealthRepository: HealthSyncRepository {
         stream: String = "workouts"
     ) throws {
         try write(affecting: snapshots.map(\.startedAt)) { affectedDates in
-            let workouts = try modelContext.fetch(FetchDescriptor<WorkoutRecord>())
+            let importedPredicate = #Predicate<WorkoutRecord> { $0.healthKitUUID != nil }
+            let importedWorkouts = try modelContext.fetch(
+                FetchDescriptor<WorkoutRecord>(predicate: importedPredicate)
+            )
             var workoutsByHealthKitUUID: [UUID: WorkoutRecord] = [:]
-            for workout in workouts.sorted(by: {
-                $0.createdAt == $1.createdAt
-                    ? $0.id.uuidString < $1.id.uuidString
-                    : $0.createdAt < $1.createdAt
-            }) {
+            // Keep the global one-record-per-HealthKit-UUID invariant while
+            // avoiding materializing local workouts that have no HealthKit ID.
+            for workout in importedWorkouts.sorted(by: Self.preferredImportedWorkout) {
                 guard let healthKitUUID = workout.healthKitUUID else { continue }
                 if workoutsByHealthKitUUID[healthKitUUID] == nil {
                     workoutsByHealthKitUUID[healthKitUUID] = workout
@@ -117,7 +118,7 @@ final class HealthRepository: HealthSyncRepository {
                 }
             }
 
-            for healthKitUUID in deletedHealthKitUUIDs {
+            for healthKitUUID in Set(deletedHealthKitUUIDs) {
                 if let workout = workoutsByHealthKitUUID[healthKitUUID] {
                     affectedDates.insert(workout.date)
                     modelContext.delete(workout)
@@ -136,6 +137,12 @@ final class HealthRepository: HealthSyncRepository {
                 ))
             }
         }
+    }
+
+    private static func preferredImportedWorkout(_ lhs: WorkoutRecord, _ rhs: WorkoutRecord) -> Bool {
+        lhs.createdAt == rhs.createdAt
+            ? lhs.id.uuidString < rhs.id.uuidString
+            : lhs.createdAt < rhs.createdAt
     }
 
     func cursor(for stream: String) throws -> HealthKitImportCursor? {

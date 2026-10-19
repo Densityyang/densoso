@@ -82,28 +82,97 @@ final class HealthRepositoryTests: XCTestCase {
             dataQuality: .complete
         )
 
-        context.insert(WorkoutRecord(date: date, type: "old-copy", healthKitUUID: healthKitUUID))
-        context.insert(WorkoutRecord(date: date, type: "duplicate-copy", healthKitUUID: healthKitUUID))
+        let priorDay = Calendar.current.date(byAdding: .day, value: -2, to: date)!
+        let duplicateDay = Calendar.current.date(byAdding: .day, value: -1, to: date)!
+        let otherHealthKitUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000022")!
+        let olderCopy = WorkoutRecord(date: priorDay, type: "old-copy", notes: "preferred", healthKitUUID: healthKitUUID)
+        olderCopy.createdAt = Date(timeIntervalSince1970: 1_699_900_000)
+        let newerCopy = WorkoutRecord(date: duplicateDay, type: "duplicate-copy", notes: "discarded", healthKitUUID: healthKitUUID)
+        newerCopy.createdAt = Date(timeIntervalSince1970: 1_699_950_000)
+        let unrelatedDay = Calendar.current.date(byAdding: .day, value: 5, to: date)!
+        let unrelatedDuplicateDay = Calendar.current.date(byAdding: .day, value: 6, to: date)!
+        let unrelatedOlderCopy = WorkoutRecord(
+            date: unrelatedDay,
+            notes: "unrelated-preferred",
+            healthKitUUID: otherHealthKitUUID
+        )
+        unrelatedOlderCopy.createdAt = Date(timeIntervalSince1970: 1_699_800_000)
+        let unrelatedNewerCopy = WorkoutRecord(
+            date: unrelatedDuplicateDay,
+            notes: "unrelated-discarded",
+            healthKitUUID: otherHealthKitUUID
+        )
+        unrelatedNewerCopy.createdAt = Date(timeIntervalSince1970: 1_699_850_000)
+        let manualWorkout = WorkoutRecord(date: unrelatedDay, type: "manual")
+        context.insert(newerCopy)
+        context.insert(olderCopy)
+        context.insert(unrelatedNewerCopy)
+        context.insert(unrelatedOlderCopy)
+        context.insert(manualWorkout)
         try context.save()
 
         try repository.applyImportedWorkouts([first, updated], deletedHealthKitUUIDs: [], nextAnchorData: Data([1]))
 
         let workouts = try context.fetch(FetchDescriptor<WorkoutRecord>())
-        XCTAssertEqual(workouts.count, 1)
-        XCTAssertEqual(workouts[0].healthKitUUID, healthKitUUID)
-        XCTAssertEqual(workouts[0].logicalSessionID, logicalSessionID)
-        XCTAssertEqual(workouts[0].estimatedCaloriesBurned, 275)
-        XCTAssertEqual(workouts[0].energySource, WorkoutEnergySource.measured.rawValue)
+        let importedWorkouts = workouts.filter { $0.healthKitUUID == healthKitUUID }
+        XCTAssertEqual(importedWorkouts.count, 1)
+        XCTAssertEqual(importedWorkouts[0].notes, "preferred")
+        XCTAssertEqual(importedWorkouts[0].date, date)
+        XCTAssertEqual(importedWorkouts[0].logicalSessionID, logicalSessionID)
+        XCTAssertEqual(importedWorkouts[0].estimatedCaloriesBurned, 275)
+        XCTAssertEqual(importedWorkouts[0].energySource, WorkoutEnergySource.measured.rawValue)
+        let unrelatedWorkouts = workouts.filter { $0.healthKitUUID == otherHealthKitUUID }
+        XCTAssertEqual(unrelatedWorkouts.count, 1)
+        XCTAssertEqual(unrelatedWorkouts.first?.notes, "unrelated-preferred")
+        XCTAssertTrue(workouts.contains { $0.id == manualWorkout.id && $0.healthKitUUID == nil })
         XCTAssertEqual(try repository.cursor(for: "workouts")?.anchorData, Data([1]))
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).count, 0)
-        XCTAssertEqual(try context.fetch(FetchDescriptor<WorkoutRecord>()).first?.routeStatus, "unavailable")
+        XCTAssertEqual(importedWorkouts.first?.routeStatus, "unavailable")
+        let metricsByDay = Dictionary(
+            uniqueKeysWithValues: try context.fetch(FetchDescriptor<DailyMetrics>()).map { ($0.date, $0.workoutCount) }
+        )
+        XCTAssertEqual(metricsByDay[Calendar.current.startOfDay(for: priorDay)], 0)
+        XCTAssertEqual(metricsByDay[Calendar.current.startOfDay(for: duplicateDay)], 0)
+        XCTAssertEqual(metricsByDay[Calendar.current.startOfDay(for: date)], 1)
+        XCTAssertEqual(metricsByDay[Calendar.current.startOfDay(for: unrelatedDay)], 2)
+        XCTAssertEqual(metricsByDay[Calendar.current.startOfDay(for: unrelatedDuplicateDay)], 0)
 
         try repository.applyImportedWorkouts([], deletedHealthKitUUIDs: [healthKitUUID], nextAnchorData: Data([2]))
 
-        XCTAssertTrue(try context.fetch(FetchDescriptor<WorkoutRecord>()).isEmpty)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<WorkoutRecord>()).filter {
+            $0.healthKitUUID == healthKitUUID
+        }.count, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<WorkoutRecord>()).filter {
+            $0.healthKitUUID == otherHealthKitUUID
+        }.count, 1)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<WorkoutRecord>()).contains {
+            $0.id == manualWorkout.id && $0.healthKitUUID == nil
+        })
         XCTAssertEqual(try repository.cursor(for: "workouts")?.anchorData, Data([2]))
         let metrics = try context.fetch(FetchDescriptor<DailyMetrics>())
-        XCTAssertEqual(metrics.first?.workoutCount, 0)
+        XCTAssertEqual(metrics.first(where: { Calendar.current.isDate($0.date, inSameDayAs: date) })?.workoutCount, 0)
+    }
+
+    func testImportedWorkoutAndAnchorRollbackTogetherWhenSaveFails() throws {
+        let repository = HealthRepository(modelContext: context, willSave: { throw TestSaveError.injected })
+        let snapshot = try WorkoutSnapshot(
+            healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000023")!,
+            logicalSessionID: UUID(uuidString: "00000000-0000-0000-0000-000000000024")!,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            duration: 1_800,
+            activityType: "running",
+            energyInput: .init(measuredKilocalories: 250),
+            origin: .watchHealthKit,
+            sourceBundleIdentifier: "com.densoso.densoso",
+            dataQuality: .complete
+        )
+
+        XCTAssertThrowsError(try repository.applyImportedWorkouts(
+            [snapshot], deletedHealthKitUUIDs: [], nextAnchorData: Data([7])
+        ))
+        XCTAssertTrue(try context.fetch(FetchDescriptor<WorkoutRecord>()).isEmpty)
+        XCTAssertNil(try repository.cursor(for: "workouts"))
+        XCTAssertTrue(try context.fetch(FetchDescriptor<DailyMetrics>()).isEmpty)
     }
 
     func testCursorAndSampleProjectionRollbackTogetherWhenSaveFails() throws {
