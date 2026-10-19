@@ -391,17 +391,15 @@ final class HealthRepository: HealthSyncRepository {
         lastSuccessfulAt: Date = Date()
     ) throws {
         let calendar = Calendar.current
-        let normalizedBuckets = Dictionary(
-            buckets.map { (calendar.startOfDay(for: $0.startDate), $0.value) },
+        let bucketsByDay = Dictionary(
+            buckets.map { (calendar.startOfDay(for: $0.startDate), $0) },
             uniquingKeysWith: { _, newest in newest }
         )
-        let days = Array(normalizedBuckets.keys)
+        let days = Array(bucketsByDay.keys)
         let containsMeasuredValues = buckets.contains { $0.readState == .available && $0.value != nil }
         try write(affecting: days) { _ in
-            for (day, value) in normalizedBuckets {
-                guard let bucket = buckets.last(where: { calendar.startOfDay(for: $0.startDate) == day }) else {
-                    continue
-                }
+            for (day, bucket) in bucketsByDay {
+                let value = bucket.value
                 var snapshot = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
                 var readStates = snapshot.healthReadStates ?? [:]
                 readStates[metric.rawValue] = bucket.readState

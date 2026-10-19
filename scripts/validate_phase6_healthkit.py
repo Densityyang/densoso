@@ -174,6 +174,8 @@ def main() -> int:
             "pendingDayKeysJSON",
             "record.isDeleted",
             "availableDayKeys",
+            "let bucketsByDay = Dictionary(",
+            "for (day, bucket) in bucketsByDay",
         ),
         errors,
     )
@@ -340,6 +342,7 @@ def main() -> int:
             "testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable",
             "testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays",
             "testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner",
+            "testDuplicateHealthAggregateBucketsKeepLastBucketPerDay",
         ),
         errors,
     )

@@ -123,6 +123,7 @@ unknown so the live projection does not reuse it as current.
     `HealthRepositoryTests.testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable`,
     `HealthRepositoryTests.testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays`,
     `HealthRepositoryTests.testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner`,
+    `HealthRepositoryTests.testDuplicateHealthAggregateBucketsKeepLastBucketPerDay`,
     `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
     and `HealthRepositoryTests.testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval`.
 

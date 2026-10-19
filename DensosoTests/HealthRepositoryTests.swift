@@ -986,6 +986,37 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metric.energyQuality, "unavailable")
     }
 
+    func testDuplicateHealthAggregateBucketsKeepLastBucketPerDay() throws {
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        try HealthRepository(modelContext: context).applyHealthAggregates(
+            [
+                HealthAggregateBucket(
+                    startDate: day,
+                    endDate: Calendar.current.date(byAdding: .day, value: 1, to: day)!,
+                    value: 500
+                ),
+                HealthAggregateBucket(
+                    startDate: day.addingTimeInterval(60 * 60),
+                    endDate: Calendar.current.date(byAdding: .day, value: 1, to: day)!,
+                    value: 640
+                ),
+            ],
+            metric: .activeEnergy,
+            stream: HealthMetricID.activeEnergy.rawValue,
+            lookbackStart: day
+        )
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshot = try decoder.decode(
+            DailyHealthSnapshot.self,
+            from: XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first).payloadData
+        )
+        XCTAssertEqual(snapshot.activeEnergyKcal, 640)
+        XCTAssertEqual(snapshot.healthReadStates?[HealthMetricID.activeEnergy.rawValue], .available)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<DailyMetrics>()).first?.activeCaloriesKcal, 640)
+    }
+
     func testHealthSnapshotUpsertUpdatesOnlyTheMatchingDayKey() throws {
         let targetDate = Date(timeIntervalSince1970: 1_700_000_000)
         let targetDay = Calendar.current.startOfDay(for: targetDate)
