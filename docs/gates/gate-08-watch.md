@@ -14,9 +14,12 @@ database, microphone recorder, or workout tracker.
   The phone's `accepted` acknowledgement means its durable inbox owns the
   envelope, even if transcript review/action confirmation remains pending.
   On app startup, pending non-transcript commands are replayed in durable
-  arrival order; transcripts remain in the review queue rather than being
-  silently submitted. Terminal action failures close the command receipt;
-  transient persistence/commit failures leave it pending for recovery.
+  arrival order from receipt-filtered 64-row pages; transcripts remain in the
+  review queue rather than being silently submitted. Terminal action failures
+  close the command receipt; transient persistence/commit failures leave it
+  pending for recovery.
+- The phone reads complete single-workout plan history in stable 64-row pages;
+  action scheduling scans bounded pages and preserves multi-day-plan priority.
 - The Watch shows a small current-day snapshot, accepts system text dictation,
   and can confirm or reject an existing phone-side draft. A transcript creates
   a draft on the phone and does not itself write a health record.
@@ -34,6 +37,8 @@ database, microphone recorder, or workout tracker.
 1. iPhone and Watch schemes compile on the macOS runner.
 2. A 100-message offline/replay fixture preserves order and accepts each
    message ID once; conflicting payloads are rejected.
+   Pending inbox reads also preserve transcript and command order across a
+   65-receipt page boundary.
 3. Offline transcript recovery yields the same durable phone-side draft.
 4. Replayed confirmation is idempotent and a workout plan never enters the
    HealthKit workout outbox.

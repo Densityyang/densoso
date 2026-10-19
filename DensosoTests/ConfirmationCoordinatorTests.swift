@@ -102,6 +102,38 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(standaloneMetric.sourceFingerprint, confirmationMetric.sourceFingerprint)
     }
 
+    func testConfirmationDailySnapshotPagesMealsAndReadsLatestWeightOnly() async throws {
+        let harness = try Harness()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let context = ModelContext(harness.container)
+        let existingMealCount = DailyMetricsProjectionInputReader.fetchBatchSize + 1
+
+        for index in 0..<existingMealCount {
+            context.insert(MealRecord(
+                date: date,
+                totalCaloriesKcal: 10,
+                sourceActionKey: "daily-snapshot-page-meal-\(index)"
+            ))
+            context.insert(WeightRecord(
+                sourceActionKey: "daily-snapshot-page-weight-\(index)",
+                measuredAt: date.addingTimeInterval(TimeInterval(index)),
+                kilograms: 60 + Double(index) / 10
+            ))
+        }
+        try context.save()
+
+        let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
+        _ = try await harness.coordinator.confirm(id: action.id)
+
+        let resultContext = ModelContext(harness.container)
+        let record = try XCTUnwrap(resultContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+        XCTAssertEqual(snapshot.energyIntakeKcal?.likely, Double(existingMealCount * 10 + 420))
+        XCTAssertEqual(try XCTUnwrap(snapshot.weightKilograms), 66.4, accuracy: 0.000_001)
+    }
+
     func testMealConfirmationPreservesMeasuredHealthKitEnergyProjection() async throws {
         let harness = try Harness()
         let date = Date(timeIntervalSince1970: 1_700_000_000)
@@ -509,6 +541,47 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(actions.map(\.state), (0..<activeActionCount).map {
             $0.isMultiple(of: 2) ? .pending : .committing
         })
+    }
+
+    func testRecoveryPagesCommittingActionsAndSendingOutboxAcrossBoundaries() async throws {
+        let harness = try Harness()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let payloadData = try JSONEncoder().encode(Self.sampleMeal())
+        let context = ModelContext(harness.container)
+        let recordCount = SwiftDataConfirmationRepository.recoveryBatchSize + 1
+
+        for index in 0..<recordCount {
+            let createdAt = now.addingTimeInterval(TimeInterval(index - recordCount))
+            context.insert(PendingActionRecord(
+                idempotencyKey: String(format: "recover-action-%03d", index),
+                actionTypeRaw: ActionType.meal.rawValue,
+                canonicalPayloadData: payloadData,
+                payloadData: payloadData,
+                clientRequestID: UUID(),
+                stateRaw: PendingActionState.committing.rawValue,
+                createdAt: createdAt,
+                expiresAt: now.addingTimeInterval(3_600)
+            ))
+            let entry = HealthSyncOutboxEntry(
+                operation: "upsertMeal",
+                recordID: UUID(),
+                idempotencyKey: String(format: "recover-outbox-%03d", index),
+                state: HealthSyncState.sending.rawValue
+            )
+            entry.createdAt = createdAt
+            context.insert(entry)
+        }
+        try context.save()
+
+        try await harness.repository.recoverInterruptedCommits(now: now)
+
+        let resultContext = ModelContext(harness.container)
+        let actions = try resultContext.fetch(FetchDescriptor<PendingActionRecord>())
+        XCTAssertEqual(actions.count, recordCount)
+        XCTAssertTrue(actions.allSatisfy { $0.stateRaw == PendingActionState.pending.rawValue })
+        let outboxEntries = try resultContext.fetch(FetchDescriptor<HealthSyncOutboxEntry>())
+        XCTAssertEqual(outboxEntries.count, recordCount)
+        XCTAssertTrue(outboxEntries.allSatisfy { $0.state == HealthSyncState.retryable.rawValue && $0.nextAttemptAt == now })
     }
 
     func testTransactionFaultRollsBackThenRecoveryRestoresPending() async throws {

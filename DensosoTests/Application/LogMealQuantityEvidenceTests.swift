@@ -44,10 +44,7 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         _ = try await harness.session.send(userText: "我吃了一些米饭")
 
         XCTAssertTrue(harness.session.pendingActions.isEmpty)
-        let toolResults = provider.recordedRequests().last?.messages.flatMap(\.content).compactMap { content in
-            guard case .toolResult(_, let result) = content else { return nil }
-            return result
-        } ?? []
+        let toolResults = toolResultContents(in: provider.recordedRequests().last)
         XCTAssertTrue(toolResults.contains { $0.contains("clarification_required") })
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 0)
     }
@@ -87,11 +84,8 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
             .weak
         )
         XCTAssertEqual(provider.recordedRequests().count, 4)
-        let clarificationResults = provider.recordedRequests().flatMap(\.messages).flatMap(\.content).compactMap { content in
-            guard case .toolResult(_, let result) = content,
-                  result.contains("clarification_required") else { return nil }
-            return result
-        }
+        let clarificationResults = toolResultContents(in: provider.recordedRequests())
+            .filter { $0.contains("clarification_required") }
         XCTAssertEqual(clarificationResults.count, 1)
     }
 
@@ -128,10 +122,7 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
             ingredient.evidence.first { $0.sourceID == "portion:modelEstimate" }?.grade,
             .weak
         )
-        let toolResults = provider.recordedRequests().flatMap(\.messages).flatMap(\.content).compactMap { content in
-            guard case .toolResult(_, let result) = content else { return nil }
-            return result
-        }
+        let toolResults = toolResultContents(in: provider.recordedRequests())
         XCTAssertEqual(toolResults.filter { $0.contains("clarification_required") }.count, 1)
         XCTAssertFalse(toolResults.contains { $0.contains("clarification_limit_reached") })
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 0)
@@ -159,10 +150,7 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         _ = try await harness.session.send(userText: "今天又吃了些牛肉")
 
         XCTAssertTrue(harness.session.pendingActions.isEmpty)
-        let results = provider.recordedRequests().last?.messages.flatMap(\.content).compactMap { content in
-            guard case .toolResult(_, let result) = content else { return nil }
-            return result
-        } ?? []
+        let results = toolResultContents(in: provider.recordedRequests().last)
         XCTAssertTrue(results.contains { $0.contains("clarification_required") && $0.contains("mealEnergy") })
         XCTAssertFalse(results.contains { $0.contains("clarification_limit_reached") })
     }
@@ -189,10 +177,7 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         _ = try await harness.session.send(userText: "我今天吃了点东西")
 
         XCTAssertTrue(harness.session.pendingActions.isEmpty)
-        let lastResults = provider.recordedRequests().last?.messages.flatMap(\.content).compactMap { content in
-            guard case .toolResult(_, let result) = content else { return nil }
-            return result
-        } ?? []
+        let lastResults = toolResultContents(in: provider.recordedRequests().last)
         XCTAssertTrue(lastResults.contains { $0.contains("clarification_required") })
         XCTAssertFalse(lastResults.contains { $0.contains("clarification_limit_reached") })
     }
@@ -233,10 +218,7 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         _ = try await harness.session.send(userText: "米饭包装每份40克，牛奶每份250克。")
 
         XCTAssertTrue(harness.session.pendingActions.isEmpty)
-        let results = provider.recordedRequests().last?.messages.flatMap(\.content).compactMap { content in
-            guard case .toolResult(_, let result) = content else { return nil }
-            return result
-        } ?? []
+        let results = toolResultContents(in: provider.recordedRequests().last)
         XCTAssertTrue(results.contains { $0.contains("clarification_required") && $0.contains("quantityEvidence") })
     }
 
@@ -262,10 +244,7 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<MealRecord>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<PendingActionRecord>()), 0)
         let requests = provider.recordedRequests()
-        let toolResults = try XCTUnwrap(requests.last).messages.flatMap(\.content).compactMap { content in
-            guard case .toolResult(_, let result) = content else { return nil }
-            return result
-        }
+        let toolResults = toolResultContents(in: requests.last)
         XCTAssertEqual(toolResults.filter { $0.contains("clarification_required") }.count, 1)
         XCTAssertEqual(toolResults.filter { $0.contains("clarification_limit_reached") }.count, 1)
         XCTAssertTrue(toolResults.contains { $0.contains("maximumQuestions") && $0.contains("1") })
@@ -281,10 +260,7 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         _ = try await harness.session.send(userText: "我吃了一碗神秘食物")
 
         XCTAssertTrue(harness.session.pendingActions.isEmpty)
-        let results = provider.recordedRequests().last?.messages.flatMap(\.content).compactMap { content in
-            guard case .toolResult(_, let result) = content else { return nil }
-            return result
-        } ?? []
+        let results = toolResultContents(in: provider.recordedRequests().last)
         XCTAssertTrue(results.contains { $0.contains("clarification_required") && $0.contains("foodIdentity") })
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 0)
     }
@@ -301,6 +277,21 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
             "unit": unit.map(JSONValue.string) ?? .null,
             "gramsPerServing": gramsPerServing.map(JSONValue.number) ?? .null,
         ])
+    }
+
+    private func toolResultContents(in request: ModelRequest?) -> [String] {
+        guard let request else { return [] }
+        return toolResultContents(in: [request])
+    }
+
+    private func toolResultContents(in requests: [ModelRequest]) -> [String] {
+        return requests
+            .flatMap(\.messages)
+            .flatMap(\.content)
+            .compactMap { (content: ModelContent) -> String? in
+                guard case .toolResult(_, let result) = content else { return nil }
+                return result
+            }
     }
 
     private func mealCall(

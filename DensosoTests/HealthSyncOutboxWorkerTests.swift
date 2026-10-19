@@ -144,6 +144,61 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         XCTAssertEqual(nutrition.proteinGrams, 31)
     }
 
+    func testSupersessionCheckPagesPast64SameRecordRows() async throws {
+        HealthKitConnectionPreference.hasRequestedAuthorization = true
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let recordID = UUID(uuidString: "00000000-0000-0000-0000-000000000702")!
+        let syncIdentifier = "densoso.meal.\(recordID.uuidString.lowercased())"
+        let older = HealthSyncOutboxEntry(
+            operation: "upsertMeal",
+            recordID: recordID,
+            idempotencyKey: "outbox-old-version",
+            state: "pending",
+            syncIdentifier: syncIdentifier,
+            syncVersion: 1
+        )
+        older.createdAt = now
+        context.insert(older)
+
+        let futureRetryAt = now.addingTimeInterval(3_600)
+        for index in 0..<HealthSyncOutboxWorker.outboxBatchSize {
+            let decoy = HealthSyncOutboxEntry(
+                operation: "unrelated-\(index)",
+                recordID: recordID,
+                idempotencyKey: "outbox-decoy-\(index)",
+                state: "retryable",
+                nextAttemptAt: futureRetryAt,
+                syncIdentifier: "unrelated-\(index)",
+                syncVersion: 20
+            )
+            decoy.createdAt = now.addingTimeInterval(TimeInterval(index + 1))
+            context.insert(decoy)
+        }
+
+        let newer = HealthSyncOutboxEntry(
+            operation: "deleteMeal",
+            recordID: recordID,
+            idempotencyKey: "outbox-newer-version",
+            state: "retryable",
+            nextAttemptAt: futureRetryAt,
+            syncIdentifier: syncIdentifier,
+            syncVersion: 2
+        )
+        newer.createdAt = now.addingTimeInterval(HealthSyncOutboxWorker.outboxBatchSize + 1)
+        context.insert(newer)
+        try context.save()
+
+        let fake = FakeHealthStoreClient()
+        await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
+            .processPending(in: context, now: now)
+
+        XCTAssertEqual(older.state, "succeeded")
+        XCTAssertEqual(older.attemptCount, 1)
+        XCTAssertEqual(newer.state, "retryable")
+        let successfulWrites = await fake.successfulWritesSnapshot()
+        XCTAssertTrue(successfulWrites.isEmpty)
+    }
+
     func testNoWriteIsAttemptedBeforeTheUserStartsHealthKitAuthorization() async throws {
         HealthKitConnectionPreference.hasRequestedAuthorization = false
         let meal = MealRecord(date: Date(), totalCaloriesKcal: 300)

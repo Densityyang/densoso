@@ -204,22 +204,54 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
 
     private func isSuperseded(_ entry: HealthSyncOutboxEntry, in modelContext: ModelContext) throws -> Bool {
         let recordID = entry.recordID
-        let descriptor = FetchDescriptor<HealthSyncOutboxEntry>(
-            predicate: #Predicate { $0.recordID == recordID }
-        )
-        return try modelContext.fetch(descriptor).contains { candidate in
-            let entryIdentifier = HealthRepository.canonicalSyncIdentifier(
-                operation: entry.operation,
-                recordID: entry.recordID
-            ) ?? entry.syncIdentifier
-            let candidateIdentifier = HealthRepository.canonicalSyncIdentifier(
-                operation: candidate.operation,
-                recordID: candidate.recordID
-            ) ?? candidate.syncIdentifier
-            return candidate.id != entry.id
-                && candidate.recordID == entry.recordID
-                && candidateIdentifier == entryIdentifier
-                && candidate.syncVersion > entry.syncVersion
+        let minimumSyncVersion = entry.syncVersion
+        let entryIdentifier = HealthRepository.canonicalSyncIdentifier(
+            operation: entry.operation,
+            recordID: entry.recordID
+        ) ?? entry.syncIdentifier
+        let sortBy = [
+            SortDescriptor(\HealthSyncOutboxEntry.createdAt),
+            SortDescriptor(\HealthSyncOutboxEntry.idempotencyKey),
+        ]
+        var cursor: OutboxCursor?
+        while true {
+            let predicate: Predicate<HealthSyncOutboxEntry>
+            if let cursor {
+                let cursorCreatedAt = cursor.createdAt
+                let cursorIdempotencyKey = cursor.idempotencyKey
+                predicate = #Predicate<HealthSyncOutboxEntry> { candidate in
+                    candidate.recordID == recordID
+                        && candidate.syncVersion > minimumSyncVersion
+                        && (candidate.createdAt > cursorCreatedAt
+                            || (candidate.createdAt == cursorCreatedAt
+                                && candidate.idempotencyKey > cursorIdempotencyKey))
+                }
+            } else {
+                predicate = #Predicate<HealthSyncOutboxEntry> { candidate in
+                    candidate.recordID == recordID && candidate.syncVersion > minimumSyncVersion
+                }
+            }
+            var descriptor = FetchDescriptor<HealthSyncOutboxEntry>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.outboxBatchSize
+            let candidates = try modelContext.fetch(descriptor)
+            guard !candidates.isEmpty else { return false }
+
+            for candidate in candidates {
+                let candidateIdentifier = HealthRepository.canonicalSyncIdentifier(
+                    operation: candidate.operation,
+                    recordID: candidate.recordID
+                ) ?? candidate.syncIdentifier
+                if candidate.id != entry.id && candidateIdentifier == entryIdentifier {
+                    return true
+                }
+            }
+
+            guard let lastCandidate = candidates.last else { return false }
+            cursor = OutboxCursor(
+                createdAt: lastCandidate.createdAt,
+                idempotencyKey: lastCandidate.idempotencyKey
+            )
+            if candidates.count < Self.outboxBatchSize { return false }
         }
     }
 

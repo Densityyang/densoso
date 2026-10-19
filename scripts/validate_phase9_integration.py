@@ -64,6 +64,13 @@ def main() -> int:
             "AgentRequestRecord",
             "HealthSyncOutboxEntry.self",
             "HealthKitImportCursor.self",
+            "private static let backupReadBatchSize = 64",
+            "private func fetchAllRecords<Record: PersistentModel>(",
+            "descriptor.fetchLimit = Self.backupReadBatchSize",
+            "descriptor.fetchOffset = offset",
+            "let requestRecords = try fetchAllRecords(",
+            "of: AgentRequestRecord.self",
+            "of: MessageRecord.self",
         ),
         errors,
     )
@@ -84,6 +91,8 @@ def main() -> int:
             "not-part-of-backup",
             "XCTAssertEqual(exported.formatVersion, 5)",
             "energyIntakeKcal: try EstimateRange(low: 450, likely: 500, high: 600)",
+            "testBackupExportPagesMealHistoryAcross64RowBoundary",
+            "testRestorePagesInterruptedRequestHistoryAcross64RowBoundary",
         ),
         errors,
     )
@@ -402,6 +411,8 @@ def main() -> int:
             "blocked-by-signing",
             "Privacy-focused diagnostics export",
             "DiagnosticsExportPrivacyTests",
+            "Export reads every collection in ordered 64-row SwiftData pages",
+            "Restore likewise pages request/message history in batches",
         ),
         errors,
     )

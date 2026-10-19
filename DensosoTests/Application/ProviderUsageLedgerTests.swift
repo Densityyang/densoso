@@ -1,6 +1,5 @@
 import XCTest
 import SwiftData
-import DensosoDomain
 @testable import Densoso
 
 @MainActor
@@ -60,7 +59,7 @@ final class ProviderUsageLedgerTests: XCTestCase {
         )
         try await ledger.record(
             ProviderUsage(
-                provider: .qwen,
+                provider: ProviderID.qwen,
                 model: "fixture",
                 capability: .text,
                 inputTokens: 10,
@@ -71,10 +70,10 @@ final class ProviderUsageLedgerTests: XCTestCase {
             requestID: UUID()
         )
 
-        let summary = try await ledger.monthlySummary(provider: .qwen)
+        let summary = try await ledger.monthlySummary(provider: ProviderID.qwen)
         XCTAssertNil(summary.estimatedCostMicros)
         let exceeded = try await ledger.isSoftBudgetExceeded(
-            provider: .qwen,
+            provider: ProviderID.qwen,
             monthlyBudgetMicros: 1
         )
         XCTAssertFalse(exceeded)

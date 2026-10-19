@@ -125,9 +125,14 @@ def main() -> int:
             "static let activeActionBatchSize = 64",
             "activeDescriptor.fetchLimit = Self.activeActionBatchSize",
             "cursorIdempotencyKey",
+            "static let recoveryBatchSize = 64",
+            "actionDescriptor.fetchLimit = Self.recoveryBatchSize",
+            "outboxDescriptor.fetchLimit = Self.recoveryBatchSize",
+            "action.id > cursorID",
+            "entry.idempotencyKey > cursorKey",
             "let activePredicate = #Predicate<PendingActionRecord>",
-            "let committingPredicate = #Predicate<PendingActionRecord>",
-            "let sendingPredicate = #Predicate<HealthSyncOutboxEntry>",
+            "let committingPredicate: Predicate<PendingActionRecord>",
+            "let sendingPredicate: Predicate<HealthSyncOutboxEntry>",
             "private func pendingAction(id: UUID)",
             "private func receipt(actionID: UUID)",
             "descriptor.fetchLimit = 1",
@@ -211,6 +216,8 @@ def main() -> int:
             "testActiveActionsKeysetPagesPendingAndCommittingInCreatedAtOrder",
             "testConfirmedWeightCreatesAndUpdatesPrimaryWhenOnlySecondaryProfileExists",
             "testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts",
+            "testConfirmationDailySnapshotPagesMealsAndReadsLatestWeightOnly",
+            "testRecoveryPagesCommittingActionsAndSendingOutboxAcrossBoundaries",
         ),
         errors,
     )
@@ -231,8 +238,20 @@ def main() -> int:
         errors,
     )
     require_text(
+        ROOT / "Densoso" / "Services" / "DailyMetricsProjectionInputReader.swift",
+        ("static func meals(on date: Date, in modelContext: ModelContext) throws -> [MealRecord]",),
+        errors,
+    )
+    require_text(
         ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataConfirmationRepository.swift",
-        ("DailyMetricsProjectionInputReader.read", "projectionInputs.meals", "projectionInputs.workouts"),
+        (
+            "DailyMetricsProjectionInputReader.read",
+            "projectionInputs.meals",
+            "projectionInputs.workouts",
+            "DailyMetricsProjectionInputReader.meals(on: day, in: modelContext)",
+            "weightDescriptor.fetchLimit = 1",
+            "SortDescriptor(\\WeightRecord.id, order: .reverse)",
+        ),
         errors,
     )
 

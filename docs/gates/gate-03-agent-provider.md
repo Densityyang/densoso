@@ -39,6 +39,9 @@ domain-persistence pass on the same head, and does not authorize Speech work.
   64-row pages so a plan beginning earlier can still contribute a session today.
 - Read visible and resumable conversation messages in stable 64-row ordinal
   pages while preserving message order and the current-request resume filter.
+- Reset conversation messages and Agent request history in stable 64-row pages
+  inside the existing single-save boundary, preserving records from other
+  conversations.
 - Read confirmed user-reported preferences newest-first in stable 64-row
   keyset pages, retaining only the requested top-K results while preserving the
   existing ID tie-break at the cutoff timestamp; the focused fixture covers

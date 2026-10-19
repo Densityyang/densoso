@@ -74,6 +74,7 @@ def main() -> int:
             "Read today's normal schedule and active historical training plans",
             "visible and resumable conversation messages",
             "current-request resume filter",
+            "Reset conversation messages and Agent request history in stable 64-row pages",
             "stable 64-row",
             "invalid rows and valid ties across the page boundary",
         ],
@@ -413,6 +414,11 @@ def main() -> int:
             "private func fetchMessageData(conversationID: UUID, excludingRequestID: UUID?)",
             "descriptor.fetchLimit = Self.messageFetchBatchSize",
             "message.id > cursorID",
+            "static let conversationResetBatchSize = 64",
+            "messageDescriptor.fetchLimit = Self.conversationResetBatchSize",
+            "message.ordinal > cursorOrdinal",
+            "requestDescriptor.fetchLimit = Self.conversationResetBatchSize",
+            "request.requestID > cursorRequestID",
         ],
         errors,
     )
@@ -427,7 +433,10 @@ def main() -> int:
     )
     require_text(
         ROOT / "DensosoTests" / "ConversationPersistenceTests.swift",
-        ["testMessagePagesPreserveOrdinalAndResumeFilterAcrossPageBoundary"],
+        [
+            "testMessagePagesPreserveOrdinalAndResumeFilterAcrossPageBoundary",
+            "testResetPagesMessagesAndRequestsAcross64RowBoundaries",
+        ],
         errors,
     )
     require_text(

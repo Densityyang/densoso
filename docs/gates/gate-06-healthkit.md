@@ -63,6 +63,9 @@ below without changing V1–V5 schema identities.
 - `DailyMetrics` uses measured HealthKit resting/active energy when present.
   Otherwise it uses the existing BMR/TDEE estimate. Workout count remains
   descriptive; Workout energy is never added to daily active energy.
+- Workout-effort re-projection reads every same-day Workout record in stable
+  64-row `(date, id)` pages; a focused fixture matches an effort sample to a
+  workout on page 2.
 - Empty HealthKit reads map to “data unavailable or read scope unknown.” They do
   not claim that the user denied read access; there is no read permission denial
   conclusion inferred from an empty result. Prior measured values remain stored
@@ -115,6 +118,8 @@ unknown so the live projection does not reuse it as current.
     reads for the reverse body-mass lookup, and pending HealthKit outbox work.
     The outbox worker recovers interrupted writes and processes pending/retryable
     entries in 64-row batches using a stable `(createdAt, idempotencyKey)` cursor.
+    Supersession checks page same-record, higher-version candidates in the same
+    stable 64-row order and preserve canonical sync-identifier matching.
     Local daily weight refresh now selects its newest eligible same-day record
     with a one-row query and excludes the record being deleted.
     Focused
@@ -134,6 +139,8 @@ unknown so the live projection does not reuse it as current.
     `HealthRepositoryTests.testOutboxEnqueueReadsMatchingVersionsAndLatestReceiptAmongManyRows`,
     `HealthRepositoryTests.testDeletingLatestSameDayWeightFallsBackToNextLocalThenHealthKitWeight`,
     `HealthRepositoryTests.testBodyMassReplacementPrefersLatestSameDayLocalWeightOverHealthKitSummary`,
+    `HealthRepositoryTests.testWorkoutEffortReprojectionPagesSameDayWorkoutsAcross64RowBoundary`,
+    `HealthSyncOutboxWorkerTests.testSupersessionCheckPagesPast64SameRecordRows`,
     `HealthSyncOutboxWorkerTests.testInterruptedOutboxRecoveryAndProcessingPagePastBoundedBatch`,
     `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
     and `HealthRepositoryTests.testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval`.

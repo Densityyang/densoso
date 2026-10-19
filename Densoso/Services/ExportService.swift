@@ -12,6 +12,7 @@ final class ExportService {
 
     private static let formatVersion = 5
     private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5]
+    private static let backupReadBatchSize = 64
 
     struct BackupDocument: Codable {
         let formatVersion: Int
@@ -573,14 +574,25 @@ final class ExportService {
             // Request budgets are deliberately not part of backups: their resumable
             // transcript is not exported. Remove unfinished request fragments and all
             // request ledger rows so restore cannot leave orphan resumable work.
-            let requestRecords = try context.fetch(FetchDescriptor<AgentRequestRecord>())
+            let requestRecords = try fetchAllRecords(
+                of: AgentRequestRecord.self,
+                in: context,
+                sortedBy: [SortDescriptor(\AgentRequestRecord.requestID)]
+            )
             let unfinishedRequestIDs = Set(
                 requestRecords
                     .filter { $0.stateRaw != AgentRequestState.completed.rawValue }
                     .map(\.requestID)
             )
             if !unfinishedRequestIDs.isEmpty {
-                let messages = try context.fetch(FetchDescriptor<MessageRecord>())
+                let messages = try fetchAllRecords(
+                    of: MessageRecord.self,
+                    in: context,
+                    sortedBy: [
+                        SortDescriptor(\MessageRecord.ordinal),
+                        SortDescriptor(\MessageRecord.id),
+                    ]
+                )
                 for message in messages {
                     if let requestID = message.requestID, unfinishedRequestIDs.contains(requestID) {
                         context.delete(message)
@@ -951,40 +963,102 @@ final class ExportService {
     }
 
     private func makePayload(context: ModelContext) throws -> BackupPayload {
-        let profile = try context.fetch(FetchDescriptor<UserProfile>()).first
-        let profileRevisions = try context.fetch(FetchDescriptor<ProfileRevisionRecord>())
+        var profileDescriptor = FetchDescriptor<UserProfile>()
+        profileDescriptor.fetchLimit = 1
+        let profile = try context.fetch(profileDescriptor).first
+        let profileRevisions = try fetchAllRecords(
+            of: ProfileRevisionRecord.self,
+            in: context,
+            sortedBy: [
+                SortDescriptor(\ProfileRevisionRecord.effectiveFrom),
+                SortDescriptor(\ProfileRevisionRecord.id),
+            ]
+        )
             .sorted { $0.effectiveFrom == $1.effectiveFrom ? $0.id.uuidString < $1.id.uuidString : $0.effectiveFrom < $1.effectiveFrom }
-        let meals = try context.fetch(FetchDescriptor<MealRecord>())
+        let meals = try fetchAllRecords(
+            of: MealRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\MealRecord.date), SortDescriptor(\MealRecord.id)]
+        )
             .sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }
-        let workouts = try context.fetch(FetchDescriptor<WorkoutRecord>())
+        let workouts = try fetchAllRecords(
+            of: WorkoutRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\WorkoutRecord.date), SortDescriptor(\WorkoutRecord.id)]
+        )
             .sorted { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }
-        let weights = try context.fetch(FetchDescriptor<WeightRecord>())
+        let weights = try fetchAllRecords(
+            of: WeightRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\WeightRecord.measuredAt), SortDescriptor(\WeightRecord.id)]
+        )
             .sorted { $0.measuredAt == $1.measuredAt ? $0.id.uuidString < $1.id.uuidString : $0.measuredAt < $1.measuredAt }
-        let goals = try context.fetch(FetchDescriptor<GoalProfileRecord>())
+        let goals = try fetchAllRecords(
+            of: GoalProfileRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\GoalProfileRecord.effectiveFrom), SortDescriptor(\GoalProfileRecord.id)]
+        )
             .sorted { $0.effectiveFrom < $1.effectiveFrom }
-        let dailyCheckIns = try context.fetch(FetchDescriptor<DailyCheckInRecord>())
+        let dailyCheckIns = try fetchAllRecords(
+            of: DailyCheckInRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\DailyCheckInRecord.occurredAt), SortDescriptor(\DailyCheckInRecord.id)]
+        )
             .sorted {
                 $0.occurredAt == $1.occurredAt
                     ? $0.id.uuidString < $1.id.uuidString
                     : $0.occurredAt < $1.occurredAt
             }
-        let userPreferences = try context.fetch(FetchDescriptor<UserPreferenceRecord>())
+        let userPreferences = try fetchAllRecords(
+            of: UserPreferenceRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\UserPreferenceRecord.createdAt), SortDescriptor(\UserPreferenceRecord.id)]
+        )
             .sorted {
                 $0.createdAt == $1.createdAt
                     ? $0.id.uuidString < $1.id.uuidString
                     : $0.createdAt < $1.createdAt
             }
-        let healthSnapshots = try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+        let healthSnapshots = try fetchAllRecords(
+            of: DailyHealthSnapshotRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\DailyHealthSnapshotRecord.dayKey)]
+        )
             .sorted { $0.dayKey < $1.dayKey }
-        let scheduleEvents = try context.fetch(FetchDescriptor<ScheduleEvent>())
+        let scheduleEvents = try fetchAllRecords(
+            of: ScheduleEvent.self,
+            in: context,
+            sortedBy: [
+                SortDescriptor(\ScheduleEvent.startTime),
+                SortDescriptor(\ScheduleEvent.title),
+                SortDescriptor(\ScheduleEvent.createdAt),
+                SortDescriptor(\ScheduleEvent.notes),
+            ]
+        )
             .sorted { $0.startTime == $1.startTime ? $0.title < $1.title : $0.startTime < $1.startTime }
-        let dailyBriefs = try context.fetch(FetchDescriptor<DailyBriefRecord>())
+        let dailyBriefs = try fetchAllRecords(
+            of: DailyBriefRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\DailyBriefRecord.dayKey)]
+        )
             .sorted { $0.dayKey < $1.dayKey }
-        let weeklyBriefs = try context.fetch(FetchDescriptor<WeeklyBriefRecord>())
+        let weeklyBriefs = try fetchAllRecords(
+            of: WeeklyBriefRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\WeeklyBriefRecord.weekKey)]
+        )
             .sorted { $0.weekKey < $1.weekKey }
-        let weeklyReports = try context.fetch(FetchDescriptor<WeeklyReport>())
+        let weeklyReports = try fetchAllRecords(
+            of: WeeklyReport.self,
+            in: context,
+            sortedBy: [SortDescriptor(\WeeklyReport.weekStartDate)]
+        )
             .sorted { $0.weekStartDate < $1.weekStartDate }
-        let dailyMetrics = try context.fetch(FetchDescriptor<DailyMetrics>())
+        let dailyMetrics = try fetchAllRecords(
+            of: DailyMetrics.self,
+            in: context,
+            sortedBy: [SortDescriptor(\DailyMetrics.date)]
+        )
             .sorted { $0.date < $1.date }
 
         return BackupPayload(
@@ -1223,6 +1297,26 @@ final class ExportService {
                 )
             }
         )
+    }
+
+    private func fetchAllRecords<Record: PersistentModel>(
+        of type: Record.Type,
+        in context: ModelContext,
+        sortedBy sortDescriptors: [SortDescriptor<Record>]
+    ) throws -> [Record] {
+        var descriptor = FetchDescriptor<Record>(sortBy: sortDescriptors)
+        descriptor.fetchLimit = Self.backupReadBatchSize
+        var offset = 0
+        var records: [Record] = []
+        while true {
+            descriptor.fetchOffset = offset
+            let page = try context.fetch(descriptor)
+            guard !page.isEmpty else { break }
+            records.append(contentsOf: page)
+            offset += page.count
+            if page.count < Self.backupReadBatchSize { break }
+        }
+        return records
     }
 
     func checksum(for payload: BackupPayload) throws -> String {

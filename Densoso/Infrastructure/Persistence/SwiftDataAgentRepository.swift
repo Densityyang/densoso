@@ -8,6 +8,7 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
     static let messageFetchBatchSize = 64
     static let userPreferenceFetchBatchSize = 64
     static let scheduleEventFetchBatchSize = 64
+    static let conversationResetBatchSize = 64
 
     private struct UserPreferenceCursor {
         let createdAt: Date
@@ -515,12 +516,58 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
     }
 
     func reset(conversationID: UUID) throws {
-        let messagePredicate = #Predicate<MessageRecord> { $0.conversationID == conversationID }
-        let messages = try modelContext.fetch(FetchDescriptor<MessageRecord>(predicate: messagePredicate))
-        for message in messages { modelContext.delete(message) }
-        let requestPredicate = #Predicate<AgentRequestRecord> { $0.conversationID == conversationID }
-        let requests = try modelContext.fetch(FetchDescriptor<AgentRequestRecord>(predicate: requestPredicate))
-        for request in requests { modelContext.delete(request) }
+        let messageSortBy = [
+            SortDescriptor(\MessageRecord.ordinal),
+            SortDescriptor(\MessageRecord.id),
+        ]
+        var messageCursor: MessageCursor?
+        while true {
+            let messagePredicate: Predicate<MessageRecord>
+            if let messageCursor {
+                let cursorOrdinal = messageCursor.ordinal
+                let cursorID = messageCursor.id
+                messagePredicate = #Predicate<MessageRecord> { message in
+                    message.conversationID == conversationID
+                        && (message.ordinal > cursorOrdinal
+                            || (message.ordinal == cursorOrdinal && message.id > cursorID))
+                }
+            } else {
+                messagePredicate = #Predicate<MessageRecord> { $0.conversationID == conversationID }
+            }
+            var messageDescriptor = FetchDescriptor<MessageRecord>(
+                predicate: messagePredicate,
+                sortBy: messageSortBy
+            )
+            messageDescriptor.fetchLimit = Self.conversationResetBatchSize
+            let messages = try modelContext.fetch(messageDescriptor)
+            guard let lastMessage = messages.last else { break }
+            for message in messages { modelContext.delete(message) }
+            messageCursor = MessageCursor(ordinal: lastMessage.ordinal, id: lastMessage.id)
+        }
+
+        var requestCursor: UUID?
+        let requestSortBy = [SortDescriptor(\AgentRequestRecord.requestID)]
+        while true {
+            let requestPredicate: Predicate<AgentRequestRecord>
+            if let requestCursor {
+                let cursorRequestID = requestCursor
+                requestPredicate = #Predicate<AgentRequestRecord> { request in
+                    request.conversationID == conversationID && request.requestID > cursorRequestID
+                }
+            } else {
+                requestPredicate = #Predicate<AgentRequestRecord> { $0.conversationID == conversationID }
+            }
+            var requestDescriptor = FetchDescriptor<AgentRequestRecord>(
+                predicate: requestPredicate,
+                sortBy: requestSortBy
+            )
+            requestDescriptor.fetchLimit = Self.conversationResetBatchSize
+            let requests = try modelContext.fetch(requestDescriptor)
+            guard let lastRequest = requests.last else { break }
+            for request in requests { modelContext.delete(request) }
+            requestCursor = lastRequest.requestID
+        }
+
         var conversationDescriptor = FetchDescriptor<ConversationRecord>(
             predicate: #Predicate { $0.id == conversationID }
         )

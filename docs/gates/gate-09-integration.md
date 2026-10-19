@@ -20,6 +20,10 @@ acceptance.
 - Backups use format version 5 for profile history, weights, goals, health
   snapshots, schedules, cached briefs and weekly reports while preserving
   V2/V3/V4 import.
+  Export reads every collection in ordered 64-row SwiftData pages, retaining
+  the complete backup contents and existing serialization order.
+  Restore likewise pages request/message history in batches while retaining
+  completed and legacy conversation messages and removing unfinished fragments.
   Active credentials, provider consent, HealthKit cursors and pending sync
   outbox rows are not restored as user data; outbox/cursors are reset on
   restore. Schedule records may contain a confirmed WorkoutKit plan intent.
@@ -44,7 +48,9 @@ acceptance.
 3. HealthKit changes flow into local daily summaries and Trends; Watch messages
    route to the same phone-side confirmation draft.
 4. Backup V2/V3/V4 compatibility and V5 round-trip are tested, including that
-   secrets, consent, cursors and active outbox state are excluded/reset.
+   secrets, consent, cursors and active outbox state are excluded/reset; a
+   65-meal export fixture and 65-request restore fixture cross their page
+   boundaries without losing eligible records.
 5. The complete Densoso unit suite and UI suite run on the iPhone 17 simulator
    with coverage, `.xcresult` bundles, logs and four-screen captures retained.
 6. Integration evidence is uploaded as `gate-09-integration-results`.

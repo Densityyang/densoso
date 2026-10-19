@@ -80,6 +80,37 @@ final class WatchMessageInboxStoreTests: XCTestCase {
         XCTAssertEqual(try store.pendingTranscripts().map(\.messageID), [transcript.messageID])
     }
 
+    func testPendingInboxPagesMoreThan64ReceiptsInArrivalOrder() throws {
+        let store = try makeStore()
+        var expectedTranscriptIDs: [UUID] = []
+        var expectedCommandIDs: [UUID] = []
+
+        for index in 0..<65 {
+            let messageID = UUID()
+            let envelope: WatchMessageEnvelope
+            if index.isMultiple(of: 2) {
+                envelope = WatchMessageEnvelope(
+                    messageID: messageID,
+                    createdAt: Date(timeIntervalSince1970: TimeInterval(100 - index)),
+                    payload: .transcript("语音记录 \(index)")
+                )
+                expectedTranscriptIDs.append(messageID)
+            } else {
+                envelope = WatchMessageEnvelope(
+                    messageID: messageID,
+                    createdAt: Date(timeIntervalSince1970: TimeInterval(100 - index)),
+                    payload: .confirm(actionID: UUID())
+                )
+                expectedCommandIDs.append(messageID)
+            }
+            XCTAssertEqual(try store.ingest(envelope), .accepted)
+        }
+
+        XCTAssertEqual(try store.pendingTranscripts().map(\.messageID), expectedTranscriptIDs)
+        XCTAssertEqual(try store.pendingCommandEnvelopes().map(\.messageID), expectedCommandIDs)
+        XCTAssertEqual(try store.receiptCount(), 65)
+    }
+
     func testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder() throws {
         let store = try makeStore()
         let messages = (0..<4).map { index in

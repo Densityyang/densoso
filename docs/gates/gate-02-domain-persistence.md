@@ -86,7 +86,13 @@ to domain/persistence behavior and have a dedicated evidence artifact.
 12. standalone and confirmation-driven daily projections page same-day meals
     and workouts in stable 64-row keyset batches while preserving totals and
     source fingerprints, covered by
-    `ConfirmationCoordinatorTests.testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts`.
+    `ConfirmationCoordinatorTests.testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts`;
+    confirmation-driven health snapshots also page meal inputs and select the
+    latest local weight with a one-row query, covered by
+    `ConfirmationCoordinatorTests.testConfirmationDailySnapshotPagesMealsAndReadsLatestWeightOnly`.
+13. crash recovery pages committing actions and sending outbox rows in stable
+    64-row keyset batches, then saves all recovered states once, covered by
+    `ConfirmationCoordinatorTests.testRecoveryPagesCommittingActionsAndSendingOutboxAcrossBoundaries`.
 
 The restore routine verifies store/WAL/SHM checksums, stages replacement files,
 and rolls back ordinary file-operation errors. The immutable migration backup is

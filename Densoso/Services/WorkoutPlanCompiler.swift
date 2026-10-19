@@ -143,6 +143,8 @@ struct WorkoutKitPlanSchedulingClient: WorkoutPlanSchedulingClient {
 @MainActor
 @Observable
 final class WorkoutPlanSchedulingService {
+    private static let confirmedPlanFetchBatchSize = 64
+
     private let modelContainer: ModelContainer
     private let client: any WorkoutPlanSchedulingClient
     private let multiDayService: TrainingPlanSchedulingService
@@ -183,16 +185,10 @@ final class WorkoutPlanSchedulingService {
 
     private func scheduleConfirmedPlanOnce(actionID: UUID) async throws {
         let context = ModelContext(modelContainer)
-        let singlePlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix
-        let multiPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
-        let predicate = #Predicate<ScheduleEvent> {
-            ($0.notes ?? "").contains(singlePlanPrefix)
-                || ($0.notes ?? "").contains(multiPlanPrefix)
+        guard let match = try findConfirmedPlanEvent(actionID: actionID, in: context) else {
+            throw WorkoutPlanCompileError.confirmedPlanNotFound
         }
-        let events = try context.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
-        if events.contains(where: {
-            ConfirmedTrainingPlanEntry.decode(notes: $0.notes)?.actionID == actionID
-        }) {
+        if match.isTrainingPlan {
             do {
                 try await multiDayService.scheduleConfirmedPlan(actionID: actionID)
                 lastError = nil
@@ -202,9 +198,8 @@ final class WorkoutPlanSchedulingService {
             }
             return
         }
-        guard let event = events.first(where: {
-            ConfirmedWorkoutPlanEntry.decode(notes: $0.notes)?.actionID == actionID
-        }), var entry = ConfirmedWorkoutPlanEntry.decode(notes: event.notes) else {
+        let event = match.event
+        guard var entry = ConfirmedWorkoutPlanEntry.decode(notes: event.notes) else {
             throw WorkoutPlanCompileError.confirmedPlanNotFound
         }
         guard entry.state != .scheduled else { return }
@@ -252,12 +247,83 @@ final class WorkoutPlanSchedulingService {
         let context = ModelContext(modelContainer)
         let prefix = ConfirmedWorkoutPlanEntry.notesPrefix
         let predicate = #Predicate<ScheduleEvent> { ($0.notes ?? "").contains(prefix) }
-        return try context.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
+        return try fetchConfirmedPlanEvents(in: context, predicate: predicate)
             .compactMap { ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) }
             .sorted { ($0.draft.scheduledAt ?? .distantPast) > ($1.draft.scheduledAt ?? .distantPast) }
     }
 
     func confirmedTrainingPlans() throws -> [ConfirmedTrainingPlanEntry] {
         try multiDayService.confirmedPlans()
+    }
+
+    private func confirmedPlanEventDescriptor() -> FetchDescriptor<ScheduleEvent> {
+        let singlePlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix
+        let multiPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
+        let predicate = #Predicate<ScheduleEvent> {
+            ($0.notes ?? "").contains(singlePlanPrefix)
+                || ($0.notes ?? "").contains(multiPlanPrefix)
+        }
+        let sortDescriptors: [SortDescriptor<ScheduleEvent>] = [
+            SortDescriptor(\ScheduleEvent.date),
+            SortDescriptor(\ScheduleEvent.startTime),
+            SortDescriptor(\ScheduleEvent.createdAt),
+            SortDescriptor(\ScheduleEvent.title),
+            SortDescriptor(\ScheduleEvent.notes),
+        ]
+        var descriptor = FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)
+        descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize
+        return descriptor
+    }
+
+    private func fetchConfirmedPlanEvents(
+        in context: ModelContext,
+        predicate: Predicate<ScheduleEvent>
+    ) throws -> [ScheduleEvent] {
+        let sortDescriptors: [SortDescriptor<ScheduleEvent>] = [
+            SortDescriptor(\ScheduleEvent.date),
+            SortDescriptor(\ScheduleEvent.startTime),
+            SortDescriptor(\ScheduleEvent.createdAt),
+            SortDescriptor(\ScheduleEvent.title),
+            SortDescriptor(\ScheduleEvent.notes),
+        ]
+        var descriptor = FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)
+        descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize
+        var offset = 0
+        var events: [ScheduleEvent] = []
+        while true {
+            descriptor.fetchOffset = offset
+            let page = try context.fetch(descriptor)
+            guard !page.isEmpty else { break }
+            events.append(contentsOf: page)
+            offset += page.count
+            if page.count < Self.confirmedPlanFetchBatchSize { break }
+        }
+        return events
+    }
+
+    private func findConfirmedPlanEvent(
+        actionID: UUID,
+        in context: ModelContext
+    ) throws -> (event: ScheduleEvent, isTrainingPlan: Bool)? {
+        var descriptor = confirmedPlanEventDescriptor()
+        var offset = 0
+        var singlePlanMatch: ScheduleEvent?
+        while true {
+            descriptor.fetchOffset = offset
+            let page = try context.fetch(descriptor)
+            guard !page.isEmpty else { break }
+            for event in page {
+                if ConfirmedTrainingPlanEntry.decode(notes: event.notes)?.actionID == actionID {
+                    return (event, true)
+                }
+                if singlePlanMatch == nil,
+                   ConfirmedWorkoutPlanEntry.decode(notes: event.notes)?.actionID == actionID {
+                    singlePlanMatch = event
+                }
+            }
+            offset += page.count
+            if page.count < Self.confirmedPlanFetchBatchSize { break }
+        }
+        return singlePlanMatch.map { ($0, false) }
     }
 }

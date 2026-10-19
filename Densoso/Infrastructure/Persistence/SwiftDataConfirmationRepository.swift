@@ -19,6 +19,7 @@ enum ConfirmationInjectedFailure: Error, Equatable {
 actor SwiftDataConfirmationRepository: ConfirmationRepository {
     static let expiredActionBatchSize = 64
     static let activeActionBatchSize = 64
+    static let recoveryBatchSize = 64
 
     private var faultPoint: ConfirmationFaultPoint?
 
@@ -365,38 +366,90 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
 
     func recoverInterruptedCommits(now: Date) throws {
         let committingState = PendingActionState.committing.rawValue
-        let committingPredicate = #Predicate<PendingActionRecord> {
-            $0.stateRaw == committingState
-        }
-        let actions = try modelContext.fetch(
-            FetchDescriptor<PendingActionRecord>(predicate: committingPredicate)
-        )
         var changed = false
-        for action in actions where action.stateRaw == PendingActionState.committing.rawValue {
-            if try receipt(actionID: action.id) != nil {
-                action.stateRaw = PendingActionState.committed.rawValue
-            } else if try sourceRecordExists(idempotencyKey: action.idempotencyKey, actionTypeRaw: action.actionTypeRaw) {
-                action.stateRaw = PendingActionState.failed.rawValue
-                action.failureCode = "record_without_receipt"
-                action.failureDetail = "A source record exists without its committed receipt."
-            } else if action.expiresAt <= now {
-                action.stateRaw = PendingActionState.expired.rawValue
+        let committingSort = [
+            SortDescriptor(\PendingActionRecord.createdAt),
+            SortDescriptor(\PendingActionRecord.id),
+        ]
+        var actionCursorCreatedAt: Date?
+        var actionCursorID: UUID?
+        while true {
+            let committingPredicate: Predicate<PendingActionRecord>
+            if let actionCursorCreatedAt, let actionCursorID {
+                let cursorCreatedAt = actionCursorCreatedAt
+                let cursorID = actionCursorID
+                committingPredicate = #Predicate<PendingActionRecord> { action in
+                    action.stateRaw == committingState
+                        && (action.createdAt > cursorCreatedAt
+                            || (action.createdAt == cursorCreatedAt && action.id > cursorID))
+                }
             } else {
-                action.stateRaw = PendingActionState.pending.rawValue
+                committingPredicate = #Predicate<PendingActionRecord> {
+                    $0.stateRaw == committingState
+                }
             }
-            action.updatedAt = now
-            changed = true
+            var actionDescriptor = FetchDescriptor<PendingActionRecord>(
+                predicate: committingPredicate,
+                sortBy: committingSort
+            )
+            actionDescriptor.fetchLimit = Self.recoveryBatchSize
+            let actions = try modelContext.fetch(actionDescriptor)
+            guard let lastAction = actions.last else { break }
+            for action in actions {
+                if try receipt(actionID: action.id) != nil {
+                    action.stateRaw = PendingActionState.committed.rawValue
+                } else if try sourceRecordExists(idempotencyKey: action.idempotencyKey, actionTypeRaw: action.actionTypeRaw) {
+                    action.stateRaw = PendingActionState.failed.rawValue
+                    action.failureCode = "record_without_receipt"
+                    action.failureDetail = "A source record exists without its committed receipt."
+                } else if action.expiresAt <= now {
+                    action.stateRaw = PendingActionState.expired.rawValue
+                } else {
+                    action.stateRaw = PendingActionState.pending.rawValue
+                }
+                action.updatedAt = now
+                changed = true
+            }
+            actionCursorCreatedAt = lastAction.createdAt
+            actionCursorID = lastAction.id
+            if actions.count < Self.recoveryBatchSize { break }
         }
 
         let sendingState = HealthSyncState.sending.rawValue
-        let sendingPredicate = #Predicate<HealthSyncOutboxEntry> { $0.state == sendingState }
-        let outboxEntries = try modelContext.fetch(
-            FetchDescriptor<HealthSyncOutboxEntry>(predicate: sendingPredicate)
-        )
-        for entry in outboxEntries {
-            entry.state = HealthSyncState.retryable.rawValue
-            entry.nextAttemptAt = now
-            changed = true
+        let sendingSort = [
+            SortDescriptor(\HealthSyncOutboxEntry.createdAt),
+            SortDescriptor(\HealthSyncOutboxEntry.idempotencyKey),
+        ]
+        var outboxCursorCreatedAt: Date?
+        var outboxCursorIdempotencyKey: String?
+        while true {
+            let sendingPredicate: Predicate<HealthSyncOutboxEntry>
+            if let outboxCursorCreatedAt, let outboxCursorIdempotencyKey {
+                let cursorCreatedAt = outboxCursorCreatedAt
+                let cursorKey = outboxCursorIdempotencyKey
+                sendingPredicate = #Predicate<HealthSyncOutboxEntry> { entry in
+                    entry.state == sendingState
+                        && (entry.createdAt > cursorCreatedAt
+                            || (entry.createdAt == cursorCreatedAt && entry.idempotencyKey > cursorKey))
+                }
+            } else {
+                sendingPredicate = #Predicate<HealthSyncOutboxEntry> { $0.state == sendingState }
+            }
+            var outboxDescriptor = FetchDescriptor<HealthSyncOutboxEntry>(
+                predicate: sendingPredicate,
+                sortBy: sendingSort
+            )
+            outboxDescriptor.fetchLimit = Self.recoveryBatchSize
+            let outboxEntries = try modelContext.fetch(outboxDescriptor)
+            guard let lastEntry = outboxEntries.last else { break }
+            for entry in outboxEntries {
+                entry.state = HealthSyncState.retryable.rawValue
+                entry.nextAttemptAt = now
+                changed = true
+            }
+            outboxCursorCreatedAt = lastEntry.createdAt
+            outboxCursorIdempotencyKey = lastEntry.idempotencyKey
+            if outboxEntries.count < Self.recoveryBatchSize { break }
         }
         if changed { try modelContext.save() }
     }
@@ -658,16 +711,20 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     private func reprojectDailyHealthSnapshot(on date: Date) throws {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: date)
-        let nextDay = calendar.date(byAdding: .day, value: 1, to: day)!
-        let mealPredicate = #Predicate<MealRecord> { $0.date >= day && $0.date < nextDay }
-        let meals = try modelContext.fetch(FetchDescriptor<MealRecord>(predicate: mealPredicate))
+        let meals = try DailyMetricsProjectionInputReader.meals(on: day, in: modelContext)
+        let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
         let weightPredicate = #Predicate<WeightRecord> {
             $0.measuredAt >= day && $0.measuredAt < nextDay
         }
-        let weights = try modelContext.fetch(FetchDescriptor<WeightRecord>(
+        var weightDescriptor = FetchDescriptor<WeightRecord>(
             predicate: weightPredicate,
-            sortBy: [SortDescriptor(\WeightRecord.measuredAt)]
-        ))
+            sortBy: [
+                SortDescriptor(\WeightRecord.measuredAt, order: .reverse),
+                SortDescriptor(\WeightRecord.id, order: .reverse),
+            ]
+        )
+        weightDescriptor.fetchLimit = 1
+        let latestWeight = try modelContext.fetch(weightDescriptor).first?.kilograms
         let targetDayKey = dayKey(for: day)
         let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == targetDayKey }
         var snapshotDescriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: snapshotPredicate)
@@ -699,7 +756,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             restingEnergyKcal: existingSnapshot?.restingEnergyKcal,
             stepCount: existingSnapshot?.stepCount,
             exerciseMinutes: existingSnapshot?.exerciseMinutes,
-            weightKilograms: weights.last?.kilograms ?? existingSnapshot?.weightKilograms,
+            weightKilograms: latestWeight ?? existingSnapshot?.weightKilograms,
             healthKitSampleSummary: existingSnapshot?.healthKitSampleSummary,
             healthReadStates: existingSnapshot?.healthReadStates,
             algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion

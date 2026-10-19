@@ -47,6 +47,12 @@ def main() -> int:
             "func ingest(_ envelope:", "payloadHash", "WatchMessageReceiptRecord", "context.transaction {",
             "func recentReceivedMessageIDs(limit: Int = 100)",
             "func pendingCommandEnvelopes() throws -> [WatchMessageEnvelope]",
+            "private static let pendingReceiptFetchBatchSize = 64",
+            "private func pendingInboxMessages(in context: ModelContext) throws -> [MessageRecord]",
+            "descriptor.fetchLimit = Self.pendingReceiptFetchBatchSize",
+            "receipt.messageID > lastMessageID",
+            "message.ordinal > cursorOrdinal",
+            "messages.sorted { $0.ordinal < $1.ordinal }",
         ),
         errors,
     )
@@ -71,6 +77,12 @@ def main() -> int:
     compiler = require_text(
         "Densoso/Services/WorkoutPlanCompiler.swift",
         (
+            "private static let confirmedPlanFetchBatchSize = 64",
+            "private func confirmedPlanEventDescriptor() -> FetchDescriptor<ScheduleEvent>",
+            "private func findConfirmedPlanEvent(",
+            "descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize",
+            "descriptor.fetchOffset = offset",
+            "FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)",
             "guard draft.activity.isWorkoutKitSupported",
             "guard draft.strengthSets.isEmpty",
             "scheduleDateRequired",
@@ -126,6 +138,7 @@ def main() -> int:
             "pendingCommands.map(\\.payload)",
             "testOutOfOrderMessagesAreReturnedInDurableArrivalOrder",
             "testConflictingPayloadWithSameMessageIDIsRejected",
+            "testPendingInboxPagesMoreThan64ReceiptsInArrivalOrder",
         ),
         errors,
     )
@@ -156,6 +169,8 @@ def main() -> int:
             "testConcurrentScheduleRequestsForOneConfirmedPlanAreCoalesced",
             "testConcurrentScheduleWaitersReceiveTheSameFailure",
             "testTransientWorkoutKitFailureLeavesAUserRetryableScheduleIntent",
+            "testConfirmedSinglePlanHistoryPagesAcross64EventBoundary",
+            "testConfirmedMultiDayPlanKeepsPriorityForSharedActionID",
         ),
         errors,
     )
@@ -192,6 +207,9 @@ def main() -> int:
         (
             "Status:",
             "100-message offline/replay fixture",
+            "arrival order from receipt-filtered 64-row pages",
+            "65-receipt page boundary",
+            "stable 64-row pages",
             "An unconfirmed plan never calls `WorkoutScheduler`",
             "real Watch pairing",
         ),

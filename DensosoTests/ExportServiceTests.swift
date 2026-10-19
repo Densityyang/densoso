@@ -5,6 +5,101 @@ import XCTest
 
 @MainActor
 final class ExportServiceTests: XCTestCase {
+    func testBackupExportPagesMealHistoryAcross64RowBoundary() async throws {
+        let (container, source) = try makeContext()
+        _ = container
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var expectedIDs: [UUID] = []
+        for index in 0..<65 {
+            let id = UUID()
+            source.insert(MealRecord(
+                id: id,
+                date: start.addingTimeInterval(TimeInterval(index)),
+                totalCaloriesKcal: index,
+                sourceActionKey: "backup-page-\(index)"
+            ))
+            expectedIDs.append(id)
+        }
+        try source.save()
+
+        let url = try await ExportService().exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let document = try JSONDecoder().decode(
+            ExportService.BackupDocument.self,
+            from: Data(contentsOf: url)
+        )
+
+        XCTAssertEqual(document.payload.mealRecords.count, 65)
+        XCTAssertEqual(document.payload.mealRecords.map(\.id), expectedIDs)
+    }
+
+    func testRestorePagesInterruptedRequestHistoryAcross64RowBoundary() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let source = ModelContext(container)
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let target = ModelContext(container)
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000961")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        for index in 0..<65 {
+            let requestID = UUID()
+            target.insert(AgentRequestRecord(
+                requestID: requestID,
+                conversationID: conversationID,
+                startedAt: startedAt.addingTimeInterval(TimeInterval(index)),
+                absoluteDeadline: startedAt.addingTimeInterval(TimeInterval(index + 45)),
+                maximumProviderRounds: 5,
+                maximumToolCalls: 8,
+                stateRaw: AgentRequestState.interrupted.rawValue
+            ))
+            target.insert(MessageRecord(
+                conversationID: conversationID,
+                roleRaw: ModelRole.user.rawValue,
+                contentData: Data("unfinished-\(index)".utf8),
+                ordinal: index,
+                requestID: requestID
+            ))
+        }
+        let completedRequestID = UUID()
+        target.insert(AgentRequestRecord(
+            requestID: completedRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(45),
+            maximumProviderRounds: 5,
+            maximumToolCalls: 8,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        target.insert(MessageRecord(
+            conversationID: conversationID,
+            roleRaw: ModelRole.assistant.rawValue,
+            contentData: Data("completed-history".utf8),
+            ordinal: 65,
+            requestID: completedRequestID
+        ))
+        target.insert(MessageRecord(
+            conversationID: conversationID,
+            roleRaw: ModelRole.assistant.rawValue,
+            contentData: Data("legacy-history".utf8),
+            ordinal: 66
+        ))
+        try target.save()
+
+        _ = try await service.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<AgentRequestRecord>()), 0)
+        let restoredMessages = try target.fetch(FetchDescriptor<MessageRecord>())
+        XCTAssertEqual(Set(restoredMessages.map { String(decoding: $0.contentData, as: UTF8.self) }), Set([
+            "completed-history", "legacy-history",
+        ]))
+    }
+
     func testRestoreReprojectsDerivedMetricsInsteadOfTrustingSerializedMetrics() async throws {
         let (sourceContainer, source) = try makeContext()
         _ = sourceContainer

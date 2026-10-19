@@ -63,23 +63,29 @@ final class TrainingPlanSchedulingServiceTests: XCTestCase {
         XCTAssertEqual(resumed.state, .scheduled)
     }
 
-    func testConfirmedPlanHistoryPagesAcrossThe64EventBoundary() throws {
-        let (container, service, _) = try makeService()
+    func testConfirmedPlanHistoryPagesAcrossThe64EventBoundary() async throws {
+        let (container, service, client) = try makeService()
         let context = ModelContext(container)
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         var actionIDs: [UUID] = []
+        var finalSessionID: UUID?
 
         for index in 0..<65 {
             let actionID = UUID()
             let createdAt = start.addingTimeInterval(TimeInterval(index))
+            let sessionID = UUID()
             let draft = TrainingPlanDraft(
                 name: "计划 \(index)",
                 createdAt: createdAt,
                 sessions: [
                     TrainingSessionDraft(
+                        id: sessionID,
                         date: createdAt,
-                        activity: nil,
-                        reason: "保留恢复日。"
+                        activity: .walking,
+                        goal: .timeMinutes(30),
+                        location: .outdoor,
+                        recommendedIntensity: .easy,
+                        reason: "保持轻松步行。"
                     ),
                 ]
             )
@@ -95,6 +101,7 @@ final class TrainingPlanSchedulingServiceTests: XCTestCase {
                 startTime: createdAt
             ))
             actionIDs.append(actionID)
+            if index == 64 { finalSessionID = sessionID }
         }
         context.insert(ScheduleEvent(date: start, title: "普通日程", notes: "普通备注", startTime: start))
         try context.save()
@@ -102,6 +109,13 @@ final class TrainingPlanSchedulingServiceTests: XCTestCase {
         let confirmed = try service.confirmedPlans()
         XCTAssertEqual(confirmed.count, 65)
         XCTAssertEqual(confirmed.map(\.actionID), Array(actionIDs.reversed()))
+
+        let targetActionID = try XCTUnwrap(actionIDs.last)
+        let targetSessionID = try XCTUnwrap(finalSessionID)
+        try await service.scheduleConfirmedPlan(actionID: targetActionID)
+        XCTAssertEqual(client.authorizationCount, 1)
+        XCTAssertEqual(client.scheduledPlanIDs, Set([targetSessionID]))
+        XCTAssertEqual(client.scheduledDates, [start.addingTimeInterval(64)])
     }
 
     private func makeService() throws -> (ModelContainer, TrainingPlanSchedulingService, FakeMultiDayWorkoutScheduler) {

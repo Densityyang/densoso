@@ -25,6 +25,7 @@ private struct HealthKitSampleIndexUpdate {
 final class HealthRepository: HealthSyncRepository {
     private static let healthKitSampleIndexBatchSize = 400
     private static let importedWorkoutBatchSize = 400
+    private static let workoutEffortFetchBatchSize = 64
 
     private let modelContext: ModelContext
     private let willSave: (() throws -> Void)?
@@ -621,8 +622,34 @@ final class HealthRepository: HealthSyncRepository {
 
     private func workouts(on day: Date) throws -> [WorkoutRecord] {
         let end = Calendar.current.date(byAdding: .day, value: 1, to: day) ?? day
-        let predicate = #Predicate<WorkoutRecord> { $0.date >= day && $0.date < end }
-        return try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: predicate))
+        let sortBy = [
+            SortDescriptor(\WorkoutRecord.date),
+            SortDescriptor(\WorkoutRecord.id),
+        ]
+        var cursor: (date: Date, id: UUID)?
+        var workouts: [WorkoutRecord] = []
+        while true {
+            let predicate: Predicate<WorkoutRecord>
+            if let cursor {
+                let cursorDate = cursor.date
+                let cursorID = cursor.id
+                predicate = #Predicate<WorkoutRecord> { workout in
+                    workout.date >= day && workout.date < end
+                        && (workout.date > cursorDate
+                            || (workout.date == cursorDate && workout.id > cursorID))
+                }
+            } else {
+                predicate = #Predicate<WorkoutRecord> { $0.date >= day && $0.date < end }
+            }
+            var descriptor = FetchDescriptor<WorkoutRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.workoutEffortFetchBatchSize
+            let page = try modelContext.fetch(descriptor)
+            guard let lastWorkout = page.last else { break }
+            workouts.append(contentsOf: page)
+            cursor = (date: lastWorkout.date, id: lastWorkout.id)
+            if page.count < Self.workoutEffortFetchBatchSize { break }
+        }
+        return workouts
     }
 
     private func forEachPendingHealthKitSampleIndex(

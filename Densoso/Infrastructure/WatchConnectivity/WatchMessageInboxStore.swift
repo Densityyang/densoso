@@ -18,8 +18,14 @@ enum WatchReceiptState {
 
 @MainActor
 final class WatchMessageInboxStore {
+    private struct InboxMessageCursor {
+        let ordinal: Int
+        let id: UUID
+    }
+
     static let conversationID = UUID(uuidString: "A7A81264-1866-4A0A-AF4A-78B920D5CB01")!
     private static let missingRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+    private static let pendingReceiptFetchBatchSize = 64
 
     private let modelContainer: ModelContainer
 
@@ -85,8 +91,7 @@ final class WatchMessageInboxStore {
 
     func pendingTranscripts(excluding claimedIDs: Set<UUID> = []) throws -> [PendingWatchTranscript] {
         let context = ModelContext(modelContainer)
-        let pendingIDs = try pendingMessageIDs(in: context)
-        let messages = try pendingInboxMessages(matching: pendingIDs, in: context)
+        let messages = try pendingInboxMessages(in: context)
         return messages.compactMap { message -> PendingWatchTranscript? in
             guard let id = message.requestID,
                   !claimedIDs.contains(id),
@@ -98,8 +103,7 @@ final class WatchMessageInboxStore {
 
     func pendingCommandEnvelopes() throws -> [WatchMessageEnvelope] {
         let context = ModelContext(modelContainer)
-        let pendingIDs = try pendingMessageIDs(in: context)
-        let messages = try pendingInboxMessages(matching: pendingIDs, in: context)
+        let messages = try pendingInboxMessages(in: context)
         return messages.compactMap { message -> WatchMessageEnvelope? in
             guard message.requestID != nil,
                   let envelope = try? WatchMessageCodec.decode(message.contentData) else { return nil }
@@ -168,11 +172,32 @@ final class WatchMessageInboxStore {
         )
     }
 
-    private func pendingMessageIDs(in context: ModelContext) throws -> [UUID] {
+    private func pendingInboxMessages(in context: ModelContext) throws -> [MessageRecord] {
         let pending = WatchReceiptState.pending
-        let predicate = #Predicate<WatchMessageReceiptRecord> { $0.state == pending }
-        return try context.fetch(FetchDescriptor<WatchMessageReceiptRecord>(predicate: predicate))
-            .compactMap { UUID(uuidString: $0.messageID) }
+        let sortBy = [SortDescriptor(\WatchMessageReceiptRecord.messageID)]
+        var cursorMessageID: String?
+        var messages: [MessageRecord] = []
+        while true {
+            let predicate: Predicate<WatchMessageReceiptRecord>
+            if let cursorMessageID {
+                let lastMessageID = cursorMessageID
+                predicate = #Predicate<WatchMessageReceiptRecord> { receipt in
+                    receipt.state == pending && receipt.messageID > lastMessageID
+                }
+            } else {
+                predicate = #Predicate<WatchMessageReceiptRecord> { $0.state == pending }
+            }
+            var descriptor = FetchDescriptor<WatchMessageReceiptRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.pendingReceiptFetchBatchSize
+            let receipts = try context.fetch(descriptor)
+            guard let lastReceipt = receipts.last else { break }
+
+            let messageIDs = receipts.compactMap { UUID(uuidString: $0.messageID) }
+            messages.append(contentsOf: try pendingInboxMessages(matching: messageIDs, in: context))
+            cursorMessageID = lastReceipt.messageID
+            if receipts.count < Self.pendingReceiptFetchBatchSize { break }
+        }
+        return messages.sorted { $0.ordinal < $1.ordinal }
     }
 
     private func pendingInboxMessages(
@@ -183,14 +208,36 @@ final class WatchMessageInboxStore {
         let inboxID = Self.conversationID
         let role = "watch-envelope"
         let missingRequestID = Self.missingRequestID
-        let predicate = #Predicate<MessageRecord> {
-            $0.conversationID == inboxID &&
-                $0.roleRaw == role &&
-                messageIDs.contains($0.requestID ?? missingRequestID)
+        let sortBy = [SortDescriptor(\MessageRecord.ordinal), SortDescriptor(\MessageRecord.id)]
+        var cursor: InboxMessageCursor?
+        var messages: [MessageRecord] = []
+        while true {
+            let predicate: Predicate<MessageRecord>
+            if let cursor {
+                let cursorOrdinal = cursor.ordinal
+                let cursorID = cursor.id
+                predicate = #Predicate<MessageRecord> { message in
+                    message.conversationID == inboxID
+                        && message.roleRaw == role
+                        && messageIDs.contains(message.requestID ?? missingRequestID)
+                        && (message.ordinal > cursorOrdinal
+                            || (message.ordinal == cursorOrdinal && message.id > cursorID))
+                }
+            } else {
+                predicate = #Predicate<MessageRecord> { message in
+                    message.conversationID == inboxID
+                        && message.roleRaw == role
+                        && messageIDs.contains(message.requestID ?? missingRequestID)
+                }
+            }
+            var descriptor = FetchDescriptor<MessageRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.pendingReceiptFetchBatchSize
+            let page = try context.fetch(descriptor)
+            guard let lastMessage = page.last else { break }
+            messages.append(contentsOf: page)
+            cursor = InboxMessageCursor(ordinal: lastMessage.ordinal, id: lastMessage.id)
+            if page.count < Self.pendingReceiptFetchBatchSize { break }
         }
-        return try context.fetch(FetchDescriptor<MessageRecord>(
-            predicate: predicate,
-            sortBy: [SortDescriptor(\.ordinal)]
-        ))
+        return messages
     }
 }

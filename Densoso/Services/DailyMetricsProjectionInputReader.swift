@@ -21,6 +21,13 @@ enum DailyMetricsProjectionInputReader {
         )
     }
 
+    static func meals(on date: Date, in modelContext: ModelContext) throws -> [MealRecord] {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+        return try meals(from: day, before: nextDay, in: modelContext)
+    }
+
     private static func meals(from day: Date, before nextDay: Date, in modelContext: ModelContext) throws -> [MealRecord] {
         let basePredicate = #Predicate<MealRecord> { $0.date >= day && $0.date < nextDay }
         let sortDescriptors = [SortDescriptor(\MealRecord.date), SortDescriptor(\MealRecord.id)]

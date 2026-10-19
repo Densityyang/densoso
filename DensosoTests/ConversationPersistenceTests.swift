@@ -220,6 +220,65 @@ final class ConversationPersistenceTests: XCTestCase {
                         (0..<messageCount).map { "previous-\($0)" } + ["previous-answer", "current-user"])
     }
 
+    func testResetPagesMessagesAndRequestsAcross64RowBoundaries() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000431")!
+        let otherConversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000432")!
+        let context = ModelContext(container)
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        for index in 0..<65 {
+            let requestID = UUID()
+            context.insert(MessageRecord(
+                conversationID: conversationID,
+                roleRaw: "user",
+                contentData: Data("message-\(index)".utf8),
+                ordinal: index,
+                requestID: requestID
+            ))
+            context.insert(AgentRequestRecord(
+                requestID: requestID,
+                conversationID: conversationID,
+                startedAt: startedAt.addingTimeInterval(TimeInterval(index)),
+                absoluteDeadline: startedAt.addingTimeInterval(TimeInterval(index + 60)),
+                maximumProviderRounds: 5,
+                maximumToolCalls: 8
+            ))
+        }
+        let otherRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000433")!
+        context.insert(MessageRecord(
+            conversationID: otherConversationID,
+            roleRaw: "user",
+            contentData: Data("preserved".utf8),
+            ordinal: 0,
+            requestID: otherRequestID
+        ))
+        context.insert(AgentRequestRecord(
+            requestID: otherRequestID,
+            conversationID: otherConversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(60),
+            maximumProviderRounds: 5,
+            maximumToolCalls: 8
+        ))
+        try context.save()
+
+        try await SwiftDataAgentRepository(modelContainer: container).reset(conversationID: conversationID)
+
+        let verificationContext = ModelContext(container)
+        let messages = try verificationContext.fetch(FetchDescriptor<MessageRecord>())
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages.first?.conversationID, otherConversationID)
+        XCTAssertEqual(messages.first?.contentData, Data("preserved".utf8))
+        let requests = try verificationContext.fetch(FetchDescriptor<AgentRequestRecord>())
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.requestID, otherRequestID)
+    }
+
     func testAgentRestorePublishesUserVisibleConversationMessages() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let container = try ModelContainer(

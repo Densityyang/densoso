@@ -497,6 +497,50 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(updated.weightKilograms, 73)
     }
 
+    func testWorkoutEffortReprojectionPagesSameDayWorkoutsAcross64RowBoundary() throws {
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        var targetWorkoutID: UUID?
+        var targetWorkoutStart: Date?
+        for index in 0..<65 {
+            let workoutStart = day.addingTimeInterval(TimeInterval(index * 600))
+            let workout = WorkoutRecord(date: workoutStart, type: "walking", durationMinutes: 5)
+            context.insert(workout)
+            if index == 64 {
+                targetWorkoutID = workout.id
+                targetWorkoutStart = workoutStart
+            }
+        }
+        try context.save()
+
+        let workoutID = try XCTUnwrap(targetWorkoutID)
+        let workoutStart = try XCTUnwrap(targetWorkoutStart)
+        let sample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000068")!,
+            metric: .workoutEffort,
+            startDate: workoutStart,
+            endDate: workoutStart.addingTimeInterval(5 * 60),
+            value: 8
+        )
+        try HealthRepository(modelContext: context).applyImportedHealthSamples(
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
+            stream: HealthMetricID.workoutEffort.rawValue,
+            lastSuccessfulAt: sample.endDate,
+            lookbackStart: day,
+            replacements: [HealthSampleDaySnapshot(
+                dayStart: day,
+                samples: [sample],
+                readState: .available
+            )]
+        )
+
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+        XCTAssertEqual(snapshot.healthKitSampleSummary?.workoutEffort.map(\.workoutRecordID), [workoutID])
+        XCTAssertEqual(snapshot.healthKitSampleSummary?.effortScore(for: workoutID), 8)
+    }
+
     func testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner() throws {
         let calendar = Calendar.current
         let targetDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
