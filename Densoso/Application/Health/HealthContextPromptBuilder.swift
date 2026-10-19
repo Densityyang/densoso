@@ -9,8 +9,8 @@ enum HealthContextPromptBuilder {
         "training", "fatigue", "trend", "calorie",
     ]
     private static let readinessActivityTerms = [
-        "跑", "训练", "运动", "锻炼", "健身", "游泳", "骑行", "练",
-        "run", "running", "workout", "exercise", "train", "swim", "cycle",
+        "跑", "训练", "运动", "锻炼", "健身", "游泳", "骑行", "骑车", "步行", "散步", "举铁", "练",
+        "run", "running", "walk", "walking", "workout", "exercise", "train", "swim", "cycle", "cycling", "hike", "lift",
     ]
     private static let readinessQuestionTerms = [
         "能", "可以", "适合", "要不要", "该不该", "应该", "行不行", "吗", "不",

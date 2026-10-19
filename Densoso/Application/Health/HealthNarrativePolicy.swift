@@ -102,7 +102,7 @@ enum HealthNarrativePolicy {
             #"[零〇一二三四五六七八九十百千万两半几]+分之[零〇一二三四五六七八九十百千万两半几]+"#,
             #"(?:半数|一半)"#,
             "[\(chineseNumerals)]+(?:点[零〇一二三四五六七八九]+)?\\s*(?:餐|次|天|周|月|年|小时|分钟|秒|步|公里|千米|米|公斤|千克|斤|克|千卡|大卡|卡路里|岁|成|倍)",
-            #"(?i:\b(?:kcal|calories?|kg|bpm|hrv|rhr|steps?|minutes?)\b)"#,
+            #"(?i:\b(?:kcal|calories?|kg|bpm|hrv|rhr|steps?|minutes?|hours?|seconds?|days?|weeks?|months?|years?|km|kilometers?|kilometres?|meters?|metres?|grams?|pounds?|lbs?|percent(?:age)?)\b)"#,
             #"千卡|公斤|步数|分钟|心率变异性|静息心率"#,
         ]
         return !forbiddenPatterns.contains { pattern in

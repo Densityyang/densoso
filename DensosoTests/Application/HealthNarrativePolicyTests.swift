@@ -16,12 +16,14 @@ final class HealthNarrativePolicyTests: XCTestCase {
         let allowed = Set(["sleep.mainSleep.minutes"])
         let numeric = #"{"headline":"状态下降 17%","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"]}"#
         let chineseNumeric = #"{"headline":"建议休息两天","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"]}"#
+        let spelledNumeric = #"{"headline":"Rest for two days","summary":"Current evidence supports taking care of your recovery.","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"]}"#
         let metric = #"{"headline":"HRV 需要留意","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"]}"#
         let unknownKey = #"{"headline":"状态需要留意","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.consistency"]}"#
         let extraField = #"{"headline":"状态需要留意","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"],"value":17}"#
 
         XCTAssertNil(HealthNarrativePolicy.decode(numeric, allowedEvidenceKeys: allowed))
         XCTAssertNil(HealthNarrativePolicy.decode(chineseNumeric, allowedEvidenceKeys: allowed))
+        XCTAssertNil(HealthNarrativePolicy.decode(spelledNumeric, allowedEvidenceKeys: allowed))
         XCTAssertNil(HealthNarrativePolicy.decode(metric, allowedEvidenceKeys: allowed))
         XCTAssertNil(HealthNarrativePolicy.decode(unknownKey, allowedEvidenceKeys: allowed))
         XCTAssertNil(HealthNarrativePolicy.decode(extraField, allowedEvidenceKeys: allowed))
