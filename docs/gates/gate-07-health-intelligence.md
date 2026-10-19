@@ -25,6 +25,9 @@ model training.
   aggregated 7/28-day cloud context, daily/weekly briefs, and goal profiles are
   computed locally. Stable source hashes reuse report caches; changed inputs
   recompute them.
+- Long-range reads constrain snapshots, metrics, weights, meals and workouts
+  by the report's date window before decoding. Goal and daily/weekly cache reads
+  filter by key and limit cache lookups to one record.
 - Morning and evening reminders use the latest local `DailyLoopSnapshot`, have
   configurable local times (08:00 and 21:00 defaults), and remain opt-in. The
   weekly reminder remains available. Restoring preferences never prompts for
@@ -44,10 +47,12 @@ model training.
    objects, timestamps or per-day sequence are serialized into the prompt.
 6. Identical source/goal inputs reuse daily and weekly caches; changed inputs
    change the source hash and refresh the affected report.
-7. Morning, evening, and weekly notifications are disabled by default;
+7. History reads include their 41-day baseline and requested dates, while
+   adjacent stale/future records remain outside the query window.
+8. Morning, evening, and weekly notifications are disabled by default;
    morning/evening times can be changed, snapshot copy contains no measured
    values, and permission is requested only after the user enables a reminder.
-8. Domain tests, app tests, contract report, result bundle and logs are retained
+9. Domain tests, app tests, contract report, result bundle and logs are retained
    in `gate-07-health-intelligence-results`.
 
 ## Evidence boundary

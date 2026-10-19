@@ -72,12 +72,18 @@ final class HealthIntelligenceService {
     func loadCachedBriefs() {
         let context = ModelContext(modelContainer)
         let decoder = makeDecoder()
-        let dailyRecords = (try? context.fetch(FetchDescriptor<DailyBriefRecord>())) ?? []
-        let weeklyRecords = (try? context.fetch(FetchDescriptor<WeeklyBriefRecord>())) ?? []
-        if let record = dailyRecords.max(by: { $0.generatedAt < $1.generatedAt }) {
+        var dailyDescriptor = FetchDescriptor<DailyBriefRecord>(
+            sortBy: [SortDescriptor(\DailyBriefRecord.generatedAt, order: .reverse)]
+        )
+        dailyDescriptor.fetchLimit = 1
+        var weeklyDescriptor = FetchDescriptor<WeeklyBriefRecord>(
+            sortBy: [SortDescriptor(\WeeklyBriefRecord.generatedAt, order: .reverse)]
+        )
+        weeklyDescriptor.fetchLimit = 1
+        if let record = try? context.fetch(dailyDescriptor).first {
             dailyBrief = try? decoder.decode(DailyHealthBrief.self, from: record.payloadData)
         }
-        if let record = weeklyRecords.max(by: { $0.generatedAt < $1.generatedAt }) {
+        if let record = try? context.fetch(weeklyDescriptor).first {
             weeklyBrief = try? decoder.decode(WeeklyHealthBrief.self, from: record.payloadData)
         }
     }
@@ -185,8 +191,10 @@ final class HealthIntelligenceService {
 
     func saveGoalProfile(_ goal: GoalProfile) throws {
         let context = ModelContext(modelContainer)
-        let existing = try context.fetch(FetchDescriptor<GoalProfileRecord>())
-            .first(where: { $0.profileKey == "primary" })
+        let predicate = #Predicate<GoalProfileRecord> { $0.profileKey == "primary" }
+        var descriptor = FetchDescriptor<GoalProfileRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        let existing = try context.fetch(descriptor).first
         if let existing {
             existing.targetWeightKilograms = goal.targetWeightKilograms
             existing.dailyDeficitKcal = goal.dailyDeficitKcal
@@ -206,17 +214,21 @@ final class HealthIntelligenceService {
     }
 
     private func goalProfile(asOf date: Date, in context: ModelContext) throws -> GoalProfile? {
-        try context.fetch(FetchDescriptor<GoalProfileRecord>())
-            .filter { $0.profileKey == "primary" && $0.effectiveFrom <= date }
-            .max(by: { $0.effectiveFrom < $1.effectiveFrom })
-            .map {
-                GoalProfile(
-                    effectiveFrom: $0.effectiveFrom,
-                    targetWeightKilograms: $0.targetWeightKilograms,
-                    dailyDeficitKcal: $0.dailyDeficitKcal,
-                    dailyProteinGrams: $0.dailyProteinGrams
-                )
-            }
+        let predicate = #Predicate<GoalProfileRecord> {
+            $0.profileKey == "primary" && $0.effectiveFrom <= date
+        }
+        var descriptor = FetchDescriptor<GoalProfileRecord>(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\GoalProfileRecord.effectiveFrom, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        guard let record = try context.fetch(descriptor).first else { return nil }
+        return GoalProfile(
+            effectiveFrom: record.effectiveFrom,
+            targetWeightKilograms: record.targetWeightKilograms,
+            dailyDeficitKcal: record.dailyDeficitKcal,
+            dailyProteinGrams: record.dailyProteinGrams
+        )
     }
 
     private func plannedWorkoutTomorrow(asOf date: Date, in context: ModelContext) throws -> Bool? {
@@ -252,9 +264,20 @@ final class HealthIntelligenceService {
         let end = calendar.startOfDay(for: date)
         guard start <= end,
               let dayCount = calendar.dateComponents([.day], from: start, to: end).day,
-              dayCount >= 0 else { return [] }
+              dayCount >= 0,
+              let exclusiveEnd = calendar.date(byAdding: .day, value: 1, to: end) else { return [] }
 
-        let snapshots = try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+        let startKey = dayKey(start)
+        let endKey = dayKey(end)
+        let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord> {
+            $0.dayKey >= startKey && $0.dayKey <= endKey
+        }
+        let snapshots = try context.fetch(
+            FetchDescriptor<DailyHealthSnapshotRecord>(
+                predicate: snapshotPredicate,
+                sortBy: [SortDescriptor(\DailyHealthSnapshotRecord.dayKey)]
+            )
+        )
         let decoder = makeDecoder()
         var snapshotByDay: [Date: DailyHealthSnapshot] = [:]
         for record in snapshots {
@@ -263,21 +286,51 @@ final class HealthIntelligenceService {
             if day >= start && day <= end { snapshotByDay[day] = snapshot }
         }
 
-        let dailyMetrics = try context.fetch(FetchDescriptor<DailyMetrics>())
+        let metricsPredicate = #Predicate<DailyMetrics> {
+            $0.date >= start && $0.date < exclusiveEnd
+        }
+        let dailyMetrics = try context.fetch(
+            FetchDescriptor<DailyMetrics>(
+                predicate: metricsPredicate,
+                sortBy: [SortDescriptor(\DailyMetrics.date)]
+            )
+        )
         var metricsByDay: [Date: DailyMetrics] = [:]
         for metric in dailyMetrics {
             let day = calendar.startOfDay(for: metric.date)
             if day >= start && day <= end { metricsByDay[day] = metric }
         }
 
-        let localWeights = try context.fetch(FetchDescriptor<WeightRecord>())
-            .filter { $0.measuredAt >= start && $0.measuredAt < (calendar.date(byAdding: .day, value: 1, to: end) ?? end) }
+        let weightPredicate = #Predicate<WeightRecord> {
+            $0.measuredAt >= start && $0.measuredAt < exclusiveEnd
+        }
+        let localWeights = try context.fetch(
+            FetchDescriptor<WeightRecord>(
+                predicate: weightPredicate,
+                sortBy: [SortDescriptor(\WeightRecord.measuredAt)]
+            )
+        )
         let weightsByDay = Dictionary(grouping: localWeights, by: { calendar.startOfDay(for: $0.measuredAt) })
-        let meals = try context.fetch(FetchDescriptor<MealRecord>())
-            .filter { $0.date >= start && $0.date < (calendar.date(byAdding: .day, value: 1, to: end) ?? end) }
+        let mealPredicate = #Predicate<MealRecord> {
+            $0.date >= start && $0.date < exclusiveEnd
+        }
+        let meals = try context.fetch(
+            FetchDescriptor<MealRecord>(
+                predicate: mealPredicate,
+                sortBy: [SortDescriptor(\MealRecord.date)]
+            )
+        )
         let mealsByDay = Dictionary(grouping: meals, by: { calendar.startOfDay(for: $0.date) })
-        let workoutRecords = try context.fetch(FetchDescriptor<WorkoutRecord>())
-            .filter { $0.date >= start && $0.date < (calendar.date(byAdding: .day, value: 1, to: end) ?? end) }
+        let workoutPredicate = #Predicate<WorkoutRecord> {
+            $0.date >= start && $0.date < exclusiveEnd
+        }
+        let workoutRecords = try context.fetch(
+            FetchDescriptor<WorkoutRecord>(
+                predicate: workoutPredicate,
+                sortBy: [SortDescriptor(\WorkoutRecord.date)]
+            )
+        )
+        let workoutsByDay = Dictionary(grouping: workoutRecords, by: { calendar.startOfDay(for: $0.date) })
         var days: [HealthIntelligenceDay] = []
         for offset in 0...dayCount {
             guard let day = calendar.date(byAdding: .day, value: offset, to: start) else { continue }
@@ -308,7 +361,7 @@ final class HealthIntelligenceService {
                     deviceModel: sample.deviceModel
                 )
             }
-            let workouts = (workoutRecords.filter { calendar.startOfDay(for: $0.date) == dayStart }).map { record in
+            let workouts = (workoutsByDay[dayStart] ?? []).map { record in
                 let startAt = record.date
                 let endAt = startAt.addingTimeInterval(Double(max(record.durationMinutes, 0)) * 60)
                 let effort = samples
@@ -361,20 +414,22 @@ final class HealthIntelligenceService {
         in context: ModelContext
     ) throws -> DailyHealthBrief {
         let key = "daily:\(dayKey(brief.dayStart))"
-        let descriptor = FetchDescriptor<DailyBriefRecord>()
-        if let record = try context.fetch(descriptor).first(where: { $0.cacheKey == key }),
-           record.snapshotHash == snapshotHash,
-           record.algorithmVersion == brief.algorithmVersion,
-           let cached = try? makeDecoder().decode(DailyHealthBrief.self, from: record.payloadData) {
+        let predicate = #Predicate<DailyBriefRecord> { $0.cacheKey == key }
+        var descriptor = FetchDescriptor<DailyBriefRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        let existing = try context.fetch(descriptor).first
+        if let existing,
+           existing.snapshotHash == snapshotHash,
+           existing.algorithmVersion == brief.algorithmVersion,
+           let cached = try? makeDecoder().decode(DailyHealthBrief.self, from: existing.payloadData) {
             return cached
         }
-        let record = try context.fetch(descriptor).first(where: { $0.cacheKey == key })
         let payload = try encode(brief)
-        if let record {
-            record.snapshotHash = snapshotHash
-            record.algorithmVersion = brief.algorithmVersion
-            record.payloadData = payload
-            record.generatedAt = Date()
+        if let existing {
+            existing.snapshotHash = snapshotHash
+            existing.algorithmVersion = brief.algorithmVersion
+            existing.payloadData = payload
+            existing.generatedAt = Date()
         } else {
             context.insert(DailyBriefRecord(
                 cacheKey: key,
@@ -394,20 +449,22 @@ final class HealthIntelligenceService {
         in context: ModelContext
     ) throws -> WeeklyHealthBrief {
         let key = "weekly:\(dayKey(brief.weekStart))"
-        let descriptor = FetchDescriptor<WeeklyBriefRecord>()
-        if let record = try context.fetch(descriptor).first(where: { $0.cacheKey == key }),
-           record.snapshotHash == snapshotHash,
-           record.algorithmVersion == brief.algorithmVersion,
-           let cached = try? makeDecoder().decode(WeeklyHealthBrief.self, from: record.payloadData) {
+        let predicate = #Predicate<WeeklyBriefRecord> { $0.cacheKey == key }
+        var descriptor = FetchDescriptor<WeeklyBriefRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        let existing = try context.fetch(descriptor).first
+        if let existing,
+           existing.snapshotHash == snapshotHash,
+           existing.algorithmVersion == brief.algorithmVersion,
+           let cached = try? makeDecoder().decode(WeeklyHealthBrief.self, from: existing.payloadData) {
             return cached
         }
-        let record = try context.fetch(descriptor).first(where: { $0.cacheKey == key })
         let payload = try encode(brief)
-        if let record {
-            record.snapshotHash = snapshotHash
-            record.algorithmVersion = brief.algorithmVersion
-            record.payloadData = payload
-            record.generatedAt = Date()
+        if let existing {
+            existing.snapshotHash = snapshotHash
+            existing.algorithmVersion = brief.algorithmVersion
+            existing.payloadData = payload
+            existing.generatedAt = Date()
         } else {
             context.insert(WeeklyBriefRecord(
                 cacheKey: key,

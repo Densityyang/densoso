@@ -169,6 +169,23 @@ final class HealthIntelligenceServiceTests: XCTestCase {
                 algorithmVersion: snapshot.algorithmVersion
             ))
         }
+        for offset in [-42, 3] {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: start))
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                stepCount: 99_999,
+                healthReadStates: [HealthMetricID.stepCount.rawValue: .available],
+                algorithmVersion: "outside-history-window"
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: dayKey(day),
+                timezoneID: snapshot.timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "outside-history-window-\(offset)",
+                algorithmVersion: snapshot.algorithmVersion
+            ))
+        }
         try context.save()
 
         let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
