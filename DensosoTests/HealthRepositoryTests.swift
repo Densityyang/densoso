@@ -267,6 +267,55 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metric.activeCaloriesKcal, 0)
         XCTAssertEqual(metric.energyQuality, "unavailable")
     }
+
+    func testHealthSnapshotUpsertUpdatesOnlyTheMatchingDayKey() throws {
+        let targetDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let targetDay = Calendar.current.startOfDay(for: targetDate)
+        let neighboringDay = Calendar.current.date(byAdding: .day, value: 1, to: targetDay)!
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        for (day, energy) in [(targetDay, 100.0), (neighboringDay, 200.0)] {
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: Calendar.current.timeZone.identifier,
+                activeEnergyKcal: energy,
+                healthReadStates: [HealthMetricID.activeEnergy.rawValue: .available],
+                algorithmVersion: "lookup-fixture"
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: Self.dayKey(day),
+                timezoneID: snapshot.timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "lookup-\(energy)",
+                algorithmVersion: snapshot.algorithmVersion
+            ))
+        }
+        try context.save()
+
+        try HealthRepository(modelContext: context).applyHealthAggregates(
+            [HealthAggregateBucket(
+                startDate: targetDay,
+                endDate: Calendar.current.date(byAdding: .day, value: 1, to: targetDay)!,
+                value: 640
+            )],
+            metric: .activeEnergy,
+            stream: "activeEnergy",
+            lookbackStart: targetDay
+        )
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshots = try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .map { try decoder.decode(DailyHealthSnapshot.self, from: $0.payloadData) }
+        XCTAssertEqual(snapshots.count, 2)
+        XCTAssertEqual(snapshots.first(where: { Calendar.current.isDate($0.dayStart, inSameDayAs: targetDay) })?.activeEnergyKcal, 640)
+        XCTAssertEqual(snapshots.first(where: { Calendar.current.isDate($0.dayStart, inSameDayAs: neighboringDay) })?.activeEnergyKcal, 200)
+    }
+
+    private static func dayKey(_ date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
 }
 
 private enum TestSaveError: Error {

@@ -124,7 +124,7 @@ final class HealthRepository: HealthSyncRepository {
                 }
             }
 
-            if let cursor = try modelContext.fetch(FetchDescriptor<HealthKitImportCursor>()).first(where: { $0.stream == stream }) {
+            if let cursor = try cursorRecord(stream: stream) {
                 cursor.anchorData = nextAnchorData
                 cursor.updatedAt = Date()
                 cursor.lastSuccessfulAt = Date()
@@ -139,7 +139,7 @@ final class HealthRepository: HealthSyncRepository {
     }
 
     func cursor(for stream: String) throws -> HealthKitImportCursor? {
-        try modelContext.fetch(FetchDescriptor<HealthKitImportCursor>()).first(where: { $0.stream == stream })
+        try cursorRecord(stream: stream)
     }
 
     func cursorSnapshot(for stream: String) throws -> HealthKitCursorSnapshot? {
@@ -247,7 +247,7 @@ final class HealthRepository: HealthSyncRepository {
                     try upsertHealthSnapshot(snapshot, for: day)
                 }
             }
-            if let cursor = try modelContext.fetch(FetchDescriptor<HealthKitImportCursor>()).first(where: { $0.stream == stream }) {
+            if let cursor = try cursorRecord(stream: stream) {
                 cursor.anchorData = nextAnchorData
                 cursor.lastSuccessfulAt = lastSuccessfulAt
                 if cursor.lookbackStart == nil { cursor.lookbackStart = lookbackStart }
@@ -295,7 +295,7 @@ final class HealthRepository: HealthSyncRepository {
                 )
                 try upsertHealthSnapshot(snapshot, for: day)
             }
-            if let cursor = try modelContext.fetch(FetchDescriptor<HealthKitImportCursor>()).first(where: { $0.stream == stream }) {
+            if let cursor = try cursorRecord(stream: stream) {
                 if cursor.lookbackStart == nil { cursor.lookbackStart = lookbackStart }
                 if containsMeasuredValues { cursor.lastSuccessfulAt = lastSuccessfulAt }
                 cursor.updatedAt = lastSuccessfulAt
@@ -402,8 +402,7 @@ final class HealthRepository: HealthSyncRepository {
 
     private func healthSnapshot(for day: Date) throws -> DailyHealthSnapshot? {
         let dayKey = Self.dayKey(for: day)
-        guard let record = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
-            .first(where: { $0.dayKey == dayKey }) else { return nil }
+        guard let record = try healthSnapshotRecord(dayKey: dayKey) else { return nil }
         return try Self.decodeHealthSnapshot(record.payloadData, decoder: JSONDecoder())
     }
 
@@ -414,8 +413,7 @@ final class HealthRepository: HealthSyncRepository {
         encoder.outputFormatting = [.sortedKeys]
         let payloadData = try encoder.encode(snapshot)
         let hash = SHA256.hash(data: payloadData).map { String(format: "%02x", $0) }.joined()
-        if let record = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
-            .first(where: { $0.dayKey == dayKey }) {
+        if let record = try healthSnapshotRecord(dayKey: dayKey) {
             record.timezoneID = snapshot.timezoneIdentifier
             record.payloadData = payloadData
             record.snapshotHash = hash
@@ -429,6 +427,20 @@ final class HealthRepository: HealthSyncRepository {
                 algorithmVersion: snapshot.algorithmVersion
             ))
         }
+    }
+
+    private func healthSnapshotRecord(dayKey: String) throws -> DailyHealthSnapshotRecord? {
+        let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == dayKey }
+        var descriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private func cursorRecord(stream: String) throws -> HealthKitImportCursor? {
+        let predicate = #Predicate<HealthKitImportCursor> { $0.stream == stream }
+        var descriptor = FetchDescriptor<HealthKitImportCursor>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
     }
 
     private static func decodeHealthSnapshot(_ data: Data, decoder: JSONDecoder) throws -> DailyHealthSnapshot {
