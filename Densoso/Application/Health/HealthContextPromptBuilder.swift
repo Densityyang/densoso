@@ -8,10 +8,19 @@ enum HealthContextPromptBuilder {
         "健康", "缺口", "摄入", "消耗", "heart", "sleep", "weight", "activity", "workout",
         "training", "fatigue", "trend", "calorie",
     ]
+    private static let readinessActivityTerms = [
+        "跑", "训练", "运动", "锻炼", "健身", "游泳", "骑行", "练",
+        "run", "running", "workout", "exercise", "train", "swim", "cycle",
+    ]
+    private static let readinessQuestionTerms = [
+        "能", "可以", "适合", "要不要", "该不该", "应该", "行不行", "吗", "不",
+        "can i", "should i", "am i", "is it okay", "is it safe", "okay to", "safe to", "could i",
+    ]
 
     static func shouldIncludeSummary(for userText: String) -> Bool {
         let normalized = userText.lowercased()
         return healthTerms.contains { normalized.contains($0) }
+            || isActivityReadinessQuestion(normalized)
     }
 
     static func prompt(
@@ -62,6 +71,12 @@ enum HealthContextPromptBuilder {
             "analyze", "trend", "how is", "how am", "should i",
         ]
         return queryTerms.contains(where: normalized.contains)
+            || isActivityReadinessQuestion(normalized)
+    }
+
+    private static func isActivityReadinessQuestion(_ normalized: String) -> Bool {
+        readinessActivityTerms.contains(where: normalized.contains)
+            && readinessQuestionTerms.contains(where: normalized.contains)
     }
 
     private static func encoded(_ summary: HealthContextSummary) throws -> Data {

@@ -271,12 +271,26 @@ private struct QwenVisionJSONSchemaObject: Encodable {
     let additionalProperties = false
 }
 
-private struct QwenVisionJSONSchemaNode: Encodable {
+private final class QwenVisionJSONSchemaNode: Encodable {
     let type: QwenVisionJSONSchemaType
     let items: QwenVisionJSONSchemaNode?
     let enumValues: [String]?
     let maxLength: Int?
     let maxItems: Int?
+
+    private init(
+        type: QwenVisionJSONSchemaType,
+        items: QwenVisionJSONSchemaNode?,
+        enumValues: [String]?,
+        maxLength: Int?,
+        maxItems: Int?
+    ) {
+        self.type = type
+        self.items = items
+        self.enumValues = enumValues
+        self.maxLength = maxLength
+        self.maxItems = maxItems
+    }
 
     enum CodingKeys: String, CodingKey {
         case type, items, maxLength, maxItems

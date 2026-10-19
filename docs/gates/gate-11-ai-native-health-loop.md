@@ -10,8 +10,9 @@ cover effective historical profiles, weight timelines, unknown data, HealthKit
 deletion/reprojection, projection fingerprints, snapshot composition, and the
 structured health-narrative boundary. DeepSeek health summaries validate
 evidence keys against local recommendation evidence; metric values remain
-deterministically rendered by the app. Providers without verified structured
-output use a deterministic local response.
+deterministically rendered by the app. Narrative validation rejects numeric
+claims written with digits or Chinese quantity words. Providers without
+verified structured output use a deterministic local response.
 
 ## Focused tests
 

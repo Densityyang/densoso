@@ -15,11 +15,13 @@ final class HealthNarrativePolicyTests: XCTestCase {
     func testNarrativeRejectsNumericMetricClaimsUnknownKeysAndExtraFields() {
         let allowed = Set(["sleep.mainSleep.minutes"])
         let numeric = #"{"headline":"状态下降 17%","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"]}"#
+        let chineseNumeric = #"{"headline":"建议休息两天","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"]}"#
         let metric = #"{"headline":"HRV 需要留意","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"]}"#
         let unknownKey = #"{"headline":"状态需要留意","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.consistency"]}"#
         let extraField = #"{"headline":"状态需要留意","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"],"value":17}"#
 
         XCTAssertNil(HealthNarrativePolicy.decode(numeric, allowedEvidenceKeys: allowed))
+        XCTAssertNil(HealthNarrativePolicy.decode(chineseNumeric, allowedEvidenceKeys: allowed))
         XCTAssertNil(HealthNarrativePolicy.decode(metric, allowedEvidenceKeys: allowed))
         XCTAssertNil(HealthNarrativePolicy.decode(unknownKey, allowedEvidenceKeys: allowed))
         XCTAssertNil(HealthNarrativePolicy.decode(extraField, allowedEvidenceKeys: allowed))
@@ -31,8 +33,13 @@ final class HealthNarrativePolicyTests: XCTestCase {
         XCTAssertTrue(HealthContextPromptBuilder.requiresNarrative(for: "今天训练是否太多"))
         XCTAssertTrue(HealthContextPromptBuilder.requiresNarrative(for: "我最近很疲劳，应该休息吗？"))
         XCTAssertTrue(HealthContextPromptBuilder.requiresNarrative(for: "我的 HRV 如何？"))
+        XCTAssertTrue(HealthContextPromptBuilder.shouldIncludeSummary(for: "我能跑不"))
+        XCTAssertTrue(HealthContextPromptBuilder.requiresNarrative(for: "我能跑不"))
+        XCTAssertTrue(HealthContextPromptBuilder.requiresNarrative(for: "Can I run today?"))
         XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: "帮我记录体重 70kg"))
         XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: "帮我安排下周训练计划"))
+        XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: "记一下我今天跑步了"))
+        XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: "Please book a running class"))
 
         let prompt = HealthContextPromptBuilder.prompt(
             basePrompt: "base",
