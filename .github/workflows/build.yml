@@ -989,6 +989,7 @@ jobs:
             -destination-timeout 120 \
             -derivedDataPath "$GATE11_DERIVED_DATA_PATH" \
             -only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay \
+            -only-testing:DensosoTests/HealthRepositoryTests/testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs \
             -only-testing:DensosoTests/HealthRepositoryTests/testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData \
             -only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion \
             -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor \

@@ -37,6 +37,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "Gate 11",
                 "historical effective profiles",
                 "HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay",
+                "HealthRepositoryTests.testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs",
                 "HealthRepositoryTests.testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData",
                 "HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
                 "HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
@@ -195,6 +196,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "DensosoTests/Application/HealthProjectionActorTests.swift",
             (
                 "testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites",
+                "testHealthContextSummaryAggregatesMealProteinAcrossStableFetchPages",
                 "testActorHistoryRetainsExistingRangeValidation",
                 "testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
             ),
@@ -223,6 +225,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "DensosoTests/HealthRepositoryTests.swift",
             (
                 "testInsertAndDeleteReprojectsTheSameDay",
+                "testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs",
                 "testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData",
                 "testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
                 "testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
@@ -248,6 +251,17 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "$0.dayKey <= lastDayKey",
                 "$0.dayKey == targetDayKey",
                 "descriptor.fetchLimit = 1",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Infrastructure/Persistence/SwiftDataConfirmedFoodHistoryRepository.swift",
+            (
+                "enum ConfirmedFoodHistoryReadLimits",
+                "mealPageSize = 128",
+                "descriptor.fetchLimit = ConfirmedFoodHistoryReadLimits.mealPageSize",
+                "cursorSourceActionKey",
+                "sourceActionKey > cursorSourceActionKey",
             ),
             errors,
         )
@@ -735,6 +749,7 @@ def main() -> int:
                 "--filter DailyLoopSnapshotTests",
                 "--filter HealthNarrativeTests",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay",
+                "-only-testing:DensosoTests/HealthRepositoryTests/testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
                 "-only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches",

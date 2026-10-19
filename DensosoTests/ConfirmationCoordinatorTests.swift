@@ -157,6 +157,9 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         let birthDate = Date(timeIntervalSince1970: 315_532_800)
         let sharedCreatedAt = date.addingTimeInterval(-60)
         let context = ModelContext(harness.container)
+        let secondaryProfile = UserProfile()
+        secondaryProfile.profileKey = "secondary"
+        context.insert(secondaryProfile)
         context.insert(ProfileRevisionRecord(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000400")!,
             effectiveFrom: calendar.date(byAdding: .day, value: -10, to: day)!,

@@ -16,6 +16,8 @@ without verified structured output use a deterministic local response. Agent
 today-state, bounded-history, and narrative-context reads now share one
 read-only data model inside `HealthProjectionActor`; results cross back as
 Sendable domain snapshots, with the UI refresh/cache-write path left separate.
+Agent meal-capture history matching reads persisted meals in stable 128-row
+keyset pages before reducing confirmed ingredient IDs.
 DailyMetrics projection bounds profile revisions, local weights, and HealthKit
 snapshot reads by the effective day and uses a keyed single-row lookup for the
 target snapshot. HealthKit sample values and device metadata are reduced to
@@ -32,6 +34,7 @@ deleted or unknown summaries.
   `DailyHealthSampleSummaryTests`, `HealthStateTests`, `DailyLoopSnapshotTests`,
   and `HealthNarrativeTests`.
 - iOS tests: `HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay`,
+  `HealthRepositoryTests.testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs`,
   `HealthRepositoryTests.testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData`,
   `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
   `HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor`,
@@ -46,6 +49,7 @@ deleted or unknown summaries.
   `HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash`,
   `HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches`,
   `HealthProjectionActorTests.testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites`,
+  `HealthProjectionActorTests.testHealthContextSummaryAggregatesMealProteinAcrossStableFetchPages`,
   `HealthProjectionActorTests.testActorHistoryRetainsExistingRangeValidation`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents`,
   `HealthNarrativePolicyTests`,

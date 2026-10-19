@@ -458,7 +458,11 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let workoutPredicate = #Predicate<WorkoutRecord> { $0.date >= day && $0.date < nextDay }
         let meals = try modelContext.fetch(FetchDescriptor<MealRecord>(predicate: mealPredicate))
         let workouts = try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: workoutPredicate))
-        let profileKey = try modelContext.fetch(FetchDescriptor<UserProfile>()).first?.profileKey ?? "primary"
+        let primaryProfileKey = "primary"
+        let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
+        var profileDescriptor = FetchDescriptor<UserProfile>(predicate: profilePredicate)
+        profileDescriptor.fetchLimit = 1
+        let profileKey = try modelContext.fetch(profileDescriptor).first?.profileKey ?? primaryProfileKey
         let effectiveRevision = try EffectiveProfileRevisionReader.latest(
             in: modelContext,
             profileKey: profileKey,

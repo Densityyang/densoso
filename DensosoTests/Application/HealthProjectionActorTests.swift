@@ -100,6 +100,44 @@ final class HealthProjectionActorTests: XCTestCase {
         }
     }
 
+    func testHealthContextSummaryAggregatesMealProteinAcrossStableFetchPages() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let today = calendar.startOfDay(for: Date())
+        let mealDate = try XCTUnwrap(calendar.date(bySettingHour: 12, minute: 0, second: 0, of: today))
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let mealCount = HealthIntelligenceReadModel.mealFetchBatchSize + 1
+        for index in 0..<mealCount {
+            context.insert(MealRecord(
+                date: mealDate,
+                totalCaloriesKcal: 100,
+                sourceActionKey: String(format: "projection-meal-%04d", index),
+                proteinLikelyG: 2
+            ))
+        }
+        let previousDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        let incompleteMealDate = try XCTUnwrap(
+            calendar.date(bySettingHour: 12, minute: 0, second: 0, of: previousDay)
+        )
+        context.insert(MealRecord(
+            date: incompleteMealDate,
+            totalCaloriesKcal: 100,
+            sourceActionKey: "projection-meal-incomplete-protein"
+        ))
+        try context.save()
+
+        let actor = HealthProjectionActor(modelContainer: container, calendar: calendar)
+        let result = try await actor.healthContextSummary(asOf: mealDate)
+        let summary = try XCTUnwrap(result)
+
+        XCTAssertEqual(summary.sevenDay.averageProteinGrams, Double(mealCount * 2))
+    }
+
     func testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

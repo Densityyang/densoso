@@ -225,6 +225,31 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         XCTAssertEqual(successfulWrites.first?.recordID, dueMeal.id)
     }
 
+    func testInterruptedOutboxRecoveryAndProcessingPagePastBoundedBatch() async throws {
+        HealthKitConnectionPreference.hasRequestedAuthorization = true
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let entryCount = HealthSyncOutboxWorker.outboxBatchSize + 1
+        var entries: [HealthSyncOutboxEntry] = []
+        for _ in 0..<entryCount {
+            let recordID = UUID()
+            let entry = HealthSyncOutboxEntry(operation: "deleteWeight", recordID: recordID)
+            entry.createdAt = now
+            entry.idempotencyKey = "outbox-batch-\(recordID.uuidString.lowercased())"
+            entry.state = "sending"
+            context.insert(entry)
+            entries.append(entry)
+        }
+        try context.save()
+
+        let fake = FakeHealthStoreClient()
+        await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
+            .processPending(in: context, now: now)
+
+        XCTAssertTrue(entries.allSatisfy { $0.state == "succeeded" && $0.attemptCount == 1 })
+        let deletedReceipts = await fake.deletedReceiptsSnapshot()
+        XCTAssertEqual(deletedReceipts.count, entryCount)
+    }
+
     func testMealDeletionUsesOnlyItsStableApplicationSyncIdentifier() async throws {
         HealthKitConnectionPreference.hasRequestedAuthorization = true
         let mealID = UUID(uuidString: "00000000-0000-0000-0000-000000000042")!

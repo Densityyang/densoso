@@ -54,6 +54,40 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).count, 2)
     }
 
+    func testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs() async throws {
+        let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let mealCount = ConfirmedFoodHistoryReadLimits.mealPageSize + 1
+        let amount = try EstimateRange.point(1)
+        let nutrients = NutrientEstimate(energyKcal: amount)
+
+        for index in 0..<mealCount {
+            let meal = MealRecord(date: baseDate.addingTimeInterval(Double(index)))
+            meal.createdAt = baseDate.addingTimeInterval(Double(index))
+            let foodID = index == mealCount - 1 ? "later-page-only" : "shared-\(index % 3)"
+            let ingredientData = try JSONEncoder().encode([
+                MealIngredientDraft(
+                    foodID: foodID,
+                    name: "燕麦",
+                    amountGrams: amount,
+                    nutrients: nutrients
+                ),
+            ])
+            let dish = DishEntry(
+                dishName: "燕麦",
+                ingredientJSON: String(decoding: ingredientData, as: UTF8.self)
+            )
+            meal.dishes = [dish]
+            context.insert(meal)
+            context.insert(dish)
+        }
+        try context.save()
+
+        let repository = SwiftDataConfirmedFoodHistoryRepository(modelContainer: container)
+        let identifiers = try await repository.confirmedFoodIDs(matching: "燕麦")
+
+        XCTAssertEqual(identifiers, Set(["shared-0", "shared-1", "shared-2", "later-page-only"]))
+    }
+
     func testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData() throws {
         let calendar = Calendar.current
         let targetDate = Date(timeIntervalSince1970: 1_700_000_000)

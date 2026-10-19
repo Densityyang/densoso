@@ -5,6 +5,8 @@ import SwiftData
 /// Shared read-only loader and deterministic calculations used by
 /// `HealthProjectionActor` for both Agent reads and explicit brief refreshes.
 struct HealthIntelligenceReadModel: Sendable {
+    static let mealFetchBatchSize = 64
+
     private let calendar: Calendar
     private let engine: HealthIntelligenceEngine
 
@@ -199,16 +201,7 @@ struct HealthIntelligenceReadModel: Sendable {
             )
         )
         let weightsByDay = Dictionary(grouping: localWeights, by: { calendar.startOfDay(for: $0.measuredAt) })
-        let mealPredicate = #Predicate<MealRecord> {
-            $0.date >= start && $0.date < exclusiveEnd
-        }
-        let meals = try context.fetch(
-            FetchDescriptor<MealRecord>(
-                predicate: mealPredicate,
-                sortBy: [SortDescriptor(\MealRecord.date)]
-            )
-        )
-        let mealsByDay = Dictionary(grouping: meals, by: { calendar.startOfDay(for: $0.date) })
+        let proteinByDay = try mealProteinByDay(from: start, before: exclusiveEnd, in: context)
         let workoutPredicate = #Predicate<WorkoutRecord> {
             $0.date >= start && $0.date < exclusiveEnd
         }
@@ -263,10 +256,7 @@ struct HealthIntelligenceReadModel: Sendable {
                 )
             }
             let metric = metricsByDay[dayStart]
-            let dailyMeals = mealsByDay[dayStart] ?? []
-            let proteinGrams: Double? = !dailyMeals.isEmpty && dailyMeals.allSatisfy { $0.proteinLikelyG != nil }
-                ? dailyMeals.compactMap(\.proteinLikelyG).reduce(0, +)
-                : nil
+            let proteinGrams = proteinByDay[dayStart]
             let energyIntake = snapshot.flatMap { $0.energyIntakeKcal?.likely }
                 ?? metric.flatMap { $0.mealCount > 0 ? Double($0.totalIntakeKcal) : nil }
             let dailyDeficit = metric.flatMap { value in
@@ -299,6 +289,53 @@ struct HealthIntelligenceReadModel: Sendable {
         return days
     }
 
+    private func mealProteinByDay(
+        from start: Date,
+        before exclusiveEnd: Date,
+        in context: ModelContext
+    ) throws -> [Date: Double] {
+        let sortBy = [
+            SortDescriptor(\MealRecord.date),
+            SortDescriptor(\MealRecord.sourceActionKey),
+        ]
+        var accumulators: [Date: DailyProteinAccumulator] = [:]
+        var cursor: MealCursor?
+        while true {
+            let predicate: Predicate<MealRecord>
+            if let cursor {
+                let cursorDate = cursor.date
+                let cursorSourceActionKey = cursor.sourceActionKey
+                predicate = #Predicate<MealRecord> {
+                    $0.date >= start && $0.date < exclusiveEnd
+                        && ($0.date > cursorDate
+                            || ($0.date == cursorDate && $0.sourceActionKey > cursorSourceActionKey))
+                }
+            } else {
+                predicate = #Predicate<MealRecord> {
+                    $0.date >= start && $0.date < exclusiveEnd
+                }
+            }
+            var descriptor = FetchDescriptor<MealRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.mealFetchBatchSize
+            let batch = try context.fetch(descriptor)
+            guard !batch.isEmpty else { break }
+
+            for meal in batch {
+                cursor = MealCursor(date: meal.date, sourceActionKey: meal.sourceActionKey)
+                let day = calendar.startOfDay(for: meal.date)
+                accumulators[day, default: DailyProteinAccumulator()].add(meal.proteinLikelyG)
+            }
+        }
+
+        var totals: [Date: Double] = [:]
+        for (day, accumulator) in accumulators {
+            if let total = accumulator.completeProteinTotal {
+                totals[day] = total
+            }
+        }
+        return totals
+    }
+
     private func dayKey(_ date: Date) -> String {
         let components = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
@@ -310,6 +347,30 @@ struct HealthIntelligenceReadModel: Sendable {
         return decoder
     }
 
+}
+
+private struct MealCursor {
+    let date: Date
+    let sourceActionKey: String
+}
+
+private struct DailyProteinAccumulator {
+    private(set) var hasMeals = false
+    private(set) var hasMissingProtein = false
+    private(set) var totalProteinGrams = 0.0
+
+    mutating func add(_ proteinGrams: Double?) {
+        hasMeals = true
+        guard let proteinGrams else {
+            hasMissingProtein = true
+            return
+        }
+        totalProteinGrams += proteinGrams
+    }
+
+    var completeProteinTotal: Double? {
+        hasMeals && !hasMissingProtein ? totalProteinGrams : nil
+    }
 }
 
 struct HealthStateHistoryPoint: Equatable, Sendable {

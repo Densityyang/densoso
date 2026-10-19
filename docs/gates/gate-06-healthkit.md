@@ -111,8 +111,11 @@ unknown so the live projection does not reuse it as current.
 12. V5-to-V6 migration removes legacy raw samples from encoded snapshots and
     creates the sample-ID/day index; day re-query rebuilds summaries after
     anchored deletions without advancing the cursor on query failure. Static
-    contracts also bound pending-index reads, batch index writes, and snapshot
-    reads for the reverse body-mass lookup. Focused
+    contracts also bound pending-index reads, batch index writes, snapshot
+    reads for the reverse body-mass lookup, and pending HealthKit outbox work.
+    The outbox worker recovers interrupted writes and processes pending/retryable
+    entries in 64-row batches using a stable `(createdAt, idempotencyKey)` cursor.
+    Focused
     coverage includes `DensosoMigrationTests.testV5MigrationMovesRawSamplesIntoIndexAndDailySummary`,
     `DailyHealthSampleSummaryTests.testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples`,
     `DailyHealthSampleSummaryTests.testSampleDeduplicationUsesSyncVersionThenStableTieOrder`,
@@ -126,6 +129,7 @@ unknown so the live projection does not reuse it as current.
     `HealthRepositoryTests.testDuplicateHealthAggregateBucketsKeepLastBucketPerDay`,
     `ConfirmationCoordinatorTests.testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision`,
     `HealthRepositoryTests.testImportedWorkoutDedupProcessesUUIDGroupsAcrossFetchBatchBoundary`,
+    `HealthSyncOutboxWorkerTests.testInterruptedOutboxRecoveryAndProcessingPagePastBoundedBatch`,
     `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
     and `HealthRepositoryTests.testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval`.
 
