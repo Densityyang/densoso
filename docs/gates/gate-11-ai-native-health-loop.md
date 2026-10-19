@@ -16,12 +16,16 @@ without verified structured output use a deterministic local response. Agent
 today-state, bounded-history, and narrative-context reads now share one
 read-only data model inside `HealthProjectionActor`; results cross back as
 Sendable domain snapshots, with the UI refresh/cache-write path left separate.
+DailyMetrics projection bounds profile revisions, local weights, and HealthKit
+snapshot reads by the effective day and uses a keyed single-row lookup for the
+target snapshot.
 
 ## Focused tests
 
 - DensosoDomain: `EffectiveProfileTests`, `WeightTimelineTests`,
   `HealthStateTests`, `DailyLoopSnapshotTests`, and `HealthNarrativeTests`.
 - iOS tests: `HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay`,
+  `HealthRepositoryTests.testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData`,
   `CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics`,
   `HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash`,
   `HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches`,

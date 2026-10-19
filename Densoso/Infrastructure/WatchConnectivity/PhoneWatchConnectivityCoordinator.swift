@@ -149,9 +149,13 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
 
     private func makeTodaySnapshot() throws -> WatchTodaySnapshot {
         let context = ModelContext(modelContainer)
-        let today = Calendar.current.startOfDay(for: Date())
-        let metrics = try context.fetch(FetchDescriptor<DailyMetrics>())
-            .first(where: { Calendar.current.isDate($0.date, inSameDayAs: today) })
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+        let metricsPredicate = #Predicate<DailyMetrics> { $0.date >= today && $0.date < tomorrow }
+        var metricsDescriptor = FetchDescriptor<DailyMetrics>(predicate: metricsPredicate)
+        metricsDescriptor.fetchLimit = 1
+        let metrics = try context.fetch(metricsDescriptor).first
         let received = try inboxStore.recentReceivedMessageIDs()
         let singleSessionPlans = try workoutPlanSchedulingService.confirmedPlans().map {
             WatchWorkoutPlanSummary(

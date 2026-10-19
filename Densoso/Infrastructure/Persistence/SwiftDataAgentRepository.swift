@@ -92,9 +92,10 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
     }
 
     func agentRequest(requestID: UUID, conversationID: UUID) throws -> AgentRequestSnapshot? {
-        let descriptor = FetchDescriptor<AgentRequestRecord>(
+        var descriptor = FetchDescriptor<AgentRequestRecord>(
             predicate: #Predicate { $0.requestID == requestID }
         )
+        descriptor.fetchLimit = 1
         guard let record = try modelContext.fetch(descriptor).first else { return nil }
         guard record.conversationID == conversationID else {
             throw AgentRequestPersistenceError.conversationMismatch
@@ -127,8 +128,13 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: date)
         let end = calendar.date(byAdding: .day, value: 1, to: start)!
+        let trainingPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
+        let eventPredicate = #Predicate<ScheduleEvent> { event in
+            (event.date >= start && event.date < end)
+                || (event.notes ?? "").contains(trainingPlanPrefix)
+        }
         var scheduleItems: [AgentScheduleItem] = []
-        for event in try modelContext.fetch(FetchDescriptor<ScheduleEvent>()) {
+        for event in try modelContext.fetch(FetchDescriptor<ScheduleEvent>(predicate: eventPredicate)) {
             if let trainingPlan = ConfirmedTrainingPlanEntry.decode(notes: event.notes) {
                 guard trainingPlan.state != .terminal else { continue }
                 scheduleItems.append(contentsOf: trainingPlan.draft.sessions.compactMap { session in
@@ -270,13 +276,14 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
 
     func userPreferences(limit: Int) throws -> [AgentUserPreference] {
         let cappedLimit = min(max(limit, 1), AgentUserPreferencesLimits.maximumQueryPreferenceCount)
+        let userReportedSource = UserPreferenceSource.userReported.rawValue
+        let predicate = #Predicate<UserPreferenceRecord> { $0.sourceRaw == userReportedSource }
         let candidates: [(
             record: UserPreferenceRecord,
             category: UserPreferenceCategory,
             statement: String
-        )] = try modelContext.fetch(FetchDescriptor<UserPreferenceRecord>()).compactMap { record in
-            guard record.sourceRaw == UserPreferenceSource.userReported.rawValue,
-                  let category = UserPreferenceCategory(rawValue: record.categoryRaw) else {
+        )] = try modelContext.fetch(FetchDescriptor<UserPreferenceRecord>(predicate: predicate)).compactMap { record in
+            guard let category = UserPreferenceCategory(rawValue: record.categoryRaw) else {
                 return nil
             }
             let statement = record.statement.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -295,8 +302,11 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
     }
 
     func ensureConversation(id: UUID) throws {
-        let exists = try modelContext.fetch(FetchDescriptor<ConversationRecord>()).contains { $0.id == id }
-        guard !exists else { return }
+        var descriptor = FetchDescriptor<ConversationRecord>(
+            predicate: #Predicate { $0.id == id }
+        )
+        descriptor.fetchLimit = 1
+        guard try modelContext.fetch(descriptor).first == nil else { return }
         modelContext.insert(ConversationRecord(id: id))
         try modelContext.save()
     }
@@ -309,9 +319,12 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         requestID: UUID?
     ) throws {
         try ensureConversation(id: conversationID)
-        let existing = try modelContext.fetch(FetchDescriptor<MessageRecord>())
-            .filter { $0.conversationID == conversationID }
-        let ordinal = (existing.map(\.ordinal).max() ?? -1) + 1
+        var latestMessageDescriptor = FetchDescriptor<MessageRecord>(
+            predicate: #Predicate { $0.conversationID == conversationID },
+            sortBy: [SortDescriptor(\MessageRecord.ordinal, order: .reverse)]
+        )
+        latestMessageDescriptor.fetchLimit = 1
+        let ordinal = (try modelContext.fetch(latestMessageDescriptor).first?.ordinal ?? -1) + 1
         modelContext.insert(
             MessageRecord(
                 conversationID: conversationID,
@@ -322,63 +335,78 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
                 requestID: requestID
             )
         )
-        if let conversation = try modelContext.fetch(FetchDescriptor<ConversationRecord>())
-            .first(where: { $0.id == conversationID }) {
+        var conversationDescriptor = FetchDescriptor<ConversationRecord>(
+            predicate: #Predicate { $0.id == conversationID }
+        )
+        conversationDescriptor.fetchLimit = 1
+        if let conversation = try modelContext.fetch(conversationDescriptor).first {
             conversation.updatedAt = Date()
         }
         try modelContext.save()
     }
 
     func messageData(conversationID: UUID) throws -> [Data] {
-        try modelContext.fetch(FetchDescriptor<MessageRecord>())
-            .filter { $0.conversationID == conversationID }
-            .sorted { $0.ordinal < $1.ordinal }
-            .map(\.contentData)
+        let descriptor = FetchDescriptor<MessageRecord>(
+            predicate: #Predicate { $0.conversationID == conversationID },
+            sortBy: [SortDescriptor(\MessageRecord.ordinal)]
+        )
+        return try modelContext.fetch(descriptor).map(\.contentData)
     }
 
     func resumeHistory(conversationID: UUID, requestID: UUID) throws -> [Data] {
-        try modelContext.fetch(FetchDescriptor<MessageRecord>())
-            .filter {
+        let descriptor = FetchDescriptor<MessageRecord>(
+            predicate: #Predicate {
                 $0.conversationID == conversationID
-                    && ($0.requestID != requestID || $0.roleRaw == "user")
-            }
-            .sorted { $0.ordinal < $1.ordinal }
-            .map(\.contentData)
+                    && ($0.requestID == nil || $0.requestID != requestID || $0.roleRaw == "user")
+            },
+            sortBy: [SortDescriptor(\MessageRecord.ordinal)]
+        )
+        return try modelContext.fetch(descriptor).map(\.contentData)
     }
 
     func containsRequestID(_ requestID: UUID, conversationID: UUID) throws -> Bool {
-        try modelContext.fetch(FetchDescriptor<MessageRecord>())
-            .contains { $0.conversationID == conversationID && $0.requestID == requestID }
+        var descriptor = FetchDescriptor<MessageRecord>(
+            predicate: #Predicate { $0.conversationID == conversationID && $0.requestID == requestID }
+        )
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first != nil
     }
 
     func containsCompletedResponse(requestID: UUID, conversationID: UUID) throws -> Bool {
-        try modelContext.fetch(FetchDescriptor<MessageRecord>())
-            .contains {
+        var descriptor = FetchDescriptor<MessageRecord>(
+            predicate: #Predicate {
                 $0.conversationID == conversationID
                     && $0.requestID == requestID
                     && $0.roleRaw == "assistant"
                     && $0.toolSummaryData == nil
             }
+        )
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first != nil
     }
 
     func reset(conversationID: UUID) throws {
-        let messages = try modelContext.fetch(FetchDescriptor<MessageRecord>())
-            .filter { $0.conversationID == conversationID }
+        let messagePredicate = #Predicate<MessageRecord> { $0.conversationID == conversationID }
+        let messages = try modelContext.fetch(FetchDescriptor<MessageRecord>(predicate: messagePredicate))
         for message in messages { modelContext.delete(message) }
-        let requests = try modelContext.fetch(FetchDescriptor<AgentRequestRecord>())
-            .filter { $0.conversationID == conversationID }
+        let requestPredicate = #Predicate<AgentRequestRecord> { $0.conversationID == conversationID }
+        let requests = try modelContext.fetch(FetchDescriptor<AgentRequestRecord>(predicate: requestPredicate))
         for request in requests { modelContext.delete(request) }
-        if let conversation = try modelContext.fetch(FetchDescriptor<ConversationRecord>())
-            .first(where: { $0.id == conversationID }) {
+        var conversationDescriptor = FetchDescriptor<ConversationRecord>(
+            predicate: #Predicate { $0.id == conversationID }
+        )
+        conversationDescriptor.fetchLimit = 1
+        if let conversation = try modelContext.fetch(conversationDescriptor).first {
             conversation.updatedAt = Date()
         }
         try modelContext.save()
     }
 
     private func fetchAgentRequest(requestID: UUID, conversationID: UUID) throws -> AgentRequestRecord {
-        let descriptor = FetchDescriptor<AgentRequestRecord>(
+        var descriptor = FetchDescriptor<AgentRequestRecord>(
             predicate: #Predicate { $0.requestID == requestID }
         )
+        descriptor.fetchLimit = 1
         guard let record = try modelContext.fetch(descriptor).first else {
             throw AgentRequestPersistenceError.requestNotFound
         }

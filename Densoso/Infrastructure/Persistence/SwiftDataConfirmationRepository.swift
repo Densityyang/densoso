@@ -459,7 +459,12 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let meals = try modelContext.fetch(FetchDescriptor<MealRecord>(predicate: mealPredicate))
         let workouts = try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: workoutPredicate))
         let profileKey = try modelContext.fetch(FetchDescriptor<UserProfile>()).first?.profileKey ?? "primary"
-        let revisionRecords = try modelContext.fetch(FetchDescriptor<ProfileRevisionRecord>())
+        let revisionPredicate = #Predicate<ProfileRevisionRecord> {
+            $0.profileKey == profileKey && $0.effectiveFrom <= day
+        }
+        let revisionRecords = try modelContext.fetch(
+            FetchDescriptor<ProfileRevisionRecord>(predicate: revisionPredicate)
+        )
         let revisions = revisionRecords.map(domainRevision)
         let effectiveProfile = EffectiveProfileResolver(profileKey: profileKey, revisions: revisions).profile(at: day)
         let effectiveRevision = revisionRecords
@@ -470,16 +475,18 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                 return $0.id.uuidString < $1.id.uuidString
             }
             .last
-        let weightObservations = try localWeightObservations() + healthKitWeightObservations()
+        let weightObservations = try localWeightObservations(effectiveAt: day)
+            + healthKitWeightObservations(effectiveAt: day)
         let effectiveWeight = WeightTimeline(observations: weightObservations).effectiveWeight(
             at: day,
             profileWeightKg: effectiveRevision?.weightKg,
             profileEffectiveFrom: effectiveRevision?.effectiveFrom
         )
-        let components = calendar.dateComponents([.year, .month, .day], from: day)
-        let dayKey = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
-        let snapshotRecord = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
-            .first(where: { $0.dayKey == dayKey })
+        let targetDayKey = dayKey(for: day)
+        let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == targetDayKey }
+        var snapshotDescriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: snapshotPredicate)
+        snapshotDescriptor.fetchLimit = 1
+        let snapshotRecord = try modelContext.fetch(snapshotDescriptor).first
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let healthSnapshot = try snapshotRecord.map { try decoder.decode(DailyHealthSnapshot.self, from: $0.payloadData) }
@@ -494,7 +501,10 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             healthKitSteps: healthSnapshot?.stepCountForProjection,
             healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection
         )
-        if let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>()).first(where: { $0.date == day }) {
+        let metricsPredicate = #Predicate<DailyMetrics> { $0.date == day }
+        var metricsDescriptor = FetchDescriptor<DailyMetrics>(predicate: metricsPredicate)
+        metricsDescriptor.fetchLimit = 1
+        if let existing = try modelContext.fetch(metricsDescriptor).first {
             copyProjectedMetrics(projected, to: existing)
         } else {
             modelContext.insert(projected)
@@ -516,8 +526,12 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         )
     }
 
-    private func localWeightObservations() throws -> [WeightObservation] {
-        try modelContext.fetch(FetchDescriptor<WeightRecord>()).compactMap { record in
+    private func localWeightObservations(effectiveAt day: Date) throws -> [WeightObservation] {
+        let minimumConfidence = WeightTimeline.defaultMinimumConfidence
+        let predicate = #Predicate<WeightRecord> {
+            $0.measuredAt <= day && $0.confidence >= minimumConfidence
+        }
+        return try modelContext.fetch(FetchDescriptor<WeightRecord>(predicate: predicate)).compactMap { record in
             guard let source = WeightSource(rawValue: record.source) else { return nil }
             return WeightObservation(
                 id: record.id,
@@ -530,10 +544,12 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         }
     }
 
-    private func healthKitWeightObservations() throws -> [WeightObservation] {
+    private func healthKitWeightObservations(effectiveAt day: Date) throws -> [WeightObservation] {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
-        let records = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+        let lastDayKey = dayKey(for: day)
+        let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey <= lastDayKey }
+        let records = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate))
         return records.flatMap { record -> [WeightObservation] in
             guard let snapshot = try? decoder.decode(DailyHealthSnapshot.self, from: record.payloadData) else {
                 return []
@@ -553,6 +569,11 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                 )
             }
         }
+    }
+
+    private func dayKey(for day: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: day)
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
     private func copyProjectedMetrics(_ source: DailyMetrics, to destination: DailyMetrics) {
@@ -592,12 +613,16 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let calendar = Calendar.current
         guard let interval = calendar.dateInterval(of: .weekOfYear, for: date) else { return }
         let weekStart = calendar.startOfDay(for: interval.start)
-        let metrics = try modelContext.fetch(FetchDescriptor<DailyMetrics>())
-            .filter { $0.date >= interval.start && $0.date < interval.end }
+        let metricsPredicate = #Predicate<DailyMetrics> {
+            $0.date >= interval.start && $0.date < interval.end
+        }
+        let metrics = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricsPredicate))
         let profile = try modelContext.fetch(FetchDescriptor<UserProfile>()).first
         let target = max(profile?.dailyDeficitTarget ?? 500, 0)
-        let existing = try modelContext.fetch(FetchDescriptor<WeeklyReport>())
-            .first(where: { $0.weekStartDate == weekStart })
+        let reportPredicate = #Predicate<WeeklyReport> { $0.weekStartDate == weekStart }
+        var reportDescriptor = FetchDescriptor<WeeklyReport>(predicate: reportPredicate)
+        reportDescriptor.fetchLimit = 1
+        let existing = try modelContext.fetch(reportDescriptor).first
         let report = existing
             ?? WeeklyReport(weekStartDate: weekStart, weekEndDate: interval.end.addingTimeInterval(-1))
         if existing == nil { modelContext.insert(report) }
@@ -622,20 +647,20 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: date)
         let nextDay = calendar.date(byAdding: .day, value: 1, to: day)!
-        let meals = try modelContext.fetch(FetchDescriptor<MealRecord>())
-            .filter { $0.date >= day && $0.date < nextDay }
-        let weights = try modelContext.fetch(FetchDescriptor<WeightRecord>())
-            .filter { $0.measuredAt >= day && $0.measuredAt < nextDay }
-            .sorted { $0.measuredAt < $1.measuredAt }
-        let components = calendar.dateComponents([.year, .month, .day], from: day)
-        let dayKey = String(
-            format: "%04d-%02d-%02d",
-            components.year ?? 0,
-            components.month ?? 0,
-            components.day ?? 0
-        )
-        let existingRecord = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
-            .first(where: { $0.dayKey == dayKey })
+        let mealPredicate = #Predicate<MealRecord> { $0.date >= day && $0.date < nextDay }
+        let meals = try modelContext.fetch(FetchDescriptor<MealRecord>(predicate: mealPredicate))
+        let weightPredicate = #Predicate<WeightRecord> {
+            $0.measuredAt >= day && $0.measuredAt < nextDay
+        }
+        let weights = try modelContext.fetch(FetchDescriptor<WeightRecord>(
+            predicate: weightPredicate,
+            sortBy: [SortDescriptor(\WeightRecord.measuredAt)]
+        ))
+        let targetDayKey = dayKey(for: day)
+        let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == targetDayKey }
+        var snapshotDescriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: snapshotPredicate)
+        snapshotDescriptor.fetchLimit = 1
+        let existingRecord = try modelContext.fetch(snapshotDescriptor).first
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let existingSnapshot = try existingRecord.map { try decoder.decode(DailyHealthSnapshot.self, from: $0.payloadData) }
@@ -727,11 +752,11 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             descriptor.fetchLimit = 1
             return try !modelContext.fetch(descriptor).isEmpty
         case .workoutPlan:
-            return try modelContext.fetch(FetchDescriptor<ScheduleEvent>()).contains { event in
+            return try scheduleEvents(containingNotesPrefix: ConfirmedWorkoutPlanEntry.notesPrefix).contains { event in
                 ConfirmedWorkoutPlanEntry.decode(notes: event.notes)?.idempotencyKey == idempotencyKey
             }
         case .trainingPlan:
-            return try modelContext.fetch(FetchDescriptor<ScheduleEvent>()).contains { event in
+            return try scheduleEvents(containingNotesPrefix: ConfirmedTrainingPlanEntry.notesPrefix).contains { event in
                 ConfirmedTrainingPlanEntry.decode(notes: event.notes)?.idempotencyKey == idempotencyKey
             }
         case .dailyCheckIn:
@@ -747,6 +772,11 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         case nil:
             throw ConfirmationError.invariantViolation("unknown action type \(actionTypeRaw)")
         }
+    }
+
+    private func scheduleEvents(containingNotesPrefix prefix: String) throws -> [ScheduleEvent] {
+        let predicate = #Predicate<ScheduleEvent> { ($0.notes ?? "").contains(prefix) }
+        return try modelContext.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
     }
 
     private func decodePayload(_ data: Data) throws -> ActionPayload {

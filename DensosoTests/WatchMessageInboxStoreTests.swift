@@ -80,6 +80,39 @@ final class WatchMessageInboxStoreTests: XCTestCase {
         XCTAssertEqual(try store.pendingTranscripts().map(\.messageID), [transcript.messageID])
     }
 
+    func testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder() throws {
+        let store = try makeStore()
+        let messages = (0..<4).map { index in
+            WatchMessageEnvelope(
+                messageID: UUID(uuidString: String(format: "00000000-0000-0000-0000-0000000007%02d", 20 + index))!,
+                createdAt: Date(timeIntervalSince1970: TimeInterval(100 - index)),
+                payload: .transcript("记录 \(index)")
+            )
+        }
+
+        for message in messages {
+            XCTAssertEqual(try store.ingest(message), .accepted)
+        }
+        try store.setState(WatchReceiptState.processed, for: messages[0].messageID)
+        try store.setState(WatchReceiptState.rejected, for: messages[1].messageID)
+
+        XCTAssertEqual(
+            Set(try store.recentProcessedMessageIDs(limit: 2)),
+            Set([messages[0].messageID, messages[1].messageID])
+        )
+        XCTAssertEqual(try store.recentProcessedMessageIDs(limit: 1).count, 1)
+        XCTAssertEqual(
+            try store.recentReceivedMessageIDs(limit: 2),
+            [messages[2].messageID, messages[3].messageID]
+        )
+        XCTAssertEqual(
+            try store.pendingTranscripts(excluding: [messages[2].messageID]).map(\.messageID),
+            [messages[3].messageID]
+        )
+        XCTAssertTrue(try store.recentProcessedMessageIDs(limit: 0).isEmpty)
+        XCTAssertTrue(try store.recentReceivedMessageIDs(limit: -1).isEmpty)
+    }
+
     func testConflictingPayloadWithSameMessageIDIsRejected() throws {
         let store = try makeStore()
         let messageID = UUID(uuidString: "00000000-0000-0000-0000-000000000704")!

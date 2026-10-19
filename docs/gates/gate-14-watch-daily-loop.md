@@ -7,8 +7,12 @@ remains separate.
 
 Checks daily snapshot summaries, pending-action confirmation boundaries,
 durable quick-record envelopes, offline replay deduplication, arrival ordering,
-and retry/resume behavior. Watch outbox and phone inbox tests cover replay
-semantics; the phone coordinator's activation path restores pending commands.
+and retry/resume behavior. Inbox reads push state, identity, sort order, and
+recent-item limits into SwiftData while preserving durable arrival ordering.
+The phone snapshot resolves today's DailyMetrics row with a bounded date query
+and one-row fetch limit.
+Watch outbox and phone inbox tests cover replay semantics; the phone
+coordinator's activation path restores pending commands.
 
 ## Focused tests
 
@@ -19,6 +23,7 @@ semantics; the phone coordinator's activation path restores pending commands.
   `DailyLoopSnapshotCompositionTests.testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary`,
   `WatchMessageInboxStoreTests.testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder`,
   `WatchMessageInboxStoreTests.testOutOfOrderMessagesAreReturnedInDurableArrivalOrder`,
+  `WatchMessageInboxStoreTests.testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry`,
   `TrainingPlanSchedulingServiceTests.testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays`,
   `TrainingPlanScheduleQueryTests.testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay`,

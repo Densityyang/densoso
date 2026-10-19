@@ -54,6 +54,92 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).count, 2)
     }
 
+    func testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData() throws {
+        let calendar = Calendar.current
+        let targetDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let targetDay = calendar.startOfDay(for: targetDate)
+        let twoDaysLater = calendar.date(byAdding: .day, value: 2, to: targetDay)!
+        let threeDaysLater = calendar.date(byAdding: .day, value: 3, to: targetDay)!
+        let tenDaysLater = calendar.date(byAdding: .day, value: 10, to: targetDay)!
+        let twentyDaysLater = calendar.date(byAdding: .day, value: 20, to: targetDay)!
+        let birthDate = Date(timeIntervalSince1970: 315_532_800)
+        context.insert(ProfileRevisionRecord(
+            profileKey: "primary",
+            effectiveFrom: calendar.date(byAdding: .day, value: -365, to: targetDay)!,
+            dateOfBirth: birthDate,
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 70,
+            activityLevel: "moderate",
+            source: "userEdited"
+        ))
+        context.insert(ProfileRevisionRecord(
+            profileKey: "primary",
+            effectiveFrom: tenDaysLater,
+            dateOfBirth: birthDate,
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 85,
+            activityLevel: "active",
+            source: "userEdited"
+        ))
+        context.insert(WeightRecord(
+            sourceActionKey: "projection-historical-weight",
+            measuredAt: twoDaysLater,
+            kilograms: 65
+        ))
+        context.insert(WeightRecord(
+            sourceActionKey: "projection-future-weight",
+            measuredAt: calendar.date(byAdding: .day, value: 50, to: targetDay)!,
+            kilograms: 95
+        ))
+
+        let futureBodyMass = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000025")!,
+            metric: .bodyMass,
+            startDate: twentyDaysLater,
+            endDate: twentyDaysLater,
+            value: 120
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        for (day, activeEnergy, samples) in [
+            (targetDay, 500.0, [HealthSampleSnapshot]()),
+            (twentyDaysLater, 999.0, [futureBodyMass]),
+        ] {
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                activeEnergyKcal: activeEnergy,
+                healthKitSamples: samples,
+                healthReadStates: [HealthMetricID.activeEnergy.rawValue: .available],
+                algorithmVersion: "projector-boundary-fixture"
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: Self.dayKey(day),
+                timezoneID: snapshot.timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "projector-\(activeEnergy)",
+                algorithmVersion: snapshot.algorithmVersion
+            ))
+        }
+        try context.save()
+
+        let repository = HealthRepository(modelContext: context)
+        try repository.insert(WorkoutRecord(date: targetDay))
+        let firstMetric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first {
+            calendar.isDate($0.date, inSameDayAs: targetDay)
+        })
+        XCTAssertEqual(firstMetric.weightKg, 70)
+        XCTAssertEqual(firstMetric.activeCaloriesKcal, 500)
+
+        try repository.insert(WorkoutRecord(date: threeDaysLater))
+        let laterMetric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first {
+            calendar.isDate($0.date, inSameDayAs: threeDaysLater)
+        })
+        XCTAssertEqual(laterMetric.weightKg, 65)
+    }
+
     func testImportedWorkoutDeduplicatesByHealthKitUUIDAndPersistsAnchor() throws {
         let repository = HealthRepository(modelContext: context)
         let healthKitUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000020")!

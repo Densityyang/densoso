@@ -64,12 +64,67 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         encoder.dateEncodingStrategy = .millisecondsSince1970
         let data = try encoder.encode(snapshot)
         let context = ModelContext(harness.container)
+        let futureDay = Calendar.current.date(byAdding: .day, value: 20, to: day)!
+        let futureComponents = Calendar.current.dateComponents([.year, .month, .day], from: futureDay)
+        let futureDayKey = String(format: "%04d-%02d-%02d", futureComponents.year ?? 0, futureComponents.month ?? 0, futureComponents.day ?? 0)
+        let futureSnapshot = DailyHealthSnapshot(
+            dayStart: futureDay,
+            timezoneIdentifier: Calendar.current.timeZone.identifier,
+            activeEnergyKcal: 999,
+            healthKitSamples: [HealthSampleSnapshot(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000301")!,
+                metric: .bodyMass,
+                startDate: futureDay,
+                endDate: futureDay,
+                value: 120
+            )],
+            healthReadStates: [HealthMetricID.activeEnergy.rawValue: .available],
+            algorithmVersion: "future-fixture"
+        )
+        let birthDate = Date(timeIntervalSince1970: 315_532_800)
+        context.insert(ProfileRevisionRecord(
+            profileKey: "primary",
+            effectiveFrom: day.addingTimeInterval(-365 * 86_400),
+            dateOfBirth: birthDate,
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 70,
+            activityLevel: "moderate",
+            source: "userEdited"
+        ))
+        context.insert(ProfileRevisionRecord(
+            profileKey: "primary",
+            effectiveFrom: futureDay,
+            dateOfBirth: birthDate,
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 85,
+            activityLevel: "active",
+            source: "userEdited"
+        ))
+        context.insert(WeightRecord(
+            sourceActionKey: "confirmation-future-weight",
+            measuredAt: day.addingTimeInterval(2 * 86_400),
+            kilograms: 65
+        ))
+        context.insert(WeightRecord(
+            sourceActionKey: "confirmation-distant-weight",
+            measuredAt: day.addingTimeInterval(50 * 86_400),
+            kilograms: 95
+        ))
         context.insert(DailyHealthSnapshotRecord(
             dayKey: dayKey,
             timezoneID: Calendar.current.timeZone.identifier,
             payloadData: data,
             snapshotHash: "fixture",
             algorithmVersion: "v3"
+        ))
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: futureDayKey,
+            timezoneID: Calendar.current.timeZone.identifier,
+            payloadData: try encoder.encode(futureSnapshot),
+            snapshotHash: "fixture-future",
+            algorithmVersion: futureSnapshot.algorithmVersion
         ))
         try context.save()
 
@@ -81,14 +136,53 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(metrics.activeCaloriesKcal, 640)
         XCTAssertEqual(metrics.bmrKcal, 1_410)
         XCTAssertEqual(metrics.totalExpenditureKcal, 2_050)
+        XCTAssertEqual(metrics.weightKg, 70)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let savedSnapshot = try decoder.decode(
             DailyHealthSnapshot.self,
-            from: XCTUnwrap(resultContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first).payloadData
+            from: XCTUnwrap(resultContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(
+                predicate: #Predicate { $0.dayKey == dayKey }
+            )).first).payloadData
         )
         XCTAssertEqual(savedSnapshot.activeEnergyKcal, 640)
         XCTAssertEqual(savedSnapshot.restingEnergyKcal, 1_410)
+    }
+
+    func testConfirmationWeeklyReportUsesOnlyMetricsInsideItsWeek() async throws {
+        let harness = try Harness()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let interval = try XCTUnwrap(calendar.dateInterval(of: .weekOfYear, for: date))
+        let actionDay = calendar.startOfDay(for: date)
+        let otherDayInWeek = try XCTUnwrap((0..<7).compactMap {
+            calendar.date(byAdding: .day, value: $0, to: interval.start)
+        }.first { !calendar.isDate($0, inSameDayAs: actionDay) })
+        let context = ModelContext(harness.container)
+        context.insert(DailyMetrics(date: otherDayInWeek, deficitKcal: 120, mealCount: 2))
+        context.insert(DailyMetrics(
+            date: interval.start.addingTimeInterval(-60),
+            deficitKcal: 10_000,
+            mealCount: 10
+        ))
+        context.insert(DailyMetrics(date: interval.end, deficitKcal: 20_000, mealCount: 20))
+        try context.save()
+
+        let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
+        _ = try await harness.coordinator.confirm(id: action.id)
+
+        let verificationContext = ModelContext(harness.container)
+        let weeklyMetrics = try verificationContext.fetch(FetchDescriptor<DailyMetrics>()).filter {
+            $0.date >= interval.start && $0.date < interval.end
+        }
+        let weekStart = calendar.startOfDay(for: interval.start)
+        let reportPredicate = #Predicate<WeeklyReport> { $0.weekStartDate == weekStart }
+        let report = try XCTUnwrap(verificationContext.fetch(
+            FetchDescriptor<WeeklyReport>(predicate: reportPredicate)
+        ).first)
+        XCTAssertEqual(report.totalDeficitKcal, weeklyMetrics.reduce(0) { $0 + $1.deficitKcal })
+        XCTAssertEqual(report.mealsCount, weeklyMetrics.reduce(0) { $0 + $1.mealCount })
+        XCTAssertFalse(weeklyMetrics.contains { $0.deficitKcal == 10_000 || $0.deficitKcal == 20_000 })
     }
 
     func testConfirmedWorkoutPlanCreatesRetryableScheduleIntentButNoWorkoutOrHealthOutbox() async throws {

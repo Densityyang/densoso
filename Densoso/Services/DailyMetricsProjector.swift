@@ -15,7 +15,12 @@ enum DailyMetricsProjector {
         let meals = try modelContext.fetch(FetchDescriptor<MealRecord>(predicate: mealPredicate))
         let workouts = try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: workoutPredicate))
         let profileKey = try modelContext.fetch(FetchDescriptor<UserProfile>()).first?.profileKey ?? "primary"
-        let revisionRecords = try modelContext.fetch(FetchDescriptor<ProfileRevisionRecord>())
+        let revisionPredicate = #Predicate<ProfileRevisionRecord> {
+            $0.profileKey == profileKey && $0.effectiveFrom <= day
+        }
+        let revisionRecords = try modelContext.fetch(
+            FetchDescriptor<ProfileRevisionRecord>(predicate: revisionPredicate)
+        )
         let revisions = revisionRecords.map(domainRevision)
         let effectiveProfile = EffectiveProfileResolver(profileKey: profileKey, revisions: revisions).profile(at: day)
         let effectiveRevision = revisionRecords
@@ -26,8 +31,8 @@ enum DailyMetricsProjector {
                 return $0.id.uuidString < $1.id.uuidString
             }
             .last
-        let weightObservations = try localWeightObservations(in: modelContext)
-            + healthKitWeightObservations(in: modelContext)
+        let weightObservations = try localWeightObservations(in: modelContext, effectiveAt: day)
+            + healthKitWeightObservations(in: modelContext, effectiveAt: day)
         let effectiveWeight = WeightTimeline(observations: weightObservations).effectiveWeight(
             at: day,
             profileWeightKg: effectiveRevision?.weightKg,
@@ -69,8 +74,15 @@ enum DailyMetricsProjector {
         )
     }
 
-    private static func localWeightObservations(in modelContext: ModelContext) throws -> [WeightObservation] {
-        try modelContext.fetch(FetchDescriptor<WeightRecord>()).compactMap { record in
+    private static func localWeightObservations(
+        in modelContext: ModelContext,
+        effectiveAt day: Date
+    ) throws -> [WeightObservation] {
+        let minimumConfidence = WeightTimeline.defaultMinimumConfidence
+        let predicate = #Predicate<WeightRecord> {
+            $0.measuredAt <= day && $0.confidence >= minimumConfidence
+        }
+        return try modelContext.fetch(FetchDescriptor<WeightRecord>(predicate: predicate)).compactMap { record in
             guard let source = WeightSource(rawValue: record.source) else { return nil }
             return WeightObservation(
                 id: record.id,
@@ -83,8 +95,13 @@ enum DailyMetricsProjector {
         }
     }
 
-    private static func healthKitWeightObservations(in modelContext: ModelContext) throws -> [WeightObservation] {
-        let records = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+    private static func healthKitWeightObservations(
+        in modelContext: ModelContext,
+        effectiveAt day: Date
+    ) throws -> [WeightObservation] {
+        let lastDayKey = dayKey(for: day)
+        let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey <= lastDayKey }
+        let records = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate))
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         return records.flatMap { record -> [WeightObservation] in
@@ -112,14 +129,19 @@ enum DailyMetricsProjector {
     }
 
     private static func healthSnapshot(for day: Date, in modelContext: ModelContext) throws -> DailyHealthSnapshot? {
-        let calendar = Calendar.current
-        let components = calendar.dateComponents([.year, .month, .day], from: day)
-        let dayKey = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
-        guard let record = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
-            .first(where: { $0.dayKey == dayKey }) else { return nil }
+        let targetDayKey = dayKey(for: day)
+        let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == targetDayKey }
+        var descriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        guard let record = try modelContext.fetch(descriptor).first else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         return try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+    }
+
+    private static func dayKey(for day: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: day)
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
     private static func copy(_ source: DailyMetrics, to destination: DailyMetrics) {

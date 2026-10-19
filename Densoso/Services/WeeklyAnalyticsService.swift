@@ -93,7 +93,9 @@ struct WeeklyAnalyticsService {
         let predicate = #Predicate<WeeklyReport> { report in
             report.weekStartDate == weekStart
         }
-        let existing = try modelContext.fetch(FetchDescriptor<WeeklyReport>(predicate: predicate)).first
+        var descriptor = FetchDescriptor<WeeklyReport>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        let existing = try modelContext.fetch(descriptor).first
         let report = existing ?? WeeklyReport(weekStartDate: weekStart, weekEndDate: interval.end.addingTimeInterval(-1))
         if existing == nil {
             modelContext.insert(report)

@@ -37,6 +37,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "Gate 11",
                 "historical effective profiles",
                 "HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay",
+                "HealthRepositoryTests.testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData",
                 "CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
                 "HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
                 "HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches",
@@ -193,7 +194,21 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "DensosoTests/HealthRepositoryTests.swift",
-            ("testInsertAndDeleteReprojectsTheSameDay",),
+            (
+                "testInsertAndDeleteReprojectsTheSameDay",
+                "testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/DailyMetricsProjector.swift",
+            (
+                "$0.profileKey == profileKey && $0.effectiveFrom <= day",
+                "$0.measuredAt <= day && $0.confidence >= minimumConfidence",
+                "$0.dayKey <= lastDayKey",
+                "$0.dayKey == targetDayKey",
+                "descriptor.fetchLimit = 1",
+            ),
             errors,
         )
         require(
@@ -523,6 +538,26 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",
             "testOutOfOrderMessagesAreReturnedInDurableArrivalOrder",
+            "testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder",
+        ),
+        errors,
+    )
+    require(
+        "Densoso/Infrastructure/WatchConnectivity/WatchMessageInboxStore.swift",
+        (
+            "let pendingIDs = try pendingMessageIDs(in: context)",
+            "messageIDs.contains($0.requestID ?? missingRequestID)",
+            "descriptor.fetchLimit = boundedLimit",
+            "SortDescriptor(\\.ordinal, order: .reverse)",
+        ),
+        errors,
+    )
+    require(
+        "Densoso/Infrastructure/WatchConnectivity/PhoneWatchConnectivityCoordinator.swift",
+        (
+            "let metricsPredicate = #Predicate<DailyMetrics> { $0.date >= today && $0.date < tomorrow }",
+            "metricsDescriptor.fetchLimit = 1",
+            "let metrics = try context.fetch(metricsDescriptor).first",
         ),
         errors,
     )
@@ -673,6 +708,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",
+                "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder",
                 "-only-testing:DensosoTests/AgentCoordinatorTests/testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce",
             ),
         ),
