@@ -70,6 +70,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples",
                 "testSleepAggregationRetainsWatchPriorityAndLegacyCategoryAliases",
+                "testSampleDeduplicationUsesSyncVersionThenStableTieOrder",
             ),
             errors,
         )

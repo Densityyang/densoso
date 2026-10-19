@@ -257,7 +257,7 @@ final class HealthKitSyncCoordinator {
                 guard let nextAnchor = page.nextAnchorData else { throw HealthStoreClientError.invalidAnchor }
                 for sample in page.samples {
                     if let existing = samplesByID[sample.id] {
-                        if Self.prefers(sample, over: existing) {
+                        if HealthSampleSnapshot.preferredForDeduplication(sample, over: existing) {
                             samplesByID[sample.id] = sample
                         }
                     } else {
@@ -270,7 +270,7 @@ final class HealthKitSyncCoordinator {
                 guard nextAnchor != anchor else { throw HealthStoreClientError.invalidAnchor }
                 anchor = nextAnchor
             }
-            let samples = samplesByID.values.sorted(by: Self.sampleOrder)
+            let samples = samplesByID.values.sorted(by: HealthSampleSnapshot.stableDeduplicationOrder)
             replacements.append(HealthSampleDaySnapshot(
                 dayStart: day,
                 samples: samples,
@@ -280,42 +280,6 @@ final class HealthKitSyncCoordinator {
         return replacements
     }
 
-    private static func prefers(_ candidate: HealthSampleSnapshot, over current: HealthSampleSnapshot) -> Bool {
-        switch (candidate.syncVersion, current.syncVersion) {
-        case let (.some(candidateVersion), .some(currentVersion)) where candidateVersion != currentVersion:
-            return candidateVersion > currentVersion
-        case (.some, .none):
-            return true
-        case (.none, .some):
-            return false
-        default:
-            break
-        }
-        return sampleOrder(candidate, current)
-    }
-
-    private static func sampleOrder(_ lhs: HealthSampleSnapshot, _ rhs: HealthSampleSnapshot) -> Bool {
-        if lhs.startDate != rhs.startDate { return lhs.startDate < rhs.startDate }
-        if lhs.id != rhs.id { return lhs.id.uuidString < rhs.id.uuidString }
-        if lhs.endDate != rhs.endDate { return lhs.endDate < rhs.endDate }
-        if lhs.metric != rhs.metric { return lhs.metric.rawValue < rhs.metric.rawValue }
-        if lhs.value != rhs.value { return optionalValueOrder(lhs.value, rhs.value) }
-        if lhs.categoryValue != rhs.categoryValue { return optionalValueOrder(lhs.categoryValue, rhs.categoryValue) }
-        if lhs.sourceBundleIdentifier != rhs.sourceBundleIdentifier {
-            return optionalValueOrder(lhs.sourceBundleIdentifier, rhs.sourceBundleIdentifier)
-        }
-        if lhs.deviceName != rhs.deviceName { return optionalValueOrder(lhs.deviceName, rhs.deviceName) }
-        if lhs.deviceModel != rhs.deviceModel { return optionalValueOrder(lhs.deviceModel, rhs.deviceModel) }
-        if lhs.syncIdentifier != rhs.syncIdentifier { return optionalValueOrder(lhs.syncIdentifier, rhs.syncIdentifier) }
-        return (lhs.syncVersion ?? Int.min) < (rhs.syncVersion ?? Int.min)
-    }
-
-    private static func optionalValueOrder<Value: Comparable>(_ lhs: Value?, _ rhs: Value?) -> Bool {
-        guard lhs != rhs else { return false }
-        guard let lhs else { return false }
-        guard let rhs else { return true }
-        return lhs < rhs
-    }
 }
 
 private final class CompletionOnce: @unchecked Sendable {

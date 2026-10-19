@@ -70,4 +70,64 @@ final class DailyHealthSampleSummaryTests: XCTestCase {
         XCTAssertEqual(summary.sleep?.stages?.core, 480)
         XCTAssertNil(summary.sleep?.selectedSourceBundleIdentifier)
     }
+
+    func testSampleDeduplicationUsesSyncVersionThenStableTieOrder() throws {
+        let day = Date(timeIntervalSince1970: 1_700_000_000)
+        let sampleID = UUID(uuidString: "00000000-0000-0000-0000-000000000704")!
+        let unversioned = HealthSampleSnapshot(
+            id: sampleID,
+            metric: .bodyMass,
+            startDate: day,
+            endDate: day,
+            value: 69
+        )
+        let explicitlyVersioned = HealthSampleSnapshot(
+            id: sampleID,
+            metric: .bodyMass,
+            startDate: day,
+            endDate: day,
+            value: 70,
+            syncVersion: Int.min
+        )
+        XCTAssertEqual(
+            HealthSampleSnapshot.deduplicated([unversioned, explicitlyVersioned]),
+            [explicitlyVersioned]
+        )
+        XCTAssertEqual(
+            HealthSampleSnapshot.deduplicated([explicitlyVersioned, unversioned]),
+            [explicitlyVersioned]
+        )
+
+        let laterRevision = HealthSampleSnapshot(
+            id: sampleID,
+            metric: .bodyMass,
+            startDate: day.addingTimeInterval(86_400),
+            endDate: day.addingTimeInterval(86_400),
+            value: 72,
+            syncVersion: 7
+        )
+        let earlierTie = HealthSampleSnapshot(
+            id: sampleID,
+            metric: .bodyMass,
+            startDate: day,
+            endDate: day,
+            value: 71,
+            syncVersion: 7
+        )
+        XCTAssertEqual(
+            HealthSampleSnapshot.deduplicated([laterRevision, earlierTie]),
+            [earlierTie]
+        )
+        XCTAssertEqual(
+            HealthSampleSnapshot.deduplicated([earlierTie, laterRevision]),
+            [earlierTie]
+        )
+
+        let summary = DailyHealthSampleSummary(
+            samples: [unversioned, explicitlyVersioned],
+            dayStart: day
+        )
+        XCTAssertEqual(summary.aggregate(for: .bodyMass)?.sampleCount, 1)
+        XCTAssertEqual(summary.aggregate(for: .bodyMass)?.latestValue, 70)
+    }
 }

@@ -114,6 +114,7 @@ unknown so the live projection does not reuse it as current.
     contracts also bound pending-index reads and batch index writes. Focused
     coverage includes `DensosoMigrationTests.testV5MigrationMovesRawSamplesIntoIndexAndDailySummary`,
     `DailyHealthSampleSummaryTests.testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples`,
+    `DailyHealthSampleSummaryTests.testSampleDeduplicationUsesSyncVersionThenStableTieOrder`,
     `HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor`,
     `HealthKitSyncCoordinatorTests.testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder`,
     `HealthRepositoryTests.testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches`,

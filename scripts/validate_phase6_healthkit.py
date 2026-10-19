@@ -41,6 +41,9 @@ def main() -> int:
             "func save(_ command: HealthWriteCommand)",
             "func deleteOwnSample(receipt: HealthWriteReceipt)",
             "func enableBackgroundDelivery(for streams: Set<HealthMetricID>)",
+            "public static func preferredForDeduplication",
+            "public static func stableDeduplicationOrder",
+            "public static func deduplicated(_ samples: [Self])",
             "protocol HealthObserverClient: Sendable",
             "dataUnavailableOrReadScopeUnknown",
         ),
@@ -104,6 +107,7 @@ def main() -> int:
             "toVersion: DensosoSchemaV6.self",
             "try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)",
             "DailyHealthSnapshot.currentAlgorithmVersion",
+            "let legacySamples = HealthSampleSnapshot.deduplicated(",
             "DensosoSchemaV6.HealthKitSampleIndexRecord(",
             "private static func sleepWakeDays(startDate: Date, endDate: Date)",
         ),
@@ -325,6 +329,7 @@ def main() -> int:
         (
             "testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples",
             "testSleepAggregationRetainsWatchPriorityAndLegacyCategoryAliases",
+            "testSampleDeduplicationUsesSyncVersionThenStableTieOrder",
         ),
         errors,
     )

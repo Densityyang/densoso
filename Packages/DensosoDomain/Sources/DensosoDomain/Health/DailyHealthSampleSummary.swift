@@ -11,7 +11,7 @@ public struct HealthMetricSampleAggregate: Codable, Equatable, Sendable {
     public let latestSampleID: UUID?
 
     public init(metric: HealthMetricID, samples: [HealthSampleSnapshot]) {
-        let values = samples.compactMap { sample -> (date: Date, id: UUID, value: Double)? in
+        let values = HealthSampleSnapshot.deduplicated(samples).compactMap { sample -> (date: Date, id: UUID, value: Double)? in
             guard sample.metric == metric,
                   let value = sample.value,
                   value.isFinite,
@@ -54,10 +54,13 @@ public struct DailyHealthSampleSummary: Codable, Equatable, Sendable {
         sleepSamples: [HealthSampleSnapshot]? = nil,
         workoutEffort: [WorkoutEffortDailyAggregate] = []
     ) {
-        metrics = Set(samples.map(\.metric)).sorted { $0.rawValue < $1.rawValue }.map { metric in
-            HealthMetricSampleAggregate(metric: metric, samples: samples)
+        let uniqueSamples = HealthSampleSnapshot.deduplicated(samples)
+        let samplesByMetric = Dictionary(grouping: uniqueSamples, by: \.metric)
+        metrics = samplesByMetric.keys.sorted { $0.rawValue < $1.rawValue }.map { metric in
+            HealthMetricSampleAggregate(metric: metric, samples: samplesByMetric[metric] ?? [])
         }
-        let sleepIntervals = (sleepSamples ?? samples).compactMap { sample -> SleepSampleInterval? in
+        let uniqueSleepSamples = HealthSampleSnapshot.deduplicated(sleepSamples ?? uniqueSamples)
+        let sleepIntervals = uniqueSleepSamples.compactMap { sample -> SleepSampleInterval? in
             guard sample.metric == .sleepAnalysis,
                   let categoryValue = sample.categoryValue,
                   let stage = Self.sleepStage(from: categoryValue) else { return nil }

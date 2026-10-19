@@ -127,6 +127,68 @@ public struct HealthSampleSnapshot: Codable, Equatable, Identifiable, Sendable {
         self.syncIdentifier = syncIdentifier
         self.syncVersion = syncVersion
     }
+
+    /// Chooses a deterministic representative when the same HealthKit UUID appears more than once.
+    /// An explicit higher sync version wins; otherwise a stable field order breaks ties.
+    public static func preferredForDeduplication(_ candidate: Self, over current: Self) -> Bool {
+        switch (candidate.syncVersion, current.syncVersion) {
+        case let (.some(candidateVersion), .some(currentVersion)) where candidateVersion != currentVersion:
+            return candidateVersion > currentVersion
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        default:
+            return stableDeduplicationOrder(candidate, current)
+        }
+    }
+
+    /// Provides stable ordering for deduplicated samples and equal-version candidates.
+    public static func stableDeduplicationOrder(_ lhs: Self, _ rhs: Self) -> Bool {
+        if lhs.startDate != rhs.startDate { return lhs.startDate < rhs.startDate }
+        if lhs.id != rhs.id { return lhs.id.uuidString < rhs.id.uuidString }
+        if lhs.endDate != rhs.endDate { return lhs.endDate < rhs.endDate }
+        if lhs.metric != rhs.metric { return lhs.metric.rawValue < rhs.metric.rawValue }
+        if lhs.value != rhs.value { return optionalDeduplicationOrder(lhs.value, rhs.value) }
+        if lhs.categoryValue != rhs.categoryValue {
+            return optionalDeduplicationOrder(lhs.categoryValue, rhs.categoryValue)
+        }
+        if lhs.sourceBundleIdentifier != rhs.sourceBundleIdentifier {
+            return optionalDeduplicationOrder(lhs.sourceBundleIdentifier, rhs.sourceBundleIdentifier)
+        }
+        if lhs.deviceName != rhs.deviceName {
+            return optionalDeduplicationOrder(lhs.deviceName, rhs.deviceName)
+        }
+        if lhs.deviceModel != rhs.deviceModel {
+            return optionalDeduplicationOrder(lhs.deviceModel, rhs.deviceModel)
+        }
+        if lhs.syncIdentifier != rhs.syncIdentifier {
+            return optionalDeduplicationOrder(lhs.syncIdentifier, rhs.syncIdentifier)
+        }
+        return optionalDeduplicationOrder(lhs.syncVersion, rhs.syncVersion)
+    }
+
+    /// Deduplicates a page or transient aggregation input by HealthKit UUID.
+    public static func deduplicated(_ samples: [Self]) -> [Self] {
+        var samplesByID: [UUID: Self] = [:]
+        for sample in samples {
+            if let current = samplesByID[sample.id] {
+                if preferredForDeduplication(sample, over: current) {
+                    samplesByID[sample.id] = sample
+                }
+            } else {
+                samplesByID[sample.id] = sample
+            }
+        }
+        return samplesByID.values.sorted(by: stableDeduplicationOrder)
+    }
+
+    private static func optionalDeduplicationOrder<Value: Comparable>(_ lhs: Value?, _ rhs: Value?) -> Bool {
+        guard lhs != rhs else { return false }
+        guard let lhs else { return false }
+        guard let rhs else { return true }
+        return lhs < rhs
+    }
 }
 
 public enum HealthReadState: String, Codable, Equatable, Sendable {

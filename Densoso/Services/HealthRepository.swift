@@ -8,46 +8,14 @@ private struct HealthKitSampleIndexUpdate {
     let pendingDayKeys: Set<String>
 
     func merged(with other: Self) -> Self {
-        let preferredSample = Self.prefers(other.sample, over: sample) ? other.sample : sample
+        let preferredSample = HealthSampleSnapshot.preferredForDeduplication(other.sample, over: sample)
+            ? other.sample
+            : sample
         return Self(
             sample: preferredSample,
             // Each unresolved day survives duplicate page ordering until it is read completely.
             pendingDayKeys: pendingDayKeys.union(other.pendingDayKeys)
         )
-    }
-
-    private static func prefers(_ candidate: HealthSampleSnapshot, over current: HealthSampleSnapshot) -> Bool {
-        switch (candidate.syncVersion, current.syncVersion) {
-        case let (.some(candidateVersion), .some(currentVersion)) where candidateVersion != currentVersion:
-            return candidateVersion > currentVersion
-        case (.some, .none):
-            return true
-        case (.none, .some):
-            return false
-        default:
-            return stableSampleOrder(candidate, current)
-        }
-    }
-
-    private static func stableSampleOrder(_ lhs: HealthSampleSnapshot, _ rhs: HealthSampleSnapshot) -> Bool {
-        if lhs.startDate != rhs.startDate { return lhs.startDate < rhs.startDate }
-        if lhs.endDate != rhs.endDate { return lhs.endDate < rhs.endDate }
-        if lhs.metric != rhs.metric { return lhs.metric.rawValue < rhs.metric.rawValue }
-        if lhs.value != rhs.value { return optionalValueOrder(lhs.value, rhs.value) }
-        if lhs.categoryValue != rhs.categoryValue { return optionalValueOrder(lhs.categoryValue, rhs.categoryValue) }
-        if lhs.sourceBundleIdentifier != rhs.sourceBundleIdentifier {
-            return optionalValueOrder(lhs.sourceBundleIdentifier, rhs.sourceBundleIdentifier)
-        }
-        if lhs.deviceName != rhs.deviceName { return optionalValueOrder(lhs.deviceName, rhs.deviceName) }
-        if lhs.deviceModel != rhs.deviceModel { return optionalValueOrder(lhs.deviceModel, rhs.deviceModel) }
-        return optionalValueOrder(lhs.syncIdentifier, rhs.syncIdentifier)
-    }
-
-    private static func optionalValueOrder<Value: Comparable>(_ lhs: Value?, _ rhs: Value?) -> Bool {
-        guard lhs != rhs else { return false }
-        guard let lhs else { return false }
-        guard let rhs else { return true }
-        return lhs < rhs
     }
 }
 

@@ -227,20 +227,12 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                     var existingDayKeys = Set(records.map(\.dayKey))
                     let calendar = Calendar.current
                     var samplesByStartDay: [Date: [UUID: HealthSampleSnapshot]] = [:]
-                    var dayBySampleID: [UUID: Date] = [:]
-                    for (_, snapshot) in decodedSnapshots {
-                        for sample in (snapshot.healthKitSamples ?? []).sorted(by: {
-                            $0.startDate == $1.startDate
-                                ? $0.id.uuidString < $1.id.uuidString
-                                : $0.startDate < $1.startDate
-                        }) {
-                            let sampleDay = calendar.startOfDay(for: sample.startDate)
-                            if let oldDay = dayBySampleID[sample.id] {
-                                samplesByStartDay[oldDay]?.removeValue(forKey: sample.id)
-                            }
-                            samplesByStartDay[sampleDay, default: [:]][sample.id] = sample
-                            dayBySampleID[sample.id] = sampleDay
-                        }
+                    let legacySamples = HealthSampleSnapshot.deduplicated(
+                        decodedSnapshots.flatMap { $0.1.healthKitSamples ?? [] }
+                    )
+                    for sample in legacySamples {
+                        let sampleDay = calendar.startOfDay(for: sample.startDate)
+                        samplesByStartDay[sampleDay, default: [:]][sample.id] = sample
                     }
                     for samples in samplesByStartDay.values {
                         for sample in samples.values {
@@ -254,11 +246,9 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                     }
                     for (record, snapshot) in decodedSnapshots {
                         let day = calendar.startOfDay(for: snapshot.dayStart)
-                        let samples = (samplesByStartDay[day] ?? [:]).values.sorted {
-                            $0.startDate == $1.startDate
-                                ? $0.id.uuidString < $1.id.uuidString
-                                : $0.startDate < $1.startDate
-                        }
+                        let samples = (samplesByStartDay[day] ?? [:]).values.sorted(
+                            by: HealthSampleSnapshot.stableDeduplicationOrder
+                        )
                         let dayWorkouts = workouts.filter { calendar.isDate($0.date, inSameDayAs: day) }
                         let previousDay = calendar.date(byAdding: .day, value: -1, to: day)
                         let previousSleepSamples = previousDay.flatMap { previous in
