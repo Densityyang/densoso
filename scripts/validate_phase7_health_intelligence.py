@@ -79,7 +79,15 @@ def main() -> int:
 
     notifications = require_text(
         "Densoso/Infrastructure/Notifications/BriefNotificationScheduler.swift",
-        ("defaults.bool(forKey: Self.dailyKey)", "defaults.bool(forKey: Self.weeklyKey)", "requestAuthorization", "通知不包含健康数值"),
+        (
+            "defaults.object(forKey: Self.morningKey)",
+            "defaults.bool(forKey: Self.eveningKey)",
+            "defaults.bool(forKey: Self.weeklyKey)",
+            "setMorningTime(hour: Int, minute: Int)",
+            "setEveningTime(hour: Int, minute: Int)",
+            "DailyLoopNotificationCopy.make(snapshot: latestSnapshot, phase: phase)",
+            "requestAuthorization",
+        ),
         errors,
     )
     if any(
@@ -135,7 +143,9 @@ def main() -> int:
         (
             "testNotificationsAreOffByDefaultAndRestoreDoesNotRequestPermission",
             "testDeniedPermissionLeavesReminderDisabled",
-            "testDailyAndWeeklyRemindersUseFixedLocalTimeAndPrivacySafeText",
+            "testLegacyDailyPreferenceMigratesToMorningReminder",
+            "testMorningAndEveningTimesAreConfigurableAndCopyUsesLocalSnapshot",
+            "testInvalidReminderTimeIsRejected",
         ),
         errors,
     )

@@ -41,6 +41,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches",
                 "DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState",
                 "DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
+                "HealthNarrativePolicyTests",
                 "does not prove access to a real person's HealthKit data",
             ),
             errors,
@@ -63,6 +64,56 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "Packages/DensosoDomain/Tests/DensosoDomainTests/DailyLoopSnapshotTests.swift",
             ("testSnapshotSupportsUnavailableOptionalSummaries",),
+            errors,
+        )
+        require(
+            "Packages/DensosoDomain/Sources/DensosoDomain/Health/HealthNarrative.swift",
+            ("struct HealthNarrative:", "struct HealthNarrativeContext:", "let allowedEvidenceKeys:"),
+            errors,
+        )
+        require(
+            "Packages/DensosoDomain/Tests/DensosoDomainTests/HealthNarrativeTests.swift",
+            (
+                "testNarrativeCodableContainsOnlyNarrativeFieldsAndEvidenceKeys",
+                "testAllowedEvidenceKeysExcludeRecommendationIDsAndUnknownReferences",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Application/Health/HealthNarrativePolicy.swift",
+            ("func responseFormat", "func decode", "isNarrativeTextSafe", "deterministicFallback"),
+            errors,
+        )
+        require(
+            "Densoso/Application/Health/HealthContextPromptBuilder.swift",
+            ("requiresNarrative(for userText: String)", "健康解读结构（强制）", "记录", "训练计划"),
+            errors,
+        )
+        require(
+            "Densoso/Agent/AgentSession.swift",
+            (
+                "healthNarrativeContextProvider",
+                "provider.descriptor.id == .deepSeek",
+                "provider.descriptor.capabilities.contains(.structuredOutput)",
+                "HealthNarrativePolicy.decode",
+                "exposeTextDeltas: !useStructuredHealthNarrative",
+                "HealthNarrativePolicy.deterministicFallback",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/HealthIntelligenceService.swift",
+            ("func healthNarrativeContext(asOf date: Date = Date())", "never refreshes or writes"),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/HealthNarrativePolicyTests.swift",
+            (
+                "testStructuredNarrativeAcceptsOnlyKnownEvidenceKeysAndNarrativeText",
+                "testNarrativeRejectsNumericMetricClaimsUnknownKeysAndExtraFields",
+                "testPromptUsesStructuredContractOnlyForPersonalHealthQuestions",
+                "testStateWithoutAggregateSummaryDoesNotProduceHealthConclusion",
+            ),
             errors,
         )
         require(
@@ -422,9 +473,11 @@ def main() -> int:
                 "--filter WeightTimelineTests",
                 "--filter HealthStateTests",
                 "--filter DailyLoopSnapshotTests",
+                "--filter HealthNarrativeTests",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay",
                 "-only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
+                "-only-testing:DensosoTests/HealthNarrativePolicyTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays",

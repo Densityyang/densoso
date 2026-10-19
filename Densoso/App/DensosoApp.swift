@@ -60,7 +60,9 @@ struct AppRoot: View {
                     await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
                     dependencies.healthIntelligenceService.loadCachedBriefs()
                     _ = try? dependencies.healthIntelligenceService.refresh()
-                    await dependencies.briefNotificationScheduler.restoreSchedules()
+                    await dependencies.briefNotificationScheduler.restoreSchedules(
+                        snapshot: try? dependencies.dailyLoopSnapshotService.snapshot()
+                    )
                     dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                     appState.pendingWorkoutPlan = AppIntentInbox.consumeWorkoutPlan()
                     appState.pendingMealText = AppIntentInbox.consumeMealText()
@@ -68,6 +70,9 @@ struct AppRoot: View {
                         appState.pendingSystemIntent = pendingSystemIntent
                     }
                     checkOnboarding()
+                }
+                .onChange(of: dependencies.healthIntelligenceService.dailyBrief) { _, _ in
+                    Task { await refreshNotificationSnapshot() }
                 }
         } else {
             PersistenceRecoveryView(
@@ -78,6 +83,11 @@ struct AppRoot: View {
                 await dependencies.speechService.cleanupStaleTemporaryAudio()
             }
         }
+    }
+
+    private func refreshNotificationSnapshot() async {
+        let snapshot = try? dependencies.dailyLoopSnapshotService.snapshot()
+        await dependencies.briefNotificationScheduler.updateSnapshot(snapshot)
     }
 
     private func prepareUITestState() {

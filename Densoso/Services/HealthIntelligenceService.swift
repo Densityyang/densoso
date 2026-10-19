@@ -94,6 +94,40 @@ final class HealthIntelligenceService {
         return result.dailyBrief.contextSummary
     }
 
+    /// Returns bounded, deterministic inputs for a model-authored health narrative.
+    /// This read path never refreshes or writes the daily/weekly brief caches.
+    func healthNarrativeContext(asOf date: Date = Date()) throws -> HealthNarrativeContext {
+        let context = ModelContext(modelContainer)
+        let days = try loadDays(through: date, in: context)
+        let result = engine.makeDailyBrief(
+            days: days,
+            goals: try goalProfile(asOf: date, in: context),
+            plannedWorkoutTomorrow: try plannedWorkoutTomorrow(asOf: date, in: context)
+        )
+        guard let brief = result?.dailyBrief else {
+            return HealthNarrativeContext(
+                healthState: nil,
+                evidence: [],
+                recommendationCandidates: [],
+                aggregateSummary: nil
+            )
+        }
+        let state = brief.healthState
+        let stateEvidence = (state?.domains ?? []).flatMap { domain in
+            domain.evidenceKeys.map { EvidenceReference(key: $0, source: domain.domain.rawValue) }
+        } + (state?.recovery.evidence ?? [])
+            + (state?.tomorrowGuidance?.reasons ?? [])
+            + brief.vitalTrends.map {
+                EvidenceReference(key: $0.evidenceKey, source: $0.metric.rawValue)
+            }
+        return HealthNarrativeContext(
+            healthState: state,
+            evidence: stateEvidence,
+            recommendationCandidates: brief.recommendations,
+            aggregateSummary: brief.contextSummary
+        )
+    }
+
     /// Builds today's deterministic state without updating either persisted brief cache.
     /// Read-only agent tools use this path so a query does not cause a write as a side effect.
     func todayHealthState(asOf date: Date = Date()) throws -> HealthStateV2? {

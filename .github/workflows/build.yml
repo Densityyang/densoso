@@ -961,6 +961,7 @@ jobs:
           swift test --package-path Packages/DensosoDomain --filter WeightTimelineTests 2>&1 | tee -a gate11-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter HealthStateTests 2>&1 | tee -a gate11-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter DailyLoopSnapshotTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter HealthNarrativeTests 2>&1 | tee -a gate11-domain-contracts.log
 
       - name: Generate Xcode project and select iPhone Simulator
         run: |
@@ -984,6 +985,7 @@ jobs:
             -only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay \
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \
+            -only-testing:DensosoTests/HealthNarrativePolicyTests \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerUsesMatchingExistingBriefAndPreservesOptionalState \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary \

@@ -78,7 +78,7 @@ final class AgentSession {
     private let readRepository: any AgentReadRepository
     private let conversationRepository: any ConversationRepository
     private let confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)?
-    private let healthContextSummaryProvider: (@MainActor () -> HealthContextSummary?)?
+    private let healthNarrativeContextProvider: (@MainActor () -> HealthNarrativeContext?)?
     private let confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)?
     private let conversationID: UUID
     private let budgetFactory: @Sendable () -> AgentBudget
@@ -114,7 +114,7 @@ final class AgentSession {
         conversationID: UUID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
         confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)? = nil,
-        healthContextSummaryProvider: (@MainActor () -> HealthContextSummary?)? = nil,
+        healthNarrativeContextProvider: (@MainActor () -> HealthNarrativeContext?)? = nil,
         confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)? = nil
     ) {
         self.providerSelector = providerSelector
@@ -127,7 +127,7 @@ final class AgentSession {
         self.readRepository = readRepository
         self.conversationRepository = conversationRepository
         self.confirmedFoodHistory = confirmedFoodHistory
-        self.healthContextSummaryProvider = healthContextSummaryProvider
+        self.healthNarrativeContextProvider = healthNarrativeContextProvider
         self.confirmedWorkoutPlanHandler = confirmedWorkoutPlanHandler
         self.conversationID = conversationID
         self.budgetFactory = budgetFactory
@@ -247,6 +247,21 @@ final class AgentSession {
         activeEventObserver = nil
     }
 
+    private func completeDeterministicHealthResponse(
+        _ text: String,
+        requestID: UUID
+    ) async throws -> AgentResponse {
+        try await append(ModelMessage(role: .assistant, text: text), requestID: requestID)
+        let response = AgentResponse(text: text, toolCallsCount: 0, providerRoundsCount: 0)
+        try await conversationRepository.updateAgentRequestState(
+            requestID: requestID,
+            conversationID: conversationID,
+            state: .completed
+        )
+        emit(.completed(response))
+        return response
+    }
+
     private func run(multimodalRequest: MultimodalModelRequest, requestID: UUID) async throws -> AgentResponse {
         let userText = multimodalRequest.userText
         transientMealImageEvidence = multimodalRequest.mealEvidence
@@ -363,7 +378,36 @@ final class AgentSession {
                 try await append(ModelMessage(role: .user, content: userContent), requestID: requestID)
             }
 
+            let promptUserText = conversationHistory.last(where: { $0.role == .user })
+                .flatMap { Self.visibleMessage($0)?.text }
+                ?? userText
+            let narrativeContext = healthNarrativeContextProvider?()
+            let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(for: promptUserText)
+            let healthSummary = narrativeContext?.aggregateSummary
+            let allowedEvidenceKeys = Set(narrativeContext?.allowedEvidenceKeys ?? [])
+
+            if wantsHealthNarrative && (healthSummary == nil || allowedEvidenceKeys.isEmpty) {
+                return try await completeDeterministicHealthResponse(
+                    HealthNarrativePolicy.deterministicFallback(narrativeContext),
+                    requestID: requestID
+                )
+            }
+
             let provider = try providerSelector.provider(for: intelligencePreferences.mode)
+            var useStructuredHealthNarrative = wantsHealthNarrative
+                && healthSummary != nil
+                && !allowedEvidenceKeys.isEmpty
+                && provider.descriptor.id == .deepSeek
+                && provider.descriptor.capabilities.contains(.structuredOutput)
+                && multimodalRequest.image == nil
+
+            if wantsHealthNarrative && !useStructuredHealthNarrative {
+                return try await completeDeterministicHealthResponse(
+                    HealthNarrativePolicy.deterministicFallback(narrativeContext),
+                    requestID: requestID
+                )
+            }
+
             guard provider.descriptor.capabilities.contains(.text) else {
                 throw ProviderError.unsupportedCapability(.text)
             }
@@ -393,15 +437,7 @@ final class AgentSession {
                     dataClass: .healthText
                 )
             }
-            let promptUserText = conversationHistory.last(where: { $0.role == .user })
-                .flatMap { Self.visibleMessage($0)?.text }
-                ?? userText
-            let healthSummary = healthContextSummaryProvider?()
-            let requestSystemPrompt = HealthContextPromptBuilder.prompt(
-                basePrompt: systemPrompt.text,
-                userText: promptUserText,
-                summary: healthSummary
-            )
+
             var tracker = AgentBudgetTracker(
                 budget: requestSnapshot.budget,
                 consumption: requestSnapshot.consumption
@@ -419,19 +455,31 @@ final class AgentSession {
                 let request = ModelRequest(
                     requestID: requestID,
                     conversationID: conversationID,
-                    systemPrompt: requestSystemPrompt,
+                    systemPrompt: HealthContextPromptBuilder.prompt(
+                        basePrompt: systemPrompt.text,
+                        userText: promptUserText,
+                        summary: healthSummary,
+                        narrativeContext: narrativeContext,
+                        structuredNarrative: useStructuredHealthNarrative
+                    ),
                     messages: providerMessagesIncludingTransientMealEvidence(),
                     tools: registry.toolDefinitions,
                     maxOutputTokens: 2_048,
                     thinking: provider.descriptor.capabilities.contains(.reasoning)
                         ? AgentReasoningPolicy.forUserMessage(userText)
                         : .none,
+                    responseFormat: useStructuredHealthNarrative
+                        ? HealthNarrativePolicy.responseFormat(
+                            allowedEvidenceKeys: narrativeContext?.allowedEvidenceKeys ?? []
+                        )
+                        : nil,
                     deadline: tracker.budget.deadline
                 )
                 let result = try await performProviderRound(
                     provider: provider,
                     request: request,
-                    providerRound: tracker.providerRounds
+                    providerRound: tracker.providerRounds,
+                    exposeTextDeltas: !useStructuredHealthNarrative
                 )
                 for usage in result.usages {
                     tracker.record(AgentTokenUsage(
@@ -446,7 +494,9 @@ final class AgentSession {
 
                 if !result.toolCalls.isEmpty {
                     var assistantContent: [ModelContent] = []
-                    if !result.text.isEmpty { assistantContent.append(.text(result.text)) }
+                    if !result.text.isEmpty && !useStructuredHealthNarrative {
+                        assistantContent.append(.text(result.text))
+                    }
                     assistantContent.append(contentsOf: result.reasoning.map(ModelContent.reasoning))
                     assistantContent.append(contentsOf: result.toolCalls.map(ModelContent.toolCall))
                     try await append(
@@ -458,6 +508,9 @@ final class AgentSession {
                         try tracker.consumeToolCall()
                         try await persist(consumption: tracker.consumption, requestID: requestID)
                         emit(.toolCallStarted(name: call.name, index: tracker.toolCalls))
+                        if registry.effect(for: call.name) == .stagesAction {
+                            useStructuredHealthNarrative = false
+                        }
                         let output = await executeTool(call, clientRequestID: requestID)
                         try await append(
                             ModelMessage(
@@ -471,12 +524,25 @@ final class AgentSession {
                 }
 
                 guard !result.text.isEmpty else { throw AgentError.emptyResponse }
+                let responseText: String
+                if useStructuredHealthNarrative {
+                    if let narrative = HealthNarrativePolicy.decode(
+                        result.text,
+                        allowedEvidenceKeys: allowedEvidenceKeys
+                    ) {
+                        responseText = HealthNarrativePolicy.displayText(narrative)
+                    } else {
+                        responseText = HealthNarrativePolicy.deterministicFallback(narrativeContext)
+                    }
+                } else {
+                    responseText = result.text
+                }
                 try await append(
-                    ModelMessage(role: .assistant, text: result.text),
+                    ModelMessage(role: .assistant, text: responseText),
                     requestID: requestID
                 )
                 let response = AgentResponse(
-                    text: result.text,
+                    text: responseText,
                     toolCallsCount: tracker.toolCalls,
                     providerRoundsCount: tracker.providerRounds
                 )
@@ -662,7 +728,12 @@ final class AgentSession {
                   let data = result.data(using: .utf8),
                   let value = try? JSONDecoder().decode(JSONValue.self, from: data),
                   let object = value.objectValue else { continue }
-            let candidates = object["candidateNames"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            let candidates: [String]
+            if case .array(let values)? = object["candidateNames"] {
+                candidates = values.compactMap { $0.stringValue }
+            } else {
+                candidates = []
+            }
             return (
                 object["field"]?.stringValue,
                 object["subject"]?.stringValue ?? object["food"]?.stringValue,
@@ -806,7 +877,8 @@ final class AgentSession {
     private func performProviderRound(
         provider: any TextModelProvider,
         request: ModelRequest,
-        providerRound: Int
+        providerRound: Int,
+        exposeTextDeltas: Bool = true
     ) async throws -> ProviderRoundResult {
         let task = Task<ProviderRoundResult, Error> {
             var text = ""
@@ -818,9 +890,11 @@ final class AgentSession {
                 switch event {
                 case .textDelta(let delta):
                     text += delta
-                    await MainActor.run {
-                        streamedText = text
-                        emit(.assistantDelta(delta))
+                    if exposeTextDeltas {
+                        await MainActor.run {
+                            streamedText = text
+                            emit(.assistantDelta(delta))
+                        }
                     }
                 case .toolCall(let call):
                     toolCalls.append(call)

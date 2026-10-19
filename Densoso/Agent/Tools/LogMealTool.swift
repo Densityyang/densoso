@@ -310,7 +310,7 @@ struct LogMealTool: ConfirmationRequiredTool {
             if let grams = parser.gramsPerServing(in: labelText) { values.insert(grams) }
         }
         guard values.count == 1 else { return nil }
-        return values.makeIterator().next()
+        return values.first
     }
 
     private func mentionsAnyTerm(_ text: String, terms: [String]) -> Bool {

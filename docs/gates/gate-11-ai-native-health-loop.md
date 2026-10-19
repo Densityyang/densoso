@@ -7,15 +7,20 @@ Status: focused CI gate; this does not certify real HealthKit delivery.
 Checks the existing local path from HealthKit samples and profile history through
 DailyMetrics and HealthState into the DailyLoop snapshot. The selected fixtures
 cover effective historical profiles, weight timelines, unknown data, HealthKit
-deletion/reprojection, projection fingerprints, and snapshot composition.
+deletion/reprojection, projection fingerprints, snapshot composition, and the
+structured health-narrative boundary. DeepSeek health summaries validate
+evidence keys against local recommendation evidence; metric values remain
+deterministically rendered by the app. Providers without verified structured
+output use a deterministic local response.
 
 ## Focused tests
 
 - DensosoDomain: `EffectiveProfileTests`, `WeightTimelineTests`,
-  `HealthStateTests`, and `DailyLoopSnapshotTests`.
+  `HealthStateTests`, `DailyLoopSnapshotTests`, and `HealthNarrativeTests`.
 - iOS tests: `HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay`,
   `CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics`,
   `HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches`,
+  `HealthNarrativePolicyTests`,
   `DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState`,
   and `DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays`.
 

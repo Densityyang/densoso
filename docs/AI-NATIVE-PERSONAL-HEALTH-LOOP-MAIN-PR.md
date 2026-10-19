@@ -1470,6 +1470,10 @@ stage_workout_plan
 stage_daily_checkin
 ```
 
+`stage_workout_plan` 是确认边界中的语义名称；当前工具 ABI 使用
+`create_workout_plan`。该工具只创建 `PendingAction`，不会创建已完成的
+Workout，也不会在用户确认前调用 WorkoutKit。
+
 只生成：
 
 ```text

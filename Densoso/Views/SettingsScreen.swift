@@ -300,14 +300,43 @@ struct SettingsScreen: View {
     }
 
     private var notificationSection: some View {
-        Section("本地日报与周报提醒") {
+        Section("本地健康回顾提醒") {
             Toggle(
-                "每天 08:00 提醒查看日报",
+                "晨间回顾提醒",
                 isOn: Binding(
-                    get: { dependencies.briefNotificationScheduler.dailyEnabled },
-                    set: { setDailyNotification($0) }
+                    get: { dependencies.briefNotificationScheduler.morningEnabled },
+                    set: { setMorningNotification($0) }
                 )
             )
+            if dependencies.briefNotificationScheduler.morningEnabled {
+                DatePicker(
+                    "晨间提醒时间",
+                    selection: reminderTimeBinding(
+                        hour: dependencies.briefNotificationScheduler.morningHour,
+                        minute: dependencies.briefNotificationScheduler.morningMinute,
+                        onChange: setMorningNotificationTime
+                    ),
+                    displayedComponents: .hourAndMinute
+                )
+            }
+            Toggle(
+                "晚间回顾提醒",
+                isOn: Binding(
+                    get: { dependencies.briefNotificationScheduler.eveningEnabled },
+                    set: { setEveningNotification($0) }
+                )
+            )
+            if dependencies.briefNotificationScheduler.eveningEnabled {
+                DatePicker(
+                    "晚间提醒时间",
+                    selection: reminderTimeBinding(
+                        hour: dependencies.briefNotificationScheduler.eveningHour,
+                        minute: dependencies.briefNotificationScheduler.eveningMinute,
+                        onChange: setEveningNotificationTime
+                    ),
+                    displayedComponents: .hourAndMinute
+                )
+            }
             Toggle(
                 "每周一 08:00 提醒查看周报",
                 isOn: Binding(
@@ -315,10 +344,27 @@ struct SettingsScreen: View {
                     set: { setWeeklyNotification($0) }
                 )
             )
-            Text("提醒默认关闭；通知只提示打开应用，不显示健康数值。")
+            Text("晨间和晚间提醒默认时间为 08:00 和 21:00；提醒默认关闭，可随时调整或关闭。通知只使用本地健康摘要，不显示健康数值。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func reminderTimeBinding(
+        hour: Int,
+        minute: Int,
+        onChange: @escaping (Int, Int) -> Void
+    ) -> Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.date(from: DateComponents(hour: hour, minute: minute)) ?? Date()
+            },
+            set: { date in
+                let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+                guard let hour = components.hour, let minute = components.minute else { return }
+                onChange(hour, minute)
+            }
+        )
     }
 
     private func loadGoalFields() {
@@ -365,10 +411,43 @@ struct SettingsScreen: View {
         return value
     }
 
-    private func setDailyNotification(_ enabled: Bool) {
+    private func setMorningNotification(_ enabled: Bool) {
         Task {
             do {
-                try await dependencies.briefNotificationScheduler.setDailyEnabled(enabled)
+                try await dependencies.briefNotificationScheduler.setMorningEnabled(enabled)
+                notificationError = nil
+            } catch {
+                notificationError = error.localizedDescription
+            }
+        }
+    }
+
+    private func setEveningNotification(_ enabled: Bool) {
+        Task {
+            do {
+                try await dependencies.briefNotificationScheduler.setEveningEnabled(enabled)
+                notificationError = nil
+            } catch {
+                notificationError = error.localizedDescription
+            }
+        }
+    }
+
+    private func setMorningNotificationTime(_ hour: Int, _ minute: Int) {
+        Task {
+            do {
+                try await dependencies.briefNotificationScheduler.setMorningTime(hour: hour, minute: minute)
+                notificationError = nil
+            } catch {
+                notificationError = error.localizedDescription
+            }
+        }
+    }
+
+    private func setEveningNotificationTime(_ hour: Int, _ minute: Int) {
+        Task {
+            do {
+                try await dependencies.briefNotificationScheduler.setEveningTime(hour: hour, minute: minute)
                 notificationError = nil
             } catch {
                 notificationError = error.localizedDescription
