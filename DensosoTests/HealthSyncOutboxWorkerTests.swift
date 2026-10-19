@@ -185,6 +185,46 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         XCTAssertEqual(attemptedWrites.count, 1)
     }
 
+    func testPendingQuerySkipsFutureRetriesAndTerminalRows() async throws {
+        HealthKitConnectionPreference.hasRequestedAuthorization = true
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let dueMeal = MealRecord(date: now, totalCaloriesKcal: 300)
+        let futureMeal = MealRecord(date: now, totalCaloriesKcal: 450)
+        let dueEntry = HealthSyncOutboxEntry(operation: "upsertMeal", recordID: dueMeal.id)
+        let futureEntry = HealthSyncOutboxEntry(
+            operation: "upsertMeal",
+            recordID: futureMeal.id,
+            state: "retryable",
+            attemptCount: 3,
+            nextAttemptAt: now.addingTimeInterval(3_600)
+        )
+        let terminalEntry = HealthSyncOutboxEntry(
+            operation: "upsertMeal",
+            recordID: UUID(),
+            state: "terminal",
+            attemptCount: 8
+        )
+        context.insert(dueMeal)
+        context.insert(futureMeal)
+        context.insert(dueEntry)
+        context.insert(futureEntry)
+        context.insert(terminalEntry)
+        try context.save()
+
+        let fake = FakeHealthStoreClient()
+        await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
+            .processPending(in: context, now: now)
+
+        XCTAssertEqual(dueEntry.state, "succeeded")
+        XCTAssertEqual(dueEntry.attemptCount, 1)
+        XCTAssertEqual(futureEntry.state, "retryable")
+        XCTAssertEqual(futureEntry.attemptCount, 3)
+        XCTAssertEqual(terminalEntry.state, "terminal")
+        let successfulWrites = await fake.successfulWritesSnapshot()
+        XCTAssertEqual(successfulWrites.count, 1)
+        XCTAssertEqual(successfulWrites.first?.recordID, dueMeal.id)
+    }
+
     func testMealDeletionUsesOnlyItsStableApplicationSyncIdentifier() async throws {
         HealthKitConnectionPreference.hasRequestedAuthorization = true
         let mealID = UUID(uuidString: "00000000-0000-0000-0000-000000000042")!

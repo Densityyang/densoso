@@ -342,6 +342,45 @@ def main() -> int:
         errors,
     )
     require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataProviderGovernanceRepository.swift",
+        [
+            "predicate: #Predicate { $0.consentKey == key }",
+            "predicate: #Predicate { $0.usageKey == usageKey }",
+            "record.provider == providerRawValue",
+            "record.createdAt >= monthStart",
+            "record.createdAt < monthEnd",
+            "descriptor.fetchLimit = 1",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "SwiftDataProviderGovernanceQueryTests.swift",
+        [
+            "testConsentAndUsageDedupResolveExactKeysWithoutDuplicatingRows",
+            "testMonthlyUsageQueriesProviderAndHalfOpenDateWindowAndKeepsUnknownCost",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataAgentRepository.swift",
+        [
+            "func dailyMetrics(from startDate: Date, through endDate: Date)",
+            "guard startDate <= endDate else { return [] }",
+            "#Predicate<DailyMetrics>",
+            "metric.date >= startDate && metric.date <= endDate",
+            r"SortDescriptor(\DailyMetrics.date)",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "AgentDailyMetricsRepositoryTests.swift",
+        [
+            "testRepositoryFiltersToInclusiveDateRangeAndSortsResults",
+            "testRepositoryReturnsEmptyForInvertedDateRange",
+        ],
+        errors,
+    )
+    require_text(
         ROOT / "DensosoTests" / "Application" / "GetRecentMealsToolTests.swift",
         [
             "testQueryWindowAndOutputUseLocalDaysSortNewestFirstAndEnforceLimit",
@@ -564,6 +603,8 @@ def main() -> int:
         "DensosoTests/Infrastructure/LLM/QwenProviderContractTests.swift",
         "DensosoTests/Infrastructure/LLM/ProviderRetryPolicyTests.swift",
         "DensosoTests/Application/AgentCoordinatorTests.swift",
+        "DensosoTests/Application/SwiftDataProviderGovernanceQueryTests.swift",
+        "DensosoTests/Application/AgentDailyMetricsRepositoryTests.swift",
         "DensosoTests/Application/AgentRequestResumeTests.swift",
         "DensosoTests/Application/PromptInjectionEvalTests.swift",
         "DensosoTests/Application/AgentBudgetTests.swift",
@@ -697,6 +738,8 @@ def main() -> int:
             "-only-testing:DensosoTests/UserPreferenceConfirmationTests",
             "-only-testing:DensosoTests/GetUserPreferencesToolTests",
             "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests",
+            "-only-testing:DensosoTests/SwiftDataProviderGovernanceQueryTests",
+            "-only-testing:DensosoTests/AgentDailyMetricsRepositoryTests",
         ],
         errors,
     )

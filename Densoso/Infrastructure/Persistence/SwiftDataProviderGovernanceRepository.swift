@@ -5,9 +5,11 @@ import SwiftData
 actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
     func isConsentGranted(provider: ProviderID, dataClass: ProviderDataClass) throws -> Bool {
         let key = consentKey(provider: provider, dataClass: dataClass)
-        return try modelContext.fetch(FetchDescriptor<ConsentRecord>())
-            .first(where: { $0.consentKey == key })?
-            .granted == true
+        var descriptor = FetchDescriptor<ConsentRecord>(
+            predicate: #Predicate { $0.consentKey == key }
+        )
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first?.granted == true
     }
 
     func setConsent(
@@ -17,8 +19,11 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
         policyVersion: String
     ) throws {
         let key = consentKey(provider: provider, dataClass: dataClass)
-        if let record = try modelContext.fetch(FetchDescriptor<ConsentRecord>())
-            .first(where: { $0.consentKey == key }) {
+        var descriptor = FetchDescriptor<ConsentRecord>(
+            predicate: #Predicate { $0.consentKey == key }
+        )
+        descriptor.fetchLimit = 1
+        if let record = try modelContext.fetch(descriptor).first {
             record.granted = granted
             record.policyVersion = policyVersion
             record.decidedAt = Date()
@@ -44,9 +49,11 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
         currency: String?,
         rateVersion: String
     ) throws {
-        let exists = try modelContext.fetch(FetchDescriptor<ProviderUsageRecord>())
-            .contains(where: { $0.usageKey == usageKey })
-        guard !exists else { return }
+        var descriptor = FetchDescriptor<ProviderUsageRecord>(
+            predicate: #Predicate { $0.usageKey == usageKey }
+        )
+        descriptor.fetchLimit = 1
+        guard try modelContext.fetch(descriptor).isEmpty else { return }
         let record = ProviderUsageRecord(
             usageKey: usageKey,
             provider: usage.provider.rawValue,
@@ -68,12 +75,15 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
         monthStart: Date,
         monthEnd: Date
     ) throws -> ProviderUsageSummary {
-        let records = try modelContext.fetch(FetchDescriptor<ProviderUsageRecord>())
-            .filter {
-                $0.provider == provider.rawValue
-                    && $0.createdAt >= monthStart
-                    && $0.createdAt < monthEnd
-            }
+        let providerRawValue = provider.rawValue
+        let predicate = #Predicate<ProviderUsageRecord> { record in
+            record.provider == providerRawValue
+                && record.createdAt >= monthStart
+                && record.createdAt < monthEnd
+        }
+        let records = try modelContext.fetch(
+            FetchDescriptor<ProviderUsageRecord>(predicate: predicate)
+        )
         let priced = records.filter { $0.estimatedCostMicros >= 0 }
         let currencies = Set(priced.map(\.currency))
         let cost: Int64? = priced.count == records.count && currencies.count <= 1

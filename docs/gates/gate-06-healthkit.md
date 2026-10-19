@@ -49,6 +49,10 @@ change the V3 persistent schema.
 - Write authorization denial/restriction is terminal; authorization not yet
   requested and locked-device database access remain retryable rather than being
   conflated with a read-denial conclusion.
+- The outbox worker queries interrupted and eligible state rows separately,
+  orders eligible work in SwiftData, and resolves supersession only among
+  entries for the same source record. Future retries and terminal rows are not
+  processed during the current pass.
 - The app no longer queries workout routes or writes/deletes Workout samples.
   The Watch workout recorder and iPhone session-mirroring listener are removed,
   and the Watch extension no longer requests HealthKit entitlement. Old schema

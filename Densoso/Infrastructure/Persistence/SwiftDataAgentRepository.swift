@@ -103,19 +103,24 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
     }
 
     func dailyMetrics(from startDate: Date, through endDate: Date) throws -> [AgentDailyMetric] {
-        try modelContext.fetch(FetchDescriptor<DailyMetrics>())
-            .filter { $0.date >= startDate && $0.date <= endDate }
-            .sorted { $0.date < $1.date }
-            .map {
-                AgentDailyMetric(
-                    date: $0.date,
-                    deficitKcal: $0.deficitKcal,
-                    intakeKcal: $0.totalIntakeKcal,
-                    expenditureKcal: $0.totalExpenditureKcal,
-                    mealCount: $0.mealCount,
-                    workoutCount: $0.workoutCount
-                )
-            }
+        guard startDate <= endDate else { return [] }
+        let predicate = #Predicate<DailyMetrics> { metric in
+            metric.date >= startDate && metric.date <= endDate
+        }
+        let descriptor = FetchDescriptor<DailyMetrics>(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\DailyMetrics.date)]
+        )
+        return try modelContext.fetch(descriptor).map {
+            AgentDailyMetric(
+                date: $0.date,
+                deficitKcal: $0.deficitKcal,
+                intakeKcal: $0.totalIntakeKcal,
+                expenditureKcal: $0.totalExpenditureKcal,
+                mealCount: $0.mealCount,
+                workoutCount: $0.workoutCount
+            )
+        }
     }
 
     func schedule(on date: Date) throws -> [AgentScheduleItem] {

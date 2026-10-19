@@ -115,6 +115,13 @@ def main() -> int:
             "record_without_receipt",
             "HealthSyncState.retryable.rawValue",
             "reprojectDailyHealthSnapshot",
+            "let expiredPredicate = #Predicate<PendingActionRecord>",
+            "let activePredicate = #Predicate<PendingActionRecord>",
+            "let committingPredicate = #Predicate<PendingActionRecord>",
+            "let sendingPredicate = #Predicate<HealthSyncOutboxEntry>",
+            "private func pendingAction(id: UUID)",
+            "private func receipt(actionID: UUID)",
+            "descriptor.fetchLimit = 1",
         ],
         errors,
     )
@@ -183,6 +190,14 @@ def main() -> int:
     ):
         if not (ROOT / "DensosoTests" / test_name).is_file():
             errors.append(f"missing DensosoTests/{test_name}")
+    require_text(
+        ROOT / "DensosoTests/ConfirmationCoordinatorTests.swift",
+        (
+            "testTransactionFaultRollsBackThenRecoveryRestoresPending",
+            "testPendingActionSurvivesRepositoryRecreation",
+        ),
+        errors,
+    )
 
     require_text(
         ROOT / "docs" / "gates" / "gate-01-foundation.md",

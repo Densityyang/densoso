@@ -335,6 +335,8 @@ jobs:
             -only-testing:DensosoTests/UserPreferenceConfirmationTests \
             -only-testing:DensosoTests/GetUserPreferencesToolTests \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests \
+            -only-testing:DensosoTests/SwiftDataProviderGovernanceQueryTests \
+            -only-testing:DensosoTests/AgentDailyMetricsRepositoryTests \
             -resultBundlePath "$GATE03_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
             test 2>&1 | tee gate03-agent-provider-tests.log

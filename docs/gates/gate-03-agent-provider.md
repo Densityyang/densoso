@@ -25,6 +25,13 @@ domain-persistence pass on the same head, and does not authorize Speech work.
   conflicting subjective fields must be clarified and never inferred from
   HealthKit.
 - Persist provider-neutral conversations, real tool counts, consent and usage.
+- Resolve consent and usage idempotency by exact keys; aggregate usage only for
+  the requested provider and half-open month window `[start, end)`. Focused
+  repository tests cover key de-duplication, month boundaries and unknown-price
+  preservation.
+- Scope the Agent's daily-metrics read to the requested inclusive date range in
+  SwiftData and return rows in ascending date order; focused tests cover both
+  range boundaries, ordering and an inverted-range empty result.
 - Expose an ordered `AsyncThrowingStream<AgentEvent>` for each request, including
   a typed cancellation event; the legacy final-response API remains available.
 - Normalize local and cloud turns as `AgentTurnResult` with a typed

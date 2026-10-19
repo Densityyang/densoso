@@ -23,9 +23,13 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
         isProcessing = true
         defer { isProcessing = false }
         guard HealthKitConnectionPreference.hasRequestedAuthorization else { return }
-        guard let entries = try? modelContext.fetch(FetchDescriptor<HealthSyncOutboxEntry>()) else { return }
+        let sendingState = "sending"
+        let sendingPredicate = #Predicate<HealthSyncOutboxEntry> { $0.state == sendingState }
+        guard let interruptedEntries = try? modelContext.fetch(
+            FetchDescriptor<HealthSyncOutboxEntry>(predicate: sendingPredicate)
+        ) else { return }
         var recoveredSending = false
-        for entry in entries where entry.state == "sending" {
+        for entry in interruptedEntries {
             entry.state = "retryable"
             entry.nextAttemptAt = now
             recoveredSending = true
@@ -35,12 +39,17 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
             catch { modelContext.rollback(); return }
         }
         guard await healthStore.isAvailable() else { return }
-        let ordered = entries
-            .filter {
-                ($0.state == "pending" || $0.state == "retryable")
-                    && ($0.nextAttemptAt == nil || $0.nextAttemptAt! <= now)
-            }
-            .sorted { $0.createdAt < $1.createdAt }
+        let pendingState = "pending"
+        let retryableState = "retryable"
+        let eligiblePredicate = #Predicate<HealthSyncOutboxEntry> {
+            $0.state == pendingState || $0.state == retryableState
+        }
+        let eligibleDescriptor = FetchDescriptor<HealthSyncOutboxEntry>(
+            predicate: eligiblePredicate,
+            sortBy: [SortDescriptor(\HealthSyncOutboxEntry.createdAt)]
+        )
+        guard let candidates = try? modelContext.fetch(eligibleDescriptor) else { return }
+        let ordered = candidates.filter { $0.nextAttemptAt == nil || $0.nextAttemptAt! <= now }
 
         for entry in ordered {
             if let canonicalIdentifier = HealthRepository.canonicalSyncIdentifier(
@@ -58,7 +67,7 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
             }
 
             do {
-                let superseded = isSuperseded(entry, among: entries)
+                let superseded = try isSuperseded(entry, in: modelContext)
                 if superseded {
                     entry.state = "succeeded"
                     entry.lastError = nil
@@ -95,7 +104,12 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
 
     private func writeCommand(for entry: HealthSyncOutboxEntry, in modelContext: ModelContext) throws -> HealthWriteCommand {
         if entry.operation == "upsertMeal" {
-            guard let meal = try modelContext.fetch(FetchDescriptor<MealRecord>()).first(where: { $0.id == entry.recordID }) else {
+            let recordID = entry.recordID
+            var descriptor = FetchDescriptor<MealRecord>(
+                predicate: #Predicate { $0.id == recordID }
+            )
+            descriptor.fetchLimit = 1
+            guard let meal = try modelContext.fetch(descriptor).first else {
                 throw HealthOutboxError.missingSourceRecord
             }
             let payload = HealthWritePayload.nutrition(HealthNutritionWrite(
@@ -114,7 +128,12 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
         }
 
         if entry.operation == "upsertWeight" {
-            guard let weight = try modelContext.fetch(FetchDescriptor<WeightRecord>()).first(where: { $0.id == entry.recordID }) else {
+            let recordID = entry.recordID
+            var descriptor = FetchDescriptor<WeightRecord>(
+                predicate: #Predicate { $0.id == recordID }
+            )
+            descriptor.fetchLimit = 1
+            guard let weight = try modelContext.fetch(descriptor).first else {
                 throw HealthOutboxError.missingSourceRecord
             }
             guard weight.source != "healthKit" else { throw HealthOutboxError.refuseHealthKitEcho }
@@ -143,8 +162,12 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
         )
     }
 
-    private func isSuperseded(_ entry: HealthSyncOutboxEntry, among entries: [HealthSyncOutboxEntry]) -> Bool {
-        return entries.contains { candidate in
+    private func isSuperseded(_ entry: HealthSyncOutboxEntry, in modelContext: ModelContext) throws -> Bool {
+        let recordID = entry.recordID
+        let descriptor = FetchDescriptor<HealthSyncOutboxEntry>(
+            predicate: #Predicate { $0.recordID == recordID }
+        )
+        return try modelContext.fetch(descriptor).contains { candidate in
             let entryIdentifier = HealthRepository.canonicalSyncIdentifier(
                 operation: entry.operation,
                 recordID: entry.recordID
@@ -161,9 +184,13 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
     }
 
     private func updateActionReceipt(for entry: HealthSyncOutboxEntry, in modelContext: ModelContext, state: String) {
-        guard let receiptID = entry.receiptID,
-              let receipt = try? modelContext.fetch(FetchDescriptor<CommittedActionReceiptRecord>())
-                .first(where: { $0.id == receiptID }) else { return }
+        guard let receiptID = entry.receiptID else { return }
+        var descriptor = FetchDescriptor<CommittedActionReceiptRecord>(
+            predicate: #Predicate { $0.id == receiptID }
+        )
+        descriptor.fetchLimit = 1
+        guard let records = try? modelContext.fetch(descriptor),
+              let receipt = records.first else { return }
         receipt.healthSyncStateRaw = state
     }
 

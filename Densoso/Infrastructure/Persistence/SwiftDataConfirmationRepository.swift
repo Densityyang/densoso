@@ -62,21 +62,30 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     }
 
     func activeActions(now: Date) throws -> [PendingAction] {
-        let records = try modelContext.fetch(FetchDescriptor<PendingActionRecord>())
+        let pendingState = PendingActionState.pending.rawValue
+        let committingState = PendingActionState.committing.rawValue
+        let expiredPredicate = #Predicate<PendingActionRecord> {
+            $0.stateRaw == pendingState && $0.expiresAt <= now
+        }
+        let expiredRecords = try modelContext.fetch(
+            FetchDescriptor<PendingActionRecord>(predicate: expiredPredicate)
+        )
         var changed = false
-        for record in records where record.stateRaw == PendingActionState.pending.rawValue && record.expiresAt <= now {
+        for record in expiredRecords {
             record.stateRaw = PendingActionState.expired.rawValue
             record.updatedAt = now
             changed = true
         }
         if changed { try modelContext.save() }
-        return try records
-            .filter {
-                $0.stateRaw == PendingActionState.pending.rawValue
-                    || $0.stateRaw == PendingActionState.committing.rawValue
-            }
-            .sorted { $0.createdAt < $1.createdAt }
-            .map { try map($0) }
+        let activePredicate = #Predicate<PendingActionRecord> {
+            ($0.stateRaw == pendingState && $0.expiresAt > now)
+                || $0.stateRaw == committingState
+        }
+        let activeDescriptor = FetchDescriptor<PendingActionRecord>(
+            predicate: activePredicate,
+            sortBy: [SortDescriptor(\PendingActionRecord.createdAt)]
+        )
+        return try modelContext.fetch(activeDescriptor).map { try map($0) }
     }
 
     func reject(id: UUID, now: Date) throws {
@@ -306,7 +315,13 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     }
 
     func recoverInterruptedCommits(now: Date) throws {
-        let actions = try modelContext.fetch(FetchDescriptor<PendingActionRecord>())
+        let committingState = PendingActionState.committing.rawValue
+        let committingPredicate = #Predicate<PendingActionRecord> {
+            $0.stateRaw == committingState
+        }
+        let actions = try modelContext.fetch(
+            FetchDescriptor<PendingActionRecord>(predicate: committingPredicate)
+        )
         var changed = false
         for action in actions where action.stateRaw == PendingActionState.committing.rawValue {
             if try receipt(actionID: action.id) != nil {
@@ -324,8 +339,12 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             changed = true
         }
 
-        let outboxEntries = try modelContext.fetch(FetchDescriptor<HealthSyncOutboxEntry>())
-        for entry in outboxEntries where entry.state == HealthSyncState.sending.rawValue {
+        let sendingState = HealthSyncState.sending.rawValue
+        let sendingPredicate = #Predicate<HealthSyncOutboxEntry> { $0.state == sendingState }
+        let outboxEntries = try modelContext.fetch(
+            FetchDescriptor<HealthSyncOutboxEntry>(predicate: sendingPredicate)
+        )
+        for entry in outboxEntries {
             entry.state = HealthSyncState.retryable.rawValue
             entry.nextAttemptAt = now
             changed = true
@@ -675,23 +694,38 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     }
 
     private func pendingAction(id: UUID) throws -> PendingActionRecord? {
-        try modelContext.fetch(FetchDescriptor<PendingActionRecord>()).first { $0.id == id }
+        let predicate = #Predicate<PendingActionRecord> { $0.id == id }
+        var descriptor = FetchDescriptor<PendingActionRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
     }
 
     private func pendingAction(idempotencyKey: String) throws -> PendingActionRecord? {
-        try modelContext.fetch(FetchDescriptor<PendingActionRecord>()).first { $0.idempotencyKey == idempotencyKey }
+        let predicate = #Predicate<PendingActionRecord> { $0.idempotencyKey == idempotencyKey }
+        var descriptor = FetchDescriptor<PendingActionRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
     }
 
     private func receipt(actionID: UUID) throws -> CommittedActionReceiptRecord? {
-        try modelContext.fetch(FetchDescriptor<CommittedActionReceiptRecord>()).first { $0.actionID == actionID }
+        let predicate = #Predicate<CommittedActionReceiptRecord> { $0.actionID == actionID }
+        var descriptor = FetchDescriptor<CommittedActionReceiptRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
     }
 
     private func sourceRecordExists(idempotencyKey: String, actionTypeRaw: String) throws -> Bool {
         switch ActionType(rawValue: actionTypeRaw) {
         case .meal:
-            return try modelContext.fetch(FetchDescriptor<MealRecord>()).contains { $0.sourceActionKey == idempotencyKey }
+            let predicate = #Predicate<MealRecord> { $0.sourceActionKey == idempotencyKey }
+            var descriptor = FetchDescriptor<MealRecord>(predicate: predicate)
+            descriptor.fetchLimit = 1
+            return try !modelContext.fetch(descriptor).isEmpty
         case .weight:
-            return try modelContext.fetch(FetchDescriptor<WeightRecord>()).contains { $0.sourceActionKey == idempotencyKey }
+            let predicate = #Predicate<WeightRecord> { $0.sourceActionKey == idempotencyKey }
+            var descriptor = FetchDescriptor<WeightRecord>(predicate: predicate)
+            descriptor.fetchLimit = 1
+            return try !modelContext.fetch(descriptor).isEmpty
         case .workoutPlan:
             return try modelContext.fetch(FetchDescriptor<ScheduleEvent>()).contains { event in
                 ConfirmedWorkoutPlanEntry.decode(notes: event.notes)?.idempotencyKey == idempotencyKey
@@ -701,11 +735,15 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                 ConfirmedTrainingPlanEntry.decode(notes: event.notes)?.idempotencyKey == idempotencyKey
             }
         case .dailyCheckIn:
-            return try modelContext.fetch(FetchDescriptor<DailyCheckInRecord>())
-                .contains { $0.sourceActionKey == idempotencyKey }
+            let predicate = #Predicate<DailyCheckInRecord> { $0.sourceActionKey == idempotencyKey }
+            var descriptor = FetchDescriptor<DailyCheckInRecord>(predicate: predicate)
+            descriptor.fetchLimit = 1
+            return try !modelContext.fetch(descriptor).isEmpty
         case .userPreference:
-            return try modelContext.fetch(FetchDescriptor<UserPreferenceRecord>())
-                .contains { $0.sourceActionKey == idempotencyKey }
+            let predicate = #Predicate<UserPreferenceRecord> { $0.sourceActionKey == idempotencyKey }
+            var descriptor = FetchDescriptor<UserPreferenceRecord>(predicate: predicate)
+            descriptor.fetchLimit = 1
+            return try !modelContext.fetch(descriptor).isEmpty
         case nil:
             throw ConfirmationError.invariantViolation("unknown action type \(actionTypeRaw)")
         }
