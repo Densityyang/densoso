@@ -12,7 +12,9 @@ recent-item limits into SwiftData while preserving durable arrival ordering.
 The phone snapshot resolves today's DailyMetrics row with a bounded date query
 and one-row fetch limit. Confirmed plan reads filter note-prefix candidates
 before decoding in 64-row pages, then retain only active sessions through
-tomorrow; ordinary calendar events remain isolated.
+tomorrow; ordinary calendar events remain isolated. The multi-day scheduling
+service also reads complete confirmed-plan history in 64-row pages before
+applying its existing decode and ordering rules.
 Watch outbox and phone inbox tests cover replay semantics; the phone
 coordinator's activation path restores pending commands.
 
@@ -28,6 +30,7 @@ coordinator's activation path restores pending commands.
   `WatchMessageInboxStoreTests.testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry`,
   `TrainingPlanSchedulingServiceTests.testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays`,
+  `TrainingPlanSchedulingServiceTests.testConfirmedPlanHistoryPagesAcrossThe64EventBoundary`,
   `WorkoutPlanSchedulingServiceTests.testConfirmedScheduleIsIdempotentAcrossRetries`,
   `TrainingPlanScheduleQueryTests.testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents`,

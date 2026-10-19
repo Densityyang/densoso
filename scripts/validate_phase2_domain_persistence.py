@@ -122,12 +122,17 @@ def main() -> int:
             "let expiredPredicate = #Predicate<PendingActionRecord>",
             "static let expiredActionBatchSize = 64",
             "expiredDescriptor.fetchLimit = Self.expiredActionBatchSize",
+            "static let activeActionBatchSize = 64",
+            "activeDescriptor.fetchLimit = Self.activeActionBatchSize",
+            "cursorIdempotencyKey",
             "let activePredicate = #Predicate<PendingActionRecord>",
             "let committingPredicate = #Predicate<PendingActionRecord>",
             "let sendingPredicate = #Predicate<HealthSyncOutboxEntry>",
             "private func pendingAction(id: UUID)",
             "private func receipt(actionID: UUID)",
             "descriptor.fetchLimit = 1",
+            "private func updateProfileWeight(_ kilograms: Double, measuredAt: Date)",
+            "UserProfile> { $0.profileKey == primaryProfileKey }",
         ],
         errors,
     )
@@ -203,7 +208,31 @@ def main() -> int:
             "testTransactionFaultRollsBackThenRecoveryRestoresPending",
             "testPendingActionSurvivesRepositoryRecreation",
             "testActiveActionsExpiresPendingRowsAcrossBoundedBatchesAndKeepsCommitting",
+            "testActiveActionsKeysetPagesPendingAndCommittingInCreatedAtOrder",
+            "testConfirmedWeightCreatesAndUpdatesPrimaryWhenOnlySecondaryProfileExists",
+            "testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts",
         ),
+        errors,
+    )
+
+    require_text(
+        ROOT / "Densoso" / "Services" / "DailyMetricsProjectionInputReader.swift",
+        (
+            "static let fetchBatchSize = 64",
+            "descriptor.fetchLimit = fetchBatchSize",
+            "meal.id > lastID",
+            "workout.id > lastID",
+        ),
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Services" / "DailyMetricsProjector.swift",
+        ("DailyMetricsProjectionInputReader.read", "projectionInputs.meals", "projectionInputs.workouts"),
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataConfirmationRepository.swift",
+        ("DailyMetricsProjectionInputReader.read", "projectionInputs.meals", "projectionInputs.workouts"),
         errors,
     )
 

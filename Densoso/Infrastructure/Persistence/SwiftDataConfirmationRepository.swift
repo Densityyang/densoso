@@ -18,6 +18,7 @@ enum ConfirmationInjectedFailure: Error, Equatable {
 @ModelActor
 actor SwiftDataConfirmationRepository: ConfirmationRepository {
     static let expiredActionBatchSize = 64
+    static let activeActionBatchSize = 64
 
     private var faultPoint: ConfirmationFaultPoint?
 
@@ -97,11 +98,43 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             ($0.stateRaw == pendingState && $0.expiresAt > now)
                 || $0.stateRaw == committingState
         }
-        let activeDescriptor = FetchDescriptor<PendingActionRecord>(
-            predicate: activePredicate,
-            sortBy: [SortDescriptor(\PendingActionRecord.createdAt)]
-        )
-        return try modelContext.fetch(activeDescriptor).map { try map($0) }
+        let activeSort = [
+            SortDescriptor(\PendingActionRecord.createdAt),
+            SortDescriptor(\PendingActionRecord.idempotencyKey),
+        ]
+        var actions: [PendingAction] = []
+        var cursorCreatedAt: Date?
+        var cursorIdempotencyKey: String?
+
+        while true {
+            let pagePredicate: Predicate<PendingActionRecord>
+            if let cursorCreatedAt, let cursorIdempotencyKey {
+                let cursorDate = cursorCreatedAt
+                let cursorKey = cursorIdempotencyKey
+                pagePredicate = #Predicate<PendingActionRecord> { record in
+                    ((record.stateRaw == pendingState && record.expiresAt > now)
+                        || record.stateRaw == committingState)
+                        && (record.createdAt > cursorDate
+                            || (record.createdAt == cursorDate && record.idempotencyKey > cursorKey))
+                }
+            } else {
+                pagePredicate = activePredicate
+            }
+
+            var activeDescriptor = FetchDescriptor<PendingActionRecord>(
+                predicate: pagePredicate,
+                sortBy: activeSort
+            )
+            activeDescriptor.fetchLimit = Self.activeActionBatchSize
+            let page = try modelContext.fetch(activeDescriptor)
+            guard !page.isEmpty else { break }
+            actions.append(contentsOf: try page.map { try map($0) })
+            guard let last = page.last else { break }
+            cursorCreatedAt = last.createdAt
+            cursorIdempotencyKey = last.idempotencyKey
+            if page.count < Self.activeActionBatchSize { break }
+        }
+        return actions
     }
 
     func reject(id: UUID, now: Date) throws {
@@ -436,8 +469,12 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     }
 
     private func updateProfileWeight(_ kilograms: Double, measuredAt: Date) throws {
+        let primaryProfileKey = "primary"
+        let predicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
+        var descriptor = FetchDescriptor<UserProfile>(predicate: predicate)
+        descriptor.fetchLimit = 1
         let profile: UserProfile
-        if let existing = try modelContext.fetch(FetchDescriptor<UserProfile>()).first {
+        if let existing = try modelContext.fetch(descriptor).first {
             profile = existing
         } else {
             profile = UserProfile(weightKg: kilograms)
@@ -469,11 +506,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         // DailyMetricsProjector is MainActor-isolated and cannot be awaited here.
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: date)
-        let nextDay = calendar.date(byAdding: .day, value: 1, to: day)!
-        let mealPredicate = #Predicate<MealRecord> { $0.date >= day && $0.date < nextDay }
-        let workoutPredicate = #Predicate<WorkoutRecord> { $0.date >= day && $0.date < nextDay }
-        let meals = try modelContext.fetch(FetchDescriptor<MealRecord>(predicate: mealPredicate))
-        let workouts = try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: workoutPredicate))
+        let projectionInputs = try DailyMetricsProjectionInputReader.read(on: day, in: modelContext)
         let primaryProfileKey = "primary"
         let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
         var profileDescriptor = FetchDescriptor<UserProfile>(predicate: profilePredicate)
@@ -511,8 +544,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let healthSnapshot = try snapshotRecord.map { try decoder.decode(DailyHealthSnapshot.self, from: $0.payloadData) }
         let projected = CaloricEngine.computeDailyMetrics(
             date: day,
-            meals: meals,
-            workouts: workouts,
+            meals: projectionInputs.meals,
+            workouts: projectionInputs.workouts,
             effectiveProfile: effectiveProfile,
             effectiveWeight: effectiveWeight,
             healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,

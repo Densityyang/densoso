@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import XCTest
+import DensosoDomain
 @testable import Densoso
 
 @MainActor

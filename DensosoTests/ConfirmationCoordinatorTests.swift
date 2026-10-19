@@ -43,6 +43,65 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 1)
     }
 
+    func testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts() async throws {
+        let harness = try Harness()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let day = Calendar.current.startOfDay(for: date)
+        let context = ModelContext(harness.container)
+        let existingRecordCount = DailyMetricsProjectionInputReader.fetchBatchSize + 1
+
+        for index in 0..<existingRecordCount {
+            context.insert(MealRecord(
+                date: date,
+                totalCaloriesKcal: 10,
+                proteinG: 1,
+                fatG: 2,
+                carbsG: 3,
+                sourceActionKey: "projection-parity-meal-\(index)"
+            ))
+            context.insert(WorkoutRecord(
+                date: date,
+                type: "walking",
+                durationMinutes: index + 1,
+                estimatedCaloriesBurned: 20
+            ))
+        }
+        try context.save()
+
+        try DailyMetricsProjector.reproject(on: day, in: context)
+        let initialMetric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(initialMetric.mealCount, existingRecordCount)
+        XCTAssertEqual(initialMetric.workoutCount, existingRecordCount)
+        XCTAssertEqual(initialMetric.totalIntakeKcal, existingRecordCount * 10)
+        XCTAssertEqual(initialMetric.proteinG, Double(existingRecordCount))
+        XCTAssertEqual(initialMetric.fatG, Double(existingRecordCount * 2))
+        XCTAssertEqual(initialMetric.carbsG, Double(existingRecordCount * 3))
+        try context.save()
+
+        let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
+        _ = try await harness.coordinator.confirm(id: action.id)
+
+        let confirmationContext = ModelContext(harness.container)
+        let confirmationMetric = try XCTUnwrap(confirmationContext.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(confirmationMetric.mealCount, existingRecordCount + 1)
+        XCTAssertEqual(confirmationMetric.workoutCount, existingRecordCount)
+        XCTAssertEqual(confirmationMetric.totalIntakeKcal, existingRecordCount * 10 + 420)
+        XCTAssertEqual(confirmationMetric.proteinG, Double(existingRecordCount + 20))
+        XCTAssertEqual(confirmationMetric.fatG, Double(existingRecordCount * 2 + 20))
+        XCTAssertEqual(confirmationMetric.carbsG, Double(existingRecordCount * 3 + 20))
+
+        let standaloneContext = ModelContext(harness.container)
+        try DailyMetricsProjector.reproject(on: day, in: standaloneContext)
+        let standaloneMetric = try XCTUnwrap(standaloneContext.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(standaloneMetric.mealCount, confirmationMetric.mealCount)
+        XCTAssertEqual(standaloneMetric.workoutCount, confirmationMetric.workoutCount)
+        XCTAssertEqual(standaloneMetric.totalIntakeKcal, confirmationMetric.totalIntakeKcal)
+        XCTAssertEqual(standaloneMetric.proteinG, confirmationMetric.proteinG)
+        XCTAssertEqual(standaloneMetric.fatG, confirmationMetric.fatG)
+        XCTAssertEqual(standaloneMetric.carbsG, confirmationMetric.carbsG)
+        XCTAssertEqual(standaloneMetric.sourceFingerprint, confirmationMetric.sourceFingerprint)
+    }
+
     func testMealConfirmationPreservesMeasuredHealthKitEnergyProjection() async throws {
         let harness = try Harness()
         let date = Date(timeIntervalSince1970: 1_700_000_000)
@@ -222,6 +281,37 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(confirmationMetric.weightKg, 85)
     }
 
+    func testConfirmedWeightCreatesAndUpdatesPrimaryWhenOnlySecondaryProfileExists() async throws {
+        let harness = try Harness()
+        let context = ModelContext(harness.container)
+        let secondaryProfile = UserProfile(weightKg: 88)
+        secondaryProfile.profileKey = "secondary"
+        secondaryProfile.updatedAt = Date(timeIntervalSince1970: 1_600_000_000)
+        context.insert(secondaryProfile)
+        try context.save()
+
+        let measuredAt = Date().addingTimeInterval(60 * 60)
+        let action = try await harness.coordinator.stage(
+            payload: .weight(WeightDraft(measuredAt: measuredAt, kilograms: 62.5)),
+            clientRequestID: UUID()
+        )
+        _ = try await harness.coordinator.confirm(id: action.id)
+
+        let resultContext = ModelContext(harness.container)
+        let profiles = try resultContext.fetch(FetchDescriptor<UserProfile>())
+        let primary = try XCTUnwrap(profiles.first(where: { $0.profileKey == "primary" }))
+        let secondary = try XCTUnwrap(profiles.first(where: { $0.profileKey == "secondary" }))
+        XCTAssertEqual(profiles.filter { $0.profileKey == "primary" }.count, 1)
+        XCTAssertEqual(primary.weightKg, 62.5)
+        XCTAssertEqual(secondary.weightKg, 88)
+
+        let primaryKey = "primary"
+        let revisionPredicate = #Predicate<ProfileRevisionRecord> { $0.profileKey == primaryKey }
+        let revisions = try resultContext.fetch(FetchDescriptor<ProfileRevisionRecord>(predicate: revisionPredicate))
+        XCTAssertEqual(revisions.count, 1)
+        XCTAssertEqual(revisions.first?.weightKg, 62.5)
+    }
+
     func testConfirmationWeeklyReportUsesOnlyMetricsInsideItsWeek() async throws {
         let harness = try Harness()
         let date = Date(timeIntervalSince1970: 1_700_000_000)
@@ -379,6 +469,46 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertTrue(try verificationContext.fetch(
             FetchDescriptor<PendingActionRecord>(predicate: stillExpiredPendingPredicate)
         ).isEmpty)
+    }
+
+    func testActiveActionsKeysetPagesPendingAndCommittingInCreatedAtOrder() async throws {
+        let harness = try Harness()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let createdAt = now.addingTimeInterval(-300)
+        let payload = try Self.sampleMeal()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        let payloadData = try encoder.encode(payload)
+        let context = ModelContext(harness.container)
+        let activeActionCount = SwiftDataConfirmationRepository.activeActionBatchSize + 1
+
+        for index in 0..<activeActionCount {
+            let state: PendingActionState = index.isMultiple(of: 2) ? .pending : .committing
+            context.insert(PendingActionRecord(
+                idempotencyKey: String(format: "active-page-%03d", index),
+                actionTypeRaw: ActionType.meal.rawValue,
+                canonicalPayloadData: payloadData,
+                payloadData: payloadData,
+                clientRequestID: UUID(),
+                stateRaw: state.rawValue,
+                createdAt: createdAt,
+                expiresAt: state == .pending
+                    ? now.addingTimeInterval(3_600)
+                    : now.addingTimeInterval(-3_600)
+            ))
+        }
+        try context.save()
+
+        let actions = try await harness.repository.activeActions(now: now)
+
+        XCTAssertEqual(actions.count, activeActionCount)
+        XCTAssertEqual(actions.map(\.idempotencyKey), (0..<activeActionCount).map {
+            String(format: "active-page-%03d", $0)
+        })
+        XCTAssertEqual(actions.map(\.createdAt), Array(repeating: createdAt, count: activeActionCount))
+        XCTAssertEqual(actions.map(\.state), (0..<activeActionCount).map {
+            $0.isMultiple(of: 2) ? .pending : .committing
+        })
     }
 
     func testTransactionFaultRollsBackThenRecoveryRestoresPending() async throws {

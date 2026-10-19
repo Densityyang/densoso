@@ -8,12 +8,7 @@ enum DailyMetricsProjector {
     static func reproject(on date: Date, in modelContext: ModelContext) throws {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: date)
-        let nextDay = calendar.date(byAdding: .day, value: 1, to: day)!
-        let mealPredicate = #Predicate<MealRecord> { $0.date >= day && $0.date < nextDay }
-        let workoutPredicate = #Predicate<WorkoutRecord> { $0.date >= day && $0.date < nextDay }
-
-        let meals = try modelContext.fetch(FetchDescriptor<MealRecord>(predicate: mealPredicate))
-        let workouts = try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: workoutPredicate))
+        let projectionInputs = try DailyMetricsProjectionInputReader.read(on: day, in: modelContext)
         let primaryProfileKey = "primary"
         let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
         var profileDescriptor = FetchDescriptor<UserProfile>(predicate: profilePredicate)
@@ -44,8 +39,8 @@ enum DailyMetricsProjector {
         let healthSnapshot = try healthSnapshot(for: day, in: modelContext)
         let projected = CaloricEngine.computeDailyMetrics(
             date: day,
-            meals: meals,
-            workouts: workouts,
+            meals: projectionInputs.meals,
+            workouts: projectionInputs.workouts,
             effectiveProfile: effectiveProfile,
             effectiveWeight: effectiveWeight,
             healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,

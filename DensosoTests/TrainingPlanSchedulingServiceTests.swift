@@ -63,6 +63,47 @@ final class TrainingPlanSchedulingServiceTests: XCTestCase {
         XCTAssertEqual(resumed.state, .scheduled)
     }
 
+    func testConfirmedPlanHistoryPagesAcrossThe64EventBoundary() throws {
+        let (container, service, _) = try makeService()
+        let context = ModelContext(container)
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var actionIDs: [UUID] = []
+
+        for index in 0..<65 {
+            let actionID = UUID()
+            let createdAt = start.addingTimeInterval(TimeInterval(index))
+            let draft = TrainingPlanDraft(
+                name: "计划 \(index)",
+                createdAt: createdAt,
+                sessions: [
+                    TrainingSessionDraft(
+                        date: createdAt,
+                        activity: nil,
+                        reason: "保留恢复日。"
+                    ),
+                ]
+            )
+            let entry = ConfirmedTrainingPlanEntry(
+                actionID: actionID,
+                idempotencyKey: "training-plan-\(actionID.uuidString.lowercased())",
+                draft: draft
+            )
+            context.insert(ScheduleEvent(
+                date: createdAt,
+                title: draft.name,
+                notes: try entry.encodedNotes(),
+                startTime: createdAt
+            ))
+            actionIDs.append(actionID)
+        }
+        context.insert(ScheduleEvent(date: start, title: "普通日程", notes: "普通备注", startTime: start))
+        try context.save()
+
+        let confirmed = try service.confirmedPlans()
+        XCTAssertEqual(confirmed.count, 65)
+        XCTAssertEqual(confirmed.map(\.actionID), Array(actionIDs.reversed()))
+    }
+
     private func makeService() throws -> (ModelContainer, TrainingPlanSchedulingService, FakeMultiDayWorkoutScheduler) {
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let container = try ModelContainer(

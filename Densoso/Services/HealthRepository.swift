@@ -339,13 +339,7 @@ final class HealthRepository: HealthSyncRepository {
                 )
 
                 if stream == HealthMetricID.bodyMass.rawValue {
-                    let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
-                    let localWeightPredicate = #Predicate<WeightRecord> {
-                        $0.measuredAt >= day && $0.measuredAt < nextDay
-                    }
-                    let localWeight = try modelContext.fetch(
-                        FetchDescriptor<WeightRecord>(predicate: localWeightPredicate)
-                    ).max { $0.measuredAt < $1.measuredAt }?.kilograms
+                    let localWeight = try latestLocalWeightKilograms(on: day)
                     let candidateHealthKitWeight = replacementSummary.aggregate(for: .bodyMass)?.latestValue
                     let healthKitWeight: Double?
                     if isReplacementAvailable,
@@ -581,16 +575,9 @@ final class HealthRepository: HealthSyncRepository {
     }
 
     private func refreshDailyWeightSnapshot(on date: Date, excluding excludedWeightID: UUID? = nil) throws {
-        let calendar = Calendar.current
-        let day = calendar.startOfDay(for: date)
-        let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+        let day = Calendar.current.startOfDay(for: date)
         var snapshot = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
-        let weightPredicate = #Predicate<WeightRecord> {
-            $0.measuredAt >= day && $0.measuredAt < nextDay
-        }
-        let localWeight = try modelContext.fetch(FetchDescriptor<WeightRecord>(predicate: weightPredicate))
-            .filter { excludedWeightID == nil || $0.id != excludedWeightID }
-            .max { $0.measuredAt < $1.measuredAt }?.kilograms
+        let localWeight = try latestLocalWeightKilograms(on: day, excluding: excludedWeightID)
         let bodyMassReadState = snapshot.healthReadStates?[HealthMetricID.bodyMass.rawValue]
         let candidateImportedWeight = snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestValue
         let importedWeight: Double?
@@ -604,6 +591,32 @@ final class HealthRepository: HealthSyncRepository {
         }
         snapshot = Self.replacing(snapshot, weightKilograms: .some(localWeight ?? importedWeight))
         try upsertHealthSnapshot(snapshot, for: day)
+    }
+
+    private func latestLocalWeightKilograms(on date: Date, excluding excludedWeightID: UUID? = nil) throws -> Double? {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+        let predicate: Predicate<WeightRecord>
+        if let excludedWeightID {
+            let excludedID = excludedWeightID
+            predicate = #Predicate<WeightRecord> { record in
+                record.measuredAt >= day && record.measuredAt < nextDay && record.id != excludedID
+            }
+        } else {
+            predicate = #Predicate<WeightRecord> { record in
+                record.measuredAt >= day && record.measuredAt < nextDay
+            }
+        }
+        var descriptor = FetchDescriptor<WeightRecord>(
+            predicate: predicate,
+            sortBy: [
+                SortDescriptor(\WeightRecord.measuredAt, order: .reverse),
+                SortDescriptor(\WeightRecord.id, order: .reverse),
+            ]
+        )
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first?.kilograms
     }
 
     private func workouts(on day: Date) throws -> [WorkoutRecord] {

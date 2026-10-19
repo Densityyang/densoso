@@ -191,6 +191,78 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(identifiers, Set(["shared-0", "shared-1", "shared-2", "later-page-only"]))
     }
 
+    func testDeletingLatestSameDayWeightFallsBackToNextLocalThenHealthKitWeight() throws {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let morning = try XCTUnwrap(calendar.date(bySettingHour: 8, minute: 0, second: 0, of: day))
+        let afternoon = try XCTUnwrap(calendar.date(bySettingHour: 17, minute: 0, second: 0, of: day))
+        let importedAt = try XCTUnwrap(calendar.date(bySettingHour: 19, minute: 0, second: 0, of: day))
+        let importedSample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000061")!,
+            metric: .bodyMass,
+            startDate: importedAt,
+            endDate: importedAt,
+            value: 68
+        )
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            weightKilograms: 67,
+            healthKitSampleSummary: DailyHealthSampleSummary(samples: [importedSample], dayStart: day),
+            healthReadStates: [HealthMetricID.bodyMass.rawValue: .available],
+            algorithmVersion: "daily-weight-delete-fixture"
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: Self.dayKey(day),
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "daily-weight-delete-fixture",
+            algorithmVersion: snapshot.algorithmVersion
+        ))
+
+        let morningWeight = WeightRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000062")!,
+            sourceActionKey: "daily-weight-morning",
+            measuredAt: morning,
+            kilograms: 70
+        )
+        let tiedLowerIDWeight = WeightRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000063")!,
+            sourceActionKey: "daily-weight-tied-lower-id",
+            measuredAt: afternoon,
+            kilograms: 72
+        )
+        let tiedHigherIDWeight = WeightRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000064")!,
+            sourceActionKey: "daily-weight-tied-higher-id",
+            measuredAt: afternoon,
+            kilograms: 73
+        )
+        context.insert(morningWeight)
+        context.insert(tiedLowerIDWeight)
+        context.insert(tiedHigherIDWeight)
+        try context.save()
+
+        let repository = HealthRepository(modelContext: context)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        func savedWeight() throws -> Double? {
+            let record = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+            return try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData).weightKilograms
+        }
+
+        try repository.delete(tiedHigherIDWeight)
+        XCTAssertEqual(try savedWeight(), 72)
+
+        try repository.delete(tiedLowerIDWeight)
+        XCTAssertEqual(try savedWeight(), 70)
+
+        try repository.delete(morningWeight)
+        XCTAssertEqual(try savedWeight(), 68)
+    }
+
     func testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData() throws {
         let calendar = Calendar.current
         let targetDate = Date(timeIntervalSince1970: 1_700_000_000)
@@ -371,6 +443,58 @@ final class HealthRepositoryTests: XCTestCase {
 
         let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(metric.weightKg, 70)
+    }
+
+    func testBodyMassReplacementPrefersLatestSameDayLocalWeightOverHealthKitSummary() throws {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let morning = try XCTUnwrap(calendar.date(bySettingHour: 8, minute: 0, second: 0, of: day))
+        let afternoon = try XCTUnwrap(calendar.date(bySettingHour: 17, minute: 0, second: 0, of: day))
+        let importedAt = try XCTUnwrap(calendar.date(bySettingHour: 19, minute: 0, second: 0, of: day))
+        let sample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000065")!,
+            metric: .bodyMass,
+            startDate: importedAt,
+            endDate: importedAt,
+            value: 75
+        )
+        context.insert(WeightRecord(
+            sourceActionKey: "replacement-weight-morning",
+            measuredAt: morning,
+            kilograms: 70
+        ))
+        context.insert(WeightRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000066")!,
+            sourceActionKey: "replacement-weight-tied-lower-id",
+            measuredAt: afternoon,
+            kilograms: 72
+        ))
+        context.insert(WeightRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000067")!,
+            sourceActionKey: "replacement-weight-tied-higher-id",
+            measuredAt: afternoon,
+            kilograms: 73
+        ))
+        try context.save()
+
+        try HealthRepository(modelContext: context).applyImportedHealthSamples(
+            HealthSamplePage(
+                samples: [sample],
+                nextAnchorData: Data([1]),
+                readState: .available
+            ),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: importedAt,
+            lookbackStart: day,
+            replacements: [HealthSampleDaySnapshot(dayStart: day, samples: [sample], readState: .available)]
+        )
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let updated = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+        XCTAssertEqual(updated.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestValue, 75)
+        XCTAssertEqual(updated.weightKilograms, 73)
     }
 
     func testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner() throws {

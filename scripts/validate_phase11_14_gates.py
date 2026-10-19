@@ -658,7 +658,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "let prefix = ConfirmedTrainingPlanEntry.notesPrefix",
             "($0.notes ?? \"\").contains(prefix)",
-            "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
+            "private static let confirmedPlanFetchBatchSize = 64",
+            "private func fetchConfirmedPlanEvents(in context: ModelContext) throws -> [ScheduleEvent]",
+            "descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize",
+            "descriptor.fetchOffset = offset",
+            "FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)",
         ),
         errors,
     )
@@ -691,6 +695,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry",
             "testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays",
+            "testConfirmedPlanHistoryPagesAcrossThe64EventBoundary",
         ),
         errors,
     )
@@ -836,6 +841,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays",
+                "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanHistoryPagesAcrossThe64EventBoundary",
                 "-only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testConfirmedScheduleIsIdempotentAcrossRetries",
                 "-only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",

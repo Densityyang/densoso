@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import DensosoDomain
 @testable import Densoso
 
 @MainActor
@@ -53,7 +54,10 @@ final class ProviderUsageLedgerTests: XCTestCase {
 
     func testMissingRateIsUnavailableRatherThanZero() async throws {
         let repository = InMemoryProviderGovernanceRepository()
-        let ledger = ProviderUsageLedger(repository: repository, pricingDescriptorSource: .unconfigured)
+        let ledger = ProviderUsageLedger(
+            repository: repository,
+            pricingDescriptorSource: StaticPricingDescriptorSource.unconfigured
+        )
         try await ledger.record(
             ProviderUsage(
                 provider: .qwen,

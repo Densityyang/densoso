@@ -19,6 +19,8 @@ does not authorize Phase 3 without explicit user approval.
   `SHA256(actionType | canonicalPayload | clientRequestID)`.
 - Confirm meal and weight actions through one transaction containing the local
   record, daily/weekly projections, receipt, and HealthKit outbox entry.
+- Weight confirmation resolves the primary profile by `profileKey`, creating
+  it when only a secondary profile exists.
 - Recover interrupted commits from receipts and return interrupted outbox sends
   to a retryable state without duplicating health records.
 - Back up the store before migration; migration failure restores it and enters a
@@ -68,6 +70,9 @@ to domain/persistence behavior and have a dedicated evidence artifact.
    expired pending rows are retired in stable 64-row batches while committing
    actions remain visible, covered by
    `ConfirmationCoordinatorTests.testActiveActionsExpiresPendingRowsAcrossBoundedBatchesAndKeepsCommitting`;
+   active pending and committing actions are returned in stable 64-row pages
+   ordered by creation time, covered by
+   `ConfirmationCoordinatorTests.testActiveActionsKeysetPagesPendingAndCommittingInCreatedAtOrder`;
 5. transaction fault injection rolls back record/projection/receipt/outbox;
 6. a crash after commit returns the existing receipt without duplication;
 7. interrupted outbox sends become retryable while retaining attempt state;
@@ -78,6 +83,10 @@ to domain/persistence behavior and have a dedicated evidence artifact.
     unchanged, and causes the write gate and ConfirmationCoordinator to reject
     writes in recovery mode; and
 11. metadata-only V1/V2 version inspection does not change the store family.
+12. standalone and confirmation-driven daily projections page same-day meals
+    and workouts in stable 64-row keyset batches while preserving totals and
+    source fingerprints, covered by
+    `ConfirmationCoordinatorTests.testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts`.
 
 The restore routine verifies store/WAL/SHM checksums, stages replacement files,
 and rolls back ordinary file-operation errors. The immutable migration backup is

@@ -115,6 +115,8 @@ unknown so the live projection does not reuse it as current.
     reads for the reverse body-mass lookup, and pending HealthKit outbox work.
     The outbox worker recovers interrupted writes and processes pending/retryable
     entries in 64-row batches using a stable `(createdAt, idempotencyKey)` cursor.
+    Local daily weight refresh now selects its newest eligible same-day record
+    with a one-row query and excludes the record being deleted.
     Focused
     coverage includes `DensosoMigrationTests.testV5MigrationMovesRawSamplesIntoIndexAndDailySummary`,
     `DailyHealthSampleSummaryTests.testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples`,
@@ -130,6 +132,8 @@ unknown so the live projection does not reuse it as current.
     `ConfirmationCoordinatorTests.testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision`,
     `HealthRepositoryTests.testImportedWorkoutDedupProcessesUUIDGroupsAcrossFetchBatchBoundary`,
     `HealthRepositoryTests.testOutboxEnqueueReadsMatchingVersionsAndLatestReceiptAmongManyRows`,
+    `HealthRepositoryTests.testDeletingLatestSameDayWeightFallsBackToNextLocalThenHealthKitWeight`,
+    `HealthRepositoryTests.testBodyMassReplacementPrefersLatestSameDayLocalWeightOverHealthKitSummary`,
     `HealthSyncOutboxWorkerTests.testInterruptedOutboxRecoveryAndProcessingPagePastBoundedBatch`,
     `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
     and `HealthRepositoryTests.testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval`.
