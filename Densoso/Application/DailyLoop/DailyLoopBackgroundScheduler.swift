@@ -113,7 +113,7 @@ final class DailyLoopBackgroundScheduler {
                     return
                 }
                 _ = try await self.healthIntelligenceService.refresh()
-                let snapshot = try self.dailyLoopSnapshotService.snapshot()
+                let snapshot = try await self.dailyLoopSnapshotService.snapshot()
                 await self.notificationScheduler.updateSnapshot(snapshot)
                 self.watchConnectivityCoordinator.refreshApplicationContext()
                 let succeeded = !syncResult.hasFailures

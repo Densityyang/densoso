@@ -7,7 +7,7 @@ import SwiftData
 /// the SwiftData model actor executor. Read-only Agent queries do not refresh or write caches.
 @ModelActor
 actor HealthProjectionActor {
-    private let calendar: Calendar
+    private var calendar: Calendar = .current
 
     init(modelContainer: ModelContainer, calendar: Calendar = .current) {
         self.modelContainer = modelContainer
@@ -136,6 +136,28 @@ actor HealthProjectionActor {
         try modelContext.save()
     }
 
+    func confirmedPlanEntries() throws -> ConfirmedDailyLoopPlans {
+        let events = try modelContext.fetch(FetchDescriptor<ScheduleEvent>())
+        let workoutPlans = events
+            .compactMap { ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) }
+            .sorted {
+                let leftDate = $0.draft.scheduledAt ?? .distantPast
+                let rightDate = $1.draft.scheduledAt ?? .distantPast
+                return leftDate == rightDate
+                    ? $0.actionID.uuidString < $1.actionID.uuidString
+                    : leftDate > rightDate
+            }
+        let trainingPlans = events
+            .compactMap { ConfirmedTrainingPlanEntry.decode(notes: $0.notes) }
+            .sorted { lhs, rhs in
+                if lhs.draft.createdAt != rhs.draft.createdAt {
+                    return lhs.draft.createdAt > rhs.draft.createdAt
+                }
+                return lhs.draft.id.uuidString < rhs.draft.id.uuidString
+            }
+        return ConfirmedDailyLoopPlans(workoutPlans: workoutPlans, trainingPlans: trainingPlans)
+    }
+
     private func cachedDailyBrief(
         _ brief: DailyHealthBrief,
         snapshotHash: String,
@@ -262,6 +284,11 @@ struct HealthIntelligenceCachedBriefs: Sendable {
     let dailyBrief: DailyHealthBrief?
     let hasWeeklyRecord: Bool
     let weeklyBrief: WeeklyHealthBrief?
+}
+
+struct ConfirmedDailyLoopPlans: Sendable {
+    let workoutPlans: [ConfirmedWorkoutPlanEntry]
+    let trainingPlans: [ConfirmedTrainingPlanEntry]
 }
 
 private struct CacheInput: Codable {

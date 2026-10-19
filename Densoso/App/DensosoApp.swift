@@ -64,7 +64,7 @@ struct AppRoot: View {
                     await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
                     await dependencies.healthIntelligenceService.loadCachedBriefs()
                     _ = try? await dependencies.healthIntelligenceService.refresh()
-                    let dailyLoopSnapshot = try? dependencies.dailyLoopSnapshotService.snapshot()
+                    let dailyLoopSnapshot = try? await dependencies.dailyLoopSnapshotService.snapshot()
                     await dependencies.briefNotificationScheduler.restoreSchedules(snapshot: dailyLoopSnapshot)
                     dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                     appState.pendingWorkoutPlan = AppIntentInbox.consumeWorkoutPlan()
@@ -94,7 +94,7 @@ struct AppRoot: View {
     }
 
     private func refreshNotificationSnapshot() async {
-        let snapshot = try? dependencies.dailyLoopSnapshotService.snapshot()
+        let snapshot = try? await dependencies.dailyLoopSnapshotService.snapshot()
         await dependencies.briefNotificationScheduler.updateSnapshot(snapshot)
     }
 

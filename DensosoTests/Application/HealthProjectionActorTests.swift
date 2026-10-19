@@ -100,6 +100,106 @@ final class HealthProjectionActorTests: XCTestCase {
         }
     }
 
+    func testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 16)))
+        let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: today))
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+
+        let todayWorkout = ConfirmedWorkoutPlanEntry(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000A01")!,
+            idempotencyKey: "daily-loop-today-workout",
+            draft: WorkoutPlanDraft(
+                name: "今日步行",
+                activity: .walking,
+                scheduledAt: today.addingTimeInterval(12 * 60 * 60)
+            )
+        )
+        let tomorrowWorkout = ConfirmedWorkoutPlanEntry(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000A02")!,
+            idempotencyKey: "daily-loop-tomorrow-workout",
+            draft: WorkoutPlanDraft(
+                name: "明日骑行",
+                activity: .cycling,
+                scheduledAt: tomorrow.addingTimeInterval(9 * 60 * 60)
+            )
+        )
+        let olderTrainingPlan = ConfirmedTrainingPlanEntry(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000A03")!,
+            idempotencyKey: "daily-loop-older-training-plan",
+            draft: TrainingPlanDraft(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000A13")!,
+                name: "旧多日计划",
+                createdAt: today.addingTimeInterval(-200),
+                sessions: [TrainingSessionDraft(date: today, activity: .walking, reason: "计划训练")]
+            )
+        )
+        let newerTrainingPlan = ConfirmedTrainingPlanEntry(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000A04")!,
+            idempotencyKey: "daily-loop-newer-training-plan",
+            draft: TrainingPlanDraft(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000A14")!,
+                name: "新多日计划",
+                createdAt: today.addingTimeInterval(-100),
+                sessions: [
+                    TrainingSessionDraft(date: today, activity: .cycling, reason: "计划骑行"),
+                    TrainingSessionDraft(date: tomorrow, activity: nil, reason: "休息日"),
+                ]
+            )
+        )
+
+        context.insert(ScheduleEvent(
+            date: today,
+            title: "普通日程",
+            notes: "not-a-confirmed-plan",
+            startTime: today
+        ))
+        context.insert(ScheduleEvent(
+            date: today,
+            title: olderTrainingPlan.draft.name,
+            notes: try olderTrainingPlan.encodedNotes(),
+            startTime: today
+        ))
+        context.insert(ScheduleEvent(
+            date: tomorrow,
+            title: tomorrowWorkout.draft.name,
+            notes: try tomorrowWorkout.encodedNotes(),
+            startTime: tomorrow
+        ))
+        context.insert(ScheduleEvent(
+            date: today,
+            title: todayWorkout.draft.name,
+            notes: try todayWorkout.encodedNotes(),
+            startTime: today
+        ))
+        context.insert(ScheduleEvent(
+            date: today,
+            title: newerTrainingPlan.draft.name,
+            notes: try newerTrainingPlan.encodedNotes(),
+            startTime: today
+        ))
+        try context.save()
+        let countBefore = try context.fetchCount(FetchDescriptor<ScheduleEvent>())
+
+        let actor = HealthProjectionActor(modelContainer: container, calendar: calendar)
+        let plans = try await actor.confirmedPlanEntries()
+
+        XCTAssertEqual(plans.workoutPlans.map(\.actionID), [tomorrowWorkout.actionID, todayWorkout.actionID])
+        XCTAssertEqual(plans.trainingPlans.map(\.actionID), [newerTrainingPlan.actionID, olderTrainingPlan.actionID])
+        XCTAssertEqual(plans.trainingPlans.first?.draft.sessions.count, 2)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScheduleEvent>()), countBefore)
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<ScheduleEvent>()).first(where: { $0.title == "普通日程" })?.notes,
+            "not-a-confirmed-plan"
+        )
+    }
+
     private func dayKey(_ date: Date, calendar: Calendar) -> String {
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)

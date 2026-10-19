@@ -42,10 +42,10 @@ struct ChatScreen: View {
                 }
             }
             .onChange(of: dependencies.agentSession.pendingActions) { _, _ in
-                refreshDailyLoopSnapshot()
+                Task { await refreshDailyLoopSnapshot() }
             }
             .onChange(of: dependencies.healthIntelligenceService.dailyBrief) { _, _ in
-                refreshDailyLoopSnapshot()
+                Task { await refreshDailyLoopSnapshot() }
             }
             .onChange(of: appState.shouldFocusComposer) { _, shouldFocus in
                 if shouldFocus { focusComposer() }
@@ -104,7 +104,7 @@ struct ChatScreen: View {
                                 Task {
                                     do {
                                         try await dependencies.agentSession.rejectPendingAction(id: action.id)
-                                        refreshDailyLoopSnapshot()
+                                        await refreshDailyLoopSnapshot()
                                         dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                                         addMessage(text: "已拒绝该记录草稿，未保存任何健康数据。", isUser: false)
                                     } catch {
@@ -140,7 +140,7 @@ struct ChatScreen: View {
             }
             .onChange(of: appState.shouldScrollToDailyLoop) { _, shouldScroll in
                 guard shouldScroll else { return }
-                refreshDailyLoopSnapshot()
+                Task { await refreshDailyLoopSnapshot() }
                 withAnimation { proxy.scrollTo("daily-loop-snapshot-anchor", anchor: .top) }
                 appState.shouldScrollToDailyLoop = false
             }
@@ -169,7 +169,7 @@ struct ChatScreen: View {
                         Task {
                             do {
                                 try await dependencies.agentSession.reloadPendingActions()
-                                refreshDailyLoopSnapshot()
+                                await refreshDailyLoopSnapshot()
                                 dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                                 addMessage(text: "本机识别已生成待确认餐食草稿，请检查后确认。", isUser: false)
                             } catch {
@@ -337,7 +337,7 @@ struct ChatScreen: View {
 
     private func prepareInitialState() async {
         _ = try? await dependencies.healthIntelligenceService.refresh()
-        refreshDailyLoopSnapshot()
+        await refreshDailyLoopSnapshot()
         if appState.shouldFocusComposer { focusComposer() }
         hydratePersistedMessagesIfNeeded()
         if messages.isEmpty {
@@ -364,9 +364,9 @@ struct ChatScreen: View {
         didHydratePersistedMessages = true
     }
 
-    private func refreshDailyLoopSnapshot() {
+    private func refreshDailyLoopSnapshot() async {
         do {
-            dailyLoopSnapshot = try dependencies.dailyLoopSnapshotService.snapshot()
+            dailyLoopSnapshot = try await dependencies.dailyLoopSnapshotService.snapshot()
         } catch {
             dailyLoopSnapshot = nil
         }
@@ -516,7 +516,7 @@ struct ChatScreen: View {
                     source: sourceForRequest
                 )
                 watchTranscriptWasDurablyHandled = watchMessageID != nil
-                refreshDailyLoopSnapshot()
+                await refreshDailyLoopSnapshot()
             case .manual:
                 addMessage(text: "本地智能当前不可用；你的输入尚未保存。可在设置中选择 DeepSeek 云端处理，或继续手动编辑。", isUser: false)
             }
@@ -563,7 +563,7 @@ struct ChatScreen: View {
             do {
                 let message = try await dependencies.agentSession.confirmPendingAction(id: action.id)
                 _ = try? await dependencies.healthIntelligenceService.refresh()
-                refreshDailyLoopSnapshot()
+                await refreshDailyLoopSnapshot()
                 dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                 addMessage(text: message, isUser: false)
             } catch {

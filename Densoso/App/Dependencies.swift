@@ -149,9 +149,9 @@ final class Dependencies {
         )
         self.agentSession = agentSession
         self.dailyLoopSnapshotService = DailyLoopSnapshotService(
+            healthProjectionActor: healthProjectionActor,
             healthIntelligenceService: healthIntelligenceService,
-            agentSession: agentSession,
-            workoutPlanSchedulingService: workoutPlanSchedulingService
+            agentSession: agentSession
         )
         let watchConnectivityCoordinator = PhoneWatchConnectivityCoordinator(
             modelContainer: modelContainer,

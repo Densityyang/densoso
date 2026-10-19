@@ -128,35 +128,36 @@ struct DailyLoopSnapshotComposer {
     }
 }
 
-/// Composes the daily loop from already-loaded summaries and current action summaries.
+/// Composes the daily loop from actor-loaded plan entries and current health/action summaries.
 /// It never refreshes health calculations or writes persistence.
 @MainActor
 final class DailyLoopSnapshotService {
+    private let healthProjectionActor: HealthProjectionActor
     private let healthIntelligenceService: HealthIntelligenceService
     private let agentSession: AgentSession
-    private let workoutPlanSchedulingService: WorkoutPlanSchedulingService
     private let composer: DailyLoopSnapshotComposer
     private(set) var lastGeneratedAt: Date?
 
     init(
+        healthProjectionActor: HealthProjectionActor,
         healthIntelligenceService: HealthIntelligenceService,
         agentSession: AgentSession,
-        workoutPlanSchedulingService: WorkoutPlanSchedulingService,
         calendar: Calendar = .current
     ) {
+        self.healthProjectionActor = healthProjectionActor
         self.healthIntelligenceService = healthIntelligenceService
         self.agentSession = agentSession
-        self.workoutPlanSchedulingService = workoutPlanSchedulingService
         self.composer = DailyLoopSnapshotComposer(calendar: calendar)
     }
 
-    func snapshot(asOf date: Date = Date()) throws -> DailyLoopSnapshot {
+    func snapshot(asOf date: Date = Date()) async throws -> DailyLoopSnapshot {
+        let plans = try await healthProjectionActor.confirmedPlanEntries()
         let snapshot = composer.compose(
             asOf: date,
             dailyBrief: healthIntelligenceService.dailyBrief,
             pendingActions: agentSession.pendingActions,
-            workoutPlans: try workoutPlanSchedulingService.confirmedPlans(),
-            trainingPlans: try workoutPlanSchedulingService.confirmedTrainingPlans()
+            workoutPlans: plans.workoutPlans,
+            trainingPlans: plans.trainingPlans
         )
         lastGeneratedAt = snapshot.generatedAt
         return snapshot

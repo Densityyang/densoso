@@ -118,6 +118,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "func todayHealthState(asOf date: Date = Date())",
                 "func healthHistory(from startDate: Date, through endDate: Date)",
                 "func healthNarrativeContext(asOf date: Date = Date())",
+                "func confirmedPlanEntries() throws -> ConfirmedDailyLoopPlans",
                 "HealthIntelligenceReadModel(calendar: calendar)",
             ),
             errors,
@@ -149,6 +150,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "try await healthProjectionActor.todayHealthState(asOf: date)",
                 "try await healthProjectionActor.healthHistory(from: start, through: end)",
                 "try? await healthProjectionActor.healthNarrativeContext()",
+                "DailyLoopSnapshotService(healthProjectionActor: healthProjectionActor)",
             ),
             errors,
         )
@@ -175,6 +177,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites",
                 "testActorHistoryRetainsExistingRangeValidation",
+                "testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
             ),
             errors,
         )
@@ -550,6 +553,29 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         errors,
     )
     require(
+        "DensosoTests/Application/HealthProjectionActorTests.swift",
+        ("testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",),
+        errors,
+    )
+    require(
+        "Densoso/Services/HealthProjectionActor.swift",
+        (
+            "func confirmedPlanEntries() throws -> ConfirmedDailyLoopPlans",
+            "ConfirmedWorkoutPlanEntry.decode(notes: $0.notes)",
+            "ConfirmedTrainingPlanEntry.decode(notes: $0.notes)",
+        ),
+        errors,
+    )
+    require(
+        "Densoso/Application/DailyLoop/DailyLoopSnapshotService.swift",
+        (
+            "func snapshot(asOf date: Date = Date()) async throws -> DailyLoopSnapshot",
+            "try await healthProjectionActor.confirmedPlanEntries()",
+            "pendingActions: agentSession.pendingActions",
+        ),
+        errors,
+    )
+    require(
         "DensosoTests/Application/AgentCoordinatorTests.swift",
         ("testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce",),
         errors,
@@ -645,6 +671,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays",
                 "-only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay",
+                "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",
                 "-only-testing:DensosoTests/AgentCoordinatorTests/testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce",
             ),

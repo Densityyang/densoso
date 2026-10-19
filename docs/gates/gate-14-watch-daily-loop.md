@@ -22,6 +22,7 @@ semantics; the phone coordinator's activation path restores pending commands.
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry`,
   `TrainingPlanSchedulingServiceTests.testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays`,
   `TrainingPlanScheduleQueryTests.testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay`,
+  `HealthProjectionActorTests.testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents`,
   `AgentCoordinatorTests.testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce`.
 
 Confirmed multi-day training sessions expose bounded human-readable goal,
