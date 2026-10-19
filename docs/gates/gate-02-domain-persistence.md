@@ -33,6 +33,14 @@ does not authorize Phase 3 without explicit user approval.
 - Remove `ModelContext` and direct Workout writes from the model-facing Agent
   and tool boundary.
 
+## Cumulative schema extension
+
+The original Gate 2 acceptance remains the historical V1/V2-to-V3 migration
+record. The current cumulative main-PR branch extends the schema through V6;
+V5-to-V6 adds only a HealthKit sample-ID/day index and rewrites legacy daily
+snapshot payloads to compact summaries. V1–V5 schema identities remain intact.
+Gate 2 CI now includes the V5-to-V6 disk migration fixture.
+
 ## Non-goals
 
 - No Provider retry/budget/usage behavior, strict Provider JSON schema, Agent

@@ -5,6 +5,7 @@ import DensosoDomain
 protocol HealthSyncRepository {
     func cursorSnapshot(for stream: String) throws -> HealthKitCursorSnapshot?
     func resetHealthKitCursors() throws
+    func affectedHealthSampleDays(for page: HealthSamplePage, stream: String) throws -> [Date]
     func applyImportedWorkouts(
         _ snapshots: [WorkoutSnapshot],
         deletedHealthKitUUIDs: [UUID],
@@ -15,7 +16,8 @@ protocol HealthSyncRepository {
         _ page: HealthSamplePage,
         stream: String,
         lastSuccessfulAt: Date,
-        lookbackStart: Date?
+        lookbackStart: Date?,
+        replacements: [HealthSampleDaySnapshot]
     ) throws
     func applyHealthAggregates(
         _ buckets: [HealthAggregateBucket],
@@ -202,16 +204,71 @@ final class HealthKitSyncCoordinator {
                 limit: 500
             ))
             guard let nextAnchor = page.nextAnchorData else { throw HealthStoreClientError.invalidAnchor }
+            let affectedDays = try repository.affectedHealthSampleDays(for: page, stream: stream)
+            let replacements = try await requerySampleDays(
+                metric: metric,
+                days: affectedDays
+            )
             try repository.applyImportedHealthSamples(
                 page,
                 stream: stream,
                 lastSuccessfulAt: now,
-                lookbackStart: start
+                lookbackStart: start,
+                replacements: replacements
             )
             if !page.hasMore { return }
             guard nextAnchor != anchor else { throw HealthStoreClientError.invalidAnchor }
             anchor = nextAnchor
         } while true
+    }
+
+    private func requerySampleDays(
+        metric: HealthMetricID,
+        days: [Date]
+    ) async throws -> [HealthSampleDaySnapshot] {
+        let calendar = Calendar.current
+        var replacements: [HealthSampleDaySnapshot] = []
+        for date in days.sorted() {
+            let day = calendar.startOfDay(for: date)
+            let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+            let queryStart: Date
+            let queryEnd: Date
+            if metric == .sleepAnalysis,
+               let previousDay = calendar.date(byAdding: .day, value: -1, to: day),
+               let windowStart = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: previousDay),
+               let windowEnd = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: day) {
+                queryStart = windowStart
+                queryEnd = windowEnd
+            } else {
+                queryStart = day
+                queryEnd = nextDay
+            }
+            var samples: [HealthSampleSnapshot] = []
+            var anchor: Data?
+            var readState: HealthReadState = .dataUnavailableOrReadScopeUnknown
+            while true {
+                let page = try await healthStore.samples(HealthSampleRequest(
+                    metric: metric,
+                    startDate: queryStart,
+                    endDate: queryEnd,
+                    anchorData: anchor,
+                    limit: 500
+                ))
+                guard let nextAnchor = page.nextAnchorData else { throw HealthStoreClientError.invalidAnchor }
+                samples.append(contentsOf: page.samples)
+                if !page.samples.isEmpty { readState = .available }
+                else if samples.isEmpty { readState = page.readState }
+                if !page.hasMore { break }
+                guard nextAnchor != anchor else { throw HealthStoreClientError.invalidAnchor }
+                anchor = nextAnchor
+            }
+            replacements.append(HealthSampleDaySnapshot(
+                dayStart: day,
+                samples: samples,
+                readState: readState
+            ))
+        }
+        return replacements
     }
 }
 

@@ -550,24 +550,25 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let lastDayKey = dayKey(for: day)
         let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey <= lastDayKey }
         let records = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate))
-        return records.flatMap { record -> [WeightObservation] in
+        return records.compactMap { record -> WeightObservation? in
             guard let snapshot = try? decoder.decode(DailyHealthSnapshot.self, from: record.payloadData) else {
-                return []
+                return nil
             }
-            return (snapshot.healthKitSamples ?? []).compactMap { sample in
-                guard sample.metric == .bodyMass,
-                      let kilograms = sample.value,
-                      kilograms.isFinite,
-                      kilograms > 0 else { return nil }
-                return WeightObservation(
-                    id: sample.id,
-                    measuredAt: sample.endDate,
-                    kilograms: kilograms,
-                    source: .healthKit,
-                    confidence: 1,
-                    healthKitSyncIdentifier: sample.syncIdentifier
-                )
+            if let state = snapshot.healthReadStates?[HealthMetricID.bodyMass.rawValue], state != .available {
+                return nil
             }
+            guard let aggregate = snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass),
+                  let id = aggregate.latestSampleID,
+                  let measuredAt = aggregate.latestSampleAt,
+                  let kilograms = aggregate.latestValue,
+                  kilograms.isFinite, kilograms > 0 else { return nil }
+            return WeightObservation(
+                id: id,
+                measuredAt: measuredAt,
+                kilograms: kilograms,
+                source: .healthKit,
+                confidence: 1
+            )
         }
     }
 
@@ -688,9 +689,9 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             stepCount: existingSnapshot?.stepCount,
             exerciseMinutes: existingSnapshot?.exerciseMinutes,
             weightKilograms: weights.last?.kilograms ?? existingSnapshot?.weightKilograms,
-            healthKitSamples: existingSnapshot?.healthKitSamples,
+            healthKitSampleSummary: existingSnapshot?.healthKitSampleSummary,
             healthReadStates: existingSnapshot?.healthReadStates,
-            algorithmVersion: "v3"
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
@@ -699,20 +700,22 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let snapshotHash = SHA256.hash(data: payloadData)
             .map { String(format: "%02x", $0) }
             .joined()
-        if let existing = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
-            .first(where: { $0.dayKey == dayKey }) {
+        let existingPredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == targetDayKey }
+        var existingDescriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: existingPredicate)
+        existingDescriptor.fetchLimit = 1
+        if let existing = try modelContext.fetch(existingDescriptor).first {
             existing.timezoneID = calendar.timeZone.identifier
             existing.payloadData = payloadData
             existing.snapshotHash = snapshotHash
-            existing.algorithmVersion = "v3"
+            existing.algorithmVersion = DailyHealthSnapshot.currentAlgorithmVersion
         } else {
             modelContext.insert(
                 DailyHealthSnapshotRecord(
-                    dayKey: dayKey,
+                    dayKey: targetDayKey,
                     timezoneID: calendar.timeZone.identifier,
                     payloadData: payloadData,
                     snapshotHash: snapshotHash,
-                    algorithmVersion: "v3"
+                    algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
                 )
             )
         }

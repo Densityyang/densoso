@@ -18,14 +18,20 @@ read-only data model inside `HealthProjectionActor`; results cross back as
 Sendable domain snapshots, with the UI refresh/cache-write path left separate.
 DailyMetrics projection bounds profile revisions, local weights, and HealthKit
 snapshot reads by the effective day and uses a keyed single-row lookup for the
-target snapshot.
+target snapshot. HealthKit sample values and device metadata are reduced to
+daily summaries before persistence; a minimal sample-ID interval index supports
+deletion rebuilds. Ambiguous full-day reads retain history but suppress it from
+the live projection.
 
 ## Focused tests
 
 - DensosoDomain: `EffectiveProfileTests`, `WeightTimelineTests`,
-  `HealthStateTests`, `DailyLoopSnapshotTests`, and `HealthNarrativeTests`.
+  `DailyHealthSampleSummaryTests`, `HealthStateTests`, `DailyLoopSnapshotTests`,
+  and `HealthNarrativeTests`.
 - iOS tests: `HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay`,
   `HealthRepositoryTests.testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData`,
+  `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
+  `HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor`,
   `CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics`,
   `HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash`,
   `HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches`,

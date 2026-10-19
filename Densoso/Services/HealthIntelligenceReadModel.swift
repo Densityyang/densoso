@@ -225,37 +225,32 @@ struct HealthIntelligenceReadModel: Sendable {
             let dayStart = calendar.startOfDay(for: day)
             guard dayStart >= start && dayStart <= end else { continue }
             let snapshot = snapshotByDay[dayStart]
-            let samples = snapshot?.healthKitSamples ?? []
+            let sampleSummary = snapshot?.healthKitSampleSummary
+            func availableAggregate(_ metric: HealthMetricID) -> HealthMetricSampleAggregate? {
+                if let state = snapshot?.healthReadStates?[metric.rawValue], state != .available { return nil }
+                return sampleSummary?.aggregate(for: metric)
+            }
+            func dailyAverage(_ metric: HealthMetricID) -> [Double] {
+                guard let value = availableAggregate(metric)?.averageValue else { return [] }
+                return [value]
+            }
             let localWeightPoints = (weightsByDay[dayStart] ?? []).map { (date: $0.measuredAt, value: $0.kilograms) }
-            let healthWeightPoints = samples
-                .filter { $0.metric == .bodyMass }
-                .compactMap { sample -> (date: Date, value: Double)? in
-                    guard let value = sample.value else { return nil }
-                    return (sample.endDate, value)
-                }
+            let healthWeightPoints = availableAggregate(.bodyMass).flatMap { aggregate in
+                guard let date = aggregate.latestSampleAt, let value = aggregate.latestValue else { return nil }
+                return [(date: date, value: value)]
+            } ?? []
             var weightPoints = localWeightPoints + healthWeightPoints
-            if weightPoints.isEmpty, let fallbackWeight = snapshot?.weightKilograms {
+            let bodyMassReadState = snapshot?.healthReadStates?[HealthMetricID.bodyMass.rawValue]
+            if weightPoints.isEmpty,
+               bodyMassReadState == nil || bodyMassReadState == .available,
+               let fallbackWeight = snapshot?.weightKilograms {
                 weightPoints = [(date: dayStart, value: fallbackWeight)]
             }
             let weightSamples = weightPoints.sorted { $0.date < $1.date }.map { $0.value }
-            let sleep = samples.compactMap { sample -> SleepSampleInterval? in
-                guard sample.metric == .sleepAnalysis,
-                      let category = Self.sleepStage(from: sample.categoryValue) else { return nil }
-                return SleepSampleInterval(
-                    startDate: sample.startDate,
-                    endDate: sample.endDate,
-                    stage: category,
-                    sourceBundleIdentifier: sample.sourceBundleIdentifier,
-                    deviceModel: sample.deviceModel
-                )
-            }
             let workouts = (workoutsByDay[dayStart] ?? []).map { record in
-                let startAt = record.date
-                let endAt = startAt.addingTimeInterval(Double(max(record.durationMinutes, 0)) * 60)
-                let effort = samples
-                    .filter { $0.metric == .workoutEffort && $0.endDate >= startAt && $0.startDate <= endAt }
-                    .max { overlap($0, start: startAt, end: endAt) < overlap($1, start: startAt, end: endAt) }?
-                    .value
+                let effort = availableAggregate(.workoutEffort) != nil
+                    ? sampleSummary?.effortScore(for: record.id)
+                    : nil
                 return TrainingWorkoutInput(
                     startedAt: record.date,
                     durationMinutes: Double(record.durationMinutes),
@@ -284,12 +279,16 @@ struct HealthIntelligenceReadModel: Sendable {
                 stepCount: snapshot?.stepCountForProjection,
                 exerciseMinutes: snapshot?.exerciseMinutesForProjection,
                 weightSamplesKilograms: weightSamples,
-                sleepSamples: sleep,
-                heartRateSamples: samples.filter { $0.metric == .heartRate }.compactMap(\.value),
-                restingHeartRateSamples: samples.filter { $0.metric == .restingHeartRate }.compactMap(\.value),
-                heartRateVariabilitySamples: samples.filter { $0.metric == .heartRateVariabilitySDNN }.compactMap(\.value),
-                respiratoryRateSamples: samples.filter { $0.metric == .respiratoryRate }.compactMap(\.value),
-                wristTemperatureSamples: samples.filter { $0.metric == .wristTemperature }.compactMap(\.value),
+                sleepSamples: [],
+                sleepSummary: snapshot?.healthReadStates?[HealthMetricID.sleepAnalysis.rawValue] == nil
+                    || snapshot?.healthReadStates?[HealthMetricID.sleepAnalysis.rawValue] == .available
+                    ? sampleSummary?.sleep
+                    : nil,
+                heartRateSamples: dailyAverage(.heartRate),
+                restingHeartRateSamples: dailyAverage(.restingHeartRate),
+                heartRateVariabilitySamples: dailyAverage(.heartRateVariabilitySDNN),
+                respiratoryRateSamples: dailyAverage(.respiratoryRate),
+                wristTemperatureSamples: dailyAverage(.wristTemperature),
                 workouts: workouts
             ))
         }
@@ -301,27 +300,12 @@ struct HealthIntelligenceReadModel: Sendable {
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
-    private func overlap(_ sample: HealthSampleSnapshot, start: Date, end: Date) -> TimeInterval {
-        max(min(sample.endDate, end).timeIntervalSince(max(sample.startDate, start)), 0)
-    }
-
     private func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         return decoder
     }
 
-    private static func sleepStage(from rawValue: String?) -> SleepStage? {
-        switch rawValue {
-        case "inBed", "0": .inBed
-        case "awake", "2": .awake
-        case "asleepCore", "3": .asleepCore
-        case "asleepDeep", "4": .asleepDeep
-        case "asleepREM", "5": .asleepREM
-        case "asleepUnspecified", "asleep", "1", "6": .asleepUnspecified
-        default: nil
-        }
-    }
 }
 
 struct HealthStateHistoryPoint: Equatable, Sendable {

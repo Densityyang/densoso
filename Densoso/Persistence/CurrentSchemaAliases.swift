@@ -23,3 +23,4 @@ typealias ProfileRevisionRecord = DensosoSchemaV4.ProfileRevisionRecord
 typealias AgentRequestRecord = DensosoSchemaV5.AgentRequestRecord
 typealias DailyCheckInRecord = DensosoSchemaV5.DailyCheckInRecord
 typealias UserPreferenceRecord = DensosoSchemaV5.UserPreferenceRecord
+typealias HealthKitSampleIndexRecord = DensosoSchemaV6.HealthKitSampleIndexRecord

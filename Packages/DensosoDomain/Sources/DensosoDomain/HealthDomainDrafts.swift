@@ -134,6 +134,8 @@ public struct GoalProfile: Codable, Equatable, Sendable {
 }
 
 public struct DailyHealthSnapshot: Codable, Equatable, Sendable {
+    public static let currentAlgorithmVersion = "daily-health-snapshot-v2"
+
     public let dayStart: Date
     public let timezoneIdentifier: String
     public let energyIntakeKcal: EstimateRange?
@@ -142,7 +144,9 @@ public struct DailyHealthSnapshot: Codable, Equatable, Sendable {
     public let stepCount: Double?
     public let exerciseMinutes: Double?
     public let weightKilograms: Double?
+    /// Transient samples decoded from V1-V5 payloads; never encoded by the V2 cache.
     public let healthKitSamples: [HealthSampleSnapshot]?
+    public let healthKitSampleSummary: DailyHealthSampleSummary?
     public let healthReadStates: [String: HealthReadState]?
     public let algorithmVersion: String
 
@@ -176,6 +180,7 @@ public struct DailyHealthSnapshot: Codable, Equatable, Sendable {
         exerciseMinutes: Double? = nil,
         weightKilograms: Double? = nil,
         healthKitSamples: [HealthSampleSnapshot]? = nil,
+        healthKitSampleSummary: DailyHealthSampleSummary? = nil,
         healthReadStates: [String: HealthReadState]? = nil,
         algorithmVersion: String
     ) {
@@ -188,7 +193,71 @@ public struct DailyHealthSnapshot: Codable, Equatable, Sendable {
         self.exerciseMinutes = exerciseMinutes
         self.weightKilograms = weightKilograms
         self.healthKitSamples = healthKitSamples
-        self.healthReadStates = healthReadStates
+        self.healthKitSampleSummary = healthKitSampleSummary
+            ?? healthKitSamples.map { DailyHealthSampleSummary(samples: $0, dayStart: dayStart) }
+        self.healthReadStates = Self.inferredReadStates(healthReadStates, from: healthKitSamples)
         self.algorithmVersion = algorithmVersion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case dayStart
+        case timezoneIdentifier
+        case energyIntakeKcal
+        case activeEnergyKcal
+        case restingEnergyKcal
+        case stepCount
+        case exerciseMinutes
+        case weightKilograms
+        case healthKitSamples
+        case healthKitSampleSummary
+        case healthReadStates
+        case algorithmVersion
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        dayStart = try container.decode(Date.self, forKey: .dayStart)
+        timezoneIdentifier = try container.decode(String.self, forKey: .timezoneIdentifier)
+        energyIntakeKcal = try container.decodeIfPresent(EstimateRange.self, forKey: .energyIntakeKcal)
+        activeEnergyKcal = try container.decodeIfPresent(Double.self, forKey: .activeEnergyKcal)
+        restingEnergyKcal = try container.decodeIfPresent(Double.self, forKey: .restingEnergyKcal)
+        stepCount = try container.decodeIfPresent(Double.self, forKey: .stepCount)
+        exerciseMinutes = try container.decodeIfPresent(Double.self, forKey: .exerciseMinutes)
+        weightKilograms = try container.decodeIfPresent(Double.self, forKey: .weightKilograms)
+        let legacySamples = try container.decodeIfPresent([HealthSampleSnapshot].self, forKey: .healthKitSamples)
+        healthKitSamples = legacySamples
+        healthKitSampleSummary = try container.decodeIfPresent(
+            DailyHealthSampleSummary.self,
+            forKey: .healthKitSampleSummary
+        ) ?? legacySamples.map { DailyHealthSampleSummary(samples: $0, dayStart: dayStart) }
+        let storedReadStates = try container.decodeIfPresent([String: HealthReadState].self, forKey: .healthReadStates)
+        healthReadStates = Self.inferredReadStates(storedReadStates, from: legacySamples)
+        algorithmVersion = try container.decode(String.self, forKey: .algorithmVersion)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(dayStart, forKey: .dayStart)
+        try container.encode(timezoneIdentifier, forKey: .timezoneIdentifier)
+        try container.encodeIfPresent(energyIntakeKcal, forKey: .energyIntakeKcal)
+        try container.encodeIfPresent(activeEnergyKcal, forKey: .activeEnergyKcal)
+        try container.encodeIfPresent(restingEnergyKcal, forKey: .restingEnergyKcal)
+        try container.encodeIfPresent(stepCount, forKey: .stepCount)
+        try container.encodeIfPresent(exerciseMinutes, forKey: .exerciseMinutes)
+        try container.encodeIfPresent(weightKilograms, forKey: .weightKilograms)
+        try container.encodeIfPresent(healthKitSampleSummary, forKey: .healthKitSampleSummary)
+        try container.encodeIfPresent(healthReadStates, forKey: .healthReadStates)
+        try container.encode(algorithmVersion, forKey: .algorithmVersion)
+    }
+
+    private static func inferredReadStates(
+        _ stored: [String: HealthReadState]?,
+        from samples: [HealthSampleSnapshot]?
+    ) -> [String: HealthReadState]? {
+        var states = stored ?? [:]
+        for metric in Set(samples?.map(\.metric) ?? []) where states[metric.rawValue] == nil {
+            states[metric.rawValue] = .available
+        }
+        return states.isEmpty ? nil : states
     }
 }

@@ -3,8 +3,10 @@
 Status: macOS CI passed; user approved Gate 6 and Phase 7–10 work proceeded
 
 Gate 6 extends Draft PR #14 after the user approved Gate 5. It adds the HealthKit
-boundary, query/sync path, outbox worker and energy projection rules. It does not
-change the V3 persistent schema.
+boundary, query/sync path, outbox worker and energy projection rules. The
+original Gate 6 implementation retained the V3 schema; the current cumulative
+main-PR extension adds the V5-to-V6 daily sample-summary migration described
+below without changing V1–V5 schema identities.
 
 ## Scope
 
@@ -20,10 +22,10 @@ change the V3 persistent schema.
 - Aggregate streams retain a stable 30-day lower-bound lookback and reproject
   its daily buckets on observer sync, so late updates/deletions inside that
   window replace prior values without changing an anchored query predicate.
-- A stream cursor and the imported samples or daily aggregate are saved with one
-  SwiftData save. A failed save rolls back data and cursor together. Anchored
-  sample streams keep a persisted lower bound and fixed open upper predicate,
-  and advance on successful empty pages;
+- A stream cursor and the compact daily summary/sample-ID index or daily
+  aggregate are saved with one SwiftData save. A failed save rolls back data
+  and cursor together. Anchored sample streams keep a persisted lower bound and
+  fixed open upper predicate, and advance on successful empty pages;
   a user-initiated Settings resync rebaselines cursors in case HealthKit read
   access changed while the app was not running.
 - Observer updates are only wakeups. The coordinator drains the relevant query
@@ -67,6 +69,18 @@ change the V3 persistent schema.
   as history but are not used in the live projection while that metric's read
   state is unknown.
 
+## V5-to-V6 daily sample summary
+
+V6 rewrites V5 `DailyHealthSnapshot` payloads so raw HealthKit sample values,
+source/device details and sync metadata are not stored in the daily cache. The
+cache retains per-metric daily aggregates and sleep summaries. A separate index
+keeps only sample ID, stream and date interval so anchored additions/deletions
+can locate affected days. After a change, the coordinator re-queries each
+affected projection day (sleep uses its wake-date window) before the summary,
+index and anchor commit together. If the full-day read is ambiguous, the prior
+summary remains stored and that stream is marked unknown so the live projection
+does not reuse it as current.
+
 ## Gate contract
 
 1. Anchored insertion, update, deletion, duplicate IDs and empty pages converge.
@@ -93,6 +107,14 @@ change the V3 persistent schema.
     a model provider.
 11. macOS CI retains the result bundle, test summary, logs and static-contract
     report under `gate-06-healthkit-results`.
+12. V5-to-V6 migration removes legacy raw samples from encoded snapshots and
+    creates the sample-ID/day index; day re-query rebuilds summaries after
+    anchored deletions without advancing the cursor on query failure. Coverage
+   includes `DensosoMigrationTests.testV5MigrationMovesRawSamplesIntoIndexAndDailySummary`,
+   `DailyHealthSampleSummaryTests.testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples`,
+   `HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor`,
+   `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
+   and `HealthRepositoryTests.testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval`.
 
 ## Evidence record
 

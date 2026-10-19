@@ -964,6 +964,7 @@ jobs:
           set -euo pipefail
           swift test --package-path Packages/DensosoDomain --filter EffectiveProfileTests 2>&1 | tee gate11-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter WeightTimelineTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter DailyHealthSampleSummaryTests 2>&1 | tee -a gate11-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter HealthStateTests 2>&1 | tee -a gate11-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter DailyLoopSnapshotTests 2>&1 | tee -a gate11-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter HealthNarrativeTests 2>&1 | tee -a gate11-domain-contracts.log
@@ -989,6 +990,8 @@ jobs:
             -derivedDataPath "$GATE11_DERIVED_DATA_PATH" \
             -only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay \
             -only-testing:DensosoTests/HealthRepositoryTests/testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData \
+            -only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion \
+            -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor \
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \

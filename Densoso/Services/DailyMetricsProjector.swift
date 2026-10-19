@@ -104,27 +104,25 @@ enum DailyMetricsProjector {
         let records = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate))
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
-        return records.flatMap { record -> [WeightObservation] in
+        return records.compactMap { record -> WeightObservation? in
             guard let snapshot = try? decoder.decode(DailyHealthSnapshot.self, from: record.payloadData) else {
-                return []
+                return nil
             }
-            return (snapshot.healthKitSamples ?? []).compactMap { sample in
-                guard sample.metric == .bodyMass,
-                      let kilograms = sample.value,
-                      kilograms.isFinite,
-                      kilograms > 0
-                else {
-                    return nil
-                }
-                return WeightObservation(
-                    id: sample.id,
-                    measuredAt: sample.endDate,
-                    kilograms: kilograms,
-                    source: .healthKit,
-                    confidence: 1,
-                    healthKitSyncIdentifier: sample.syncIdentifier
-                )
+            if let state = snapshot.healthReadStates?[HealthMetricID.bodyMass.rawValue], state != .available {
+                return nil
             }
+            guard let aggregate = snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass),
+                  let id = aggregate.latestSampleID,
+                  let measuredAt = aggregate.latestSampleAt,
+                  let kilograms = aggregate.latestValue,
+                  kilograms.isFinite, kilograms > 0 else { return nil }
+            return WeightObservation(
+                id: id,
+                measuredAt: measuredAt,
+                kilograms: kilograms,
+                source: .healthKit,
+                confidence: 1
+            )
         }
     }
 

@@ -49,6 +49,65 @@ def main() -> int:
     if "readDenied" in contracts or "case denied" in contracts:
         errors.append("HealthKit read authorization must not expose a denied state")
 
+    snapshot_contract = require_text(
+        "Packages/DensosoDomain/Sources/DensosoDomain/HealthDomainDrafts.swift",
+        (
+            'public static let currentAlgorithmVersion = "daily-health-snapshot-v2"',
+            "public let healthKitSampleSummary: DailyHealthSampleSummary?",
+            "case healthKitSamples",
+            "try container.encodeIfPresent(healthKitSampleSummary, forKey: .healthKitSampleSummary)",
+            "private static func inferredReadStates",
+        ),
+        errors,
+    )
+    if "try container.encodeIfPresent(healthKitSamples" in snapshot_contract:
+        errors.append("daily HealthKit cache must not encode raw sample payloads")
+
+    summary_domain = require_text(
+        "Packages/DensosoDomain/Sources/DensosoDomain/Health/DailyHealthSampleSummary.swift",
+        (
+            "public struct DailyHealthSampleSummary",
+            "public struct HealthMetricSampleAggregate",
+            "public struct WorkoutEffortDailyAggregate",
+            "public let metrics: [HealthMetricSampleAggregate]",
+            "public let sleep: SleepSummary?",
+            "public let workoutEffort: [WorkoutEffortDailyAggregate]",
+        ),
+        errors,
+    )
+    if "public let samples: [HealthSampleSnapshot]" in summary_domain:
+        errors.append("daily summaries must aggregate samples without retaining raw HealthKit payloads")
+
+    v6_schema = require_text(
+        "Densoso/Persistence/Schemas/DensosoSchemaV6.swift",
+        (
+            "static var versionIdentifier: Schema.Version { .init(6, 0, 0) }",
+            "DensosoSchemaV5.models + [HealthKitSampleIndexRecord.self]",
+            "@Attribute(.unique) var sampleID: UUID",
+            "var stream: String",
+            "var dayKey: String",
+            "var startDate: Date",
+            "var endDate: Date",
+            "var needsRequery: Bool",
+        ),
+        errors,
+    )
+    if "HealthSampleSnapshot" in v6_schema:
+        errors.append("V6 sample index must not persist complete HealthKit sample payloads")
+
+    migration = require_text(
+        "Densoso/Persistence/DensosoMigrationPlan.swift",
+        (
+            "fromVersion: DensosoSchemaV5.self",
+            "toVersion: DensosoSchemaV6.self",
+            "try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)",
+            "DailyHealthSnapshot.currentAlgorithmVersion",
+            "DensosoSchemaV6.HealthKitSampleIndexRecord(",
+            "private static func sleepWakeDays(startDate: Date, endDate: Date)",
+        ),
+        errors,
+    )
+
     health_store = require_text(
         "Densoso/Infrastructure/HealthKit/HealthKitHealthStoreClient.swift",
         (
@@ -97,6 +156,11 @@ def main() -> int:
             "private static func preferredImportedWorkout(_ lhs: WorkoutRecord, _ rhs: WorkoutRecord)",
             "lastSuccessfulAt",
             "modelContext.rollback()",
+            "func affectedHealthSampleDays(for page: HealthSamplePage, stream: String)",
+            "replacements: [HealthSampleDaySnapshot]",
+            "HealthKitSampleIndexRecord",
+            "needsRequery",
+            "private static func sleepWakeDays(startDate: Date, endDate: Date)",
         ),
         errors,
     )
@@ -109,6 +173,10 @@ def main() -> int:
             "lookbackStart", "endDate: .distantFuture", "forceRebaseline", "value: -30",
             "failedStreams[metric]", "completedStreams.insert(metric)",
             "onObserverSyncCompleted", "self.onObserverSyncCompleted?()",
+            "repository.affectedHealthSampleDays(for: page, stream: stream)",
+            "requerySampleDays(",
+            "private func requerySampleDays(",
+            "replacements: replacements",
         ),
         errors,
     )
@@ -224,6 +292,26 @@ def main() -> int:
             "testUpdatedSampleMovingToAnotherDayRemovesOldProjection",
             "testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue",
             "testHealthSnapshotUpsertUpdatesOnlyTheMatchingDayKey",
+            "testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
+            "testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval",
+        ),
+        errors,
+    )
+    require_text(
+        "DensosoTests/DensosoMigrationTests.swift",
+        ("testV5MigrationMovesRawSamplesIntoIndexAndDailySummary",),
+        errors,
+    )
+    require_text(
+        "DensosoTests/HealthKitSyncCoordinatorTests.swift",
+        ("testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",),
+        errors,
+    )
+    require_text(
+        "Packages/DensosoDomain/Tests/DensosoDomainTests/Health/DailyHealthSampleSummaryTests.swift",
+        (
+            "testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples",
+            "testSleepAggregationRetainsWatchPriorityAndLegacyCategoryAliases",
         ),
         errors,
     )
@@ -256,6 +344,9 @@ def main() -> int:
             "no read permission denial",
             "Gate 6 does not claim",
             "Weight edit/delete controls are not added",
+            "V5-to-V6 daily sample summary",
+            "testV5MigrationMovesRawSamplesIntoIndexAndDailySummary",
+            "testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
         ),
         errors,
     )
@@ -293,7 +384,7 @@ def main() -> int:
 
     report = {
         "status": "pass",
-        "scope": "healthkit-sync-and-energy-semantics",
+        "scope": "healthkit-sync-energy-semantics-and-v6-daily-sample-summary",
         "protectedOCRRead": False,
         "readAuthorizationInferred": False,
         "workoutWritesEnabled": False,

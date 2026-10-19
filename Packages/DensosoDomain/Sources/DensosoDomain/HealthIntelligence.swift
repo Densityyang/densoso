@@ -211,6 +211,7 @@ public struct HealthIntelligenceDay: Codable, Equatable, Sendable {
     public let exerciseMinutes: Double?
     public let weightSamplesKilograms: [Double]
     public let sleepSamples: [SleepSampleInterval]
+    public let sleepSummary: SleepSummary?
     public let heartRateSamples: [Double]
     public let restingHeartRateSamples: [Double]
     public let heartRateVariabilitySamples: [Double]
@@ -228,6 +229,7 @@ public struct HealthIntelligenceDay: Codable, Equatable, Sendable {
         exerciseMinutes: Double? = nil,
         weightSamplesKilograms: [Double] = [],
         sleepSamples: [SleepSampleInterval] = [],
+        sleepSummary: SleepSummary? = nil,
         heartRateSamples: [Double] = [],
         restingHeartRateSamples: [Double] = [],
         heartRateVariabilitySamples: [Double] = [],
@@ -244,6 +246,7 @@ public struct HealthIntelligenceDay: Codable, Equatable, Sendable {
         self.exerciseMinutes = Self.valid(exerciseMinutes)
         self.weightSamplesKilograms = weightSamplesKilograms.filter { $0.isFinite && $0 > 0 }
         self.sleepSamples = sleepSamples
+        self.sleepSummary = sleepSummary
         self.heartRateSamples = heartRateSamples.filter { $0.isFinite && $0 > 0 }
         self.restingHeartRateSamples = restingHeartRateSamples.filter { $0.isFinite && $0 > 0 }
         self.heartRateVariabilitySamples = heartRateVariabilitySamples.filter { $0.isFinite && $0 > 0 }
@@ -752,7 +755,7 @@ public struct HealthIntelligenceEngine: Sendable {
             return nil
         }
         let currentDay = calendar.startOfDay(for: current.dayStart)
-        let sleep = sleepSummary(for: currentDay, samples: days.flatMap(\.sleepSamples))
+        let sleep = current.sleepSummary ?? sleepSummary(for: currentDay, samples: days.flatMap(\.sleepSamples))
         let workouts = days.flatMap(\.workouts)
         let load = trainingLoad(workouts: workouts, asOf: currentDay)
 
@@ -855,7 +858,9 @@ public struct HealthIntelligenceEngine: Sendable {
             let day = calendar.startOfDay(for: $0.dayStart)
             return day >= start && day < end
         }
-        let sleeps = weekDays.compactMap { sleepSummary(for: $0.dayStart, samples: days.flatMap(\.sleepSamples))?.mainSleepMinutes }
+        let sleeps = weekDays.compactMap {
+            ($0.sleepSummary ?? sleepSummary(for: $0.dayStart, samples: days.flatMap(\.sleepSamples)))?.mainSleepMinutes
+        }
         let intakes = weekDays.compactMap(\.energyIntakeKcal)
         let weights = weekDays.flatMap(\.weightSamplesKilograms)
         let current = weekDays.max { calendar.startOfDay(for: $0.dayStart) < calendar.startOfDay(for: $1.dayStart) }
@@ -955,7 +960,7 @@ public struct HealthIntelligenceEngine: Sendable {
         allDays: [HealthIntelligenceDay]
     ) -> HealthContextWindowSummary {
         let sleeps = days.compactMap {
-            sleepSummary(for: $0.dayStart, samples: allDays.flatMap(\.sleepSamples))?.mainSleepMinutes
+            ($0.sleepSummary ?? sleepSummary(for: $0.dayStart, samples: allDays.flatMap(\.sleepSamples)))?.mainSleepMinutes
         }
         let weights = days.flatMap(\.weightSamplesKilograms)
         func coverage(_ predicate: (HealthIntelligenceDay) -> Bool) -> Int {
@@ -964,7 +969,7 @@ public struct HealthIntelligenceEngine: Sendable {
         return HealthContextWindowSummary(
             windowDays: windowDays,
             coverageDays: [
-                "sleep": coverage { !$0.sleepSamples.isEmpty },
+                "sleep": coverage { $0.sleepSummary != nil || !$0.sleepSamples.isEmpty },
                 "steps": coverage { $0.stepCount != nil },
                 "activeEnergy": coverage { $0.activeEnergyKcal != nil },
                 "energyIntake": coverage { $0.energyIntakeKcal != nil },
@@ -1041,7 +1046,8 @@ public struct HealthIntelligenceEngine: Sendable {
     ) -> Double? {
         switch domain {
         case .nutrition: day.energyIntakeKcal
-        case .sleep: sleepSummary(for: day.dayStart, samples: allDays.flatMap(\.sleepSamples))?.mainSleepMinutes
+        case .sleep:
+            (day.sleepSummary ?? sleepSummary(for: day.dayStart, samples: allDays.flatMap(\.sleepSamples)))?.mainSleepMinutes
         case .activity: day.stepCount ?? day.exerciseMinutes ?? day.activeEnergyKcal
         case .body: day.weightSamplesKilograms.last
         }
@@ -1049,7 +1055,7 @@ public struct HealthIntelligenceEngine: Sendable {
 
     private static func hasData(_ day: HealthIntelligenceDay) -> Bool {
         day.energyIntakeKcal != nil || day.stepCount != nil || day.exerciseMinutes != nil
-            || !day.weightSamplesKilograms.isEmpty || !day.sleepSamples.isEmpty
+            || !day.weightSamplesKilograms.isEmpty || day.sleepSummary != nil || !day.sleepSamples.isEmpty
     }
 
     private static func estimatedEffort(for intensity: String?) -> Double? {

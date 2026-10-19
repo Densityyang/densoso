@@ -48,6 +48,9 @@ def main() -> int:
         "DensosoSchemaV2.swift",
         "DensosoSchemaV2Bridge.swift",
         "DensosoSchemaV3.swift",
+        "DensosoSchemaV4.swift",
+        "DensosoSchemaV5.swift",
+        "DensosoSchemaV6.swift",
     ):
         if not (schemas / name).is_file():
             errors.append(f"missing Densoso/Persistence/Schemas/{name}")
@@ -60,6 +63,7 @@ def main() -> int:
             "legacy-meal-",
             "legacy-outbox-",
             "legacyPointEstimate",
+            "DensosoSchemaV6.self",
         ],
         errors,
     )
@@ -148,6 +152,7 @@ def main() -> int:
             'storeURL.path + "-wal"',
             'storeURL.path + "-shm"',
             "DensosoSchemaV1.self",
+            "DensosoSchemaV6.self",
             "DensosoSchemaV2.self",
         ],
         errors,

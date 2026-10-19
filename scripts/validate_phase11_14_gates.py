@@ -38,6 +38,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "historical effective profiles",
                 "HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay",
                 "HealthRepositoryTests.testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData",
+                "HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
+                "HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
                 "CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
                 "HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
                 "HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches",
@@ -57,6 +59,14 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "Packages/DensosoDomain/Tests/DensosoDomainTests/Health/WeightTimelineTests.swift",
             ("testUsesLatestTrustedObservationNotLaterThanRequestedDate",),
+            errors,
+        )
+        require(
+            "Packages/DensosoDomain/Tests/DensosoDomainTests/Health/DailyHealthSampleSummaryTests.swift",
+            (
+                "testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples",
+                "testSleepAggregationRetainsWatchPriorityAndLegacyCategoryAliases",
+            ),
             errors,
         )
         require(
@@ -206,7 +216,13 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "testInsertAndDeleteReprojectsTheSameDay",
                 "testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData",
+                "testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
             ),
+            errors,
+        )
+        require(
+            "DensosoTests/HealthKitSyncCoordinatorTests.swift",
+            ("testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",),
             errors,
         )
         require(
@@ -217,6 +233,15 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "$0.dayKey <= lastDayKey",
                 "$0.dayKey == targetDayKey",
                 "descriptor.fetchLimit = 1",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/HealthIntelligenceReadModel.swift",
+            (
+                "healthKitSampleSummary",
+                "availableAggregate",
+                "healthReadStates?[HealthMetricID.sleepAnalysis.rawValue]",
             ),
             errors,
         )
@@ -690,10 +715,13 @@ def main() -> int:
             (
                 "--filter EffectiveProfileTests",
                 "--filter WeightTimelineTests",
+                "--filter DailyHealthSampleSummaryTests",
                 "--filter HealthStateTests",
                 "--filter DailyLoopSnapshotTests",
                 "--filter HealthNarrativeTests",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay",
+                "-only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
+                "-only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
                 "-only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
                 "-only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
                 "-only-testing:DensosoTests/HealthProjectionActorTests",

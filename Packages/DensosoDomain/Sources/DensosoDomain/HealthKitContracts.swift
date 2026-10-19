@@ -190,6 +190,20 @@ public struct HealthSamplePage: Codable, Equatable, Sendable {
     }
 }
 
+/// A complete transient read for one projection day. It is consumed to rebuild
+/// the local daily summary and is never persisted as a raw sample collection.
+public struct HealthSampleDaySnapshot: Codable, Equatable, Sendable {
+    public let dayStart: Date
+    public let samples: [HealthSampleSnapshot]
+    public let readState: HealthReadState
+
+    public init(dayStart: Date, samples: [HealthSampleSnapshot], readState: HealthReadState) {
+        self.dayStart = dayStart
+        self.samples = samples
+        self.readState = readState
+    }
+}
+
 public struct HealthChangePage<Value: Codable & Sendable>: Codable, Sendable {
     public let added: [Value]
     public let deletedObjectIDs: [UUID]

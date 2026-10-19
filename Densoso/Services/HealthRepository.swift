@@ -3,6 +3,11 @@ import CryptoKit
 import SwiftData
 import DensosoDomain
 
+private struct HealthKitSampleIndexUpdate {
+    let sample: HealthSampleSnapshot
+    let needsRequery: Bool
+}
+
 /// Coordinates local health-record writes and their derived daily metrics.
 /// SwiftData persists both the source change and its projection with one save.
 @MainActor
@@ -171,88 +176,177 @@ final class HealthRepository: HealthSyncRepository {
         }
     }
 
+    func affectedHealthSampleDays(for page: HealthSamplePage, stream: String) throws -> [Date] {
+        let requestedIDs = Array(Set(page.samples.map(\.id)).union(page.deletedSampleIDs))
+            .sorted { $0.uuidString < $1.uuidString }
+        var days = Set<Date>()
+        if !requestedIDs.isEmpty {
+            let batchSize = 400
+            var offset = 0
+            while offset < requestedIDs.count {
+                let batchEnd = min(offset + batchSize, requestedIDs.count)
+                let sampleIDs = Array(requestedIDs[offset..<batchEnd])
+                let predicate = #Predicate<HealthKitSampleIndexRecord> {
+                    $0.stream == stream && sampleIDs.contains($0.sampleID)
+                }
+                for record in try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate)) {
+                    if stream == HealthMetricID.sleepAnalysis.rawValue {
+                        days.formUnion(Self.sleepWakeDays(startDate: record.startDate, endDate: record.endDate))
+                    } else if let day = Self.date(fromDayKey: record.dayKey) {
+                        days.insert(day)
+                    }
+                }
+                offset = batchEnd
+            }
+        }
+        for sample in page.samples {
+            if stream == HealthMetricID.sleepAnalysis.rawValue {
+                days.formUnion(Self.sleepWakeDays(startDate: sample.startDate, endDate: sample.endDate))
+            } else {
+                days.insert(Calendar.current.startOfDay(for: sample.startDate))
+            }
+        }
+        let pendingPredicate = #Predicate<HealthKitSampleIndexRecord> {
+            $0.stream == stream && $0.needsRequery
+        }
+        for record in try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: pendingPredicate)) {
+            if stream == HealthMetricID.sleepAnalysis.rawValue {
+                days.formUnion(Self.sleepWakeDays(startDate: record.startDate, endDate: record.endDate))
+            } else if let day = Self.date(fromDayKey: record.dayKey) {
+                days.insert(day)
+            }
+        }
+        return days.sorted()
+    }
+
     func applyImportedHealthSamples(
         _ page: HealthSamplePage,
         stream: String,
-        lastSuccessfulAt: Date = Date(),
-        lookbackStart: Date? = nil
+        lastSuccessfulAt: Date,
+        lookbackStart: Date?,
+        replacements: [HealthSampleDaySnapshot]
     ) throws {
         guard let nextAnchorData = page.nextAnchorData else {
             throw HealthRepositoryError.missingHealthKitAnchor
         }
 
         let calendar = Calendar.current
-        let records = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
-        var snapshotsByDay: [Date: DailyHealthSnapshot] = [:]
-        for record in records {
-            if let snapshot = try? Self.decodeHealthSnapshot(record.payloadData, decoder: JSONDecoder()) {
-                snapshotsByDay[calendar.startOfDay(for: snapshot.dayStart)] = snapshot
-            }
-        }
-
-        var affectedDays = Set<Date>()
-        var samplesByDay: [Date: [UUID: HealthSampleSnapshot]] = [:]
-        var dayBySampleID: [UUID: Date] = [:]
-        for day in snapshotsByDay.keys.sorted() {
-            for sample in (snapshotsByDay[day]?.healthKitSamples ?? []).sorted(by: { $0.startDate < $1.startDate }) {
-                if let duplicateDay = dayBySampleID[sample.id] {
-                    samplesByDay[duplicateDay]?.removeValue(forKey: sample.id)
-                    affectedDays.insert(duplicateDay)
+        let replacementsByDay = Dictionary(
+            replacements.map { (calendar.startOfDay(for: $0.dayStart), $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        let affectedDays = Array(replacementsByDay.keys)
+        try write(affecting: affectedDays) { _ in
+            for (day, replacement) in replacementsByDay {
+                let existing = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
+                let priorSummary = existing.healthKitSampleSummary
+                    ?? DailyHealthSampleSummary(samples: existing.healthKitSamples ?? [], dayStart: day)
+                let intervalEnd = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+                let replacementSamples = replacement.samples.filter { sample in
+                    sample.metric.rawValue == stream
+                        && (stream == HealthMetricID.sleepAnalysis.rawValue
+                            || (sample.startDate >= day && sample.startDate < intervalEnd))
                 }
-                samplesByDay[day, default: [:]][sample.id] = sample
-                dayBySampleID[sample.id] = day
+                let dayWorkouts: [WorkoutRecord]
+                if stream == HealthMetricID.workoutEffort.rawValue {
+                    dayWorkouts = try workouts(on: day)
+                } else {
+                    dayWorkouts = []
+                }
+                let replacementSummary = DailyHealthSampleSummaryBuilder.build(
+                    samples: replacementSamples,
+                    dayStart: day,
+                    sleepSamples: stream == HealthMetricID.sleepAnalysis.rawValue ? replacement.samples : nil,
+                    workouts: stream == HealthMetricID.workoutEffort.rawValue ? dayWorkouts : []
+                )
+                let isReplacementAvailable = replacement.readState == .available
+                let updatedMetrics = isReplacementAvailable
+                    ? priorSummary.metrics.filter { $0.metric.rawValue != stream } + replacementSummary.metrics
+                    : priorSummary.metrics
+                let updatedEfforts = stream == HealthMetricID.workoutEffort.rawValue && isReplacementAvailable
+                    ? replacementSummary.workoutEffort
+                    : priorSummary.workoutEffort
+                let summary = DailyHealthSampleSummary(
+                    metrics: updatedMetrics,
+                    sleep: stream == HealthMetricID.sleepAnalysis.rawValue && isReplacementAvailable
+                        ? replacementSummary.sleep
+                        : priorSummary.sleep,
+                    workoutEffort: updatedEfforts
+                )
+                var readStates = existing.healthReadStates ?? [:]
+                readStates[stream] = replacement.readState
+                var updated = Self.replacing(
+                    existing,
+                    healthKitSamples: .some(nil),
+                    healthKitSampleSummary: .some(summary),
+                    healthReadStates: .some(readStates)
+                )
+
+                if stream == HealthMetricID.bodyMass.rawValue {
+                    let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+                    let localWeightPredicate = #Predicate<WeightRecord> {
+                        $0.measuredAt >= day && $0.measuredAt < nextDay
+                    }
+                    let localWeight = try modelContext.fetch(
+                        FetchDescriptor<WeightRecord>(predicate: localWeightPredicate)
+                    ).max { $0.measuredAt < $1.measuredAt }?.kilograms
+                    let candidateHealthKitWeight = replacementSummary.aggregate(for: .bodyMass)?.latestValue
+                    let healthKitWeight: Double?
+                    if isReplacementAvailable,
+                       let candidateHealthKitWeight,
+                       candidateHealthKitWeight.isFinite,
+                       candidateHealthKitWeight > 0 {
+                        healthKitWeight = candidateHealthKitWeight
+                    } else {
+                        healthKitWeight = nil
+                    }
+                    updated = Self.replacing(updated, weightKilograms: .some(localWeight ?? healthKitWeight))
+                }
+
+                try upsertHealthSnapshot(updated, for: day)
             }
-        }
-
-        for sampleID in page.deletedSampleIDs {
-            guard let day = dayBySampleID.removeValue(forKey: sampleID) else { continue }
-            samplesByDay[day]?.removeValue(forKey: sampleID)
-            affectedDays.insert(day)
-        }
-
-        for sample in page.samples {
-            if let previousDay = dayBySampleID[sample.id] {
-                samplesByDay[previousDay]?.removeValue(forKey: sample.id)
-                affectedDays.insert(previousDay)
-            }
-            let day = calendar.startOfDay(for: sample.startDate)
-            samplesByDay[day, default: [:]][sample.id] = sample
-            dayBySampleID[sample.id] = day
-            affectedDays.insert(day)
-        }
-
-        for day in affectedDays {
-            let snapshot = snapshotsByDay[day] ?? Self.emptyHealthSnapshot(for: day)
-            let samples = (samplesByDay[day] ?? [:]).values.sorted { $0.startDate < $1.startDate }
-            var readStates = snapshot.healthReadStates ?? [:]
-            readStates[stream] = page.readState
-            snapshotsByDay[day] = Self.replacing(
-                snapshot,
-                healthKitSamples: samples,
-                healthReadStates: readStates
+            try markHealthKitSampleIndexesForRequery(
+                sampleIDs: Set(page.deletedSampleIDs),
+                stream: stream
             )
-        }
-
-        for day in affectedDays {
-            guard let snapshot = snapshotsByDay[day] else { continue }
-            let healthKitWeight = (snapshot.healthKitSamples ?? [])
-                .filter { $0.metric == .bodyMass }
-                .max { $0.endDate < $1.endDate }?.value
-            let endOfDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
-            let localWeight = try modelContext.fetch(FetchDescriptor<WeightRecord>())
-                .filter { $0.measuredAt >= day && $0.measuredAt < endOfDay }
-                .max { $0.measuredAt < $1.measuredAt }?.kilograms
-            // Double?? distinguishes "leave unchanged" from "clear the projection".
-            // Wrap the computed optional explicitly so a missing local value still
-            // updates the projection from imported HealthKit samples (or clears it).
-            snapshotsByDay[day] = Self.replacing(snapshot, weightKilograms: .some(localWeight ?? healthKitWeight))
-        }
-
-        try write(affecting: Array(affectedDays)) { _ in
-            for day in affectedDays {
-                if let snapshot = snapshotsByDay[day] {
-                    try upsertHealthSnapshot(snapshot, for: day)
+            var sampleIndexUpdates: [UUID: HealthKitSampleIndexUpdate] = [:]
+            for sample in page.samples where sample.metric.rawValue == stream {
+                let requiredDays = Self.sampleProjectionDays(for: sample, stream: stream)
+                let needsRequery = requiredDays.isEmpty || !requiredDays.allSatisfy {
+                    replacementsByDay[$0]?.readState == .available
                 }
+                sampleIndexUpdates[sample.id] = HealthKitSampleIndexUpdate(
+                    sample: sample,
+                    needsRequery: needsRequery
+                )
+            }
+            for replacement in replacements {
+                for sample in replacement.samples where sample.metric.rawValue == stream {
+                    let requiredDays = Self.sampleProjectionDays(for: sample, stream: stream)
+                    sampleIndexUpdates[sample.id] = HealthKitSampleIndexUpdate(
+                        sample: sample,
+                        needsRequery: requiredDays.isEmpty || !requiredDays.allSatisfy {
+                            replacementsByDay[$0]?.readState == .available
+                        }
+                    )
+                }
+            }
+            try upsertHealthKitSampleIndexes(sampleIndexUpdates, stream: stream)
+            let pendingPredicate = #Predicate<HealthKitSampleIndexRecord> {
+                $0.stream == stream && $0.needsRequery
+            }
+            let pendingRecords = try modelContext.fetch(
+                FetchDescriptor<HealthKitSampleIndexRecord>(predicate: pendingPredicate)
+            )
+            for record in pendingRecords {
+                let requiredDays = stream == HealthMetricID.sleepAnalysis.rawValue
+                    ? Self.sleepWakeDays(startDate: record.startDate, endDate: record.endDate)
+                    : Set([Self.date(fromDayKey: record.dayKey)].compactMap { $0 })
+                guard !requiredDays.isEmpty,
+                      requiredDays.allSatisfy({ replacementsByDay[$0]?.readState == .available }) else {
+                    continue
+                }
+                modelContext.delete(record)
             }
             if let cursor = try cursorRecord(stream: stream) {
                 cursor.anchorData = nextAnchorData
@@ -394,17 +488,95 @@ final class HealthRepository: HealthSyncRepository {
         let day = calendar.startOfDay(for: date)
         let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
         var snapshot = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
-        let localWeight = try modelContext.fetch(FetchDescriptor<WeightRecord>())
-            .filter { record in
-                if let excludedWeightID, record.id == excludedWeightID { return false }
-                return record.measuredAt >= day && record.measuredAt < nextDay
-            }
+        let weightPredicate = #Predicate<WeightRecord> {
+            $0.measuredAt >= day && $0.measuredAt < nextDay
+        }
+        let localWeight = try modelContext.fetch(FetchDescriptor<WeightRecord>(predicate: weightPredicate))
+            .filter { excludedWeightID == nil || $0.id != excludedWeightID }
             .max { $0.measuredAt < $1.measuredAt }?.kilograms
-        let importedWeight = (snapshot.healthKitSamples ?? [])
-            .filter { $0.metric == .bodyMass }
-            .max { $0.endDate < $1.endDate }?.value
+        let bodyMassReadState = snapshot.healthReadStates?[HealthMetricID.bodyMass.rawValue]
+        let candidateImportedWeight = snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestValue
+        let importedWeight: Double?
+        if (bodyMassReadState == nil || bodyMassReadState == .available),
+           let candidateImportedWeight,
+           candidateImportedWeight.isFinite,
+           candidateImportedWeight > 0 {
+            importedWeight = candidateImportedWeight
+        } else {
+            importedWeight = nil
+        }
         snapshot = Self.replacing(snapshot, weightKilograms: .some(localWeight ?? importedWeight))
         try upsertHealthSnapshot(snapshot, for: day)
+    }
+
+    private func workouts(on day: Date) throws -> [WorkoutRecord] {
+        let end = Calendar.current.date(byAdding: .day, value: 1, to: day) ?? day
+        let predicate = #Predicate<WorkoutRecord> { $0.date >= day && $0.date < end }
+        return try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: predicate))
+    }
+
+    private func upsertHealthKitSampleIndexes(
+        _ updates: [UUID: HealthKitSampleIndexUpdate],
+        stream: String
+    ) throws {
+        let orderedUpdates = updates.values.sorted {
+            $0.sample.id.uuidString < $1.sample.id.uuidString
+        }
+        guard !orderedUpdates.isEmpty else { return }
+
+        var existingByID: [UUID: HealthKitSampleIndexRecord] = [:]
+        let sampleIDs = orderedUpdates.map { $0.sample.id }
+        let batchSize = 400
+        var offset = 0
+        while offset < sampleIDs.count {
+            let batchEnd = min(offset + batchSize, sampleIDs.count)
+            let batchIDs = Array(sampleIDs[offset..<batchEnd])
+            let predicate = #Predicate<HealthKitSampleIndexRecord> {
+                batchIDs.contains($0.sampleID)
+            }
+            for record in try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate)) {
+                existingByID[record.sampleID] = record
+            }
+            offset = batchEnd
+        }
+
+        for update in orderedUpdates {
+            let sample = update.sample
+            let sampleID = sample.id
+            let dayKey = Self.dayKey(for: sample.startDate)
+            if let record = existingByID[sampleID] {
+                record.stream = stream
+                record.dayKey = dayKey
+                record.startDate = sample.startDate
+                record.endDate = sample.endDate
+                record.needsRequery = update.needsRequery
+            } else {
+                modelContext.insert(HealthKitSampleIndexRecord(
+                    sampleID: sampleID,
+                    stream: stream,
+                    dayKey: dayKey,
+                    startDate: sample.startDate,
+                    endDate: sample.endDate,
+                    needsRequery: update.needsRequery
+                ))
+            }
+        }
+    }
+
+    private func markHealthKitSampleIndexesForRequery(sampleIDs: Set<UUID>, stream: String) throws {
+        let orderedIDs = sampleIDs.sorted { $0.uuidString < $1.uuidString }
+        let batchSize = 400
+        var offset = 0
+        while offset < orderedIDs.count {
+            let batchEnd = min(offset + batchSize, orderedIDs.count)
+            let batchIDs = Array(orderedIDs[offset..<batchEnd])
+            let predicate = #Predicate<HealthKitSampleIndexRecord> {
+                $0.stream == stream && batchIDs.contains($0.sampleID)
+            }
+            let records = try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate))
+            for record in records { record.needsRequery = true }
+            offset = batchEnd
+        }
     }
 
     private func healthSnapshot(for day: Date) throws -> DailyHealthSnapshot? {
@@ -460,11 +632,47 @@ final class HealthRepository: HealthSyncRepository {
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
+    private static func date(fromDayKey key: String) -> Date? {
+        let parts = key.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return Calendar.current.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+    }
+
+    private static func sleepWakeDays(startDate: Date, endDate: Date) -> Set<Date> {
+        guard startDate.timeIntervalSince1970.isFinite,
+              endDate.timeIntervalSince1970.isFinite,
+              endDate > startDate else { return [] }
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: startDate)
+        let lastDay = calendar.startOfDay(for: endDate)
+        guard let dayCount = calendar.dateComponents([.day], from: firstDay, to: lastDay).day,
+              dayCount >= 0,
+              dayCount <= 366 else { return [] }
+        var affected = Set<Date>()
+        for offset in 0...dayCount {
+            guard let wakeDay = calendar.date(byAdding: .day, value: offset, to: firstDay),
+                  let previousDay = calendar.date(byAdding: .day, value: -1, to: wakeDay),
+                  let windowStart = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: previousDay),
+                  let windowEnd = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: wakeDay) else {
+                continue
+            }
+            if endDate > windowStart && startDate < windowEnd { affected.insert(wakeDay) }
+        }
+        return affected
+    }
+
+    private static func sampleProjectionDays(for sample: HealthSampleSnapshot, stream: String) -> Set<Date> {
+        if stream == HealthMetricID.sleepAnalysis.rawValue {
+            return sleepWakeDays(startDate: sample.startDate, endDate: sample.endDate)
+        }
+        return [Calendar.current.startOfDay(for: sample.startDate)]
+    }
+
     private static func emptyHealthSnapshot(for day: Date) -> DailyHealthSnapshot {
         DailyHealthSnapshot(
             dayStart: day,
             timezoneIdentifier: Calendar.current.timeZone.identifier,
-            algorithmVersion: "v3"
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
         )
     }
 
@@ -476,6 +684,7 @@ final class HealthRepository: HealthSyncRepository {
         exerciseMinutes: Double?? = nil,
         weightKilograms: Double?? = nil,
         healthKitSamples: [HealthSampleSnapshot]?? = nil,
+        healthKitSampleSummary: DailyHealthSampleSummary?? = nil,
         healthReadStates: [String: HealthReadState]?? = nil
     ) -> DailyHealthSnapshot {
         DailyHealthSnapshot(
@@ -488,8 +697,9 @@ final class HealthRepository: HealthSyncRepository {
             exerciseMinutes: exerciseMinutes ?? source.exerciseMinutes,
             weightKilograms: weightKilograms ?? source.weightKilograms,
             healthKitSamples: healthKitSamples ?? source.healthKitSamples,
+            healthKitSampleSummary: healthKitSampleSummary ?? source.healthKitSampleSummary,
             healthReadStates: healthReadStates ?? source.healthReadStates,
-            algorithmVersion: source.algorithmVersion
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
         )
     }
 }

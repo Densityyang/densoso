@@ -12,7 +12,7 @@ final class HealthRepositoryTests: XCTestCase {
         container = try ModelContainer(
             for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self,
                 DailyHealthSnapshotRecord.self, WeightRecord.self, ProfileRevisionRecord.self,
-                HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
+                HealthSyncOutboxEntry.self, HealthKitImportCursor.self, HealthKitSampleIndexRecord.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         context = ModelContext(container)
@@ -276,7 +276,14 @@ final class HealthRepositoryTests: XCTestCase {
             readState: .available
         )
 
-        XCTAssertThrowsError(try repository.applyImportedHealthSamples(page, stream: "bodyMass"))
+        let day = Calendar.current.startOfDay(for: sample.startDate)
+        XCTAssertThrowsError(try repository.applyImportedHealthSamples(
+            page,
+            stream: "bodyMass",
+            lastSuccessfulAt: Date(),
+            lookbackStart: nil,
+            replacements: [HealthSampleDaySnapshot(dayStart: day, samples: [sample], readState: .available)]
+        ))
         XCTAssertNil(try repository.cursor(for: "bodyMass"))
         XCTAssertTrue(try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).isEmpty)
         XCTAssertTrue(try context.fetch(FetchDescriptor<DailyMetrics>()).isEmpty)
@@ -291,37 +298,64 @@ final class HealthRepositoryTests: XCTestCase {
 
         try repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [first], nextAnchorData: Data([1]), readState: .available),
-            stream: "bodyMass"
+            stream: "bodyMass",
+            lastSuccessfulAt: Date(),
+            lookbackStart: date,
+            replacements: [HealthSampleDaySnapshot(
+                dayStart: Calendar.current.startOfDay(for: date),
+                samples: [first],
+                readState: .available
+            )]
         )
         try repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [updated, updated], nextAnchorData: Data([2]), readState: .available),
-            stream: "bodyMass"
+            stream: "bodyMass",
+            lastSuccessfulAt: Date(),
+            lookbackStart: date,
+            replacements: [HealthSampleDaySnapshot(
+                dayStart: Calendar.current.startOfDay(for: date),
+                samples: [updated],
+                readState: .available
+            )]
         )
 
         let stored = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: stored.payloadData)
-        XCTAssertEqual(snapshot.healthKitSamples?.count, 1)
-        XCTAssertEqual(snapshot.healthKitSamples?.first?.metric, .bodyMass)
-        XCTAssertEqual(snapshot.healthKitSamples?.first?.value, 71)
+        XCTAssertNil(snapshot.healthKitSamples)
+        XCTAssertEqual(snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.sampleCount, 1)
+        XCTAssertEqual(snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestValue, 71)
         XCTAssertEqual(snapshot.weightKilograms, 71)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).count, 1)
         XCTAssertEqual(try repository.cursor(for: "bodyMass")?.anchorData, Data([2]))
 
         try repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], deletedSampleIDs: [sampleID], nextAnchorData: Data([3]), readState: .available),
-            stream: "bodyMass"
+            stream: "bodyMass",
+            lastSuccessfulAt: Date(),
+            lookbackStart: date,
+            replacements: [HealthSampleDaySnapshot(
+                dayStart: Calendar.current.startOfDay(for: date),
+                samples: [],
+                readState: .available
+            )]
         )
         let afterDeletion = try decoder.decode(DailyHealthSnapshot.self, from: XCTUnwrap(
             context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first
         ).payloadData)
-        XCTAssertTrue(afterDeletion.healthKitSamples?.isEmpty ?? true)
+        XCTAssertNil(afterDeletion.healthKitSamples)
+        XCTAssertNil(afterDeletion.healthKitSampleSummary?.aggregate(for: .bodyMass))
         XCTAssertNil(afterDeletion.weightKilograms)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).isEmpty)
         XCTAssertEqual(try repository.cursor(for: "bodyMass")?.anchorData, Data([3]))
 
         try repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], nextAnchorData: Data([4]), readState: .dataUnavailableOrReadScopeUnknown),
-            stream: "bodyMass"
+            stream: "bodyMass",
+            lastSuccessfulAt: Date(),
+            lookbackStart: date,
+            replacements: []
         )
         XCTAssertEqual(try repository.cursor(for: "bodyMass")?.anchorData, Data([4]))
         XCTAssertNotNil(try repository.cursor(for: "bodyMass")?.lastSuccessfulAt)
@@ -329,6 +363,147 @@ final class HealthRepositoryTests: XCTestCase {
         try repository.resetHealthKitCursors()
         XCTAssertNil(try repository.cursor(for: "bodyMass")?.anchorData)
         XCTAssertNil(try repository.cursor(for: "bodyMass")?.lastSuccessfulAt)
+    }
+
+    func testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion() throws {
+        let repository = HealthRepository(modelContext: context)
+        let sampleID = UUID(uuidString: "00000000-0000-0000-0000-000000000033")!
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let day = Calendar.current.startOfDay(for: date)
+        let sample = HealthSampleSnapshot(
+            id: sampleID,
+            metric: .bodyMass,
+            startDate: date,
+            endDate: date,
+            value: 69
+        )
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: date,
+            lookbackStart: day,
+            replacements: [HealthSampleDaySnapshot(dayStart: day, samples: [sample], readState: .available)]
+        )
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(
+                samples: [],
+                deletedSampleIDs: [sampleID],
+                nextAnchorData: Data([2]),
+                readState: .available
+            ),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: date.addingTimeInterval(60),
+            lookbackStart: day,
+            replacements: [HealthSampleDaySnapshot(
+                dayStart: day,
+                samples: [],
+                readState: .dataUnavailableOrReadScopeUnknown
+            )]
+        )
+
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+        XCTAssertEqual(snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestValue, 69)
+        XCTAssertEqual(snapshot.healthReadStates?[HealthMetricID.bodyMass.rawValue], .dataUnavailableOrReadScopeUnknown)
+        XCTAssertNil(snapshot.weightKilograms)
+        XCTAssertNil(try context.fetch(FetchDescriptor<DailyMetrics>()).first?.weightKg)
+        let pendingIndex = try XCTUnwrap(context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).first)
+        XCTAssertEqual(pendingIndex.sampleID, sampleID)
+        XCTAssertTrue(pendingIndex.needsRequery)
+
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [], nextAnchorData: Data([3]), readState: .available),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: date.addingTimeInterval(120),
+            lookbackStart: day,
+            replacements: [HealthSampleDaySnapshot(dayStart: day, samples: [], readState: .available)]
+        )
+        let confirmedDeletion = try decoder.decode(
+            DailyHealthSnapshot.self,
+            from: XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first).payloadData
+        )
+        XCTAssertNil(confirmedDeletion.healthKitSampleSummary?.aggregate(for: .bodyMass))
+        XCTAssertEqual(confirmedDeletion.healthReadStates?[HealthMetricID.bodyMass.rawValue], .available)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).isEmpty)
+    }
+
+    func testAnchoredAdditionStaysIndexedWhenFullDayReadIsUnknown() throws {
+        let repository = HealthRepository(modelContext: context)
+        let sampleID = UUID(uuidString: "00000000-0000-0000-0000-000000000034")!
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let day = Calendar.current.startOfDay(for: date)
+        let sample = HealthSampleSnapshot(
+            id: sampleID,
+            metric: .bodyMass,
+            startDate: date,
+            endDate: date,
+            value: 71
+        )
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: date,
+            lookbackStart: day,
+            replacements: [HealthSampleDaySnapshot(
+                dayStart: day,
+                samples: [],
+                readState: .dataUnavailableOrReadScopeUnknown
+            )]
+        )
+
+        let index = try XCTUnwrap(context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).first)
+        XCTAssertEqual(index.sampleID, sampleID)
+        XCTAssertEqual(index.dayKey, Self.dayKey(day))
+        XCTAssertTrue(index.needsRequery)
+        let stored = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: stored.payloadData)
+        XCTAssertEqual(snapshot.healthReadStates?[HealthMetricID.bodyMass.rawValue], .dataUnavailableOrReadScopeUnknown)
+        XCTAssertNil(snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass))
+    }
+
+    func testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval() throws {
+        let repository = HealthRepository(modelContext: context)
+        let calendar = Calendar.current
+        let startDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let wakeDay = calendar.date(byAdding: .day, value: 1, to: startDay)!
+        let sampleStart = calendar.date(bySettingHour: 22, minute: 0, second: 0, of: startDay)!
+        let sampleEnd = calendar.date(bySettingHour: 6, minute: 0, second: 0, of: wakeDay)!
+        let sampleID = UUID(uuidString: "00000000-0000-0000-0000-000000000035")!
+        let sample = HealthSampleSnapshot(
+            id: sampleID,
+            metric: .sleepAnalysis,
+            startDate: sampleStart,
+            endDate: sampleEnd,
+            categoryValue: "asleepCore",
+            sourceBundleIdentifier: "com.example.health",
+            deviceModel: "Watch6,1"
+        )
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
+            stream: HealthMetricID.sleepAnalysis.rawValue,
+            lastSuccessfulAt: sampleEnd,
+            lookbackStart: startDay,
+            replacements: [HealthSampleDaySnapshot(
+                dayStart: wakeDay,
+                samples: [sample],
+                readState: .available
+            )]
+        )
+
+        let deletionPage = HealthSamplePage(
+            samples: [],
+            deletedSampleIDs: [sampleID],
+            nextAnchorData: Data([2]),
+            readState: .available
+        )
+        XCTAssertEqual(
+            try repository.affectedHealthSampleDays(for: deletionPage, stream: HealthMetricID.sleepAnalysis.rawValue),
+            [wakeDay]
+        )
     }
 
     func testUpdatedSampleMovingToAnotherDayRemovesOldProjection() throws {
@@ -352,11 +527,32 @@ final class HealthRepositoryTests: XCTestCase {
         )
         try repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [first], nextAnchorData: Data([1]), readState: .available),
-            stream: "bodyMass"
+            stream: "bodyMass",
+            lastSuccessfulAt: Date(),
+            lookbackStart: firstDate,
+            replacements: [HealthSampleDaySnapshot(
+                dayStart: Calendar.current.startOfDay(for: firstDate),
+                samples: [first],
+                readState: .available
+            )]
         )
         try repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [moved], nextAnchorData: Data([2]), readState: .available),
-            stream: "bodyMass"
+            stream: "bodyMass",
+            lastSuccessfulAt: Date(),
+            lookbackStart: firstDate,
+            replacements: [
+                HealthSampleDaySnapshot(
+                    dayStart: Calendar.current.startOfDay(for: firstDate),
+                    samples: [],
+                    readState: .available
+                ),
+                HealthSampleDaySnapshot(
+                    dayStart: Calendar.current.startOfDay(for: movedDate),
+                    samples: [moved],
+                    readState: .available
+                ),
+            ]
         )
 
         let decoder = JSONDecoder()
@@ -365,10 +561,12 @@ final class HealthRepositoryTests: XCTestCase {
             .map { try decoder.decode(DailyHealthSnapshot.self, from: $0.payloadData) }
         let originalDay = try XCTUnwrap(snapshots.first(where: { Calendar.current.isDate($0.dayStart, inSameDayAs: firstDate) }))
         let movedDay = try XCTUnwrap(snapshots.first(where: { Calendar.current.isDate($0.dayStart, inSameDayAs: movedDate) }))
-        XCTAssertTrue(originalDay.healthKitSamples?.isEmpty ?? true)
+        XCTAssertNil(originalDay.healthKitSamples)
+        XCTAssertNil(originalDay.healthKitSampleSummary?.aggregate(for: .bodyMass))
         XCTAssertNil(originalDay.weightKilograms)
-        XCTAssertEqual(movedDay.healthKitSamples?.map(\.id), [sampleID])
-        XCTAssertEqual(movedDay.healthKitSamples?.first?.value, 72)
+        XCTAssertNil(movedDay.healthKitSamples)
+        XCTAssertEqual(movedDay.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestSampleID, sampleID)
+        XCTAssertEqual(movedDay.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestValue, 72)
         XCTAssertEqual(movedDay.weightKilograms, 72)
     }
 

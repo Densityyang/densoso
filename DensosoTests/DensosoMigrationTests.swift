@@ -1,3 +1,4 @@
+import CryptoKit
 import DensosoDomain
 import SwiftData
 import XCTest
@@ -179,6 +180,98 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(metric.intakeEnergyHighKcal, 700)
         XCTAssertEqual(metric.energyQuality, "legacy")
         XCTAssertTrue(metric.requiresRecompute)
+    }
+
+    func testV5MigrationMovesRawSamplesIntoIndexAndDailySummary() throws {
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        var container: ModelContainer? = try makeContainer(version: DensosoSchemaV5.self, url: location.storeURL)
+        var context: ModelContext? = ModelContext(container!)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let day = Calendar.current.startOfDay(for: date)
+        let sample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000801")!,
+            metric: .bodyMass,
+            startDate: date,
+            endDate: date,
+            value: 68.5,
+            sourceBundleIdentifier: "private.healthkit.source",
+            deviceModel: "private.device.model",
+            syncIdentifier: "private.sync.identifier"
+        )
+        let calendar = Calendar.current
+        let wakeDay = calendar.date(byAdding: .day, value: 1, to: day)!
+        let sleepSample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000802")!,
+            metric: .sleepAnalysis,
+            startDate: calendar.date(bySettingHour: 22, minute: 0, second: 0, of: day)!,
+            endDate: calendar.date(bySettingHour: 6, minute: 0, second: 0, of: wakeDay)!,
+            categoryValue: "asleepCore",
+            sourceBundleIdentifier: "com.example.health",
+            deviceModel: "Watch6,1"
+        )
+        let legacySnapshot = LegacyDailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: Calendar.current.timeZone.identifier,
+            weightKilograms: 68.5,
+            healthKitSamples: [sample, sleepSample],
+            algorithmVersion: "v3"
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        let payload = try encoder.encode(legacySnapshot)
+        context!.insert(DailyHealthSnapshotRecord(
+            dayKey: Self.dayKey(day),
+            timezoneID: legacySnapshot.timezoneIdentifier,
+            payloadData: payload,
+            snapshotHash: "legacy-sample-payload",
+            algorithmVersion: legacySnapshot.algorithmVersion
+        ))
+        try context!.save()
+        context = nil
+        container = nil
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "5.0.0")
+
+        let migrated = try openV6Store(at: location.storeURL)
+        let migratedContext = ModelContext(migrated)
+        let migratedSnapshotRecord = try XCTUnwrap(
+            migratedContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first
+        )
+        let rawPayload = String(decoding: migratedSnapshotRecord.payloadData, as: UTF8.self)
+        XCTAssertFalse(rawPayload.contains("healthKitSamples"))
+        XCTAssertFalse(rawPayload.contains("private.healthkit.source"))
+        XCTAssertFalse(rawPayload.contains("private.device.model"))
+        XCTAssertFalse(rawPayload.contains("private.sync.identifier"))
+        XCTAssertEqual(migratedSnapshotRecord.algorithmVersion, DailyHealthSnapshot.currentAlgorithmVersion)
+        let expectedHash = SHA256.hash(data: migratedSnapshotRecord.payloadData)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        XCTAssertEqual(migratedSnapshotRecord.snapshotHash, expectedHash)
+        let migratedDecoder = JSONDecoder()
+        migratedDecoder.dateDecodingStrategy = .millisecondsSince1970
+        let migratedSnapshot = try migratedDecoder.decode(
+            DailyHealthSnapshot.self,
+            from: migratedSnapshotRecord.payloadData
+        )
+        XCTAssertNil(migratedSnapshot.healthKitSamples)
+        XCTAssertEqual(migratedSnapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestValue, 68.5)
+        let sampleIndex = try XCTUnwrap(migratedContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).first {
+            $0.sampleID == sample.id
+        })
+        XCTAssertEqual(sampleIndex.sampleID, sample.id)
+        XCTAssertEqual(sampleIndex.stream, HealthMetricID.bodyMass.rawValue)
+        XCTAssertEqual(sampleIndex.dayKey, Self.dayKey(day))
+        XCTAssertEqual(sampleIndex.startDate, sample.startDate)
+        XCTAssertEqual(sampleIndex.endDate, sample.endDate)
+        XCTAssertEqual(try migratedContext.fetchCount(FetchDescriptor<HealthKitSampleIndexRecord>()), 2)
+        let wakeDayKey = Self.dayKey(wakeDay)
+        let wakePredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == wakeDayKey }
+        let wakeSnapshotRecord = try XCTUnwrap(
+            migratedContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: wakePredicate)).first
+        )
+        let wakeSnapshot = try migratedDecoder.decode(DailyHealthSnapshot.self, from: wakeSnapshotRecord.payloadData)
+        XCTAssertEqual(wakeSnapshot.healthKitSampleSummary?.sleep?.totalAsleepMinutes, 480)
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "6.0.0")
     }
 
     func testFaultingMigrationRestoresOriginalAndEntersReadOnlyRecovery() async throws {
@@ -432,6 +525,21 @@ final class DensosoMigrationTests: XCTestCase {
         )
     }
 
+    private func openV6Store(at url: URL) throws -> ModelContainer {
+        let schema = Schema(versionedSchema: DensosoSchemaV6.self)
+        let configuration = ModelConfiguration("Densoso", schema: schema, url: url)
+        return try ModelContainer(
+            for: schema,
+            migrationPlan: DensosoMigrationPlan.self,
+            configurations: [configuration]
+        )
+    }
+
+    private static func dayKey(_ date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
+
     private func assertRecoveryWritesRejected(by bootstrap: PersistenceBootstrap) throws {
         XCTAssertThrowsError(
             try PersistenceWriteGate(state: bootstrap.state).requireWritable()
@@ -511,13 +619,30 @@ private struct MigrationWeightEntry: Codable {
     let kg: Double
 }
 
+private struct LegacyDailyHealthSnapshot: Encodable {
+    let dayStart: Date
+    let timezoneIdentifier: String
+    let energyIntakeKcal: EstimateRange? = nil
+    let activeEnergyKcal: Double? = nil
+    let restingEnergyKcal: Double? = nil
+    let stepCount: Double? = nil
+    let exerciseMinutes: Double? = nil
+    let weightKilograms: Double?
+    let healthKitSamples: [HealthSampleSnapshot]?
+    let healthReadStates: [String: HealthReadState]? = nil
+    let algorithmVersion: String
+}
+
 private enum Gate02Fault: Error {
     case injected
 }
 
 private enum Gate02FaultingMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [DensosoSchemaV2.self, DensosoSchemaV3.self, DensosoSchemaV4.self]
+        [
+            DensosoSchemaV2.self, DensosoSchemaV3.self, DensosoSchemaV4.self,
+            DensosoSchemaV5.self, DensosoSchemaV6.self,
+        ]
     }
 
     static var stages: [MigrationStage] {
@@ -533,7 +658,14 @@ private enum Gate02FaultingMigrationPlan: SchemaMigrationPlan {
                 },
                 didMigrate: nil
             ),
-            .lightweight(fromVersion: DensosoSchemaV3.self, toVersion: DensosoSchemaV4.self)
+            .lightweight(fromVersion: DensosoSchemaV3.self, toVersion: DensosoSchemaV4.self),
+            .lightweight(fromVersion: DensosoSchemaV4.self, toVersion: DensosoSchemaV5.self),
+            .custom(
+                fromVersion: DensosoSchemaV5.self,
+                toVersion: DensosoSchemaV6.self,
+                willMigrate: nil,
+                didMigrate: nil
+            )
         ]
     }
 }

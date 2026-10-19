@@ -13,7 +13,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self,
                 DailyHealthSnapshotRecord.self, DailyBriefRecord.self, WeeklyBriefRecord.self, GoalProfileRecord.self,
                 ProfileRevisionRecord.self,
-                WeightRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
+                WeightRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self, HealthKitSampleIndexRecord.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         context = ModelContext(container)
@@ -145,5 +145,63 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertNotNil(report.failedStreams[.restingEnergy])
         let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(metrics.activeCaloriesKcal, 610)
+    }
+
+    func testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor() async throws {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let day = Calendar.current.startOfDay(for: date)
+        let deletedID = UUID(uuidString: "00000000-0000-0000-0000-000000000057")!
+        let replacementID = UUID(uuidString: "00000000-0000-0000-0000-000000000058")!
+        let existing = HealthSampleSnapshot(
+            id: deletedID,
+            metric: .bodyMass,
+            startDate: date,
+            endDate: date,
+            value: 70
+        )
+        let replacement = HealthSampleSnapshot(
+            id: replacementID,
+            metric: .bodyMass,
+            startDate: date.addingTimeInterval(3_600),
+            endDate: date.addingTimeInterval(3_600),
+            value: 72
+        )
+        let repository = HealthRepository(modelContext: context)
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [existing], nextAnchorData: Data([1]), readState: .available),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: date,
+            lookbackStart: day,
+            replacements: [HealthSampleDaySnapshot(dayStart: day, samples: [existing], readState: .available)]
+        )
+        let fake = FakeHealthStoreClient()
+        await fake.setSampleResponses([
+            HealthSamplePage(
+                samples: [],
+                deletedSampleIDs: [deletedID],
+                nextAnchorData: Data([2]),
+                readState: .available
+            ),
+            HealthSamplePage(
+                samples: [replacement],
+                nextAnchorData: Data([3]),
+                readState: .available
+            ),
+        ], for: .bodyMass)
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+
+        let result = try await coordinator.syncAvailableData(using: repository, now: date)
+
+        XCTAssertTrue(result.completedStreams.contains(.bodyMass))
+        XCTAssertEqual(try repository.cursor(for: HealthMetricID.bodyMass.rawValue)?.anchorData, Data([2]))
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+        XCTAssertNil(snapshot.healthKitSamples)
+        XCTAssertEqual(snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestSampleID, replacementID)
+        XCTAssertEqual(snapshot.weightKilograms, 72)
+        let indexes = try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>())
+        XCTAssertEqual(indexes.map(\.sampleID), [replacementID])
     }
 }
