@@ -64,6 +64,16 @@ final class HealthNarrativePolicyTests: XCTestCase {
         XCTAssertFalse(capturePrompt.contains("健康解读结构（强制）"))
     }
 
+    func testSystemPromptRoutesHealthAdviceThroughLocalStateAndConfirmedPlanReads() {
+        let prompt = AgentSystemPrompt().text
+
+        XCTAssertTrue(prompt.contains("get_today_health_state"))
+        XCTAssertTrue(prompt.contains("get_today_plan"))
+        XCTAssertTrue(prompt.contains("get_health_history"))
+        XCTAssertTrue(prompt.contains("已确认安排"))
+        XCTAssertTrue(prompt.contains("不得用生理指标推断用户未自述的主观状态"))
+    }
+
     func testStructuredSchemaIsClosedAndConstrainsEvidenceKeys() {
         let format = HealthNarrativePolicy.responseFormat(allowedEvidenceKeys: ["sleep.mainSleep.minutes"])
         XCTAssertEqual(format.name, "health_narrative")
