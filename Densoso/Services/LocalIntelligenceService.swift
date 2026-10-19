@@ -14,7 +14,7 @@ struct LocalIntelligenceResult: Equatable, Sendable {
 }
 
 struct LocalRecordSuggestion: Codable, Equatable, Sendable {
-    enum Kind: String, Sendable {
+    enum Kind: String, Codable, Sendable {
         case meal
         case workoutPlan = "workoutplan"
     }
