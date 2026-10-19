@@ -12,6 +12,8 @@ private struct HealthKitSampleIndexUpdate {
 /// SwiftData persists both the source change and its projection with one save.
 @MainActor
 final class HealthRepository: HealthSyncRepository {
+    private static let healthKitSampleIndexBatchSize = 400
+
     private let modelContext: ModelContext
     private let willSave: (() throws -> Void)?
 
@@ -181,10 +183,9 @@ final class HealthRepository: HealthSyncRepository {
             .sorted { $0.uuidString < $1.uuidString }
         var days = Set<Date>()
         if !requestedIDs.isEmpty {
-            let batchSize = 400
             var offset = 0
             while offset < requestedIDs.count {
-                let batchEnd = min(offset + batchSize, requestedIDs.count)
+                let batchEnd = min(offset + Self.healthKitSampleIndexBatchSize, requestedIDs.count)
                 let sampleIDs = Array(requestedIDs[offset..<batchEnd])
                 let predicate = #Predicate<HealthKitSampleIndexRecord> {
                     $0.stream == stream && sampleIDs.contains($0.sampleID)
@@ -206,14 +207,13 @@ final class HealthRepository: HealthSyncRepository {
                 days.insert(Calendar.current.startOfDay(for: sample.startDate))
             }
         }
-        let pendingPredicate = #Predicate<HealthKitSampleIndexRecord> {
-            $0.stream == stream && $0.needsRequery
-        }
-        for record in try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: pendingPredicate)) {
-            if stream == HealthMetricID.sleepAnalysis.rawValue {
-                days.formUnion(Self.sleepWakeDays(startDate: record.startDate, endDate: record.endDate))
-            } else if let day = Self.date(fromDayKey: record.dayKey) {
-                days.insert(day)
+        try forEachPendingHealthKitSampleIndex(stream: stream) { records in
+            for record in records {
+                if stream == HealthMetricID.sleepAnalysis.rawValue {
+                    days.formUnion(Self.sleepWakeDays(startDate: record.startDate, endDate: record.endDate))
+                } else if let day = Self.date(fromDayKey: record.dayKey) {
+                    days.insert(day)
+                }
             }
         }
         return days.sorted()
@@ -332,22 +332,20 @@ final class HealthRepository: HealthSyncRepository {
                 }
             }
             try upsertHealthKitSampleIndexes(sampleIndexUpdates, stream: stream)
-            let pendingPredicate = #Predicate<HealthKitSampleIndexRecord> {
-                $0.stream == stream && $0.needsRequery
-            }
-            let pendingRecords = try modelContext.fetch(
-                FetchDescriptor<HealthKitSampleIndexRecord>(predicate: pendingPredicate)
-            )
-            for record in pendingRecords {
-                let requiredDays = stream == HealthMetricID.sleepAnalysis.rawValue
-                    ? Self.sleepWakeDays(startDate: record.startDate, endDate: record.endDate)
-                    : Set([Self.date(fromDayKey: record.dayKey)].compactMap { $0 })
-                guard !requiredDays.isEmpty,
-                      requiredDays.allSatisfy({ replacementsByDay[$0]?.readState == .available }) else {
-                    continue
+            var confirmedDeletedSampleIDs = Set<UUID>()
+            try forEachPendingHealthKitSampleIndex(stream: stream) { records in
+                for record in records {
+                    let requiredDays = stream == HealthMetricID.sleepAnalysis.rawValue
+                        ? Self.sleepWakeDays(startDate: record.startDate, endDate: record.endDate)
+                        : Set([Self.date(fromDayKey: record.dayKey)].compactMap { $0 })
+                    guard !requiredDays.isEmpty,
+                          requiredDays.allSatisfy({ replacementsByDay[$0]?.readState == .available }) else {
+                        continue
+                    }
+                    confirmedDeletedSampleIDs.insert(record.sampleID)
                 }
-                modelContext.delete(record)
             }
+            try deleteHealthKitSampleIndexes(sampleIDs: confirmedDeletedSampleIDs, stream: stream)
             if let cursor = try cursorRecord(stream: stream) {
                 cursor.anchorData = nextAnchorData
                 cursor.lastSuccessfulAt = lastSuccessfulAt
@@ -515,6 +513,34 @@ final class HealthRepository: HealthSyncRepository {
         return try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: predicate))
     }
 
+    private func forEachPendingHealthKitSampleIndex(
+        stream: String,
+        _ body: ([HealthKitSampleIndexRecord]) throws -> Void
+    ) throws {
+        let predicate = #Predicate<HealthKitSampleIndexRecord> {
+            $0.stream == stream && $0.needsRequery
+        }
+        var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(
+            predicate: predicate,
+            sortBy: [
+                SortDescriptor(\HealthKitSampleIndexRecord.dayKey),
+                SortDescriptor(\HealthKitSampleIndexRecord.startDate),
+                SortDescriptor(\HealthKitSampleIndexRecord.endDate),
+                SortDescriptor(\HealthKitSampleIndexRecord.sampleID),
+            ]
+        )
+        descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize
+        var offset = 0
+        while true {
+            descriptor.fetchOffset = offset
+            let records = try modelContext.fetch(descriptor)
+            guard !records.isEmpty else { return }
+            try body(records)
+            offset += records.count
+            if records.count < Self.healthKitSampleIndexBatchSize { return }
+        }
+    }
+
     private func upsertHealthKitSampleIndexes(
         _ updates: [UUID: HealthKitSampleIndexUpdate],
         stream: String
@@ -526,10 +552,9 @@ final class HealthRepository: HealthSyncRepository {
 
         var existingByID: [UUID: HealthKitSampleIndexRecord] = [:]
         let sampleIDs = orderedUpdates.map { $0.sample.id }
-        let batchSize = 400
         var offset = 0
         while offset < sampleIDs.count {
-            let batchEnd = min(offset + batchSize, sampleIDs.count)
+            let batchEnd = min(offset + Self.healthKitSampleIndexBatchSize, sampleIDs.count)
             let batchIDs = Array(sampleIDs[offset..<batchEnd])
             let predicate = #Predicate<HealthKitSampleIndexRecord> {
                 batchIDs.contains($0.sampleID)
@@ -565,16 +590,30 @@ final class HealthRepository: HealthSyncRepository {
 
     private func markHealthKitSampleIndexesForRequery(sampleIDs: Set<UUID>, stream: String) throws {
         let orderedIDs = sampleIDs.sorted { $0.uuidString < $1.uuidString }
-        let batchSize = 400
         var offset = 0
         while offset < orderedIDs.count {
-            let batchEnd = min(offset + batchSize, orderedIDs.count)
+            let batchEnd = min(offset + Self.healthKitSampleIndexBatchSize, orderedIDs.count)
             let batchIDs = Array(orderedIDs[offset..<batchEnd])
             let predicate = #Predicate<HealthKitSampleIndexRecord> {
                 $0.stream == stream && batchIDs.contains($0.sampleID)
             }
             let records = try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate))
             for record in records { record.needsRequery = true }
+            offset = batchEnd
+        }
+    }
+
+    private func deleteHealthKitSampleIndexes(sampleIDs: Set<UUID>, stream: String) throws {
+        let orderedIDs = sampleIDs.sorted { $0.uuidString < $1.uuidString }
+        var offset = 0
+        while offset < orderedIDs.count {
+            let batchEnd = min(offset + Self.healthKitSampleIndexBatchSize, orderedIDs.count)
+            let batchIDs = Array(orderedIDs[offset..<batchEnd])
+            let predicate = #Predicate<HealthKitSampleIndexRecord> {
+                $0.stream == stream && $0.needsRequery && batchIDs.contains($0.sampleID)
+            }
+            let records = try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate))
+            for record in records { modelContext.delete(record) }
             offset = batchEnd
         }
     }

@@ -465,6 +465,35 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertNil(snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass))
     }
 
+    func testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches() throws {
+        let repository = HealthRepository(modelContext: context)
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        var expectedDays = Set<Date>()
+        for offset in 0..<401 {
+            let day = calendar.date(byAdding: .day, value: offset, to: firstDay)!
+            expectedDays.insert(day)
+            context.insert(HealthKitSampleIndexRecord(
+                sampleID: UUID(),
+                stream: HealthMetricID.bodyMass.rawValue,
+                dayKey: Self.dayKey(day),
+                startDate: day,
+                endDate: day,
+                needsRequery: true
+            ))
+        }
+        try context.save()
+
+        let page = HealthSamplePage(samples: [], nextAnchorData: Data([1]), readState: .available)
+        let affectedDays = try repository.affectedHealthSampleDays(
+            for: page,
+            stream: HealthMetricID.bodyMass.rawValue
+        )
+
+        XCTAssertEqual(affectedDays.count, 401)
+        XCTAssertEqual(Set(affectedDays), expectedDays)
+    }
+
     func testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval() throws {
         let repository = HealthRepository(modelContext: context)
         let calendar = Calendar.current

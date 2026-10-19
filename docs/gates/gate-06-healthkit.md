@@ -109,11 +109,13 @@ does not reuse it as current.
     report under `gate-06-healthkit-results`.
 12. V5-to-V6 migration removes legacy raw samples from encoded snapshots and
     creates the sample-ID/day index; day re-query rebuilds summaries after
-    anchored deletions without advancing the cursor on query failure. Coverage
-    includes `DensosoMigrationTests.testV5MigrationMovesRawSamplesIntoIndexAndDailySummary`,
+    anchored deletions without advancing the cursor on query failure. Static
+    contracts also bound pending-index reads and batch index writes. Focused
+    coverage includes `DensosoMigrationTests.testV5MigrationMovesRawSamplesIntoIndexAndDailySummary`,
     `DailyHealthSampleSummaryTests.testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples`,
     `HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor`,
     `HealthKitSyncCoordinatorTests.testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder`,
+    `HealthRepositoryTests.testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches`,
     `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
     and `HealthRepositoryTests.testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval`.
 

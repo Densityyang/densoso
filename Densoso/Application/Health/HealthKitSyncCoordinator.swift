@@ -281,8 +281,15 @@ final class HealthKitSyncCoordinator {
     }
 
     private static func prefers(_ candidate: HealthSampleSnapshot, over current: HealthSampleSnapshot) -> Bool {
-        if candidate.syncVersion != current.syncVersion {
-            return (candidate.syncVersion ?? Int.min) > (current.syncVersion ?? Int.min)
+        switch (candidate.syncVersion, current.syncVersion) {
+        case let (.some(candidateVersion), .some(currentVersion)) where candidateVersion != currentVersion:
+            return candidateVersion > currentVersion
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        default:
+            break
         }
         return sampleOrder(candidate, current)
     }

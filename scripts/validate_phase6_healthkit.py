@@ -161,6 +161,10 @@ def main() -> int:
             "HealthKitSampleIndexRecord",
             "needsRequery",
             "private static func sleepWakeDays(startDate: Date, endDate: Date)",
+            "private static let healthKitSampleIndexBatchSize = 400",
+            "private func forEachPendingHealthKitSampleIndex(",
+            "descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize",
+            "descriptor.fetchOffset = offset",
         ),
         errors,
     )
@@ -295,6 +299,7 @@ def main() -> int:
             "testHealthSnapshotUpsertUpdatesOnlyTheMatchingDayKey",
             "testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
             "testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval",
+            "testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches",
         ),
         errors,
     )
@@ -349,6 +354,7 @@ def main() -> int:
             "testV5MigrationMovesRawSamplesIntoIndexAndDailySummary",
             "testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
             "testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
+            "testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches",
         ),
         errors,
     )

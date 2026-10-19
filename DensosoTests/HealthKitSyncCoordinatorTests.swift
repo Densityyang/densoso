@@ -215,15 +215,14 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             startDate: date,
             endDate: date.addingTimeInterval(3_600),
             value: 70,
-            syncVersion: 2
+            syncVersion: Int.min
         )
-        let olderRevision = HealthSampleSnapshot(
+        let unversionedDuplicate = HealthSampleSnapshot(
             id: firstID,
             metric: .bodyMass,
             startDate: date,
             endDate: date.addingTimeInterval(3_600),
-            value: 69,
-            syncVersion: 1
+            value: 69
         )
         let second = HealthSampleSnapshot(
             id: secondID,
@@ -236,7 +235,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         await fake.setSampleResponses([
             HealthSamplePage(samples: [first], nextAnchorData: Data([1]), readState: .available),
             HealthSamplePage(
-                samples: [olderRevision, second],
+                samples: [unversionedDuplicate, second],
                 nextAnchorData: Data([2]),
                 hasMore: true,
                 readState: .available
@@ -267,7 +266,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
                 hasMore: true,
                 readState: .available
             ),
-            HealthSamplePage(samples: [olderRevision, second], nextAnchorData: Data([6]), readState: .available),
+            HealthSamplePage(samples: [unversionedDuplicate, second], nextAnchorData: Data([6]), readState: .available),
         ], for: .bodyMass)
 
         let secondResult = try await coordinator.syncAvailableData(using: repository, now: date.addingTimeInterval(60))
