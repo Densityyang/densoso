@@ -1,82 +1,100 @@
 import Foundation
 
-struct ProviderTokenRate: Equatable, Sendable {
-    let inputMicrosPerMillionTokens: Int64
-    let outputMicrosPerMillionTokens: Int64
-    let audioMicrosPerSecond: Int64?
-    let currency: String
-
-    init(
-        inputMicrosPerMillionTokens: Int64,
-        outputMicrosPerMillionTokens: Int64,
-        audioMicrosPerSecond: Int64? = nil,
-        currency: String
-    ) {
-        self.inputMicrosPerMillionTokens = inputMicrosPerMillionTokens
-        self.outputMicrosPerMillionTokens = outputMicrosPerMillionTokens
-        self.audioMicrosPerSecond = audioMicrosPerSecond
-        self.currency = currency
-    }
+enum PricingDescriptorOrigin: Equatable, Sendable {
+    case publishedPriceList(documentID: String, checkedOn: String)
+    case localConfiguration(identifier: String)
 }
 
-struct ProviderRateTable: Sendable {
+struct PricingDescriptor: Equatable, Sendable {
+    let provider: ProviderID
+    let model: String
+    let capability: ProviderCapability
     let version: String
-    let rates: [ProviderID: ProviderTokenRate]
-
-    static let unconfigured = ProviderRateTable(version: "unconfigured", rates: [:])
-    /// Conservative Phase 3 estimates, intentionally biased against under-reporting.
-    /// DeepSeek uses the peak, cache-miss V4 Flash price; Qwen uses Beijing's
-    /// standard, non-cached <=128k tier. These are estimates, not invoice totals.
-    static let phase3Conservative = ProviderRateTable(
-        version: "phase4-conservative-2026-09-02",
-        rates: [
-            .deepSeek: ProviderTokenRate(
-                inputMicrosPerMillionTokens: 440_000,
-                outputMicrosPerMillionTokens: 1_320_000,
-                currency: "USD"
-            ),
-            .qwen: ProviderTokenRate(
-                inputMicrosPerMillionTokens: 150_000,
-                outputMicrosPerMillionTokens: 1_500_000,
-                audioMicrosPerSecond: 220,
-                currency: "CNY"
-            ),
-        ]
-    )
+    let origin: PricingDescriptorOrigin
+    let currency: String
+    let inputMicrosPerMillionTokens: Int64?
+    let cachedInputMicrosPerMillionTokens: Int64?
+    let outputMicrosPerMillionTokens: Int64?
+    let audioMicrosPerSecond: Int64?
 
     func estimate(_ usage: ProviderUsage) -> (micros: Int64, currency: String)? {
-        guard let rate = rates[usage.provider] else { return nil }
-        if usage.capability == .speech {
-            guard let audioRate = rate.audioMicrosPerSecond,
-                  audioRate >= 0,
+        guard usage.provider == provider,
+              usage.model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == model,
+              usage.capability == capability else { return nil }
+        if capability == .speech {
+            guard let audioMicrosPerSecond,
+                  audioMicrosPerSecond >= 0,
                   usage.audioSeconds.isFinite,
                   usage.audioSeconds >= 0 else { return nil }
-            let rawCost = usage.audioSeconds * Double(audioRate)
+            let rawCost = usage.audioSeconds * Double(audioMicrosPerSecond)
             guard rawCost.isFinite, rawCost <= Double(Int64.max) else { return nil }
-            return (Int64(rawCost.rounded(.up)), rate.currency)
+            return (Int64(rawCost.rounded(.up)), currency)
         }
-        guard
-              usage.inputTokens >= 0,
+
+        guard usage.inputTokens >= 0,
               usage.outputTokens >= 0,
-              let input = scaledCost(
-                tokens: usage.inputTokens,
-                microsPerMillion: rate.inputMicrosPerMillionTokens
-              ),
-              let output = scaledCost(
-                tokens: usage.outputTokens,
-                microsPerMillion: rate.outputMicrosPerMillionTokens
-              ) else { return nil }
-        let sum = input.addingReportingOverflow(output)
-        guard !sum.overflow else { return nil }
-        return (max(sum.partialValue, 0), rate.currency)
+              usage.cachedInputTokens >= 0,
+              usage.cachedInputTokens <= usage.inputTokens,
+              let inputMicrosPerMillionTokens,
+              let outputMicrosPerMillionTokens else { return nil }
+
+        let uncachedInputTokens = usage.inputTokens - usage.cachedInputTokens
+        guard let input = Self.scaledCost(
+            tokens: uncachedInputTokens,
+            microsPerMillion: inputMicrosPerMillionTokens
+        ) else { return nil }
+        let cachedInput: Int64
+        if usage.cachedInputTokens == 0 {
+            cachedInput = 0
+        } else {
+            guard let cachedInputMicrosPerMillionTokens,
+                  let cost = Self.scaledCost(
+                      tokens: usage.cachedInputTokens,
+                      microsPerMillion: cachedInputMicrosPerMillionTokens
+                  ) else { return nil }
+            cachedInput = cost
+        }
+        guard let output = Self.scaledCost(
+            tokens: usage.outputTokens,
+            microsPerMillion: outputMicrosPerMillionTokens
+        ) else { return nil }
+
+        let inputAndCache = input.addingReportingOverflow(cachedInput)
+        guard !inputAndCache.overflow else { return nil }
+        let total = inputAndCache.partialValue.addingReportingOverflow(output)
+        guard !total.overflow else { return nil }
+        return (max(total.partialValue, 0), currency)
     }
 
-    private func scaledCost(tokens: Int, microsPerMillion: Int64) -> Int64? {
-        guard microsPerMillion >= 0 else { return nil }
+    private static func scaledCost(tokens: Int, microsPerMillion: Int64) -> Int64? {
+        guard tokens >= 0, microsPerMillion >= 0 else { return nil }
         let product = Int64(tokens).multipliedReportingOverflow(by: microsPerMillion)
         guard !product.overflow else { return nil }
         return product.partialValue / 1_000_000
     }
+}
+
+protocol PricingDescriptorSource: Sendable {
+    func descriptor(for usage: ProviderUsage) -> PricingDescriptor?
+}
+
+struct StaticPricingDescriptorSource: PricingDescriptorSource, Sendable {
+    let descriptors: [PricingDescriptor]
+
+    func descriptor(for usage: ProviderUsage) -> PricingDescriptor? {
+        let normalizedModel = usage.model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return descriptors.first {
+            $0.provider == usage.provider
+                && $0.model == normalizedModel
+                && $0.capability == usage.capability
+        }
+    }
+
+    func estimate(_ usage: ProviderUsage) -> (micros: Int64, currency: String)? {
+        descriptor(for: usage)?.estimate(usage)
+    }
+
+    static let unconfigured = StaticPricingDescriptorSource(descriptors: [])
 }
 
 struct ProviderUsageSummary: Equatable, Sendable {
@@ -108,14 +126,14 @@ protocol ProviderGovernanceRepository: Sendable {
 
 actor ProviderUsageLedger {
     private let repository: any ProviderGovernanceRepository
-    private let rateTable: ProviderRateTable
+    private let pricingDescriptorSource: any PricingDescriptorSource
 
     init(
         repository: any ProviderGovernanceRepository,
-        rateTable: ProviderRateTable = .phase3Conservative
+        pricingDescriptorSource: any PricingDescriptorSource = PricingDescriptorCatalog.phase3Conservative
     ) {
         self.repository = repository
-        self.rateTable = rateTable
+        self.pricingDescriptorSource = pricingDescriptorSource
     }
 
     func record(
@@ -123,7 +141,8 @@ actor ProviderUsageLedger {
         requestID: UUID,
         providerRound: Int = 1
     ) async throws {
-        let estimate = rateTable.estimate(usage)
+        let descriptor = pricingDescriptorSource.descriptor(for: usage)
+        let estimate = descriptor?.estimate(usage)
         let key = [
             usage.provider.rawValue,
             requestID.uuidString.lowercased(),
@@ -135,7 +154,7 @@ actor ProviderUsageLedger {
             usageKey: key,
             estimatedCostMicros: estimate?.micros,
             currency: estimate?.currency,
-            rateVersion: rateTable.version
+            rateVersion: estimate == nil ? "unknown" : descriptor?.version ?? "unknown"
         )
     }
 

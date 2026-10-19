@@ -28,10 +28,14 @@ domain-persistence pass on the same head, and does not authorize Speech work.
 - Expose an ordered `AsyncThrowingStream<AgentEvent>` for each request, including
   a typed cancellation event; the legacy final-response API remains available.
 - Add soft monthly budget reminders without interrupting an active request.
-  Estimates use a versioned 2026-09-01 conservative table: DeepSeek V4 Flash
-  peak/cache-miss rates and Qwen Beijing standard non-cached <=128k rates. Qwen
-  request bodies are capped at 120 KB to stay inside that pricing tier; these
-  values are estimates, not invoice totals.
+  Estimates resolve through a versioned `PricingDescriptor` matched by exact
+  provider, model and capability. DeepSeek Flash uses the 2026-09-01
+  peak/cache-miss snapshot; Qwen Flash uses the Beijing standard non-cached
+  <=128k snapshot, with cached input conservatively priced at the non-cached
+  rate. Qwen request bodies are capped at 120 KB to stay inside that tier.
+  Models or usage units without a verified descriptor (including current Qwen
+  ASR and vision) retain unknown cost instead of falling back to another model's
+  price. These estimates are not invoice totals.
 - Render restricted Markdown through typed `AssistantBlock` values with HTML,
   remote images and non-HTTPS links removed or rejected.
 - Ensure Provider logs contain metadata only, never keys, authorization headers,
@@ -69,8 +73,9 @@ The `agent-provider` job has `needs: domain-persistence` and must prove:
 5. five rounds, eight tools and one 45-second deadline are hard limits;
 6. every executable prompt-injection eval case—including injected tool output—
    produces only staged actions and zero direct health writes;
-7. usage deduplicates by request/attempt, persists and applies versioned,
-   conservative pricing estimates for soft-budget warnings;
+7. usage deduplicates by request/attempt, persists descriptor versions and
+   applies conservative estimates only for exact provider/model/capability
+   matches; missing price inputs remain unknown for soft-budget reporting;
 8. Markdown emphasis/list/HTTPS behavior and HTML/image/non-HTTPS/fallback safety;
 9. logs contain no credentials, complete health input or transcript; and
 10. `.xcresult`, logs, test summary, fixture summary and redaction evidence are retained.

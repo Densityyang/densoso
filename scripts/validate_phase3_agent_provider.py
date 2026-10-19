@@ -44,6 +44,7 @@ def main() -> int:
         "Densoso/Application/Agent/AgentEvents.swift",
         "Densoso/Application/Agent/ToolSchemaValidator.swift",
         "Densoso/Application/Usage/ProviderUsageLedger.swift",
+        "Densoso/Application/Usage/PricingDescriptorCatalog.swift",
         "Densoso/Application/Formatting/AssistantBlock.swift",
         "Densoso/Application/Formatting/RestrictedMarkdownRenderer.swift",
         "Densoso/Views/Components/AssistantBlockView.swift",
@@ -60,6 +61,33 @@ def main() -> int:
             "Daily-check-in tool arguments are checked against the current user turn",
             "a note absent from the user's words",
             "do not enter HealthKit projections",
+            "PricingDescriptor",
+            "exact provider, model and capability",
+            "retain unknown cost",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso/Application/Usage/ProviderUsageLedger.swift",
+        [
+            "enum PricingDescriptorOrigin",
+            "struct PricingDescriptor",
+            "protocol PricingDescriptorSource",
+            "struct StaticPricingDescriptorSource",
+            "usage.cachedInputTokens <= usage.inputTokens",
+            'rateVersion: estimate == nil ? "unknown"',
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso/Application/Usage/PricingDescriptorCatalog.swift",
+        [
+            "enum PricingDescriptorCatalog",
+            "model: \"deepseek-flash\"",
+            "model: \"qwen-flash\"",
+            "cachedInputMicrosPerMillionTokens: 440_000",
+            "cachedInputMicrosPerMillionTokens: 150_000",
+            "No descriptor is supplied for Qwen ASR or vision",
         ],
         errors,
     )
@@ -493,6 +521,16 @@ def main() -> int:
     for relative in test_files:
         if not (ROOT / relative).is_file():
             errors.append(f"missing {relative}")
+    require_text(
+        ROOT / "DensosoTests/Application/ProviderUsageLedgerTests.swift",
+        [
+            "testCachedInputUsesDescriptorPriceWithoutDoubleCounting",
+            "testPricingDescriptorRequiresExactModelAndCapability",
+            "testMissingCachedPriceAndUnlistedVisionModelKeepCostUnknown",
+            "testQwenSpeechUsageWithoutPricingDescriptorKeepsCostUnknown",
+        ],
+        errors,
+    )
 
     fixture_paths = [
         ROOT / "DensosoTests/Fixtures/Gate03/Providers/DeepSeek/deepseek-responses-stream.sse",

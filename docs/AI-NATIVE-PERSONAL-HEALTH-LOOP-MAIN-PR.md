@@ -2863,25 +2863,34 @@ reasoning 消耗多少
 
 # 63. Cost Accounting
 
-Provider 必须携带：
+费用估算必须由有类型的 `PricingDescriptor` 提供，不从 provider 名称、能力或相邻模型价格推断：
 
 ```text
 PricingDescriptor
 ```
 
-不要把价格硬编码进业务逻辑。
+Descriptor 精确绑定 provider、model、capability、版本、币种和价格来源，并分别描述 input、cached input、output token 单价或 audio 秒单价。模型 usage 进入 ledger 时只按完全匹配的 descriptor 估算，reasoning tokens 已包含在 output tokens 中，不重复计费。
+
+没有匹配 descriptor，或本次 usage 所需单价缺失时，费用与币种保持 `unknown`；不以 provider 级费率兜底，不把未知费用当成零，也不阻断正在进行的请求。当前 DeepSeek 和 Qwen Flash 的保守 token 估算以各自已核对的价格页快照为来源；缓存输入暂按非缓存单价估算，作为保守上界。未配置专属价格来源的 Qwen ASR 和视觉模型保持 unknown。
 
 例如：
 
 ```swift
-struct ProviderPricing {
-    let inputPerMillion: Decimal
-    let cachedInputPerMillion: Decimal
-    let outputPerMillion: Decimal
+struct PricingDescriptor {
+    let provider: ProviderID
+    let model: String
+    let capability: ProviderCapability
+    let version: String
+    let origin: PricingDescriptorOrigin
+    let currency: String
+    let inputMicrosPerMillionTokens: Int64?
+    let cachedInputMicrosPerMillionTokens: Int64?
+    let outputMicrosPerMillionTokens: Int64?
+    let audioMicrosPerSecond: Int64?
 }
 ```
 
-这样模型切换不需要修改 Agent。
+价格表独立于 Agent；模型切换只会在存在对应 descriptor 时得到估算。现有 V4 usage 记录列继续承载版本、币种和费用；unknown 使用既有 unavailable 表示，不增加数据库列或迁移。
 
 ---
 
