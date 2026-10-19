@@ -82,7 +82,9 @@ final class TrainingPlanSchedulingService {
 
     func confirmedPlans() throws -> [ConfirmedTrainingPlanEntry] {
         let context = ModelContext(modelContainer)
-        return try context.fetch(FetchDescriptor<ScheduleEvent>())
+        let prefix = ConfirmedTrainingPlanEntry.notesPrefix
+        let predicate = #Predicate<ScheduleEvent> { ($0.notes ?? "").contains(prefix) }
+        return try context.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
             .compactMap { ConfirmedTrainingPlanEntry.decode(notes: $0.notes) }
             .sorted { lhs, rhs in
                 if lhs.draft.createdAt != rhs.draft.createdAt {
@@ -94,7 +96,9 @@ final class TrainingPlanSchedulingService {
 
     private func scheduleConfirmedPlanOnce(actionID: UUID) async throws {
         let context = ModelContext(modelContainer)
-        let events = try context.fetch(FetchDescriptor<ScheduleEvent>())
+        let prefix = ConfirmedTrainingPlanEntry.notesPrefix
+        let predicate = #Predicate<ScheduleEvent> { ($0.notes ?? "").contains(prefix) }
+        let events = try context.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
         guard let event = events.first(where: {
             ConfirmedTrainingPlanEntry.decode(notes: $0.notes)?.actionID == actionID
         }), var entry = ConfirmedTrainingPlanEntry.decode(notes: event.notes) else {

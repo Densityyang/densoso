@@ -10,7 +10,8 @@ durable quick-record envelopes, offline replay deduplication, arrival ordering,
 and retry/resume behavior. Inbox reads push state, identity, sort order, and
 recent-item limits into SwiftData while preserving durable arrival ordering.
 The phone snapshot resolves today's DailyMetrics row with a bounded date query
-and one-row fetch limit.
+and one-row fetch limit. Confirmed plan reads filter note-prefix candidates
+before decoding, while ordinary calendar events remain isolated.
 Watch outbox and phone inbox tests cover replay semantics; the phone
 coordinator's activation path restores pending commands.
 
@@ -26,6 +27,7 @@ coordinator's activation path restores pending commands.
   `WatchMessageInboxStoreTests.testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry`,
   `TrainingPlanSchedulingServiceTests.testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays`,
+  `WorkoutPlanSchedulingServiceTests.testConfirmedScheduleIsIdempotentAcrossRetries`,
   `TrainingPlanScheduleQueryTests.testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents`,
   `AgentCoordinatorTests.testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce`.

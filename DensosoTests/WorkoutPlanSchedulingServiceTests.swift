@@ -23,6 +23,7 @@ final class WorkoutPlanSchedulingServiceTests: XCTestCase {
         let actionID = UUID()
         try insertConfirmedPlan(actionID: actionID, in: container)
 
+        XCTAssertEqual(try service.confirmedPlans().map(\.actionID), [actionID])
         try await service.scheduleConfirmedPlan(actionID: actionID)
         try await service.scheduleConfirmedPlan(actionID: actionID)
 
@@ -143,6 +144,12 @@ final class WorkoutPlanSchedulingServiceTests: XCTestCase {
         )
         let context = ModelContext(container)
         context.insert(ScheduleEvent(date: start, title: draft.name, notes: try entry.encodedNotes(), startTime: start))
+        context.insert(ScheduleEvent(
+            date: start,
+            title: "普通日程",
+            notes: "普通日程备注",
+            startTime: start.addingTimeInterval(600)
+        ))
         try context.save()
     }
 }

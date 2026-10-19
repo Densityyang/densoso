@@ -137,7 +137,13 @@ actor HealthProjectionActor {
     }
 
     func confirmedPlanEntries() throws -> ConfirmedDailyLoopPlans {
-        let events = try modelContext.fetch(FetchDescriptor<ScheduleEvent>())
+        let workoutPlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix
+        let trainingPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
+        let predicate = #Predicate<ScheduleEvent> {
+            ($0.notes ?? "").contains(workoutPlanPrefix)
+                || ($0.notes ?? "").contains(trainingPlanPrefix)
+        }
+        let events = try modelContext.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
         let workoutPlans = events
             .compactMap { ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) }
             .sorted {

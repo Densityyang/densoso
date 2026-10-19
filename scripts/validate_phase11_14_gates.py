@@ -183,6 +183,15 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "Densoso/Services/HealthProjectionActor.swift",
+            (
+                "($0.notes ?? \"\").contains(workoutPlanPrefix)",
+                "($0.notes ?? \"\").contains(trainingPlanPrefix)",
+                "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
+            ),
+            errors,
+        )
+        require(
             "DensosoTests/Application/HealthNarrativePolicyTests.swift",
             (
                 "testStructuredNarrativeAcceptsOnlyKnownEvidenceKeysAndNarrativeText",
@@ -562,6 +571,35 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         errors,
     )
     require(
+        "Densoso/Services/HealthProjectionActor.swift",
+        (
+            "($0.notes ?? \"\").contains(workoutPlanPrefix)",
+            "($0.notes ?? \"\").contains(trainingPlanPrefix)",
+            "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
+        ),
+        errors,
+    )
+    require(
+        "Densoso/Application/Workout/TrainingPlanSchedulingService.swift",
+        (
+            "let prefix = ConfirmedTrainingPlanEntry.notesPrefix",
+            "($0.notes ?? \"\").contains(prefix)",
+            "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
+        ),
+        errors,
+    )
+    require(
+        "Densoso/Services/WorkoutPlanCompiler.swift",
+        (
+            "let singlePlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix",
+            "let multiPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix",
+            "($0.notes ?? \"\").contains(singlePlanPrefix)",
+            "($0.notes ?? \"\").contains(multiPlanPrefix)",
+            "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
+        ),
+        errors,
+    )
+    require(
         "DensosoTests/Application/DailyLoopSnapshotCompositionTests.swift",
         (
             "testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
@@ -705,6 +743,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays",
+                "-only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testConfirmedScheduleIsIdempotentAcrossRetries",
                 "-only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",

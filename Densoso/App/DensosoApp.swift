@@ -129,7 +129,8 @@ struct AppRoot: View {
             )
             modelContext.insert(profile)
         }
-        if (try? modelContext.fetch(FetchDescriptor<ProfileRevisionRecord>()).isEmpty) == true,
+        if let revisionCount = try? modelContext.fetchCount(FetchDescriptor<ProfileRevisionRecord>()),
+           revisionCount == 0,
            let dateOfBirth = profile.dateOfBirth {
             let now = Date()
             modelContext.insert(
@@ -146,7 +147,8 @@ struct AppRoot: View {
                 )
             )
         }
-        if (try? modelContext.fetch(FetchDescriptor<WeightRecord>()).isEmpty) == true {
+        if let weightCount = try? modelContext.fetchCount(FetchDescriptor<WeightRecord>()),
+           weightCount == 0 {
             let now = Date()
             modelContext.insert(
                 WeightRecord(

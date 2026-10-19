@@ -183,7 +183,13 @@ final class WorkoutPlanSchedulingService {
 
     private func scheduleConfirmedPlanOnce(actionID: UUID) async throws {
         let context = ModelContext(modelContainer)
-        let events = try context.fetch(FetchDescriptor<ScheduleEvent>())
+        let singlePlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix
+        let multiPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
+        let predicate = #Predicate<ScheduleEvent> {
+            ($0.notes ?? "").contains(singlePlanPrefix)
+                || ($0.notes ?? "").contains(multiPlanPrefix)
+        }
+        let events = try context.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
         if events.contains(where: {
             ConfirmedTrainingPlanEntry.decode(notes: $0.notes)?.actionID == actionID
         }) {
@@ -244,7 +250,9 @@ final class WorkoutPlanSchedulingService {
 
     func confirmedPlans() throws -> [ConfirmedWorkoutPlanEntry] {
         let context = ModelContext(modelContainer)
-        return try context.fetch(FetchDescriptor<ScheduleEvent>())
+        let prefix = ConfirmedWorkoutPlanEntry.notesPrefix
+        let predicate = #Predicate<ScheduleEvent> { ($0.notes ?? "").contains(prefix) }
+        return try context.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
             .compactMap { ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) }
             .sorted { ($0.draft.scheduledAt ?? .distantPast) > ($1.draft.scheduledAt ?? .distantPast) }
     }

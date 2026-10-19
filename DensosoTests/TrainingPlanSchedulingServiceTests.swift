@@ -12,6 +12,7 @@ final class TrainingPlanSchedulingServiceTests: XCTestCase {
         let draft = makeDraft()
         try insertConfirmedPlan(actionID: actionID, draft: draft, in: container)
 
+        XCTAssertEqual(try service.confirmedPlans().map(\.actionID), [actionID])
         try await service.scheduleConfirmedPlan(actionID: actionID)
 
         XCTAssertEqual(client.authorizationCount, 1)
@@ -81,6 +82,12 @@ final class TrainingPlanSchedulingServiceTests: XCTestCase {
         let start = try XCTUnwrap(draft.sessions.map(\.date).min())
         let context = ModelContext(container)
         context.insert(ScheduleEvent(date: start, title: draft.name, notes: try entry.encodedNotes(), startTime: start))
+        context.insert(ScheduleEvent(
+            date: start,
+            title: "普通日程",
+            notes: "普通日程备注",
+            startTime: start.addingTimeInterval(600)
+        ))
         try context.save()
     }
 
