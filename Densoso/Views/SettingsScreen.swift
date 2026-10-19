@@ -246,7 +246,7 @@ struct SettingsScreen: View {
                     format: .number.precision(.fractionLength(0...2))
                 )
                 .keyboardType(.decimalPad)
-                Text("文本、qwen3-asr-flash 与 qwen3-vl-flash 均固定北京区域；音频和处理后照片分别取得同意，原图不会保存。")
+                Text("文本、qwen3-asr-flash 与 qwen3.7-flash-2026-07-15 均固定北京区域；音频和处理后照片分别取得同意，原图不会保存。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

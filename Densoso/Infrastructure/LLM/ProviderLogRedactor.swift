@@ -73,7 +73,7 @@ enum ProviderLogRedactor {
             "deepseek-flash",
             "qwen-flash",
             "qwen3-asr-flash",
-            "qwen3-vl-flash",
+            "qwen3.7-flash-2026-07-15",
         ]
         return allowlist.contains(candidate.lowercased()) ? candidate.lowercased() : "redacted"
     }

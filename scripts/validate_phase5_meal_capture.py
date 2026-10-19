@@ -187,9 +187,22 @@ def main() -> int:
     require_text(
         ROOT / "Densoso/Infrastructure/LLM/QwenMealVisionProvider.swift",
         [
-            'model = "qwen3-vl-flash"', 'type: "image_url"',
-            '"data:image/jpeg;base64,', '"json_object"', "allowedKeys",
+            'model = "qwen3.7-flash-2026-07-15"',
+            "requiredCapabilities: Set<ProviderCapability> = [.vision, .structuredOutput]",
+            'type: "image_url"', '"data:image/jpeg;base64,', 'type = "json_schema"', "allowedKeys",
+            "responseModel == Self.model",
             "schemaViolation(path: \"visionObservation\")",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests/Infrastructure/LLM/QwenMealVisionProviderContractTests.swift",
+        [
+            "testPinnedQwen37SnapshotUsesImageAndStructuredObservationContract",
+            "testRollingQwen37AliasDoesNotSatisfyPinnedSnapshot",
+            '"qwen3.7-flash-2026-07-15"',
+            '"json_schema"',
+            '"additionalProperties"] as? Bool, false',
         ],
         errors,
     )
@@ -293,8 +306,8 @@ def main() -> int:
                 errors.append(f"Gate 5 manifest hash mismatch for {filename}")
 
     fixture_paths = [
-        "DensosoTests/Fixtures/Gate05/Providers/Qwen/qwen3-vl-flash-response.json",
-        "DensosoTests/Fixtures/Gate05/Providers/Qwen/qwen3-vl-forbidden-food-id.json",
+        "DensosoTests/Fixtures/Gate05/Providers/Qwen/qwen3.7-flash-2026-07-15-response.json",
+        "DensosoTests/Fixtures/Gate05/Providers/Qwen/qwen3.7-flash-2026-07-15-forbidden-food-id.json",
     ]
     for relative in fixture_paths:
         load_json(relative, errors)
@@ -372,6 +385,11 @@ def main() -> int:
     require_text(
         ROOT / "docs/gates/gate-05-meal-capture.md",
         [
+            "qwen3.7-flash-2026-07-15",
+            "strict JSON Schema",
+            "response contract",
+            "rolling aliases are rejected",
+            "this meal-vision adapter does not expose or execute tool calls",
             "Non-optional V3 point mirrors may contain",
             "aggregates are outside this gate's accuracy claim",
             "FoodResolverV2",

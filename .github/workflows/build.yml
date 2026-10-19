@@ -1069,7 +1069,7 @@ jobs:
             -only-testing:DensosoTests/DeepSeekProviderContractTests/testResponsesAPIRequestAndStreamingToolContract \
             -only-testing:DensosoTests/DeepSeekProviderContractTests/testImageStructuredOutputAndStatelessToolHistoryEncoding \
             -only-testing:DensosoTests/QwenASRProviderContractTests/testOpenAICompatibleAudioRequestAndResponseContract \
-            -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testImageRequestAndRestrictedObservationContract \
+            -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testPinnedQwen37SnapshotUsesImageAndStructuredObservationContract \
             -only-testing:DensosoTests/SpeechCaptureStateMachineTests/testLocalFailureWithCapturedAudioUsesQwenOnceAndDeletesTemporaryAudio \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testOpenPhotoRequiresSeparateImageConsent \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentRoutesResolvedBarcodeLocallyAndStagesPendingAction \

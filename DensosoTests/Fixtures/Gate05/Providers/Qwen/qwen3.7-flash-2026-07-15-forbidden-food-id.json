@@ -1,5 +1,5 @@
 {
-  "model": "qwen3-vl-flash",
+  "model": "qwen3.7-flash-2026-07-15",
   "choices": [
     {
       "index": 0,

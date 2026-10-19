@@ -328,7 +328,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "DensosoTests/Infrastructure/LLM/QwenMealVisionProviderContractTests.swift",
-            ("testImageRequestAndRestrictedObservationContract",),
+            ("testPinnedQwen37SnapshotUsesImageAndStructuredObservationContract",),
             errors,
         )
         require(
@@ -548,7 +548,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testLocalMealPortionAnswerSupportsCountsAndRejectsPackageSpecsAsConsumedAmount",
                 "-only-testing:DensosoTests/DeepSeekProviderContractTests/testImageStructuredOutputAndStatelessToolHistoryEncoding",
                 "-only-testing:DensosoTests/QwenASRProviderContractTests/testOpenAICompatibleAudioRequestAndResponseContract",
-                "-only-testing:DensosoTests/QwenMealVisionProviderContractTests/testImageRequestAndRestrictedObservationContract",
+                "-only-testing:DensosoTests/QwenMealVisionProviderContractTests/testPinnedQwen37SnapshotUsesImageAndStructuredObservationContract",
                 "-only-testing:DensosoTests/AgentRequestResumeTests/testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage",
             ),
         ),

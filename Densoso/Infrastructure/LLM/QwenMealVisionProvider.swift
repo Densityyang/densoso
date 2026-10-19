@@ -2,7 +2,8 @@ import DensosoDomain
 import Foundation
 
 struct QwenMealVisionProvider: MealVisionProviding {
-    static let model = "qwen3-vl-flash"
+    static let model = "qwen3.7-flash-2026-07-15"
+    static let requiredCapabilities: Set<ProviderCapability> = [.vision, .structuredOutput]
     static let maximumRequestBytes = 20_000_000
 
     private let endpoint: URL
@@ -91,7 +92,7 @@ struct QwenMealVisionProvider: MealVisionProviding {
         }
         guard let choice = response.choices.first else { throw ProviderError.malformedResponse }
         guard let responseModel = response.model,
-              responseModel.hasPrefix(Self.model) else {
+              responseModel == Self.model else {
             throw ProviderError.malformedResponse
         }
         if choice.finishReason == "content_filter" { throw ProviderError.contentRejected }
@@ -189,7 +190,7 @@ struct ConfiguredQwenMealVisionProvider: MealVisionProviding {
 private struct QwenVisionRequest: Encodable {
     let model = QwenMealVisionProvider.model
     let messages: [Message]
-    let responseFormat = ["type": "json_object"]
+    let responseFormat = QwenVisionResponseFormat()
     let stream = false
     let enableThinking = false
     let maxTokens = 1_024
@@ -232,6 +233,89 @@ private struct QwenVisionRequest: Encodable {
         case responseFormat = "response_format"
         case enableThinking = "enable_thinking"
         case maxTokens = "max_tokens"
+    }
+}
+
+private struct QwenVisionResponseFormat: Encodable {
+    let type = "json_schema"
+    let jsonSchema = QwenVisionJSONSchema()
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case jsonSchema = "json_schema"
+    }
+}
+
+private struct QwenVisionJSONSchema: Encodable {
+    let name = "MealVisionObservation"
+    let strict = true
+    let schema = QwenVisionJSONSchemaObject()
+}
+
+private struct QwenVisionJSONSchemaObject: Encodable {
+    let type = "object"
+    let properties: [String: QwenVisionJSONSchemaNode] = [
+        "labels": .array(of: .string(maxLength: 80), maxItems: 8),
+        "preparationHints": .array(
+            of: .enumeration(["raw", "cooked", "unknown"]),
+            maxItems: 3
+        ),
+        "cookingMethod": .nullableString(maxLength: 40),
+        "containerHint": .nullableString(maxLength: 40),
+        "portionHint": .nullableString(maxLength: 80),
+        "isOccluded": .boolean,
+    ]
+    let required = [
+        "labels", "preparationHints", "cookingMethod", "containerHint", "portionHint", "isOccluded",
+    ]
+    let additionalProperties = false
+}
+
+private struct QwenVisionJSONSchemaNode: Encodable {
+    let type: QwenVisionJSONSchemaType
+    let items: QwenVisionJSONSchemaNode?
+    let enumValues: [String]?
+    let maxLength: Int?
+    let maxItems: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case type, items, maxLength, maxItems
+        case enumValues = "enum"
+    }
+
+    static var boolean: Self {
+        Self(type: .single("boolean"), items: nil, enumValues: nil, maxLength: nil, maxItems: nil)
+    }
+
+    static func string(maxLength: Int) -> Self {
+        Self(type: .single("string"), items: nil, enumValues: nil, maxLength: maxLength, maxItems: nil)
+    }
+
+    static func nullableString(maxLength: Int) -> Self {
+        Self(type: .nullable("string"), items: nil, enumValues: nil, maxLength: maxLength, maxItems: nil)
+    }
+
+    static func enumeration(_ values: [String]) -> Self {
+        Self(type: .single("string"), items: nil, enumValues: values, maxLength: nil, maxItems: nil)
+    }
+
+    static func array(of items: Self, maxItems: Int) -> Self {
+        Self(type: .single("array"), items: items, enumValues: nil, maxLength: nil, maxItems: maxItems)
+    }
+}
+
+private enum QwenVisionJSONSchemaType: Encodable {
+    case single(String)
+    case nullable(String)
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .single(let value):
+            try container.encode(value)
+        case .nullable(let value):
+            try container.encode([value, "null"])
+        }
     }
 }
 

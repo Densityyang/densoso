@@ -70,7 +70,11 @@ struct PricingDescriptor: Equatable, Sendable {
         guard tokens >= 0, microsPerMillion >= 0 else { return nil }
         let product = Int64(tokens).multipliedReportingOverflow(by: microsPerMillion)
         guard !product.overflow else { return nil }
-        return product.partialValue / 1_000_000
+        let quotient = product.partialValue / 1_000_000
+        let remainder = product.partialValue % 1_000_000
+        guard remainder != 0 else { return quotient }
+        let rounded = quotient.addingReportingOverflow(1)
+        return rounded.overflow ? nil : rounded.partialValue
     }
 }
 

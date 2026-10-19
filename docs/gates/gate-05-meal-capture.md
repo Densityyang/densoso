@@ -18,10 +18,15 @@ meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
   serving weight is not assumed to equal the amount eaten: the user supplies
   grams or a serving count that can be converted from a known per-serving mass;
   otherwise the local flow asks once before staging.
-- Open dishes may use the independent Beijing `qwen3-vl-flash` adapter only when
-  the feature flag, `.mealImage` consent and quality gate all allow it.
+- Open dishes may use the independent Beijing
+  `qwen3.7-flash-2026-07-15` adapter only when the feature flag, `.mealImage`
+  consent and quality gate all allow it.
   Production defaults this quality gate to unavailable/closed because the
   checked-in synthetic set does not prove real-photo VLM accuracy.
+- The pinned model receives sanitized image input and a strict JSON Schema
+  response contract. Its model response must identify the pinned snapshot;
+  rolling aliases are rejected. The model supports Function Calling too, but
+  this meal-vision adapter does not expose or execute tool calls.
 - VLM output is a closed observation schema containing labels, preparation,
   cooking/container/portion hints and occlusion only. It cannot supply food ID,
   calories or nutrient truth.
@@ -92,7 +97,8 @@ The `meal-capture` job has `needs: speech` and must prove:
    output is <=1280px, JPEG 0.75 and contains no source GPS/EXIF/XMP/MakerNote;
 9. valid GTIN/OCR avoid Qwen, UPC-E is expanded with its own checksum validation,
    and open-photo use requires separate consent;
-10. Qwen request/response fixture uses image Data URI and rejects foodID/nutrient fields;
+10. the pinned Qwen request/response fixture uses image Data URI and strict
+    structured output, and rejects rolling model aliases and foodID/nutrient fields;
 11. unconfirmed capture produces zero Meal/outbox rows, while explicit confirmation
     atomically produces one Meal, one receipt and one nutrition outbox entry.
 12. barcode, nutrition-label, and visual candidate integration uses the same V2

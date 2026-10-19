@@ -117,6 +117,32 @@ final class ProviderUsageLedgerTests: XCTestCase {
         XCTAssertEqual(descriptor.estimate(usage)?.micros, 1_640)
     }
 
+    func testFractionalMicroCostsRoundUpForConservativeEstimate() {
+        let descriptor = PricingDescriptor(
+            provider: .deepSeek,
+            model: "fixture",
+            capability: .text,
+            version: "fixture-v1",
+            origin: .localConfiguration(identifier: "fixture-v1"),
+            currency: "USD",
+            inputMicrosPerMillionTokens: 500_000,
+            cachedInputMicrosPerMillionTokens: 0,
+            outputMicrosPerMillionTokens: 0,
+            audioMicrosPerSecond: nil
+        )
+        let usage = ProviderUsage(
+            provider: .deepSeek,
+            model: "fixture",
+            capability: .text,
+            inputTokens: 1,
+            outputTokens: 0,
+            audioSeconds: 0,
+            attempt: 1
+        )
+
+        XCTAssertEqual(descriptor.estimate(usage)?.micros, 1)
+    }
+
     func testQwenSpeechUsageWithoutPricingDescriptorKeepsCostUnknown() async throws {
         let repository = InMemoryProviderGovernanceRepository()
         let ledger = ProviderUsageLedger(repository: repository)

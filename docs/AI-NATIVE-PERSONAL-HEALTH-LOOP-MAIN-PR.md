@@ -2922,6 +2922,10 @@ qwen3.7-flash
 qwen3.7-flash-2026-07-15
 ```
 
+Vision 请求和接受的响应 model ID 必须使用此固定快照。meal-vision adapter
+使用图像输入和严格结构化输出；它不会把该模型支持的 Function Calling
+暴露为本地工具调用路径。
+
 并保留：
 
 ```text

@@ -199,6 +199,11 @@ def main() -> int:
         errors,
     )
     require_text(
+        ROOT / "DensosoTests/Privacy/ProviderLogRedactionTests.swift",
+        ["testPinnedQwenVisionSnapshotIsAnAllowlistedModelIdentifier"],
+        errors,
+    )
+    require_text(
         ROOT / "DensosoTests" / "Application" / "DailyLoopSnapshotCompositionTests.swift",
         [
             "testComposerUsesMatchingExistingBriefAndPreservesOptionalState",
@@ -525,6 +530,7 @@ def main() -> int:
         ROOT / "DensosoTests/Application/ProviderUsageLedgerTests.swift",
         [
             "testCachedInputUsesDescriptorPriceWithoutDoubleCounting",
+            "testFractionalMicroCostsRoundUpForConservativeEstimate",
             "testPricingDescriptorRequiresExactModelAndCapability",
             "testMissingCachedPriceAndUnlistedVisionModelKeepCostUnknown",
             "testQwenSpeechUsageWithoutPricingDescriptorKeepsCostUnknown",

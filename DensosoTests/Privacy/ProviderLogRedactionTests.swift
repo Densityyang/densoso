@@ -27,4 +27,11 @@ final class ProviderLogRedactionTests: XCTestCase {
         XCTAssertFalse(error.localizedDescription.contains("response body"))
         XCTAssertFalse(error.localizedDescription.contains("sk-"))
     }
+
+    func testPinnedQwenVisionSnapshotIsAnAllowlistedModelIdentifier() {
+        XCTAssertEqual(
+            ProviderLogRedactor.safeModel("qwen3.7-flash-2026-07-15"),
+            "qwen3.7-flash-2026-07-15"
+        )
+    }
 }
