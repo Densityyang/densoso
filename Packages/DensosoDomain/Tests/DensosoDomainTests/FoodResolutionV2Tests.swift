@@ -10,7 +10,8 @@ final class FoodResolutionV2Tests: XCTestCase {
             name: "oatmeal bar",
             aliases: ["oat bar"],
             preparation: .unknown,
-            edibleFraction: 1
+            edibleFraction: 1,
+            category: "snack"
         )
         let result = FoodResolverV2(catalog: [bar]).resolve(
             FoodResolutionV2Query(
@@ -302,7 +303,8 @@ final class FoodResolutionV2Tests: XCTestCase {
         name: String,
         aliases: [String],
         preparation: FoodPreparation,
-        edibleFraction: Double
+        edibleFraction: Double,
+        category: String = "fixture-food"
     ) -> FoodCatalogEntry {
         FoodCatalogEntry(
             id: id,
@@ -310,7 +312,7 @@ final class FoodResolutionV2Tests: XCTestCase {
             name: name,
             aliases: aliases,
             preparation: preparation,
-            category: "fixture-food",
+            category: category,
             edibleFraction: edibleFraction,
             nutrients: FoodNutrientProfile(energyKcalPer100Grams: 100),
             sourceVersion: "food-catalog-v2"

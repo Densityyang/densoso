@@ -17,4 +17,20 @@ final class AgentReasoningPolicyTests: XCTestCase {
     func testOrdinaryQuestionUsesLowReasoning() {
         XCTAssertEqual(AgentReasoningPolicy.forUserMessage("今天有什么安排？"), .low)
     }
+
+    func testMealDraftUsesLowReasoning() {
+        XCTAssertEqual(AgentReasoningPolicy.forUserMessage("记录午餐：吃了鸡蛋和米饭"), .low)
+    }
+
+    func testIntentExtractionUsesNoReasoning() {
+        XCTAssertEqual(AgentReasoningPolicy.forUserMessage("只提取意图：给我健康建议"), .none)
+    }
+
+    func testDailyRecommendationUsesHighReasoning() {
+        XCTAssertEqual(AgentReasoningPolicy.forUserMessage("今天应该怎么安排训练？"), .high)
+    }
+
+    func testComplexPlanningUsesMaximumReasoning() {
+        XCTAssertEqual(AgentReasoningPolicy.forUserMessage("帮我制定一个8周训练计划"), .max)
+    }
 }

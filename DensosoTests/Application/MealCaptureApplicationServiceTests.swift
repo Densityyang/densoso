@@ -21,6 +21,11 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
         XCTAssertEqual(parser.parse("我吃了180克", matching: "测试燕麦棒", allowBareAmount: false), .grams(180))
         XCTAssertNil(parser.parse("我吃了约180克", matching: "测试燕麦棒", allowBareAmount: false))
         XCTAssertNil(parser.parse("我吃了180克或250克", matching: "测试燕麦棒", allowBareAmount: false))
+        XCTAssertNil(parser.parse(
+            String(repeating: "我吃了180克 ", count: 100),
+            matching: "测试燕麦棒",
+            allowBareAmount: false
+        ))
         XCTAssertNil(parser.parse("包装规格每份 250g", matching: "测试燕麦棒", allowBareAmount: false))
         XCTAssertNil(parser.parse("包装标注 2份", matching: "测试燕麦棒", allowBareAmount: false))
         XCTAssertNil(parser.parse("我今天运动2小时", matching: "测试燕麦棒", allowBareAmount: false))

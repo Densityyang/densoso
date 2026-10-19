@@ -76,7 +76,7 @@ struct LocalMealPortionAnswerParser: Sendable {
         allowBareAmount: Bool
     ) -> LocalMealPortionAnswer? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty, trimmed.count <= 500 else { return nil }
 
         if allowBareAmount,
            let grams = amount(

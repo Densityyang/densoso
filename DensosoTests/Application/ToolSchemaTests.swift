@@ -7,7 +7,7 @@ import XCTest
 final class ToolSchemaTests: XCTestCase {
     func testEveryToolUsesClosedObjectSchemaAndLocalEffect() throws {
         let registry = ToolRegistry()
-        XCTAssertEqual(registry.toolDefinitions.count, 18)
+        XCTAssertEqual(registry.toolDefinitions.count, 19)
         for tool in registry.toolDefinitions {
             guard case .object(_, _, let additionalProperties, _) = tool.parameters else {
                 return XCTFail("\(tool.name) must use an object schema")
@@ -26,7 +26,153 @@ final class ToolSchemaTests: XCTestCase {
         XCTAssertEqual(registry.effect(for: "get_recent_workouts"), .readOnly)
         XCTAssertEqual(registry.effect(for: "get_goal"), .readOnly)
         XCTAssertEqual(registry.effect(for: "get_user_preferences"), .readOnly)
+        XCTAssertEqual(registry.effect(for: "get_today_plan"), .readOnly)
+        XCTAssertEqual(registry.effect(for: "get_schedule"), .readOnly)
         XCTAssertNil(registry.effect(for: "log_workout"))
+    }
+
+    func testSearchFoodIsStrictReadOnlyV2Tool() throws {
+        let registry = ToolRegistry()
+        let definition = try XCTUnwrap(registry.toolDefinitions.first { $0.name == "search_food" })
+
+        XCTAssertEqual(definition.effect, .readOnly)
+        XCTAssertEqual(registry.effect(for: "search_food"), .readOnly)
+        XCTAssertNil(registry.effect(for: "query_food"), "Do not expose a duplicate legacy search tool")
+        guard case .object(let properties, let required, let additionalProperties, _) = definition.parameters else {
+            return XCTFail("search_food must use a strict object")
+        }
+        XCTAssertEqual(required, ["query"])
+        XCTAssertFalse(additionalProperties)
+        guard let querySchema = properties["query"],
+              case .string(_, _, let minimumQueryLength, let maximumQueryLength, _) = querySchema else {
+            return XCTFail("search_food query must be bounded text")
+        }
+        XCTAssertEqual(minimumQueryLength, 1)
+        XCTAssertEqual(maximumQueryLength, SearchFoodTool.maximumQueryLength)
+
+        XCTAssertNoThrow(try ToolSchemaValidator.validate(
+            .object(["query": .string("熟米饭"), "preparation": .string("cooked")]),
+            against: definition.parameters
+        ))
+        XCTAssertThrowsError(try ToolSchemaValidator.validate(
+            .object(["query": .string("米饭"), "foodID": .string("forged-id")]),
+            against: definition.parameters
+        ))
+    }
+
+    func testSearchFoodUsesV2AxesLimitsTopThreeAndOmitsStorageIdentifiers() throws {
+        let tool = SearchFoodTool()
+        let entries = [
+            searchFoodEntry(
+                id: "private-cooked-history-row",
+                localFoodID: "private-cooked-history-id",
+                name: "rice",
+                aliases: ["cooked rice"],
+                preparation: .cooked
+            ),
+            searchFoodEntry(
+                id: "private-cooked-row-2",
+                localFoodID: "private-cooked-id-2",
+                name: "rice",
+                aliases: ["cooked rice", "brown rice"],
+                preparation: .cooked
+            ),
+            searchFoodEntry(
+                id: "private-cooked-row-3",
+                localFoodID: "private-cooked-id-3",
+                name: "rice",
+                aliases: ["cooked rice", "white rice"],
+                preparation: .cooked
+            ),
+            searchFoodEntry(
+                id: "private-raw-row",
+                localFoodID: "private-raw-id",
+                name: "rice",
+                aliases: ["raw rice"],
+                preparation: .raw
+            ),
+        ]
+
+        let resolution = tool.resolve(
+            query: "cooked rice",
+            preparation: .cooked,
+            massBasis: .cooked,
+            categoryHint: "grain",
+            confirmedFoodHistoryIDs: ["private-cooked-history-id"],
+            catalog: entries
+        )
+        XCTAssertEqual(resolution.candidates.count, 3)
+        XCTAssertEqual(resolution.candidates.first?.entry.id, "private-cooked-history-row")
+        XCTAssertEqual(resolution.candidates.first?.score.preparation, 1)
+        XCTAssertEqual(resolution.candidates.first?.score.massBasis, 1)
+        XCTAssertEqual(resolution.candidates.first?.score.category, 1)
+        XCTAssertEqual(resolution.candidates.first?.score.history, 1)
+        XCTAssertEqual(resolution.candidates.first?.score.alias, 1)
+        XCTAssertFalse(resolution.candidates.contains { $0.entry.preparation == .raw })
+        XCTAssertNil(resolution.autoPreselect, "Similar candidates must stay unresolved")
+        XCTAssertTrue(resolution.requiresConfirmation)
+
+        let response = try tool.response(query: "cooked rice", resolution: resolution)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let candidates = try XCTUnwrap(object["candidates"] as? [[String: Any]])
+        let first = try XCTUnwrap(candidates.first)
+        let score = try XCTUnwrap(first["score"] as? [String: Any])
+        XCTAssertEqual(candidates.count, 3)
+        XCTAssertEqual(object["requiresConfirmation"] as? Bool, true)
+        XCTAssertNil(object["autoPreselectCandidate"] as? String)
+        for axis in ["lexical", "alias", "preparation", "massBasis", "category", "history", "evidence", "finalScore"] {
+            XCTAssertNotNil(score[axis])
+        }
+        XCTAssertFalse(response.contains("private-cooked-history-row"))
+        XCTAssertFalse(response.contains("private-cooked-history-id"))
+        XCTAssertFalse(response.contains("\"id\""))
+    }
+
+    func testGetTodayPlanHasEmptyStrictReadOnlySchema() throws {
+        let registry = ToolRegistry()
+        let definition = try XCTUnwrap(registry.toolDefinitions.first { $0.name == "get_today_plan" })
+
+        XCTAssertEqual(definition.effect, .readOnly)
+        guard case .object(let properties, let required, let additionalProperties, _) = definition.parameters else {
+            return XCTFail("get_today_plan must use an object schema")
+        }
+        XCTAssertTrue(properties.isEmpty)
+        XCTAssertTrue(required.isEmpty)
+        XCTAssertFalse(additionalProperties)
+        XCTAssertNoThrow(try ToolSchemaValidator.validate(.object([:]), against: definition.parameters))
+        XCTAssertThrowsError(try ToolSchemaValidator.validate(
+            .object(["date": .string("2026-10-19T00:00:00Z")]),
+            against: definition.parameters
+        ))
+    }
+
+    func testGetTodayPlanResponseUsesLocalDayAndBoundsEntries() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let tool = GetTodayPlanTool(calendar: calendar)
+        let asOf = Date(timeIntervalSince1970: 0)
+        let items = (0..<25).reversed().map { index in
+            AgentScheduleItem(
+                title: "Plan \(index)",
+                startTime: Date(timeIntervalSince1970: Double(index * 60)),
+                endTime: nil,
+                notes: String(repeating: "routine ", count: 60)
+            )
+        }
+
+        let response = try tool.response(asOf: asOf, items: items)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let plans = try XCTUnwrap(object["plans"] as? [[String: Any]])
+
+        XCTAssertEqual(object["status"] as? String, "available")
+        XCTAssertEqual(object["localDate"] as? String, "1970-01-01")
+        XCTAssertEqual(object["count"] as? Int, GetTodayPlanTool.maximumEvents)
+        XCTAssertEqual(object["hasMore"] as? Bool, true)
+        XCTAssertEqual(plans.first?["title"] as? String, "Plan 0")
+        XCTAssertLessThanOrEqual((plans.first?["summary"] as? String)?.count ?? 0, 80)
+        XCTAssertLessThanOrEqual(response.utf8.count, 8_192)
+        XCTAssertFalse(response.contains("storageID"))
+        XCTAssertFalse(response.contains("notesPrefix"))
     }
 
     func testPendingActionsToolOnlyReturnsUnexpiredUncommittedSummaries() throws {
@@ -223,6 +369,31 @@ final class ToolSchemaTests: XCTestCase {
                 .object(["kilograms": .number(900), "measuredAt": .null]),
                 against: weightSchema
             )
+        )
+    }
+
+    private func searchFoodEntry(
+        id: String,
+        localFoodID: String,
+        name: String,
+        aliases: [String],
+        preparation: FoodPreparation
+    ) -> FoodCatalogEntry {
+        FoodCatalogEntry(
+            id: id,
+            localFoodID: localFoodID,
+            name: name,
+            aliases: aliases,
+            preparation: preparation,
+            category: "grain",
+            edibleFraction: 1,
+            nutrients: FoodNutrientProfile(
+                energyKcalPer100Grams: 130,
+                proteinGramsPer100Grams: 2.5,
+                fatGramsPer100Grams: 0.4,
+                carbohydrateGramsPer100Grams: 28
+            ),
+            sourceVersion: "search-food-fixture-v2"
         )
     }
 

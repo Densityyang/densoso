@@ -96,6 +96,27 @@ def main() -> int:
         ],
         errors,
     )
+    require_text(
+        ROOT / "Densoso" / "Application" / "Agent" / "AgentReasoningPolicy.swift",
+        [
+            "提取意图", "训练计划", "今天怎么安排", "return .max", "return .high", "return .none",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "AgentReasoningPolicyTests.swift",
+        [
+            "testWeightLoggingUsesNoReasoning",
+            "testHealthAnalysisUsesHighReasoning",
+            "testLongRangeTrainingPlanUsesMaximumReasoning",
+            "testOrdinaryQuestionUsesLowReasoning",
+            "testMealDraftUsesLowReasoning",
+            "testIntentExtractionUsesNoReasoning",
+            "testDailyRecommendationUsesHighReasoning",
+            "testComplexPlanningUsesMaximumReasoning",
+        ],
+        errors,
+    )
     agent_text = (ROOT / "Densoso" / "Agent" / "AgentSession.swift").read_text(encoding="utf-8")
     if "DeepSeekClient" in agent_text or "ModelContext" in agent_text:
         errors.append("AgentSession must remain provider-neutral and free of ModelContext")
@@ -342,6 +363,9 @@ def main() -> int:
         ROOT / "Densoso" / "Agent" / "ToolRegistry.swift",
         [
             "ToolSchemaValidator.validate",
+            "SearchFoodTool",
+            "GetTodayPlanTool",
+            "GetScheduleTool",
             "CreateWorkoutPlanTool",
             "CreateTrainingPlanTool",
             "GetRecentMealsTool",
@@ -359,13 +383,41 @@ def main() -> int:
     require_text(
         ROOT / "DensosoTests" / "Application" / "ToolSchemaTests.swift",
         [
-            "registry.toolDefinitions.count, 18",
+            "registry.toolDefinitions.count, 19",
+            "testSearchFoodIsStrictReadOnlyV2Tool",
+            "testSearchFoodUsesV2AxesLimitsTopThreeAndOmitsStorageIdentifiers",
+            "testGetTodayPlanHasEmptyStrictReadOnlySchema",
+            "testGetTodayPlanResponseUsesLocalDayAndBoundsEntries",
             "create_training_plan",
             "testCreateTrainingPlanUsesBoundedStructuredWorkoutAndRestDays",
             "get_user_preferences",
             "testPendingActionsToolOnlyReturnsUnexpiredUncommittedSummaries",
             "testPendingActionsToolAcceptsOnlyAnEmptyReadOnlyRequest",
             "testPendingActionsToolBoundsResultsAndReportsRemainingActions",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Agent" / "Tools" / "SearchFoodTool.swift",
+        [
+            'name: "search_food"',
+            "FoodResolverV2(catalog: catalog).resolve",
+            "maximumCandidates = 3",
+            "confirmedFoodHistoryIDs",
+            "requiresConfirmation",
+            "finalScore",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Agent" / "Tools" / "GetTodayPlanTool.swift",
+        [
+            'name: "get_today_plan"',
+            "properties: [:]",
+            "required: []",
+            "context.schedule(on: now)",
+            "maximumEvents = 12",
+            "hasMore",
         ],
         errors,
     )
@@ -485,6 +537,7 @@ def main() -> int:
             "agent-provider:", "needs: domain-persistence", "gate-03-agent-provider",
             "validate_phase3_agent_provider.py", "Gate03AgentProviderTests.xcresult",
             "gate-03-agent-provider-results",
+            "-only-testing:DensosoTests/AgentReasoningPolicyTests",
             "-only-testing:DensosoTests/UserPreferenceConfirmationTests",
             "-only-testing:DensosoTests/GetUserPreferencesToolTests",
             "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests",
