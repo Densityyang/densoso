@@ -8,6 +8,24 @@ import XCTest
 
 @MainActor
 final class MealCaptureApplicationServiceTests: XCTestCase {
+    func testLocalMealPortionAnswerSupportsCountsAndRejectsPackageSpecsAsConsumedAmount() {
+        let parser = LocalMealPortionAnswerParser()
+
+        XCTAssertEqual(parser.parse("2份", matching: "测试燕麦棒", allowBareAmount: true), .servings(2))
+        XCTAssertEqual(parser.parse("2包", matching: "测试燕麦棒", allowBareAmount: false), .servings(2))
+        XCTAssertEqual(parser.parse("半包", matching: "测试燕麦棒", allowBareAmount: true), .servings(0.5))
+        XCTAssertEqual(parser.parse("我吃了2包", matching: "测试燕麦棒", allowBareAmount: false), .servings(2))
+        XCTAssertEqual(parser.parse("180克", matching: "测试燕麦棒", allowBareAmount: true), .grams(180))
+        XCTAssertEqual(parser.parse("180g", matching: "测试燕麦棒", allowBareAmount: false), .grams(180))
+        XCTAssertNil(parser.parse("2", matching: "测试燕麦棒", allowBareAmount: true))
+        XCTAssertEqual(parser.parse("我吃了180克", matching: "测试燕麦棒", allowBareAmount: false), .grams(180))
+        XCTAssertNil(parser.parse("我吃了约180克", matching: "测试燕麦棒", allowBareAmount: false))
+        XCTAssertNil(parser.parse("我吃了180克或250克", matching: "测试燕麦棒", allowBareAmount: false))
+        XCTAssertNil(parser.parse("包装规格每份 250g", matching: "测试燕麦棒", allowBareAmount: false))
+        XCTAssertNil(parser.parse("包装标注 2份", matching: "测试燕麦棒", allowBareAmount: false))
+        XCTAssertNil(parser.parse("我今天运动2小时", matching: "测试燕麦棒", allowBareAmount: false))
+    }
+
     func testBarcodeMatchSkipsQwenAndStillCreatesOnlyPendingAction() async throws {
         let scanner = FakeMealImageScanner(evidence: [
             MealEvidence(kind: .barcode, value: "6901234567892", confidence: 1)
@@ -31,13 +49,22 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
         )
 
         let review = try await harness.service.analyzePhoto(try fixtureJPEG())
+        let barcodeCandidate = try XCTUnwrap(review.resolution?.autoPreselect)
+        let correction = try PortionEstimator().estimate(
+            evidence: [.userCorrection(low: 40, likely: 40, high: 40)],
+            food: barcodeCandidate
+        )
         let action = try await harness.service.stageMeal(
             review: review,
-            selectedFoodID: nil
+            selectedFoodID: nil,
+            correctedPortion: correction
         )
 
         XCTAssertEqual(review.route, .packagedBarcode)
         XCTAssertFalse(review.rawPhotoRetained)
+        XCTAssertEqual(barcodeCandidate.evidence.first?.sourceID, "barcode")
+        XCTAssertEqual(barcodeCandidate.evidence.first?.grade, .label)
+        XCTAssertEqual(barcodeCandidate.breakdown.sourceQuality, 1)
         let visionCalls = await vision.callCount()
         XCTAssertEqual(visionCalls, 0)
         XCTAssertEqual(action.state, .pending)
@@ -45,11 +72,149 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
             return XCTFail("Expected meal payload")
         }
         XCTAssertFalse(draft.dishes.flatMap(\.evidence).contains {
+            $0.summary.contains("6901234567892")
+        })
+        XCTAssertFalse(draft.dishes.flatMap(\.evidence).contains {
             $0.sourceID == "user-selected-candidate"
         })
         let context = ModelContext(harness.container)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<MealRecord>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
+    }
+
+    func testPrepareForAgentRoutesResolvedBarcodeLocallyAndStagesPendingAction() async throws {
+        let barcode = "6901234567892"
+        let scanner = FakeMealImageScanner(evidence: [
+            MealEvidence(kind: .barcode, value: barcode, confidence: 1)
+        ])
+        let packaged = FakePackagedFoodProvider(
+            match: PackagedFoodMatch(
+                barcode: barcode,
+                displayName: "测试燕麦棒",
+                servingGrams: 40,
+                caloriesPer100Grams: 420,
+                providerID: "fixture"
+            )
+        )
+        let vision = FakeMealVisionProvider()
+        let harness = try await MealCaptureHarness(
+            scanner: scanner,
+            packagedFoodProvider: packaged,
+            visionProvider: vision,
+            imageConsent: false,
+            imageEnabled: true
+        )
+
+        let result = try await harness.service.prepareForAgent(originalData: try fixtureJPEG())
+        guard case .localReview(let review) = result else {
+            return XCTFail("A locally matched barcode must not create an image request")
+        }
+        XCTAssertEqual(review.route, .packagedBarcode)
+        XCTAssertFalse(review.rawPhotoRetained)
+        XCTAssertTrue(review.clarification?.prompt.contains("份数") == true)
+        let correction = try PortionEstimator().estimate(
+            evidence: [.userCorrection(low: 40, likely: 40, high: 40)],
+            food: review.resolution?.autoPreselect
+        )
+        let action = try await harness.service.stageMeal(
+            review: review,
+            selectedFoodID: nil,
+            correctedPortion: correction,
+            userNote: "不加糖"
+        )
+        XCTAssertEqual(action.state, .pending)
+        guard case .meal(let draft) = action.payload else {
+            return XCTFail("Expected a local meal pending action")
+        }
+        XCTAssertEqual(draft.note, "不加糖")
+        let visionCalls = await vision.callCount()
+        XCTAssertEqual(visionCalls, 0)
+
+        let context = ModelContext(harness.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MealRecord>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<PendingActionRecord>()), 1)
+    }
+
+    func testPrepareForAgentKeepsCompleteLabelLocalAndAsksOnceForMissingPortion() async throws {
+        let scanner = FakeMealImageScanner(evidence: [
+            MealEvidence(
+                kind: .nutritionLabel,
+                value: "测试饮料\n每100g\n能量 80 kcal\n蛋白质 3g",
+                confidence: 0.95,
+                sourceVersion: "local-ocr"
+            )
+        ])
+        let vision = FakeMealVisionProvider()
+        let harness = try await MealCaptureHarness(
+            scanner: scanner,
+            visionProvider: vision,
+            imageConsent: false,
+            imageEnabled: true
+        )
+
+        let result = try await harness.service.prepareForAgent(originalData: try fixtureJPEG())
+        guard case .localReview(let review) = result else {
+            return XCTFail("A complete local nutrition label must not create an image request")
+        }
+        XCTAssertEqual(review.route, .nutritionLabel)
+        XCTAssertNil(review.portion, "Per-100g density is not the amount eaten")
+        XCTAssertEqual(review.clarification?.kind, .portion)
+        XCTAssertTrue(review.clarification?.prompt.contains("没有可换算的每份重量") == true)
+        do {
+            _ = try await harness.service.stageMeal(review: review, selectedFoodID: nil)
+            XCTFail("The local route must ask once when consumed portion is missing")
+        } catch {
+            XCTAssertEqual(error as? MealCaptureApplicationError, .clarificationAnswerRequired)
+        }
+
+        let correction = try PortionEstimator().estimate(
+            evidence: [.userCorrection(low: 180, likely: 180, high: 180)],
+            food: review.resolution?.autoPreselect
+        )
+        let action = try await harness.service.stageMeal(
+            review: review,
+            selectedFoodID: nil,
+            correctedPortion: correction
+        )
+        XCTAssertEqual(action.state, .pending)
+        let visionCalls = await vision.callCount()
+        XCTAssertEqual(visionCalls, 0)
+
+        let context = ModelContext(harness.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MealRecord>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<PendingActionRecord>()), 1)
+    }
+
+    func testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto() async throws {
+        let barcode = "6901234567892"
+        let barcodeHarness = try await MealCaptureHarness(
+            scanner: FakeMealImageScanner(evidence: [
+                MealEvidence(kind: .barcode, value: barcode, confidence: 1)
+            ]),
+            visionProvider: FakeMealVisionProvider(),
+            imageConsent: false,
+            imageEnabled: true
+        )
+        let barcodeResult = try await barcodeHarness.service.prepareForAgent(originalData: try fixtureJPEG())
+        guard case .textOnlyFallback(let prompt) = barcodeResult else {
+            return XCTFail("An unmatched barcode must not fall through with the photo")
+        }
+        XCTAssertFalse(prompt.contains(barcode))
+        XCTAssertTrue(prompt.contains("不要上传这张图片"))
+
+        let openPhotoHarness = try await MealCaptureHarness(
+            scanner: FakeMealImageScanner(evidence: []),
+            visionProvider: FakeMealVisionProvider(),
+            imageConsent: false,
+            imageEnabled: true
+        )
+        let openPhotoResult = try await openPhotoHarness.service.prepareForAgent(originalData: try fixtureJPEG())
+        guard case .agentRequest(let request) = openPhotoResult else {
+            return XCTFail("Open photo input must enter the same AgentSession path")
+        }
+        XCTAssertNotNil(request.image)
+        XCTAssertTrue(request.mealEvidence.isEmpty)
     }
 
     func testNutritionLabelSkipsQwenAndKeepsUnknownMacrosNil() async throws {
@@ -69,17 +234,34 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
         )
 
         let review = try await harness.service.analyzePhoto(try fixtureJPEG())
+        let candidate = try XCTUnwrap(review.resolution?.candidates.first)
+        XCTAssertEqual(review.resolution?.autoPreselect?.id, candidate.id)
+        XCTAssertTrue(candidate.evidence.contains {
+            $0.sourceID == "food-evidence-v2:nutritionLabel" && $0.grade == .label
+        })
+        XCTAssertFalse(candidate.evidence.contains {
+            $0.summary.contains("测试饮料\n每份 250g")
+                || ($0.sourceVersion?.contains("测试饮料\n每份 250g") ?? false)
+        })
         let action = try await harness.service.stageMeal(
             review: review,
-            selectedFoodID: nil
+            selectedFoodID: candidate.id,
+            correctedPortion: try PortionEstimator().estimate(
+                evidence: [.userCorrection(low: 250, likely: 250, high: 250)],
+                food: candidate
+            )
         )
 
         XCTAssertEqual(review.route, .nutritionLabel)
+        XCTAssertTrue(review.clarification?.prompt.contains("份数") == true)
         let visionCalls = await vision.callCount()
         XCTAssertEqual(visionCalls, 0)
         guard case .meal(let draft) = action.payload else {
             return XCTFail("Expected meal payload")
         }
+        XCTAssertFalse(draft.dishes.flatMap(\.evidence).contains {
+            $0.summary.contains("测试饮料\n每份 250g")
+        })
         XCTAssertNotNil(draft.totalNutrients?.proteinGrams)
         XCTAssertNil(draft.totalNutrients?.fatGrams)
         XCTAssertNil(draft.totalNutrients?.carbohydrateGrams)
@@ -182,6 +364,42 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
             return XCTFail("Expected meal payload")
         }
         XCTAssertEqual(draft.dishes.first?.ingredients.first?.foodID, selectedCandidate.entry.localFoodID)
+    }
+
+    func testVisionResolutionUsesV2LabelEvidenceAndConfirmedHistory() async throws {
+        let scanner = FakeMealImageScanner(evidence: [
+            MealEvidence(kind: .nutritionLabel, value: "熟米饭", confidence: 0.92, sourceVersion: "local-ocr")
+        ])
+        let vision = FakeMealVisionProvider(
+            observation: MealVisionObservation(
+                labels: ["熟米饭"],
+                preparationHints: [.cooked],
+                isOccluded: false,
+                modelVersion: "fixture-vl"
+            )
+        )
+        let harness = try await MealCaptureHarness(
+            scanner: scanner,
+            visionProvider: vision,
+            confirmedFoodHistory: FakeConfirmedFoodHistory(foodIDs: ["2"]),
+            imageConsent: true,
+            imageEnabled: true
+        )
+
+        let review = try await harness.service.analyzePhoto(try fixtureJPEG())
+
+        XCTAssertEqual(review.route, .qwenVision)
+        let candidate = try XCTUnwrap(review.resolution?.candidates.first {
+            $0.entry.localFoodID == "2"
+        })
+        XCTAssertEqual(candidate.breakdown.confirmedUserHistory, 1)
+        XCTAssertTrue(candidate.evidence.contains {
+            $0.sourceID == "food-evidence-v2:nutritionLabel" && $0.grade == .label
+        })
+        XCTAssertTrue(candidate.evidence.contains {
+            $0.sourceID == "food-evidence-v2:foodCandidate"
+        })
+        XCTAssertFalse(candidate.evidence.contains { $0.summary == "熟米饭" })
     }
 
     func testPortionClarificationMustBeAnsweredAndIsPersistedAsUserEvidence() async throws {
@@ -352,6 +570,14 @@ private struct ThrowingPackagedFoodProvider: PackagedFoodProvider {
     }
 }
 
+private struct FakeConfirmedFoodHistory: ConfirmedFoodHistoryProviding {
+    let foodIDs: Set<String>
+
+    func confirmedFoodIDs(matching label: String) async throws -> Set<String> {
+        foodIDs
+    }
+}
+
 @MainActor
 private struct MealCaptureHarness {
     let container: ModelContainer
@@ -362,6 +588,7 @@ private struct MealCaptureHarness {
         scanner: any MealImageScanning,
         packagedFoodProvider: (any PackagedFoodProvider)? = nil,
         visionProvider: any MealVisionProviding,
+        confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)? = nil,
         imageConsent: Bool,
         imageEnabled: Bool,
         qualityGate: MealVisionQualityGate = .syntheticContractV1
@@ -393,6 +620,7 @@ private struct MealCaptureHarness {
             foodDatabase: foodDatabase,
             scanner: scanner,
             packagedFoodProvider: packagedFoodProvider,
+            confirmedFoodHistory: confirmedFoodHistory,
             visionProvider: visionProvider,
             governanceRepository: governance,
             providerConfiguration: configuration,

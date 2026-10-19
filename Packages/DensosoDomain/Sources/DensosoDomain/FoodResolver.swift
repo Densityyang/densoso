@@ -45,6 +45,7 @@ public struct FoodCandidate: Codable, Equatable, Identifiable, Sendable {
     public let entry: FoodCatalogEntry
     public let score: Double
     public let breakdown: FoodScoreBreakdown
+    public let resolutionScoreV2: FoodResolutionScore?
     public let evidence: [EvidenceSnapshot]
 
     public var id: String { entry.id }
@@ -53,11 +54,13 @@ public struct FoodCandidate: Codable, Equatable, Identifiable, Sendable {
         entry: FoodCatalogEntry,
         score: Double,
         breakdown: FoodScoreBreakdown,
-        evidence: [EvidenceSnapshot]
+        evidence: [EvidenceSnapshot],
+        resolutionScoreV2: FoodResolutionScore? = nil
     ) {
         self.entry = entry
         self.score = min(max(score, 0), 1)
         self.breakdown = breakdown
+        self.resolutionScoreV2 = resolutionScoreV2
         self.evidence = evidence
     }
 }

@@ -199,9 +199,20 @@ def main() -> int:
             "rawPhotoRetained: false", "dataClass: .mealImage", "allowsOpenPhoto",
             "stageMeal", "confirmationCoordinator.stage", "packagedBarcode",
             "nutritionLabel", "qwenVision", "manualDescription",
+            "FoodResolverV2(catalog:", "FoodResolutionV2Query(",
+            "confirmedHistoryFoodIDs:", "barcodeMatchedFoodID:",
+            "massBasis: Self.massBasis(for: preparation)",
+            "本地识别到营养标签",
+            "enum MealCapturePreparation",
+            "case .localReview(review)",
+            "case .textOnlyFallback",
+            "case .agentRequest(try MultimodalModelRequest",
+            "consumedPortionClarification(canConvertServingCount:",
         ],
         errors,
     )
+    if "FoodResolver(catalog:" in application_service or "FoodResolutionQuery(" in application_service:
+        errors.append("photo candidate routes must use the shared FoodResolverV2 contract")
     if "qualityGate: MealVisionQualityGate = .unavailable" not in application_service:
         errors.append("production open-photo quality gate must default closed")
     if "if barcode != nil { return manualReview" not in application_service:
@@ -224,11 +235,15 @@ def main() -> int:
     require_text(
         ROOT / "Densoso/Views/MealCaptureSheet.swift",
         [
-            "if !review.candidateNames.isEmpty",
-            "返回对话补充描述",
-            "生成待确认草稿",
-            "hasAnsweredClarification(for: review)",
-            "Picker(\"额外用油\"",
+            "case .localReview(let review)",
+            "prepareForAgent(originalData: originalData)",
+            "stageLocalReview(localReview)",
+            "onLocalPendingAction(action)",
+            "Picker(\"选择最接近的候选\"",
+            "TextField(portionAnswerPrompt, text: $portionAnswerText)",
+            "MultimodalModelRequest(userText: textOnlyFallback)",
+            "packagePortion.source == .packageServing",
+            "userNote: supplementalText",
         ],
         errors,
     )
@@ -289,6 +304,7 @@ def main() -> int:
         "DensosoTests/Application/MealCaptureApplicationServiceTests.swift",
         "DensosoTests/Infrastructure/LLM/QwenMealVisionProviderContractTests.swift",
         "Packages/DensosoDomain/Tests/DensosoDomainTests/MealResolutionTests.swift",
+        "Packages/DensosoDomain/Tests/DensosoDomainTests/FoodResolutionV2Tests.swift",
     ]
     for relative in test_files:
         if not (ROOT / relative).is_file():
@@ -296,8 +312,35 @@ def main() -> int:
     require_text(
         ROOT / "DensosoTests/Application/MealCaptureApplicationServiceTests.swift",
         [
+            "testLocalMealPortionAnswerSupportsCountsAndRejectsPackageSpecsAsConsumedAmount",
             "testDefaultClosedQualityGateRequiresManualFallbackWithoutStaging",
             "testPortionClarificationMustBeAnsweredAndIsPersistedAsUserEvidence",
+            "testBarcodeMatchSkipsQwenAndStillCreatesOnlyPendingAction",
+            "testPrepareForAgentRoutesResolvedBarcodeLocallyAndStagesPendingAction",
+            "testPrepareForAgentKeepsCompleteLabelLocalAndAsksOnceForMissingPortion",
+            "testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto",
+            "testNutritionLabelSkipsQwenAndKeepsUnknownMacrosNil",
+            "testLowConfidenceVisionCannotStageFoodIDWithoutUserSelection",
+            "testVisionResolutionUsesV2LabelEvidenceAndConfirmedHistory",
+            "XCTAssertEqual(review.resolution?.autoPreselect?.id, candidate.id)",
+            "$0.summary.contains(\"6901234567892\")",
+            "$0.summary.contains(\"测试饮料\\n每份 250g\")",
+            "food-evidence-v2:nutritionLabel",
+            "food-evidence-v2:foodCandidate",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Packages/DensosoDomain/Tests/DensosoDomainTests/FoodResolutionV2Tests.swift",
+        [
+            "testAliasAndCategoryHaveSeparateScoreAxes",
+            "testMassBasisAndPreparationCompatibilityRankCookedFood",
+            "testConfirmedFoodHistoryContributesIndependentV2Score",
+            "testLocalLabelAndVisualEvidenceScoreCandidateWithoutReturningRawText",
+            "testBarcodeMatchCanResolveLabelWithoutChangingConfirmationRequirement",
+            "testCloseCandidatesStayUnresolvedAndRequireConfirmation",
+            "testShortASCIINameInsideAnUnrelatedLabelDoesNotBoostEvidence",
+            "testV2ScoreAxesSurviveMealResolverAndDraftBridges",
         ],
         errors,
     )
@@ -331,6 +374,10 @@ def main() -> int:
         [
             "Non-optional V3 point mirrors may contain",
             "aggregates are outside this gate's accuracy claim",
+            "FoodResolverV2",
+            "V2 scoring keeps lexical, alias, preparation, mass-basis, category, history and evidence as independent axes.",
+            "Candidate evidence summaries do not copy raw OCR text.",
+            "The seven V2 score axes are retained with the pending meal draft",
         ],
         errors,
     )
@@ -342,6 +389,8 @@ def main() -> int:
             "validate_phase5_meal_capture.py", "Gate05MealCaptureTests.xcresult",
             "gate-05-meal-capture-results",
             "food-catalog.json", "Fixtures/Gate05/Providers/Qwen",
+            "swift test --package-path Packages/DensosoDomain 2>&1 | tee gate05-domain.log",
+            "-only-testing:DensosoTests/MealCaptureApplicationServiceTests",
         ],
         errors,
     )

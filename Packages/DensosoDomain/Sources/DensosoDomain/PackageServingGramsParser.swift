@@ -47,8 +47,9 @@ public struct PackageServingGramsParser: Sendable {
         let separators = "，,。.;；\n"
         let prefix = text[..<match.lowerBound]
             .split(whereSeparator: { separators.contains($0) })
-            .last.map(String.init) ?? ""
+            .last.map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
         let suffix = String(text[match.upperBound...].prefix { !separators.contains($0) })
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let alternatives = [
             #"(?:[0-9]+(?:\.[0-9]+)?\s*(?:g|克)\s*(?:或|或者|or|to|[-–—])\s*)+$"#,
             #"^(?:(?:或|或者|or|to|[-–—])\s*[0-9]+(?:\.[0-9]+)?\s*(?:g|克))+"#,

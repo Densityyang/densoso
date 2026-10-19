@@ -184,7 +184,11 @@ def main() -> int:
         ROOT / "Densoso" / "Agent" / "AgentSession.swift",
         [
             "func send(multimodalRequest: MultimodalModelRequest",
-            "containsTransientImage: multimodalRequest.image != nil",
+            "containsTransientImage: multimodalRequest.image != nil || !multimodalRequest.mealEvidence.isEmpty",
+            "transientMealImageEvidence = multimodalRequest.mealEvidence",
+            "providerMessagesIncludingTransientMealEvidence()",
+            "transientMealEvidenceMessage",
+            "requestSnapshot.resumeCount > 0",
             "AgentError.transientImageRequired",
             "withoutTransientImages",
         ],
@@ -205,6 +209,9 @@ def main() -> int:
         [
             "testImageInputUsesAgentSessionAndStagesMealWithoutDirectCommitOrRawMediaPersistence",
             "testInterruptedImageRequestFailsClosedUntilImageIsReattachedAndKeepsBudget",
+            "testEvidenceOnlyRequestUsesEphemeralProviderMessageWithoutImageConsentOrPersistence",
+            "testInterruptedEvidenceOnlyRequestRequiresNewRequestToReprovideEvidence",
+            "testEvidenceOnlyRequestBoundsTransientEvidence",
             "testImageRequiresVisionCapabilityAndSeparateMealImageConsent",
             "transientImageRequired",
             "PRIVATE-OCR-EVIDENCE-MUST-NOT-PERSIST",

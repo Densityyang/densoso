@@ -1136,6 +1136,7 @@ struct FoodResolutionScore {
     let lexical: Double
     let alias: Double
     let preparation: Double
+    let massBasis: Double
     let category: Double
     let history: Double
     let evidence: Double
@@ -1170,7 +1171,7 @@ result    multimodal
               ↓
          structured result
               ↓
-         FoodResolver
+         FoodResolver V2
               ↓
          PortionEstimator
               ↓

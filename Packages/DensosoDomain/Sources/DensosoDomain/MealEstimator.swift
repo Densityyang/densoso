@@ -215,7 +215,8 @@ public struct MealEstimator: Sendable {
                     summary: "约 \(Int(input.portion.likelyGrams.rounded()))g（\(Int(input.portion.lowGrams.rounded()))–\(Int(input.portion.highGrams.rounded()))g）",
                     confidence: nil
                 )
-            ]
+            ],
+            foodResolutionScoreV2: selectedCandidate?.resolutionScoreV2
         )
     }
 

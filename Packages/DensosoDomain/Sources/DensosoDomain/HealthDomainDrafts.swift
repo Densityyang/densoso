@@ -7,6 +7,7 @@ public struct MealIngredientDraft: Codable, Equatable, Identifiable, Sendable {
     public let amountGrams: EstimateRange
     public let nutrients: NutrientEstimate
     public let evidence: [EvidenceSnapshot]
+    public let foodResolutionScoreV2: FoodResolutionScore?
 
     public init(
         id: UUID = UUID(),
@@ -14,7 +15,8 @@ public struct MealIngredientDraft: Codable, Equatable, Identifiable, Sendable {
         name: String,
         amountGrams: EstimateRange,
         nutrients: NutrientEstimate,
-        evidence: [EvidenceSnapshot] = []
+        evidence: [EvidenceSnapshot] = [],
+        foodResolutionScoreV2: FoodResolutionScore? = nil
     ) {
         self.id = id
         self.foodID = foodID
@@ -22,6 +24,7 @@ public struct MealIngredientDraft: Codable, Equatable, Identifiable, Sendable {
         self.amountGrams = amountGrams
         self.nutrients = nutrients
         self.evidence = evidence
+        self.foodResolutionScoreV2 = foodResolutionScoreV2
     }
 }
 

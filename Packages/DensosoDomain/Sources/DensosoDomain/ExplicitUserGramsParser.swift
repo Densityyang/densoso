@@ -63,7 +63,10 @@ public struct ExplicitUserGramsParser: Sendable {
     private static func regexTerm(_ term: String) -> String {
         let escaped = NSRegularExpression.escapedPattern(for: term)
         let isASCIIWord = term.unicodeScalars.allSatisfy {
-            CharacterSet.letters.contains($0) || CharacterSet.decimalDigits.contains($0) || $0 == "_"
+            ($0.value >= 0x41 && $0.value <= 0x5A)
+                || ($0.value >= 0x61 && $0.value <= 0x7A)
+                || ($0.value >= 0x30 && $0.value <= 0x39)
+                || $0 == "_"
         }
         return isASCIIWord ? "(?<![A-Za-z0-9_])\(escaped)(?![A-Za-z0-9_])" : escaped
     }
@@ -87,8 +90,9 @@ public struct ExplicitUserGramsParser: Sendable {
         let separators = "，,。.;；\n"
         let prefixClause = text[..<match.lowerBound]
             .split(whereSeparator: { separators.contains($0) })
-            .last.map(String.init) ?? ""
+            .last.map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
         let suffixClause = String(text[match.upperBound...].prefix { !separators.contains($0) })
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let units = "(?:grams?|g|公克|克)"
         let joiners = "(?:或|或者|还是|到|\\bor\\b|\\bto\\b|/|\\\\|[-–—])"
         let alternatives = [

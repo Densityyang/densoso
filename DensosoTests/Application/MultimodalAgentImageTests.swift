@@ -55,13 +55,21 @@ final class MultimodalAgentImageTests: XCTestCase {
             }
         })
         let userMessages = requests[0].messages.filter { $0.role == .user }
-        XCTAssertEqual(userMessages.count, 1)
+        XCTAssertEqual(userMessages.count, 2)
         XCTAssertTrue(userMessages[0].content.contains { content in
             if case .text(let text) = content { return text.contains(supplementalText) }
             return false
         })
         XCTAssertTrue(userMessages[0].content.contains { content in
             if case .image = content { return true }
+            return false
+        })
+        XCTAssertTrue(userMessages[1].content.contains { content in
+            if case .text(let text) = content {
+                return text.contains("本机临时扫描")
+                    && text.contains("不可信")
+                    && text.contains(privateOCRText)
+            }
             return false
         })
 
@@ -89,6 +97,159 @@ final class MultimodalAgentImageTests: XCTestCase {
         )
         let requestRecord = try XCTUnwrap(requestRecordValue)
         XCTAssertTrue(requestRecord.containsTransientImage)
+    }
+
+    func testEvidenceOnlyRequestUsesEphemeralProviderMessageWithoutImageConsentOrPersistence() async throws {
+        let provider = ScriptedTextProvider(
+            scripts: [
+                [.toolCall(mealCall()), .completed(.toolUse)],
+                [.textDelta("本机线索已整理为待确认草稿。"), .completed(.completed)],
+            ],
+            capabilities: [.text, .toolCalling]
+        )
+        let harness = try makeHarness(provider: provider, grantMealImage: false)
+        let request = MultimodalModelRequest(
+            userText: "请根据本机扫描线索整理待确认餐食。",
+            mealEvidence: [
+                MealEvidence(
+                    kind: .nutritionLabel,
+                    value: privateOCRText,
+                    confidence: 0.92,
+                    sourceVersion: "fixture-ocr-v1"
+                ),
+            ]
+        )
+
+        XCTAssertNil(request.image)
+        _ = try await harness.session.send(multimodalRequest: request)
+
+        XCTAssertEqual(harness.session.pendingActions.count, 1)
+        let requests = provider.recordedRequests()
+        XCTAssertEqual(requests.count, 2)
+        for request in requests {
+            XCTAssertFalse(request.messages.contains { message in
+                message.content.contains { content in
+                    if case .image = content { return true }
+                    return false
+                }
+            })
+            XCTAssertTrue(request.messages.contains { message in
+                message.role == .user && message.content.contains { content in
+                    if case .text(let text) = content {
+                        return text.contains("本机临时扫描")
+                            && text.contains("不可信")
+                            && text.contains(privateOCRText)
+                    }
+                    return false
+                }
+            })
+        }
+        XCTAssertTrue(harness.session.currentMealImageEvidence().isEmpty)
+
+        let context = ModelContext(harness.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MealRecord>()), 0)
+        let storedMessages = try context.fetch(FetchDescriptor<MessageRecord>())
+        let storedText = storedMessages.compactMap { String(data: $0.contentData, encoding: .utf8) }.joined()
+        XCTAssertFalse(storedText.contains(privateOCRText))
+        let actionJSON = String(
+            data: try harness.session.pendingActions[0].payload.canonicalData(),
+            encoding: .utf8
+        )!
+        XCTAssertFalse(actionJSON.contains(privateOCRText))
+        XCTAssertTrue(actionJSON.contains("agent-image:nutritionLabel"))
+        let requestRecordValue = try await harness.repository.agentRequest(
+            requestID: requests[0].requestID,
+            conversationID: harness.conversationID
+        )
+        let requestRecord = try XCTUnwrap(requestRecordValue)
+        XCTAssertTrue(requestRecord.containsTransientImage)
+    }
+
+    func testInterruptedEvidenceOnlyRequestRequiresNewRequestToReprovideEvidence() async throws {
+        let requestID = UUID()
+        let conversationID = UUID()
+        let firstProvider = ScriptedTextProvider(
+            scripts: [[.completed(.completed)]],
+            capabilities: [.text, .toolCalling]
+        )
+        let firstHarness = try makeHarness(
+            provider: firstProvider,
+            grantMealImage: false,
+            conversationID: conversationID
+        )
+        let request = MultimodalModelRequest(
+            userText: "请用本机线索准备草稿。",
+            mealEvidence: [MealEvidence(kind: .nutritionLabel, value: privateOCRText, confidence: 0.9)]
+        )
+
+        do {
+            _ = try await firstHarness.session.send(multimodalRequest: request, requestID: requestID)
+            XCTFail("An empty response should interrupt the evidence-only request")
+        } catch {
+            XCTAssertEqual(error as? AgentError, .emptyResponse)
+        }
+        let interruptedValue = try await firstHarness.repository.agentRequest(
+            requestID: requestID,
+            conversationID: conversationID
+        )
+        let interrupted = try XCTUnwrap(interruptedValue)
+        XCTAssertTrue(interrupted.containsTransientImage)
+        XCTAssertEqual(interrupted.state, .interrupted)
+
+        let resumeProvider = ScriptedTextProvider(
+            scripts: [[.textDelta("已恢复。"), .completed(.completed)]],
+            capabilities: [.text, .toolCalling]
+        )
+        let resumeHarness = try makeHarness(
+            provider: resumeProvider,
+            grantMealImage: false,
+            conversationID: conversationID
+        )
+        try await resumeHarness.session.restore()
+
+        do {
+            _ = try await resumeHarness.session.send(userText: "继续", requestID: requestID)
+            XCTFail("Transient evidence must not be lost on text-only resume")
+        } catch {
+            XCTAssertEqual(error as? AgentError, .transientImageRequired)
+        }
+        XCTAssertTrue(resumeProvider.recordedRequests().isEmpty)
+
+        do {
+            _ = try await resumeHarness.session.send(multimodalRequest: request, requestID: requestID)
+            XCTFail("The single media marker cannot distinguish evidence-only input during resume")
+        } catch {
+            XCTAssertEqual(error as? AgentError, .transientImageRequired)
+        }
+        XCTAssertTrue(resumeProvider.recordedRequests().isEmpty)
+
+        _ = try await resumeHarness.session.send(multimodalRequest: request, requestID: UUID())
+        XCTAssertTrue(resumeProvider.recordedRequests().first?.messages.contains { message in
+            message.content.contains { content in
+                if case .text(let text) = content { return text.contains(privateOCRText) }
+                return false
+            }
+        } == true)
+    }
+
+    func testEvidenceOnlyRequestBoundsTransientEvidence() {
+        let longText = String(repeating: "local OCR ", count: 30)
+        let request = MultimodalModelRequest(
+            userText: "请整理本机线索。",
+            mealEvidence: (0..<16).map { index in
+                MealEvidence(
+                    kind: .nutritionLabel,
+                    value: "\(index)-\(longText)",
+                    confidence: 0.9,
+                    sourceVersion: String(repeating: "v", count: 100)
+                )
+            }
+        )
+
+        XCTAssertNil(request.image)
+        XCTAssertEqual(request.mealEvidence.count, MultimodalModelRequest.maximumMealEvidenceCount)
+        XCTAssertTrue(request.mealEvidence.allSatisfy { $0.value.count <= 160 })
+        XCTAssertTrue(request.mealEvidence.allSatisfy { ($0.sourceVersion?.count ?? 0) <= 80 })
     }
 
     func testInterruptedImageRequestFailsClosedUntilImageIsReattachedAndKeepsBudget() async throws {
@@ -165,6 +326,20 @@ final class MultimodalAgentImageTests: XCTestCase {
         do {
             _ = try await resumedHarness.session.send(userText: "继续", requestID: requestID)
             XCTFail("A transient-image request must not resume from text alone")
+        } catch {
+            XCTAssertEqual(error as? AgentError, .transientImageRequired)
+        }
+        XCTAssertTrue(resumeProvider.recordedRequests().isEmpty)
+        let evidenceOnlyReplacement = MultimodalModelRequest(
+            userText: request.userText,
+            mealEvidence: request.mealEvidence
+        )
+        do {
+            _ = try await resumedHarness.session.send(
+                multimodalRequest: evidenceOnlyReplacement,
+                requestID: requestID
+            )
+            XCTFail("Local evidence cannot replace the original transient image on resume")
         } catch {
             XCTAssertEqual(error as? AgentError, .transientImageRequired)
         }

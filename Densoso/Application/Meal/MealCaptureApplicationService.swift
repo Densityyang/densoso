@@ -58,6 +58,146 @@ struct MealCaptureReview: Identifiable, Sendable {
     }
 }
 
+enum MealCapturePreparation: Sendable {
+    case agentRequest(MultimodalModelRequest)
+    case localReview(MealCaptureReview)
+    case textOnlyFallback(String)
+}
+
+enum LocalMealPortionAnswer: Equatable, Sendable {
+    case grams(Double)
+    case servings(Double)
+}
+
+struct LocalMealPortionAnswerParser: Sendable {
+    func parse(
+        _ text: String,
+        matching ingredient: String,
+        allowBareAmount: Bool
+    ) -> LocalMealPortionAnswer? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if allowBareAmount,
+           let grams = amount(
+            in: trimmed,
+            pattern: #"^\s*([0-9]+(?:\.[0-9]+)?)\s*(?:g|grams?|克|公克)\s*$"#
+           ) {
+            return .grams(grams)
+        }
+        if let grams = ExplicitUserGramsParser().exactGrams(
+            in: trimmed,
+            matching: [ingredient]
+        ) {
+            return .grams(grams)
+        }
+        if !allowBareAmount, let standaloneAnswer = standaloneAnswer(trimmed) {
+            return standaloneAnswer
+        }
+
+        let needsConsumptionContext = !allowBareAmount
+        guard !needsConsumptionContext || Self.hasConsumptionContext(trimmed) else {
+            return nil
+        }
+        if needsConsumptionContext, let grams = Self.singleUnhedgedGramAmount(in: trimmed) {
+            return .grams(grams)
+        }
+        let normalized = trimmed.lowercased()
+        if ["半份", "半包", "半袋", "half a serving", "half serving"].contains(where: normalized.contains) {
+            return .servings(0.5)
+        }
+        let chineseCounts: [(String, Double)] = [
+            ("两份", 2), ("二份", 2), ("三份", 3), ("一份", 1),
+            ("两包", 2), ("二包", 2), ("三包", 3), ("一包", 1),
+            ("两袋", 2), ("二袋", 2), ("一袋", 1),
+        ]
+        if let match = chineseCounts.first(where: { normalized.contains($0.0) }) {
+            return .servings(match.1)
+        }
+        if let count = amount(
+            in: trimmed,
+            pattern: #"([0-9]+(?:\.[0-9]+)?)\s*(?:份|包|袋|盒|瓶|servings?|packages?)"#
+        ), (0.1...20).contains(count) {
+            return .servings(count)
+        }
+        return nil
+    }
+
+    private static func hasConsumptionContext(_ text: String) -> Bool {
+        ["吃", "喝", "食用", "摄入", "ate", "consumed", "had"].contains {
+            text.localizedCaseInsensitiveContains($0)
+        }
+    }
+
+    private func standaloneAnswer(_ text: String) -> LocalMealPortionAnswer? {
+        let normalized = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if ["半份", "半包", "半袋"].contains(normalized) { return .servings(0.5) }
+        let chineseCounts: [(String, Double)] = [
+            ("一份", 1), ("二份", 2), ("两份", 2), ("三份", 3),
+            ("一包", 1), ("二包", 2), ("两包", 2), ("三包", 3),
+            ("一袋", 1), ("二袋", 2), ("两袋", 2), ("三袋", 3),
+        ]
+        if let match = chineseCounts.first(where: { $0.0 == normalized }) {
+            return .servings(match.1)
+        }
+        if let count = amount(
+            in: normalized,
+            pattern: #"^([0-9]+(?:\.[0-9]+)?)\s*(?:份|包|袋|盒|瓶|servings?|packages?)$"#
+        ), (0.1...20).contains(count) {
+            return .servings(count)
+        }
+        if let grams = amount(
+            in: normalized,
+            pattern: #"^([0-9]+(?:\.[0-9]+)?)\s*(?:g|grams?|克|公克)$"#
+        ), (0.1...5_000).contains(grams) {
+            return .grams(grams)
+        }
+        return nil
+    }
+
+    private static func singleUnhedgedGramAmount(in text: String) -> Double? {
+        let normalized = text.lowercased()
+        let hedges = ["约", "大约", "左右", "差不多", "大概", "about", "around", "approximately"]
+        guard !hedges.contains(where: normalized.contains),
+              let rangeRegex = try? NSRegularExpression(
+                pattern: #"[0-9]+(?:\.[0-9]+)?\s*(?:-|–|~|至|到|to)\s*[0-9]+(?:\.[0-9]+)?\s*(?:g|grams?|克|公克)"#,
+                options: [.caseInsensitive]
+              ) else {
+            return nil
+        }
+        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard rangeRegex.firstMatch(in: text, range: fullRange) == nil,
+              let gramRegex = try? NSRegularExpression(
+                pattern: #"([0-9]+(?:\.[0-9]+)?)\s*(?:g|grams?|克|公克)"#,
+                options: [.caseInsensitive]
+              ) else {
+            return nil
+        }
+        let matches = gramRegex.matches(in: text, range: fullRange)
+        guard matches.count == 1,
+              let valueRange = Range(matches[0].range(at: 1), in: text),
+              let value = Double(text[valueRange]),
+              value.isFinite,
+              (0.1...5_000).contains(value) else {
+            return nil
+        }
+        return value
+    }
+
+    private func amount(in text: String, pattern: String) -> Double? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(
+                in: text,
+                range: NSRange(text.startIndex..<text.endIndex, in: text)
+              ),
+              let range = Range(match.range(at: 1), in: text) else {
+            return nil
+        }
+        guard let value = Double(String(text[range])), value.isFinite else { return nil }
+        return value
+    }
+}
+
 enum MealCaptureOilAnswer: String, CaseIterable, Sendable {
     case noAdditionalOil
     case useEstimatedRange
@@ -143,7 +283,7 @@ final class MealCaptureApplicationService {
         if let barcode, let packagedFoodProvider {
             do {
                 if let packaged = try await packagedFoodProvider.lookup(barcode: barcode.value) {
-                    return try packagedReview(
+                    return try await packagedReview(
                         packaged,
                         nutrition: parsedNutrition(from: localEvidence),
                         evidence: localEvidence
@@ -159,7 +299,7 @@ final class MealCaptureApplicationService {
             .filter { $0.kind == .nutritionLabel }
             .flatMap { $0.value.split(separator: "\n").map(String.init) }
         if let nutrition = nutritionParser.parse(lines: labelLines) {
-            return try nutritionLabelReview(nutrition, evidence: localEvidence)
+            return try await nutritionLabelReview(nutrition, evidence: localEvidence)
         }
 
         if barcode != nil { return manualReview(evidence: localEvidence) }
@@ -209,14 +349,16 @@ final class MealCaptureApplicationService {
         let catalog = try foodDatabase.catalogEntries()
         let preparation = observation.preparationHints.first ?? .unknown
         let history = (try? await confirmedFoodHistory?.confirmedFoodIDs(matching: label)) ?? []
-        let resolution = FoodResolver(catalog: catalog).resolve(
-            FoodResolutionQuery(
+        let resolution = FoodResolverV2(catalog: catalog).resolve(
+            FoodResolutionV2Query(
                 label: label,
                 preparation: preparation,
+                massBasis: Self.massBasis(for: preparation),
                 sourceQuality: observation.isOccluded ? 0.45 : 0.75,
-                confirmedHistoryFoodIDs: history
+                confirmedHistoryFoodIDs: history,
+                evidence: localEvidence + visionEvidence
             )
-        )
+        ).mealEstimatorResolution
         let portion = try portionEstimator.estimate(
             evidence: [
                 .photo(
@@ -258,14 +400,49 @@ final class MealCaptureApplicationService {
     func prepareForAgent(
         originalData: Data,
         userText: String = "请根据这张餐食照片协助我记录，生成待确认草稿；不确定的部分先提出一个问题。"
-    ) async throws -> MultimodalModelRequest {
+    ) async throws -> MealCapturePreparation {
         let sanitized = try await photoSanitizer.sanitize(originalData: originalData)
         let localEvidence = try await scanner.scan(imageJPEG: sanitized)
-        return try MultimodalModelRequest(
+
+        if let barcode = localEvidence.first(where: { $0.kind == .barcode }) {
+            if let packagedFoodProvider {
+                do {
+                    if let packaged = try await packagedFoodProvider.lookup(barcode: barcode.value) {
+                        let review = try await packagedReview(
+                            packaged,
+                            nutrition: parsedNutrition(from: localEvidence),
+                            evidence: localEvidence
+                        )
+                        if review.route == .packagedBarcode {
+                            return .localReview(review)
+                        }
+                        return .textOnlyFallback(
+                            "本机识别到包装候选「\(packaged.displayName)」，但没有可用营养能量信息。请让用户补充包装营养信息或用文字描述；不要从条码推测营养，也不要上传这张图片。\n\n\(userText)"
+                        )
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // A scanned barcode remains a text-only/manual path on provider failure.
+                }
+            }
+            return .textOnlyFallback(
+                "本机识别到包装条码，但没有可用的本地商品匹配。请让用户补充商品名称或营养信息；不要把条码数字当作食物名称，也不要上传这张图片。\n\n\(userText)"
+            )
+        }
+
+        let labelLines = localEvidence
+            .filter { $0.kind == .nutritionLabel }
+            .flatMap { $0.value.split(separator: "\n").map(String.init) }
+        if let nutrition = nutritionParser.parse(lines: labelLines) {
+            return .localReview(try await nutritionLabelReview(nutrition, evidence: localEvidence))
+        }
+
+        return .agentRequest(try MultimodalModelRequest(
             userText: userText,
             imageJPEG: sanitized,
             mealEvidence: localEvidence
-        )
+        ))
     }
 
     func stageMeal(
@@ -273,6 +450,7 @@ final class MealCaptureApplicationService {
         selectedFoodID: String?,
         correctedPortion: PortionEstimate? = nil,
         oilAnswer: MealCaptureOilAnswer? = nil,
+        userNote: String? = nil,
         mealType: String = "lunch",
         occurredAt: Date = Date(),
         clientRequestID: UUID? = nil
@@ -305,13 +483,22 @@ final class MealCaptureApplicationService {
             autoPreselect: selected
         )
         var captureEvidence = review.evidence.map { evidence in
-            EvidenceSnapshot(
+            let summary: String
+            switch evidence.kind {
+            case .barcode:
+                summary = "本地扫描到商品条码"
+            case .nutritionLabel:
+                summary = "本地识别到营养标签"
+            default:
+                summary = String(evidence.value.prefix(160))
+            }
+            return EvidenceSnapshot(
                 grade: evidence.kind == .barcode || evidence.kind == .nutritionLabel
                     ? .label
                     : .estimated,
                 sourceID: "capture:\(evidence.kind.rawValue)",
                 sourceVersion: evidence.sourceVersion,
-                summary: String(evidence.value.prefix(160)),
+                summary: summary,
                 confidence: evidence.confidence
             )
         }
@@ -380,12 +567,13 @@ final class MealCaptureApplicationService {
                 inferredOilGrams: oilEstimate
             )
         )
+        let trimmedUserNote = userNote?.trimmingCharacters(in: .whitespacesAndNewlines)
         let payload = ActionPayload.meal(
             MealDraft(
                 occurredAt: occurredAt,
                 mealType: mealType,
                 dishes: [dish],
-                note: nil
+                note: trimmedUserNote.flatMap { $0.isEmpty ? nil : String($0.prefix(500)) }
             )
         )
         return try await confirmationCoordinator.stage(
@@ -398,7 +586,7 @@ final class MealCaptureApplicationService {
         _ packaged: PackagedFoodMatch,
         nutrition: PackagedNutritionObservation?,
         evidence: [MealEvidence]
-    ) throws -> MealCaptureReview {
+    ) async throws -> MealCaptureReview {
         let packagedEvidence = evidence + [
             MealEvidence(
                 kind: .foodCandidate,
@@ -439,22 +627,32 @@ final class MealCaptureApplicationService {
             ),
             sourceVersion: packaged.providerID
         )
-        let resolution = exactResolution(
+        let history = (try? await confirmedFoodHistory?.confirmedFoodIDs(matching: packaged.displayName)) ?? []
+        let resolution = resolveWithV2(
             entry,
-            sourceID: "barcode:\(packaged.barcode)",
-            isBarcode: true
+            label: packaged.displayName,
+            massBasis: .asPurchased,
+            categoryHint: "packaged",
+            sourceQuality: packagedEvidence.map(\.confidence).max() ?? 1,
+            barcodeMatchedFoodID: entry.id,
+            confirmedHistoryFoodIDs: history,
+            evidence: packagedEvidence
         )
         let serving = packaged.servingGrams ?? labelServing
-        let portion = try portionEstimator.estimate(
-            evidence: serving.map {
-                [.packageServing(gramsPerServing: $0, count: 1)]
-            } ?? [.photo(likelyGrams: 100, hasScale: false, isMixedDish: false, isOccluded: false, unknownContainer: true)],
-            food: resolution.autoPreselect
-        )
+        let portion: PortionEstimate?
+        if let serving {
+            portion = try portionEstimator.estimate(
+                evidence: [.packageServing(gramsPerServing: serving, count: 1)],
+                food: resolution.autoPreselect
+            )
+        } else {
+            portion = nil
+        }
         return MealCaptureReview(
             id: UUID(), route: .packagedBarcode, evidence: packagedEvidence,
             label: packaged.displayName, resolution: resolution, portion: portion,
-            cookingMethod: nil, inferredOilGrams: nil, clarification: nil,
+            cookingMethod: nil, inferredOilGrams: nil,
+            clarification: Self.consumedPortionClarification(canConvertServingCount: serving != nil),
             attribution: packaged.attribution,
             rawPhotoRetained: false
         )
@@ -479,13 +677,13 @@ final class MealCaptureApplicationService {
     private func nutritionLabelReview(
         _ nutrition: PackagedNutritionObservation,
         evidence: [MealEvidence]
-    ) throws -> MealCaptureReview {
+    ) async throws -> MealCaptureReview {
         let name = nutrition.productName ?? "包装食品"
-        let servingGrams: Double
+        let servingGrams: Double?
         let scale: Double
         switch nutrition.basis {
         case .per100Grams:
-            servingGrams = 100
+            servingGrams = nil
             scale = 1
         case .perServing(let grams):
             servingGrams = grams
@@ -504,15 +702,38 @@ final class MealCaptureApplicationService {
             ),
             sourceVersion: "local-vision-label-v1"
         )
-        let resolution = exactResolution(entry, sourceID: "nutrition-label")
-        let portion = try portionEstimator.estimate(
-            evidence: [.packageServing(gramsPerServing: servingGrams, count: 1)],
-            food: resolution.autoPreselect
+        let labelEvidence = evidence.filter { $0.kind == .nutritionLabel }
+        let history = (try? await confirmedFoodHistory?.confirmedFoodIDs(matching: name)) ?? []
+        let resolution = resolveWithV2(
+            entry,
+            label: name,
+            massBasis: .asPurchased,
+            categoryHint: "packaged",
+            sourceQuality: max(labelEvidence.map(\.confidence).max() ?? 0, 0.5),
+            confirmedHistoryFoodIDs: history,
+            evidence: labelEvidence + [
+                MealEvidence(
+                    kind: .nutritionLabel,
+                    value: name,
+                    confidence: labelEvidence.map(\.confidence).max() ?? 1,
+                    sourceVersion: entry.sourceVersion
+                )
+            ]
         )
+        let portion: PortionEstimate?
+        if let servingGrams {
+            portion = try portionEstimator.estimate(
+                evidence: [.packageServing(gramsPerServing: servingGrams, count: 1)],
+                food: resolution.autoPreselect
+            )
+        } else {
+            portion = nil
+        }
         return MealCaptureReview(
             id: UUID(), route: .nutritionLabel, evidence: evidence,
             label: name, resolution: resolution, portion: portion,
-            cookingMethod: nil, inferredOilGrams: nil, clarification: nil,
+            cookingMethod: nil, inferredOilGrams: nil,
+            clarification: Self.consumedPortionClarification(canConvertServingCount: servingGrams != nil),
             attribution: nil,
             rawPhotoRetained: false
         )
@@ -525,38 +746,47 @@ final class MealCaptureApplicationService {
         return nutritionParser.parse(lines: lines)
     }
 
-    private func exactResolution(
+    private func resolveWithV2(
         _ entry: FoodCatalogEntry,
-        sourceID: String,
-        isBarcode: Bool = false
+        label: String,
+        massBasis: FoodMassBasis?,
+        categoryHint: String?,
+        sourceQuality: Double,
+        barcodeMatchedFoodID: String? = nil,
+        confirmedHistoryFoodIDs: Set<String> = [],
+        evidence: [MealEvidence]
     ) -> FoodResolution {
-        let localResolution = FoodResolver(catalog: [entry]).resolve(
-            FoodResolutionQuery(
-                label: entry.name,
+        FoodResolverV2(catalog: [entry]).resolve(
+            FoodResolutionV2Query(
+                label: label,
                 preparation: entry.preparation,
-                categoryHint: entry.category,
-                sourceQuality: 1,
-                barcodeMatchedFoodID: isBarcode ? entry.id : nil
+                massBasis: massBasis,
+                categoryHint: categoryHint,
+                sourceQuality: sourceQuality,
+                barcodeMatchedFoodID: barcodeMatchedFoodID,
+                confirmedHistoryFoodIDs: confirmedHistoryFoodIDs,
+                evidence: evidence
             )
-        )
-        let candidates = localResolution.candidates.map { candidate in
-            FoodCandidate(
-                entry: candidate.entry,
-                score: candidate.score,
-                breakdown: candidate.breakdown,
-                evidence: candidate.evidence + [
-                    EvidenceSnapshot(
-                        grade: .label,
-                        sourceID: sourceID,
-                        sourceVersion: entry.sourceVersion,
-                        summary: entry.name,
-                        confidence: 1
-                    )
-                ]
-            )
+        ).mealEstimatorResolution
+    }
+
+    private static func massBasis(for preparation: FoodPreparation) -> FoodMassBasis? {
+        switch preparation {
+        case .raw: .edibleRaw
+        case .cooked: .cooked
+        case .unknown: nil
         }
-        let selected = candidates.first
-        return FoodResolution(candidates: candidates, autoPreselect: selected)
+    }
+
+    private static func consumedPortionClarification(
+        canConvertServingCount: Bool
+    ) -> ClarificationQuestion {
+        ClarificationQuestion(
+            kind: .portion,
+            prompt: canConvertServingCount
+                ? "标签或包装规格不能确定本次实际份量；请填写克数，或按已知每份重量填写份数。"
+                : "本机没有可换算的每份重量；请填写这次实际吃下的大约克数。"
+        )
     }
 
     private func makeClarification(

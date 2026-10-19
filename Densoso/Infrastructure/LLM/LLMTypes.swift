@@ -104,6 +104,14 @@ struct MultimodalModelRequest: Sendable {
         self.mealEvidence = []
     }
 
+    /// Evidence-only requests keep local scanner output in memory for this
+    /// Agent turn; the evidence is not added to persisted conversation history.
+    init(userText: String, mealEvidence: [MealEvidence]) {
+        self.userText = userText
+        self.image = nil
+        self.mealEvidence = Self.boundedMealEvidence(mealEvidence)
+    }
+
     init(userText: String, imageJPEG: Data, mealEvidence: [MealEvidence]) throws {
         guard !imageJPEG.isEmpty, imageJPEG.starts(with: [0xFF, 0xD8]) else {
             throw ProviderError.schemaViolation(path: "image")
@@ -117,16 +125,7 @@ struct MultimodalModelRequest: Sendable {
             base64Data: imageJPEG.base64EncodedString(),
             detail: .high
         )
-        self.mealEvidence = mealEvidence.prefix(Self.maximumMealEvidenceCount).map { evidence in
-            MealEvidence(
-                id: evidence.id,
-                kind: evidence.kind,
-                value: String(evidence.value.prefix(160)),
-                confidence: evidence.confidence.isFinite ? evidence.confidence : 0,
-                capturedAt: evidence.capturedAt,
-                sourceVersion: evidence.sourceVersion.map { String($0.prefix(80)) }
-            )
-        }
+        self.mealEvidence = Self.boundedMealEvidence(mealEvidence)
     }
 
     func includingSupplementalText(_ supplementalText: String) -> MultimodalModelRequest {
@@ -142,7 +141,20 @@ struct MultimodalModelRequest: Sendable {
     private init(userText: String, image: ImageInput?, mealEvidence: [MealEvidence]) {
         self.userText = userText
         self.image = image
-        self.mealEvidence = Array(mealEvidence.prefix(Self.maximumMealEvidenceCount))
+        self.mealEvidence = Self.boundedMealEvidence(mealEvidence)
+    }
+
+    private static func boundedMealEvidence(_ evidence: [MealEvidence]) -> [MealEvidence] {
+        evidence.prefix(Self.maximumMealEvidenceCount).map { item in
+            MealEvidence(
+                id: item.id,
+                kind: item.kind,
+                value: String(item.value.prefix(160)),
+                confidence: item.confidence.isFinite ? min(max(item.confidence, 0), 1) : 0,
+                capturedAt: item.capturedAt,
+                sourceVersion: item.sourceVersion.map { String($0.prefix(80)) }
+            )
+        }
     }
 }
 

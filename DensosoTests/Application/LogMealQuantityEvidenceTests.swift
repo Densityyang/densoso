@@ -167,6 +167,36 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         XCTAssertFalse(results.contains { $0.contains("clarification_limit_reached") })
     }
 
+    func testVagueNewMealDoesNotCountAsClarificationAnswer() async throws {
+        let provider = ScriptedTextProvider(scripts: [
+            [
+                .toolCall(mealCall(ingredientName: "米饭", quantity: quantity("unknown"))),
+                .completed(.toolUse),
+            ],
+            [.textDelta("米饭大约有多少份量？"), .completed(.completed)],
+            [
+                .toolCall(mealCall(
+                    ingredientName: "米饭",
+                    quantity: quantity("unknown", value: 180, unit: "g")
+                )),
+                .completed(.toolUse),
+            ],
+            [.textDelta("我还缺少这餐的份量信息。"), .completed(.completed)],
+        ])
+        let harness = try makeHarness(provider: provider)
+
+        _ = try await harness.session.send(userText: "我吃了一些米饭")
+        _ = try await harness.session.send(userText: "我今天吃了点东西")
+
+        XCTAssertTrue(harness.session.pendingActions.isEmpty)
+        let lastResults = provider.recordedRequests().last?.messages.flatMap(\.content).compactMap { content in
+            guard case .toolResult(_, let result) = content else { return nil }
+            return result
+        } ?? []
+        XCTAssertTrue(lastResults.contains { $0.contains("clarification_required") })
+        XCTAssertFalse(lastResults.contains { $0.contains("clarification_limit_reached") })
+    }
+
     func testPackageServingRequiresLocalUserOrLabelGrams() async throws {
         let provider = provider(calls: [mealCall(
             ingredientName: "米饭",

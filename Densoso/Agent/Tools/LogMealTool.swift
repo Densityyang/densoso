@@ -107,7 +107,7 @@ struct LogMealTool: ConfirmationRequiredTool {
         guard !context.hasIssuedMealClarification() else {
             throw DraftError.clarificationLimitReached
         }
-        let resolver = FoodResolver(catalog: try database.catalogEntries())
+        let resolver = FoodResolverV2(catalog: try database.catalogEntries())
         let portionEstimator = PortionEstimator()
         let mealEstimator = MealEstimator()
         let oilPriors = CookingOilPriorTable()
@@ -136,15 +136,19 @@ struct LogMealTool: ConfirmationRequiredTool {
             var ingredients: [MealIngredientEstimationInput] = []
             for (ingredientIndex, ingredient) in rawDish.ingredients.enumerated() {
                 let preparation = FoodPreparation(rawValue: ingredient.preparation ?? "") ?? .unknown
+                let massBasis = FoodMassBasis(rawValue: ingredient.massBasis ?? "")
+                    ?? (preparation == .cooked ? .cooked : .edibleRaw)
                 let confirmedHistory = await context.confirmedFoodIDs(matching: ingredient.name)
                 let resolution = resolver.resolve(
-                    FoodResolutionQuery(
+                    FoodResolutionV2Query(
                         label: ingredient.name,
                         preparation: preparation,
+                        massBasis: massBasis,
                         sourceQuality: rawDish.lowConfidence ? 0.7 : 1,
-                        confirmedHistoryFoodIDs: confirmedHistory
+                        confirmedHistoryFoodIDs: confirmedHistory,
+                        evidence: agentImageEvidence
                     )
-                )
+                ).mealEstimatorResolution
                 guard !resolution.candidates.isEmpty else {
                     throw DraftError.clarificationRequired(
                         field: "foodIdentity",
@@ -194,8 +198,6 @@ struct LogMealTool: ConfirmationRequiredTool {
                     evidence: [portionEvidence],
                     food: selectedFood
                 )
-                let massBasis = FoodMassBasis(rawValue: ingredient.massBasis ?? "")
-                    ?? (preparation == .cooked ? .cooked : .edibleRaw)
                 let imageEvidence: [EvidenceSnapshot] = ingredientIndex == 0
                     ? agentImageEvidence.map { evidence in
                         EvidenceSnapshot(

@@ -145,15 +145,32 @@ struct ChatScreen: View {
                 scrollToBottom(proxy: proxy)
             }
             .sheet(isPresented: $showMealCapture) {
-                MealCaptureSheet { request in
-                    let requestWithSupplement = request.includingSupplementalText(inputText)
-                    Task {
-                        await send(
-                            text: requestWithSupplement.userText,
-                            multimodalRequest: requestWithSupplement
-                        )
+                MealCaptureSheet(
+                    supplementalText: inputText,
+                    onSendToAgent: { request in
+                        let requestWithSupplement = request.includingSupplementalText(inputText)
+                        Task {
+                            await send(
+                                text: requestWithSupplement.userText,
+                                multimodalRequest: requestWithSupplement
+                            )
+                        }
+                    },
+                    onLocalPendingAction: { _ in
+                        inputText = ""
+                        inputSource = .manualText
+                        Task {
+                            do {
+                                try await dependencies.agentSession.reloadPendingActions()
+                                refreshDailyLoopSnapshot()
+                                dependencies.watchConnectivityCoordinator.refreshApplicationContext()
+                                addMessage(text: "本机识别已生成待确认餐食草稿，请检查后确认。", isUser: false)
+                            } catch {
+                                addMessage(text: "待确认草稿已生成，但列表刷新失败：\(error.localizedDescription)", isUser: false)
+                            }
+                        }
                     }
-                }
+                )
                 .presentationBackground { OrbitBackground() }
             }
         }

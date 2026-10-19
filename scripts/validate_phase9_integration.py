@@ -351,6 +351,10 @@ def main() -> int:
         "DensosoTests/Application/MealCaptureApplicationServiceTests.swift",
         (
             "testBarcodeMatchSkipsQwenAndStillCreatesOnlyPendingAction",
+            "testPrepareForAgentRoutesResolvedBarcodeLocallyAndStagesPendingAction",
+            "testPrepareForAgentKeepsCompleteLabelLocalAndAsksOnceForMissingPortion",
+            "testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto",
+            "testLocalMealPortionAnswerSupportsCountsAndRejectsPackageSpecsAsConsumedAmount",
             "testOpenPhotoRequiresSeparateImageConsent",
             "testPortionClarificationMustBeAnsweredAndIsPersistedAsUserEvidence",
         ),

@@ -13,6 +13,11 @@ meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
   source EXIF/GPS/XMP/MakerNote metadata. Raw photos are never persisted.
 - Local Vision runs barcode and nutrition-label OCR first. Valid GTIN and usable
   label nutrition avoid Qwen vision.
+- Barcode matches and complete local nutrition labels use a local review path.
+  The sanitized image is not included in an Agent request. A package's label
+  serving weight is not assumed to equal the amount eaten: the user supplies
+  grams or a serving count that can be converted from a known per-serving mass;
+  otherwise the local flow asks once before staging.
 - Open dishes may use the independent Beijing `qwen3-vl-flash` adapter only when
   the feature flag, `.mealImage` consent and quality gate all allow it.
   Production defaults this quality gate to unavailable/closed because the
@@ -20,9 +25,14 @@ meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
 - VLM output is a closed observation schema containing labels, preparation,
   cooking/container/portion hints and occlusion only. It cannot supply food ID,
   calories or nutrient truth.
-- `FoodResolver` applies the fixed 0.60/0.15/0.10/0.10/0.05 score, retains top 3,
-  and preselects only at score >=0.85 and margin >=0.12. Every result still needs
-  confirmation; ambiguous results keep `foodID == nil` until explicit selection.
+- Barcode, local nutrition-label, and open-photo candidates all pass through
+  `FoodResolverV2`. V2 scoring keeps lexical, alias, preparation, mass-basis, category, history and evidence as independent axes.
+  Exact barcode evidence can identify its matched package, while OCR and visual
+  cues contribute only when they match a candidate.
+  Candidate evidence summaries do not copy raw OCR text. Every result still requires confirmation; ambiguous
+  results keep `foodID == nil` until the user selects a candidate.
+- The seven V2 score axes are retained with the pending meal draft and its
+  canonical receipt as audit data; this does not replace explicit confirmation.
 - `PortionEstimator` implements measured, approximate, package, household and
   photo interval rules. A single photo is never measured.
 - `log_meal` accepts `quantityEvidence`; exact grams are used only when the
@@ -64,7 +74,9 @@ meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
 
 The `meal-capture` job has `needs: speech` and must prove:
 
-1. exact alias and raw/cooked subsets are 100%;
+1. the frozen resolver fixture retains its exact-alias and raw/cooked baselines;
+   focused V2 contracts verify separate alias/category, preparation/mass-basis,
+   confirmed-history, barcode, local-label/visual-evidence, and ambiguity paths;
 2. the frozen 100-case synthetic set reaches top-1 >=80% and top-3 >=90%;
 3. the frozen 50-case synthetic portion set reaches coverage >=80% and outside <=20%;
 4. package, single food, mixed/occluded/no-scale/unknown-container and correction
@@ -83,6 +95,11 @@ The `meal-capture` job has `needs: speech` and must prove:
 10. Qwen request/response fixture uses image Data URI and rejects foodID/nutrient fields;
 11. unconfirmed capture produces zero Meal/outbox rows, while explicit confirmation
     atomically produces one Meal, one receipt and one nutrition outbox entry.
+12. barcode, nutrition-label, and visual candidate integration uses the same V2
+    resolver contract; matching source evidence affects ranking independently,
+    and candidate summaries and staged evidence do not persist raw barcode or
+    nutrition-label OCR strings. Locally resolved barcode/label images stay out
+    of model requests, and missing consumed quantity requires one local answer.
 
 The Gate 5 XCTest result bundle retains `gate05-food-resolution.json` and
 `gate05-portion-reference.json` attachments with the measured rates and the

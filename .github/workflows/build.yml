@@ -1047,6 +1047,9 @@ jobs:
             -derivedDataPath "$GATE12_DERIVED_DATA_PATH" \
             -only-testing:DensosoTests/MultimodalAgentImageTests/testImageInputUsesAgentSessionAndStagesMealWithoutDirectCommitOrRawMediaPersistence \
             -only-testing:DensosoTests/MultimodalAgentImageTests/testInterruptedImageRequestFailsClosedUntilImageIsReattachedAndKeepsBudget \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testEvidenceOnlyRequestUsesEphemeralProviderMessageWithoutImageConsentOrPersistence \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testInterruptedEvidenceOnlyRequestRequiresNewRequestToReprovideEvidence \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testEvidenceOnlyRequestBoundsTransientEvidence \
             -only-testing:DensosoTests/MultimodalAgentImageTests/testImageRequiresVisionCapabilityAndSeparateMealImageConsent \
             -only-testing:DensosoTests/AgentCoordinatorTests/testRealRoundAndToolCountsAndPendingAction \
             -only-testing:DensosoTests/AgentCoordinatorTests/testProviderReasoningContinuesInMemoryButIsNeverPersisted \
@@ -1059,6 +1062,10 @@ jobs:
             -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testImageRequestAndRestrictedObservationContract \
             -only-testing:DensosoTests/SpeechCaptureStateMachineTests/testLocalFailureWithCapturedAudioUsesQwenOnceAndDeletesTemporaryAudio \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testOpenPhotoRequiresSeparateImageConsent \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentRoutesResolvedBarcodeLocallyAndStagesPendingAction \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentKeepsCompleteLabelLocalAndAsksOnceForMissingPortion \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testLocalMealPortionAnswerSupportsCountsAndRejectsPackageSpecsAsConsumedAmount \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testLowConfidenceVisionCannotStageFoodIDWithoutUserSelection \
             -resultBundlePath "$GATE12_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
