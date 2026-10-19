@@ -265,6 +265,7 @@ def main() -> int:
             "testMeasuredDailyActivityAggregateFeedsProjectionWithoutWorkoutEnergy",
             "testEmptyAmbiguousWorkoutReadAdvancesCursorWithoutClaimingReadDenial",
             "testOneFailedStreamDoesNotBlockOtherHealthMetrics",
+            "testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
         ),
         errors,
     )
@@ -347,6 +348,7 @@ def main() -> int:
             "V5-to-V6 daily sample summary",
             "testV5MigrationMovesRawSamplesIntoIndexAndDailySummary",
             "testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
+            "testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
         ),
         errors,
     )

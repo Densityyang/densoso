@@ -1,6 +1,6 @@
 # Gate 06 — HealthKit Synchronization and Energy Semantics
 
-Status: macOS CI passed; user approved Gate 6 and Phase 7–10 work proceeded
+Status: original Gate 6 passed macOS CI; V5-to-V6 main-PR extension awaits current GitHub CI
 
 Gate 6 extends Draft PR #14 after the user approved Gate 5. It adds the HealthKit
 boundary, query/sync path, outbox worker and energy projection rules. The
@@ -110,11 +110,12 @@ does not reuse it as current.
 12. V5-to-V6 migration removes legacy raw samples from encoded snapshots and
     creates the sample-ID/day index; day re-query rebuilds summaries after
     anchored deletions without advancing the cursor on query failure. Coverage
-   includes `DensosoMigrationTests.testV5MigrationMovesRawSamplesIntoIndexAndDailySummary`,
-   `DailyHealthSampleSummaryTests.testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples`,
-   `HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor`,
-   `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
-   and `HealthRepositoryTests.testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval`.
+    includes `DensosoMigrationTests.testV5MigrationMovesRawSamplesIntoIndexAndDailySummary`,
+    `DailyHealthSampleSummaryTests.testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples`,
+    `HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor`,
+    `HealthKitSyncCoordinatorTests.testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder`,
+    `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
+    and `HealthRepositoryTests.testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval`.
 
 ## Evidence record
 

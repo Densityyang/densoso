@@ -204,4 +204,87 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let indexes = try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>())
         XCTAssertEqual(indexes.map(\.sampleID), [replacementID])
     }
+
+    func testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder() async throws {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000000059")!
+        let secondID = UUID(uuidString: "00000000-0000-0000-0000-000000000060")!
+        let first = HealthSampleSnapshot(
+            id: firstID,
+            metric: .bodyMass,
+            startDate: date,
+            endDate: date.addingTimeInterval(3_600),
+            value: 70,
+            syncVersion: 2
+        )
+        let olderRevision = HealthSampleSnapshot(
+            id: firstID,
+            metric: .bodyMass,
+            startDate: date,
+            endDate: date.addingTimeInterval(3_600),
+            value: 69,
+            syncVersion: 1
+        )
+        let second = HealthSampleSnapshot(
+            id: secondID,
+            metric: .bodyMass,
+            startDate: date,
+            endDate: date.addingTimeInterval(3_600),
+            value: 72
+        )
+        let fake = FakeHealthStoreClient()
+        await fake.setSampleResponses([
+            HealthSamplePage(samples: [first], nextAnchorData: Data([1]), readState: .available),
+            HealthSamplePage(
+                samples: [olderRevision, second],
+                nextAnchorData: Data([2]),
+                hasMore: true,
+                readState: .available
+            ),
+            HealthSamplePage(samples: [second, first], nextAnchorData: Data([3]), readState: .available),
+        ], for: .bodyMass)
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+        let repository = HealthRepository(modelContext: context)
+
+        let firstResult = try await coordinator.syncAvailableData(using: repository, now: date)
+
+        XCTAssertTrue(firstResult.completedStreams.contains(.bodyMass))
+        let firstRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let firstSnapshot = try decoder.decode(DailyHealthSnapshot.self, from: firstRecord.payloadData)
+        XCTAssertEqual(firstSnapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.sampleCount, 2)
+        XCTAssertEqual(firstSnapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.averageValue, 71)
+        XCTAssertEqual(firstSnapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestSampleID, secondID)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthKitSampleIndexRecord>()), 2)
+        let firstHash = firstRecord.snapshotHash
+
+        await fake.setSampleResponses([
+            HealthSamplePage(samples: [first], nextAnchorData: Data([4]), readState: .available),
+            HealthSamplePage(
+                samples: [second, first],
+                nextAnchorData: Data([5]),
+                hasMore: true,
+                readState: .available
+            ),
+            HealthSamplePage(samples: [olderRevision, second], nextAnchorData: Data([6]), readState: .available),
+        ], for: .bodyMass)
+
+        let secondResult = try await coordinator.syncAvailableData(using: repository, now: date.addingTimeInterval(60))
+
+        XCTAssertTrue(secondResult.completedStreams.contains(.bodyMass))
+        let persistedRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let persistedSnapshot = try decoder.decode(DailyHealthSnapshot.self, from: persistedRecord.payloadData)
+        XCTAssertEqual(persistedSnapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.sampleCount, 2)
+        XCTAssertEqual(persistedSnapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestSampleID, secondID)
+        XCTAssertEqual(persistedRecord.snapshotHash, firstHash)
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).map(\.sampleID).sorted {
+                $0.uuidString < $1.uuidString
+            },
+            [firstID, secondID].sorted { $0.uuidString < $1.uuidString }
+        )
+        XCTAssertEqual(try repository.cursor(for: HealthMetricID.bodyMass.rawValue)?.anchorData, Data([4]))
+        XCTAssertEqual(firstSnapshot.dayStart, Calendar.current.startOfDay(for: date))
+    }
 }

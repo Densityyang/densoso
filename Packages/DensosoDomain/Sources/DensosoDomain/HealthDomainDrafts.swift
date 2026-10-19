@@ -216,7 +216,8 @@ public struct DailyHealthSnapshot: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        dayStart = try container.decode(Date.self, forKey: .dayStart)
+        let decodedDayStart = try container.decode(Date.self, forKey: .dayStart)
+        dayStart = decodedDayStart
         timezoneIdentifier = try container.decode(String.self, forKey: .timezoneIdentifier)
         energyIntakeKcal = try container.decodeIfPresent(EstimateRange.self, forKey: .energyIntakeKcal)
         activeEnergyKcal = try container.decodeIfPresent(Double.self, forKey: .activeEnergyKcal)
@@ -226,10 +227,11 @@ public struct DailyHealthSnapshot: Codable, Equatable, Sendable {
         weightKilograms = try container.decodeIfPresent(Double.self, forKey: .weightKilograms)
         let legacySamples = try container.decodeIfPresent([HealthSampleSnapshot].self, forKey: .healthKitSamples)
         healthKitSamples = legacySamples
-        healthKitSampleSummary = try container.decodeIfPresent(
+        let decodedSampleSummary = try container.decodeIfPresent(
             DailyHealthSampleSummary.self,
             forKey: .healthKitSampleSummary
-        ) ?? legacySamples.map { DailyHealthSampleSummary(samples: $0, dayStart: dayStart) }
+        ) ?? legacySamples.map { DailyHealthSampleSummary(samples: $0, dayStart: decodedDayStart) }
+        healthKitSampleSummary = decodedSampleSummary
         let storedReadStates = try container.decodeIfPresent([String: HealthReadState].self, forKey: .healthReadStates)
         healthReadStates = Self.inferredReadStates(storedReadStates, from: legacySamples)
         algorithmVersion = try container.decode(String.self, forKey: .algorithmVersion)

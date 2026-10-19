@@ -243,7 +243,7 @@ final class HealthKitSyncCoordinator {
                 queryStart = day
                 queryEnd = nextDay
             }
-            var samples: [HealthSampleSnapshot] = []
+            var samplesByID: [UUID: HealthSampleSnapshot] = [:]
             var anchor: Data?
             var readState: HealthReadState = .dataUnavailableOrReadScopeUnknown
             while true {
@@ -255,13 +255,22 @@ final class HealthKitSyncCoordinator {
                     limit: 500
                 ))
                 guard let nextAnchor = page.nextAnchorData else { throw HealthStoreClientError.invalidAnchor }
-                samples.append(contentsOf: page.samples)
+                for sample in page.samples {
+                    if let existing = samplesByID[sample.id] {
+                        if Self.prefers(sample, over: existing) {
+                            samplesByID[sample.id] = sample
+                        }
+                    } else {
+                        samplesByID[sample.id] = sample
+                    }
+                }
                 if !page.samples.isEmpty { readState = .available }
-                else if samples.isEmpty { readState = page.readState }
+                else if samplesByID.isEmpty { readState = page.readState }
                 if !page.hasMore { break }
                 guard nextAnchor != anchor else { throw HealthStoreClientError.invalidAnchor }
                 anchor = nextAnchor
             }
+            let samples = samplesByID.values.sorted(by: Self.sampleOrder)
             replacements.append(HealthSampleDaySnapshot(
                 dayStart: day,
                 samples: samples,
@@ -269,6 +278,36 @@ final class HealthKitSyncCoordinator {
             ))
         }
         return replacements
+    }
+
+    private static func prefers(_ candidate: HealthSampleSnapshot, over current: HealthSampleSnapshot) -> Bool {
+        if candidate.syncVersion != current.syncVersion {
+            return (candidate.syncVersion ?? Int.min) > (current.syncVersion ?? Int.min)
+        }
+        return sampleOrder(candidate, current)
+    }
+
+    private static func sampleOrder(_ lhs: HealthSampleSnapshot, _ rhs: HealthSampleSnapshot) -> Bool {
+        if lhs.startDate != rhs.startDate { return lhs.startDate < rhs.startDate }
+        if lhs.id != rhs.id { return lhs.id.uuidString < rhs.id.uuidString }
+        if lhs.endDate != rhs.endDate { return lhs.endDate < rhs.endDate }
+        if lhs.metric != rhs.metric { return lhs.metric.rawValue < rhs.metric.rawValue }
+        if lhs.value != rhs.value { return optionalValueOrder(lhs.value, rhs.value) }
+        if lhs.categoryValue != rhs.categoryValue { return optionalValueOrder(lhs.categoryValue, rhs.categoryValue) }
+        if lhs.sourceBundleIdentifier != rhs.sourceBundleIdentifier {
+            return optionalValueOrder(lhs.sourceBundleIdentifier, rhs.sourceBundleIdentifier)
+        }
+        if lhs.deviceName != rhs.deviceName { return optionalValueOrder(lhs.deviceName, rhs.deviceName) }
+        if lhs.deviceModel != rhs.deviceModel { return optionalValueOrder(lhs.deviceModel, rhs.deviceModel) }
+        if lhs.syncIdentifier != rhs.syncIdentifier { return optionalValueOrder(lhs.syncIdentifier, rhs.syncIdentifier) }
+        return (lhs.syncVersion ?? Int.min) < (rhs.syncVersion ?? Int.min)
+    }
+
+    private static func optionalValueOrder<Value: Comparable>(_ lhs: Value?, _ rhs: Value?) -> Bool {
+        guard lhs != rhs else { return false }
+        guard let lhs else { return false }
+        guard let rhs else { return true }
+        return lhs < rhs
     }
 }
 
