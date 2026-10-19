@@ -135,29 +135,23 @@ final class DailyLoopSnapshotService {
     private let healthProjectionActor: HealthProjectionActor
     private let healthIntelligenceService: HealthIntelligenceService
     private let agentSession: AgentSession
-    private let composer: DailyLoopSnapshotComposer
     private(set) var lastGeneratedAt: Date?
 
     init(
         healthProjectionActor: HealthProjectionActor,
         healthIntelligenceService: HealthIntelligenceService,
-        agentSession: AgentSession,
-        calendar: Calendar = .current
+        agentSession: AgentSession
     ) {
         self.healthProjectionActor = healthProjectionActor
         self.healthIntelligenceService = healthIntelligenceService
         self.agentSession = agentSession
-        self.composer = DailyLoopSnapshotComposer(calendar: calendar)
     }
 
     func snapshot(asOf date: Date = Date()) async throws -> DailyLoopSnapshot {
-        let plans = try await healthProjectionActor.confirmedPlanEntries()
-        let snapshot = composer.compose(
+        let snapshot = try await healthProjectionActor.dailyLoopSnapshot(
             asOf: date,
             dailyBrief: healthIntelligenceService.dailyBrief,
-            pendingActions: agentSession.pendingActions,
-            workoutPlans: plans.workoutPlans,
-            trainingPlans: plans.trainingPlans
+            pendingActions: agentSession.pendingActions
         )
         lastGeneratedAt = snapshot.generatedAt
         return snapshot

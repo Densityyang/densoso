@@ -130,6 +130,8 @@ final class HealthProjectionActorTests: XCTestCase {
                 scheduledAt: tomorrow.addingTimeInterval(9 * 60 * 60)
             )
         )
+        let olderTrainingSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000A21")!
+        let newerTrainingSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000A22")!
         let olderTrainingPlan = ConfirmedTrainingPlanEntry(
             actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000A03")!,
             idempotencyKey: "daily-loop-older-training-plan",
@@ -137,7 +139,7 @@ final class HealthProjectionActorTests: XCTestCase {
                 id: UUID(uuidString: "00000000-0000-0000-0000-000000000A13")!,
                 name: "旧多日计划",
                 createdAt: today.addingTimeInterval(-200),
-                sessions: [TrainingSessionDraft(date: today, activity: .walking, reason: "计划训练")]
+                sessions: [TrainingSessionDraft(id: olderTrainingSessionID, date: today, activity: .walking, reason: "计划训练")]
             )
         )
         let newerTrainingPlan = ConfirmedTrainingPlanEntry(
@@ -148,7 +150,7 @@ final class HealthProjectionActorTests: XCTestCase {
                 name: "新多日计划",
                 createdAt: today.addingTimeInterval(-100),
                 sessions: [
-                    TrainingSessionDraft(date: today, activity: .cycling, reason: "计划骑行"),
+                    TrainingSessionDraft(id: newerTrainingSessionID, date: today, activity: .cycling, reason: "计划骑行"),
                     TrainingSessionDraft(date: tomorrow, activity: nil, reason: "休息日"),
                 ]
             )
@@ -193,6 +195,41 @@ final class HealthProjectionActorTests: XCTestCase {
         XCTAssertEqual(plans.workoutPlans.map(\.actionID), [tomorrowWorkout.actionID, todayWorkout.actionID])
         XCTAssertEqual(plans.trainingPlans.map(\.actionID), [newerTrainingPlan.actionID, olderTrainingPlan.actionID])
         XCTAssertEqual(plans.trainingPlans.first?.draft.sessions.count, 2)
+
+        let asOf = today.addingTimeInterval(10 * 60 * 60)
+        let activeAction = PendingAction(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000A05")!,
+            idempotencyKey: "daily-loop-active-action",
+            clientRequestID: UUID(),
+            createdAt: asOf.addingTimeInterval(-60),
+            expiresAt: asOf.addingTimeInterval(3_600),
+            payload: .trainingPlan(newerTrainingPlan.draft),
+            state: .pending
+        )
+        let expiredAction = PendingAction(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000A06")!,
+            idempotencyKey: "daily-loop-expired-action",
+            clientRequestID: UUID(),
+            createdAt: asOf.addingTimeInterval(-120),
+            expiresAt: asOf.addingTimeInterval(-1),
+            payload: .trainingPlan(olderTrainingPlan.draft),
+            state: .pending
+        )
+        let snapshot = try await actor.dailyLoopSnapshot(
+            asOf: asOf,
+            dailyBrief: nil,
+            pendingActions: [expiredAction, activeAction]
+        )
+        XCTAssertEqual(snapshot.phase, .morning)
+        XCTAssertNil(snapshot.todaySummary)
+        XCTAssertEqual(snapshot.pendingActions.map(\.actionID), [activeAction.id])
+        XCTAssertTrue(snapshot.pendingActions.first?.requiresPhoneReview == true)
+        XCTAssertEqual(snapshot.workoutPlans.map(\.actionID), [
+            olderTrainingSessionID,
+            newerTrainingSessionID,
+            todayWorkout.actionID,
+            tomorrowWorkout.actionID,
+        ])
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScheduleEvent>()), countBefore)
         XCTAssertEqual(
             try context.fetch(FetchDescriptor<ScheduleEvent>()).first(where: { $0.title == "普通日程" })?.notes,

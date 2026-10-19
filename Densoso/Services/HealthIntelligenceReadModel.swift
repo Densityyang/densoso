@@ -323,3 +323,27 @@ struct HealthIntelligenceReadModel: Sendable {
         }
     }
 }
+
+struct HealthStateHistoryPoint: Equatable, Sendable {
+    let date: Date
+    let state: HealthStateV2
+}
+
+enum HealthHistoryQueryError: Error, LocalizedError, Equatable {
+    static let maximumDays = 14
+
+    case invalidRange
+    case rangeTooLarge
+    case futureDate
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidRange:
+            "健康历史日期范围无效。"
+        case .rangeTooLarge:
+            "健康状态历史一次最多查询 14 天。"
+        case .futureDate:
+            "健康状态历史不能查询未来日期。"
+        }
+    }
+}

@@ -158,6 +158,21 @@ actor HealthProjectionActor {
         return ConfirmedDailyLoopPlans(workoutPlans: workoutPlans, trainingPlans: trainingPlans)
     }
 
+    func dailyLoopSnapshot(
+        asOf date: Date,
+        dailyBrief: DailyHealthBrief?,
+        pendingActions: [PendingAction]
+    ) throws -> DailyLoopSnapshot {
+        let plans = try confirmedPlanEntries()
+        return DailyLoopSnapshotComposer(calendar: calendar).compose(
+            asOf: date,
+            dailyBrief: dailyBrief,
+            pendingActions: pendingActions,
+            workoutPlans: plans.workoutPlans,
+            trainingPlans: plans.trainingPlans
+        )
+    }
+
     private func cachedDailyBrief(
         _ brief: DailyHealthBrief,
         snapshotHash: String,
