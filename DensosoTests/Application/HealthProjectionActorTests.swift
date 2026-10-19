@@ -138,6 +138,79 @@ final class HealthProjectionActorTests: XCTestCase {
         XCTAssertEqual(summary.sevenDay.averageProteinGrams, Double(mealCount * 2))
     }
 
+    func testLoadDaysIncludesAllWorkoutsAcrossStableFetchPages() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let today = calendar.startOfDay(for: Date())
+        let workoutDate = try XCTUnwrap(calendar.date(bySettingHour: 12, minute: 0, second: 0, of: today))
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let workoutCount = HealthIntelligenceReadModel.workoutFetchBatchSize + 1
+        for index in 0..<workoutCount {
+            let workout = WorkoutRecord(
+                date: workoutDate,
+                type: "walking",
+                durationMinutes: index + 1
+            )
+            workout.id = try XCTUnwrap(UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", index + 1)))
+            context.insert(workout)
+        }
+        let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: today))
+        context.insert(WorkoutRecord(
+            date: tomorrow.addingTimeInterval(12 * 60 * 60),
+            type: "cycling",
+            durationMinutes: 10_000
+        ))
+        try context.save()
+
+        let readModel = HealthIntelligenceReadModel(calendar: calendar)
+        let days = try readModel.loadDays(through: today, in: context)
+        let todayWorkouts = try XCTUnwrap(days.first(where: { $0.dayStart == today })).workouts
+
+        XCTAssertEqual(todayWorkouts.count, workoutCount)
+        XCTAssertEqual(todayWorkouts.reduce(0) { $0 + $1.durationMinutes }, Double((1...workoutCount).reduce(0, +)))
+    }
+
+    func testLoadDaysIncludesAllWeightsAcrossStableFetchPages() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let today = calendar.startOfDay(for: Date())
+        let measuredAt = try XCTUnwrap(calendar.date(bySettingHour: 12, minute: 0, second: 0, of: today))
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let weightCount = HealthIntelligenceReadModel.weightFetchBatchSize + 1
+        for index in 0..<weightCount {
+            context.insert(WeightRecord(
+                id: try XCTUnwrap(UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", index + 1))),
+                sourceActionKey: String(format: "projection-weight-%04d", index),
+                measuredAt: measuredAt,
+                kilograms: Double(index + 1)
+            ))
+        }
+        let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: today))
+        context.insert(WeightRecord(
+            sourceActionKey: "projection-weight-outside-window",
+            measuredAt: tomorrow.addingTimeInterval(12 * 60 * 60),
+            kilograms: 10_000
+        ))
+        try context.save()
+
+        let readModel = HealthIntelligenceReadModel(calendar: calendar)
+        let days = try readModel.loadDays(through: today, in: context)
+        let todayWeights = try XCTUnwrap(days.first(where: { $0.dayStart == today })).weightSamplesKilograms
+
+        XCTAssertEqual(todayWeights.count, weightCount)
+        XCTAssertEqual(todayWeights.reduce(0, +), Double((1...weightCount).reduce(0, +)))
+    }
+
     func testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

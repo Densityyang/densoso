@@ -124,6 +124,47 @@ final class GetUserPreferencesToolTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), beforeOutboxCount)
     }
 
+    func testRepositoryPagesInvalidRowsAndPreservesIDOrderAcrossTimestampCutoff() async throws {
+        let container = try makeV5Container()
+        let context = ModelContext(container)
+        let cutoffDate = Date(timeIntervalSince1970: 1_800_000_000)
+        for index in 0..<(SwiftDataAgentRepository.userPreferenceFetchBatchSize - 1) {
+            context.insert(UserPreferenceRecord(
+                sourceActionKey: String(format: "invalid-%04d", index),
+                categoryRaw: "unknown-category",
+                statement: "skip this row",
+                createdAt: cutoffDate.addingTimeInterval(Double(64 - index))
+            ))
+        }
+        context.insert(UserPreferenceRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000103")!,
+            sourceActionKey: "tie-a",
+            categoryRaw: UserPreferenceCategory.food.rawValue,
+            statement: "later ID at cutoff",
+            createdAt: cutoffDate
+        ))
+        context.insert(UserPreferenceRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000102")!,
+            sourceActionKey: "tie-m",
+            categoryRaw: UserPreferenceCategory.food.rawValue,
+            statement: "middle ID at cutoff",
+            createdAt: cutoffDate
+        ))
+        context.insert(UserPreferenceRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000101")!,
+            sourceActionKey: "tie-z",
+            categoryRaw: UserPreferenceCategory.food.rawValue,
+            statement: "lowest ID wins cutoff",
+            createdAt: cutoffDate
+        ))
+        try context.save()
+
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let preferences = try await repository.userPreferences(limit: 1)
+
+        XCTAssertEqual(preferences.map(\.statement), ["lowest ID wins cutoff"])
+    }
+
     func testOutputSizeLimitRemovesItemsAndReportsHasMore() throws {
         let preferences = (0..<AgentUserPreferencesLimits.maximumPreferenceCount).map { _ in
             AgentUserPreference(category: .communication, statement: String(repeating: "\n", count: 500))

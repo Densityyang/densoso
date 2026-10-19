@@ -17,6 +17,8 @@ enum ConfirmationInjectedFailure: Error, Equatable {
 
 @ModelActor
 actor SwiftDataConfirmationRepository: ConfirmationRepository {
+    static let expiredActionBatchSize = 64
+
     private var faultPoint: ConfirmationFaultPoint?
 
     func setFaultPoint(_ point: ConfirmationFaultPoint?) {
@@ -64,19 +66,33 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     func activeActions(now: Date) throws -> [PendingAction] {
         let pendingState = PendingActionState.pending.rawValue
         let committingState = PendingActionState.committing.rawValue
-        let expiredPredicate = #Predicate<PendingActionRecord> {
-            $0.stateRaw == pendingState && $0.expiresAt <= now
+        let expiredState = PendingActionState.expired.rawValue
+        let expirationSort = [
+            SortDescriptor(\PendingActionRecord.createdAt),
+            SortDescriptor(\PendingActionRecord.idempotencyKey),
+        ]
+        while true {
+            let expiredPredicate = #Predicate<PendingActionRecord> {
+                $0.stateRaw == pendingState && $0.expiresAt <= now
+            }
+            var expiredDescriptor = FetchDescriptor<PendingActionRecord>(
+                predicate: expiredPredicate,
+                sortBy: expirationSort
+            )
+            expiredDescriptor.fetchLimit = Self.expiredActionBatchSize
+            let expiredRecords = try modelContext.fetch(expiredDescriptor)
+            guard !expiredRecords.isEmpty else { break }
+            for record in expiredRecords {
+                record.stateRaw = expiredState
+                record.updatedAt = now
+            }
+            do {
+                try modelContext.save()
+            } catch {
+                modelContext.rollback()
+                throw error
+            }
         }
-        let expiredRecords = try modelContext.fetch(
-            FetchDescriptor<PendingActionRecord>(predicate: expiredPredicate)
-        )
-        var changed = false
-        for record in expiredRecords {
-            record.stateRaw = PendingActionState.expired.rawValue
-            record.updatedAt = now
-            changed = true
-        }
-        if changed { try modelContext.save() }
         let activePredicate = #Predicate<PendingActionRecord> {
             ($0.stateRaw == pendingState && $0.expiresAt > now)
                 || $0.stateRaw == committingState

@@ -156,6 +156,14 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Services/HealthIntelligenceReadModel.swift",
             (
                 "struct HealthIntelligenceReadModel",
+                "static let mealFetchBatchSize = 64",
+                "static let workoutFetchBatchSize = 64",
+                "static let weightFetchBatchSize = 64",
+                "private func mealProteinByDay(",
+                "sourceActionKey > cursorSourceActionKey",
+                "descriptor.fetchLimit = Self.mealFetchBatchSize",
+                "descriptor.fetchLimit = Self.workoutFetchBatchSize",
+                "descriptor.fetchLimit = Self.weightFetchBatchSize",
                 "func todayHealthState(asOf date: Date, in context: ModelContext)",
                 "func healthHistory(",
                 "HealthIntelligenceEngine(calendar: calendar)",
@@ -197,6 +205,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites",
                 "testHealthContextSummaryAggregatesMealProteinAcrossStableFetchPages",
+                "testLoadDaysIncludesAllWorkoutsAcrossStableFetchPages",
+                "testLoadDaysIncludesAllWeightsAcrossStableFetchPages",
                 "testActorHistoryRetainsExistingRangeValidation",
                 "testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
             ),

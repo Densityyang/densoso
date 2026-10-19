@@ -4,6 +4,19 @@ import SwiftData
 
 @ModelActor
 actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
+    static let userPreferenceFetchBatchSize = 64
+
+    private struct UserPreferenceCursor {
+        let createdAt: Date
+        let sourceActionKey: String
+    }
+
+    private struct UserPreferenceCandidate {
+        let record: UserPreferenceRecord
+        let category: UserPreferenceCategory
+        let statement: String
+    }
+
     func beginAgentRequest(
         requestID: UUID,
         conversationID: UUID,
@@ -277,28 +290,63 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
     func userPreferences(limit: Int) throws -> [AgentUserPreference] {
         let cappedLimit = min(max(limit, 1), AgentUserPreferencesLimits.maximumQueryPreferenceCount)
         let userReportedSource = UserPreferenceSource.userReported.rawValue
-        let predicate = #Predicate<UserPreferenceRecord> { $0.sourceRaw == userReportedSource }
-        let candidates: [(
-            record: UserPreferenceRecord,
-            category: UserPreferenceCategory,
-            statement: String
-        )] = try modelContext.fetch(FetchDescriptor<UserPreferenceRecord>(predicate: predicate)).compactMap { record in
-            guard let category = UserPreferenceCategory(rawValue: record.categoryRaw) else {
-                return nil
-            }
-            let statement = record.statement.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !statement.isEmpty, statement.count <= 500 else { return nil }
-            return (record, category, String(statement.prefix(AgentUserPreferencesLimits.maximumStatementLength)))
-        }
-        return candidates
-            .sorted {
-                if $0.record.createdAt != $1.record.createdAt {
-                    return $0.record.createdAt > $1.record.createdAt
+        let sortBy = [
+            SortDescriptor(\UserPreferenceRecord.createdAt, order: .reverse),
+            SortDescriptor(\UserPreferenceRecord.sourceActionKey),
+        ]
+        var cursor: UserPreferenceCursor?
+        var candidates: [UserPreferenceCandidate] = []
+        var reachedCutoff = false
+        while !reachedCutoff {
+            let predicate: Predicate<UserPreferenceRecord>
+            if let cursor {
+                let cursorCreatedAt = cursor.createdAt
+                let cursorSourceActionKey = cursor.sourceActionKey
+                predicate = #Predicate<UserPreferenceRecord> {
+                    $0.sourceRaw == userReportedSource
+                        && ($0.createdAt < cursorCreatedAt
+                            || ($0.createdAt == cursorCreatedAt
+                                && $0.sourceActionKey > cursorSourceActionKey))
                 }
-                return $0.record.id.uuidString < $1.record.id.uuidString
+            } else {
+                predicate = #Predicate<UserPreferenceRecord> { $0.sourceRaw == userReportedSource }
             }
-            .prefix(cappedLimit)
-            .map { AgentUserPreference(category: $0.category, statement: $0.statement) }
+            var descriptor = FetchDescriptor<UserPreferenceRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.userPreferenceFetchBatchSize
+            let batch = try modelContext.fetch(descriptor)
+            guard !batch.isEmpty else { break }
+
+            for record in batch {
+                cursor = UserPreferenceCursor(
+                    createdAt: record.createdAt,
+                    sourceActionKey: record.sourceActionKey
+                )
+                if candidates.count == cappedLimit,
+                   let cutoffDate = candidates.last?.record.createdAt,
+                   record.createdAt < cutoffDate {
+                    reachedCutoff = true
+                    break
+                }
+                guard let category = UserPreferenceCategory(rawValue: record.categoryRaw) else {
+                    continue
+                }
+                let statement = record.statement.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !statement.isEmpty, statement.count <= 500 else { continue }
+                candidates.append(UserPreferenceCandidate(
+                    record: record,
+                    category: category,
+                    statement: String(statement.prefix(AgentUserPreferencesLimits.maximumStatementLength))
+                ))
+                candidates.sort {
+                    if $0.record.createdAt != $1.record.createdAt {
+                        return $0.record.createdAt > $1.record.createdAt
+                    }
+                    return $0.record.id.uuidString < $1.record.id.uuidString
+                }
+                if candidates.count > cappedLimit { candidates.removeLast() }
+            }
+        }
+        return candidates.map { AgentUserPreference(category: $0.category, statement: $0.statement) }
     }
 
     func ensureConversation(id: UUID) throws {

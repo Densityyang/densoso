@@ -109,6 +109,70 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
         XCTAssertNil(summaryWithUnknownPrice.currency)
     }
 
+    func testMonthlyUsagePagesLastCrossCurrencyRecordAndFiltersProviderWindow() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let monthStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let monthEnd = monthStart.addingTimeInterval(30 * 86_400)
+        let recordCount = SwiftDataProviderGovernanceRepository.monthlyUsageBatchSize + 1
+        for index in 0..<recordCount {
+            let record = usageRecord(
+                key: String(format: "monthly-page-%04d", index),
+                provider: .deepSeek,
+                createdAt: monthStart.addingTimeInterval(60),
+                input: 1,
+                output: 2,
+                audioSeconds: 1.25,
+                cost: index == recordCount - 1 ? 200 : 100,
+                currency: index == recordCount - 1 ? "EUR" : "USD"
+            )
+            context.insert(record)
+        }
+        [
+            usageRecord(
+                key: "monthly-page-before-window",
+                provider: .deepSeek,
+                createdAt: monthStart.addingTimeInterval(-1),
+                input: 999,
+                output: 999,
+                audioSeconds: 999,
+                cost: 999
+            ),
+            usageRecord(
+                key: "monthly-page-end-exclusive",
+                provider: .deepSeek,
+                createdAt: monthEnd,
+                input: 999,
+                output: 999,
+                audioSeconds: 999,
+                cost: 999
+            ),
+            usageRecord(
+                key: "monthly-page-other-provider",
+                provider: .qwen,
+                createdAt: monthStart.addingTimeInterval(60),
+                input: 999,
+                output: 999,
+                audioSeconds: 999,
+                cost: 999
+            ),
+        ].forEach(context.insert)
+        try context.save()
+
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        let summary = try await repository.monthlyUsage(
+            provider: .deepSeek,
+            monthStart: monthStart,
+            monthEnd: monthEnd
+        )
+
+        XCTAssertEqual(summary.inputTokens, recordCount)
+        XCTAssertEqual(summary.outputTokens, recordCount * 2)
+        XCTAssertEqual(summary.audioSeconds, Double(recordCount) * 1.25)
+        XCTAssertNil(summary.estimatedCostMicros)
+        XCTAssertNil(summary.currency)
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         return try ModelContainer(
@@ -123,6 +187,7 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
         createdAt: Date,
         input: Int,
         output: Int,
+        audioSeconds: Double = 0,
         cost: Int64,
         currency: String = "USD"
     ) -> ProviderUsageRecord {
@@ -135,6 +200,7 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
         record.createdAt = createdAt
         record.inputTokens = input
         record.outputTokens = output
+        record.audioSeconds = audioSeconds
         record.estimatedCostMicros = cost
         record.currency = currency
         record.rateVersion = cost < 0 ? "unknown" : "fixture-v1"

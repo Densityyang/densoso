@@ -6,6 +6,8 @@ import SwiftData
 /// `HealthProjectionActor` for both Agent reads and explicit brief refreshes.
 struct HealthIntelligenceReadModel: Sendable {
     static let mealFetchBatchSize = 64
+    static let workoutFetchBatchSize = 64
+    static let weightFetchBatchSize = 64
 
     private let calendar: Calendar
     private let engine: HealthIntelligenceEngine
@@ -194,23 +196,63 @@ struct HealthIntelligenceReadModel: Sendable {
         let weightPredicate = #Predicate<WeightRecord> {
             $0.measuredAt >= start && $0.measuredAt < exclusiveEnd
         }
-        let localWeights = try context.fetch(
-            FetchDescriptor<WeightRecord>(
-                predicate: weightPredicate,
-                sortBy: [SortDescriptor(\WeightRecord.measuredAt)]
-            )
-        )
+        let weightSortBy = [
+            SortDescriptor(\WeightRecord.measuredAt),
+            SortDescriptor(\WeightRecord.id),
+        ]
+        var localWeights: [WeightRecord] = []
+        var weightCursor: WeightCursor?
+        while true {
+            let predicate: Predicate<WeightRecord>
+            if let weightCursor {
+                let cursorMeasuredAt = weightCursor.measuredAt
+                let cursorID = weightCursor.id
+                predicate = #Predicate<WeightRecord> { record in
+                    record.measuredAt >= start && record.measuredAt < exclusiveEnd
+                        && (record.measuredAt > cursorMeasuredAt
+                            || (record.measuredAt == cursorMeasuredAt && record.id > cursorID))
+                }
+            } else {
+                predicate = weightPredicate
+            }
+            var descriptor = FetchDescriptor<WeightRecord>(predicate: predicate, sortBy: weightSortBy)
+            descriptor.fetchLimit = Self.weightFetchBatchSize
+            let batch = try context.fetch(descriptor)
+            guard let last = batch.last else { break }
+            localWeights.append(contentsOf: batch)
+            weightCursor = WeightCursor(measuredAt: last.measuredAt, id: last.id)
+        }
         let weightsByDay = Dictionary(grouping: localWeights, by: { calendar.startOfDay(for: $0.measuredAt) })
         let proteinByDay = try mealProteinByDay(from: start, before: exclusiveEnd, in: context)
         let workoutPredicate = #Predicate<WorkoutRecord> {
             $0.date >= start && $0.date < exclusiveEnd
         }
-        let workoutRecords = try context.fetch(
-            FetchDescriptor<WorkoutRecord>(
-                predicate: workoutPredicate,
-                sortBy: [SortDescriptor(\WorkoutRecord.date)]
-            )
-        )
+        let workoutSortBy = [
+            SortDescriptor(\WorkoutRecord.date),
+            SortDescriptor(\WorkoutRecord.id),
+        ]
+        var workoutRecords: [WorkoutRecord] = []
+        var workoutCursor: WorkoutCursor?
+        while true {
+            let predicate: Predicate<WorkoutRecord>
+            if let workoutCursor {
+                let cursorDate = workoutCursor.date
+                let cursorID = workoutCursor.id
+                predicate = #Predicate<WorkoutRecord> { record in
+                    record.date >= start && record.date < exclusiveEnd
+                        && (record.date > cursorDate
+                            || (record.date == cursorDate && record.id > cursorID))
+                }
+            } else {
+                predicate = workoutPredicate
+            }
+            var descriptor = FetchDescriptor<WorkoutRecord>(predicate: predicate, sortBy: workoutSortBy)
+            descriptor.fetchLimit = Self.workoutFetchBatchSize
+            let batch = try context.fetch(descriptor)
+            guard let last = batch.last else { break }
+            workoutRecords.append(contentsOf: batch)
+            workoutCursor = WorkoutCursor(date: last.date, id: last.id)
+        }
         let workoutsByDay = Dictionary(grouping: workoutRecords, by: { calendar.startOfDay(for: $0.date) })
         var days: [HealthIntelligenceDay] = []
         for offset in 0...dayCount {
@@ -352,6 +394,16 @@ struct HealthIntelligenceReadModel: Sendable {
 private struct MealCursor {
     let date: Date
     let sourceActionKey: String
+}
+
+private struct WorkoutCursor {
+    let date: Date
+    let id: UUID
+}
+
+private struct WeightCursor {
+    let measuredAt: Date
+    let id: UUID
 }
 
 private struct DailyProteinAccumulator {

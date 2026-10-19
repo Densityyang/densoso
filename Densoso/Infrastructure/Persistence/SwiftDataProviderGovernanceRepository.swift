@@ -3,6 +3,13 @@ import SwiftData
 
 @ModelActor
 actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
+    static let monthlyUsageBatchSize = 64
+
+    private struct UsageCursor {
+        let createdAt: Date
+        let usageKey: String
+    }
+
     func isConsentGranted(provider: ProviderID, dataClass: ProviderDataClass) throws -> Bool {
         let key = consentKey(provider: provider, dataClass: dataClass)
         var descriptor = FetchDescriptor<ConsentRecord>(
@@ -76,24 +83,61 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
         monthEnd: Date
     ) throws -> ProviderUsageSummary {
         let providerRawValue = provider.rawValue
-        let predicate = #Predicate<ProviderUsageRecord> { record in
-            record.provider == providerRawValue
-                && record.createdAt >= monthStart
-                && record.createdAt < monthEnd
+        let sortBy = [
+            SortDescriptor(\ProviderUsageRecord.createdAt),
+            SortDescriptor(\ProviderUsageRecord.usageKey),
+        ]
+        var cursor: UsageCursor?
+        var recordCount = 0
+        var pricedCount = 0
+        var inputTokens = 0
+        var outputTokens = 0
+        var audioSeconds = 0.0
+        var pricedCost: Int64 = 0
+        var currencies = Set<String>()
+        while true {
+            let predicate: Predicate<ProviderUsageRecord>
+            if let cursor {
+                let cursorCreatedAt = cursor.createdAt
+                let cursorUsageKey = cursor.usageKey
+                predicate = #Predicate<ProviderUsageRecord> { record in
+                    record.provider == providerRawValue
+                        && record.createdAt >= monthStart
+                        && record.createdAt < monthEnd
+                        && (record.createdAt > cursorCreatedAt
+                            || (record.createdAt == cursorCreatedAt && record.usageKey > cursorUsageKey))
+                }
+            } else {
+                predicate = #Predicate<ProviderUsageRecord> { record in
+                    record.provider == providerRawValue
+                        && record.createdAt >= monthStart
+                        && record.createdAt < monthEnd
+                }
+            }
+            var descriptor = FetchDescriptor<ProviderUsageRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.monthlyUsageBatchSize
+            let batch = try modelContext.fetch(descriptor)
+            guard !batch.isEmpty else { break }
+
+            for record in batch {
+                cursor = UsageCursor(createdAt: record.createdAt, usageKey: record.usageKey)
+                recordCount += 1
+                inputTokens += record.inputTokens
+                outputTokens += record.outputTokens
+                audioSeconds += record.audioSeconds
+                if record.estimatedCostMicros >= 0 {
+                    pricedCount += 1
+                    currencies.insert(record.currency)
+                    pricedCost += record.estimatedCostMicros
+                }
+            }
         }
-        let records = try modelContext.fetch(
-            FetchDescriptor<ProviderUsageRecord>(predicate: predicate)
-        )
-        let priced = records.filter { $0.estimatedCostMicros >= 0 }
-        let currencies = Set(priced.map(\.currency))
-        let cost: Int64? = priced.count == records.count && currencies.count <= 1
-            ? priced.reduce(0) { $0 + $1.estimatedCostMicros }
-            : nil
+        let cost: Int64? = pricedCount == recordCount && currencies.count <= 1 ? pricedCost : nil
         return ProviderUsageSummary(
             provider: provider,
-            inputTokens: records.reduce(0) { $0 + $1.inputTokens },
-            outputTokens: records.reduce(0) { $0 + $1.outputTokens },
-            audioSeconds: records.reduce(0) { $0 + $1.audioSeconds },
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            audioSeconds: audioSeconds,
             estimatedCostMicros: cost,
             currency: cost == nil ? nil : currencies.first
         )

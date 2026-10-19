@@ -129,6 +129,7 @@ unknown so the live projection does not reuse it as current.
     `HealthRepositoryTests.testDuplicateHealthAggregateBucketsKeepLastBucketPerDay`,
     `ConfirmationCoordinatorTests.testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision`,
     `HealthRepositoryTests.testImportedWorkoutDedupProcessesUUIDGroupsAcrossFetchBatchBoundary`,
+    `HealthRepositoryTests.testOutboxEnqueueReadsMatchingVersionsAndLatestReceiptAmongManyRows`,
     `HealthSyncOutboxWorkerTests.testInterruptedOutboxRecoveryAndProcessingPagePastBoundedBatch`,
     `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,
     and `HealthRepositoryTests.testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval`.

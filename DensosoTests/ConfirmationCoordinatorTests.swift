@@ -324,6 +324,63 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         try assertNoCommittedWrites(in: expiredHarness.container)
     }
 
+    func testActiveActionsExpiresPendingRowsAcrossBoundedBatchesAndKeepsCommitting() async throws {
+        let harness = try Harness()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let activeAction = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        let committingAction = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        let context = ModelContext(harness.container)
+        let committingID = committingAction.id
+        let committingPredicate = #Predicate<PendingActionRecord> { $0.id == committingID }
+        let committingRecord = try XCTUnwrap(context.fetch(
+            FetchDescriptor<PendingActionRecord>(predicate: committingPredicate)
+        ).first)
+        committingRecord.stateRaw = PendingActionState.committing.rawValue
+        committingRecord.expiresAt = now.addingTimeInterval(-1)
+
+        let expiredCount = SwiftDataConfirmationRepository.expiredActionBatchSize + 1
+        for index in 0..<expiredCount {
+            context.insert(PendingActionRecord(
+                idempotencyKey: "expired-batch-\(index)",
+                actionTypeRaw: ActionType.meal.rawValue,
+                canonicalPayloadData: Data(),
+                payloadData: Data(),
+                clientRequestID: UUID(),
+                stateRaw: PendingActionState.pending.rawValue,
+                createdAt: now.addingTimeInterval(Double(-index - 1)),
+                expiresAt: now.addingTimeInterval(-1)
+            ))
+        }
+        try context.save()
+
+        let activeActions = try await harness.repository.activeActions(now: now)
+        let statesByID = Dictionary(uniqueKeysWithValues: activeActions.map { ($0.id, $0.state) })
+
+        XCTAssertEqual(statesByID[activeAction.id], .pending)
+        XCTAssertEqual(statesByID[committingAction.id], .committing)
+        XCTAssertEqual(activeActions.count, 2)
+        let verificationContext = ModelContext(harness.container)
+        let expiredState = PendingActionState.expired.rawValue
+        let expiredPredicate = #Predicate<PendingActionRecord> { $0.stateRaw == expiredState }
+        XCTAssertEqual(
+            try verificationContext.fetchCount(FetchDescriptor<PendingActionRecord>(predicate: expiredPredicate)),
+            expiredCount
+        )
+        let pendingState = PendingActionState.pending.rawValue
+        let stillExpiredPendingPredicate = #Predicate<PendingActionRecord> {
+            $0.stateRaw == pendingState && $0.expiresAt <= now
+        }
+        XCTAssertTrue(try verificationContext.fetch(
+            FetchDescriptor<PendingActionRecord>(predicate: stillExpiredPendingPredicate)
+        ).isEmpty)
+    }
+
     func testTransactionFaultRollsBackThenRecoveryRestoresPending() async throws {
         let harness = try Harness()
         let action = try await harness.coordinator.stage(payload: try Self.sampleMeal(), clientRequestID: UUID())

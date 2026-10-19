@@ -54,6 +54,109 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).count, 2)
     }
 
+    func testOutboxEnqueueReadsMatchingVersionsAndLatestReceiptAmongManyRows() throws {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let recordID = UUID(uuidString: "00000000-0000-0000-0000-000000000601")!
+        let syncIdentifier = "densoso.meal.\(recordID.uuidString.lowercased())"
+        let olderReceiptID = UUID()
+        let latestReceiptID = UUID()
+        let otherTypeReceiptID = UUID()
+        let olderWeightReceiptID = UUID()
+        let latestWeightReceiptID = UUID()
+        let meal = MealRecord(id: recordID, date: date, totalCaloriesKcal: 420)
+        let weight = WeightRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000602")!,
+            sourceActionKey: "outbox-enqueue-weight",
+            measuredAt: date.addingTimeInterval(60),
+            kilograms: 69
+        )
+        context.insert(meal)
+        context.insert(weight)
+        context.insert(HealthSyncOutboxEntry(
+            operation: "upsertMeal",
+            recordID: recordID,
+            receiptID: olderReceiptID,
+            syncIdentifier: syncIdentifier,
+            syncVersion: 3
+        ))
+        context.insert(HealthSyncOutboxEntry(
+            operation: "upsertMeal",
+            recordID: recordID,
+            receiptID: latestReceiptID,
+            syncIdentifier: syncIdentifier,
+            syncVersion: 7
+        ))
+        context.insert(HealthSyncOutboxEntry(
+            operation: "deleteMeal",
+            recordID: recordID,
+            syncIdentifier: syncIdentifier,
+            syncVersion: 8
+        ))
+        context.insert(HealthSyncOutboxEntry(
+            operation: "upsertWeight",
+            recordID: recordID,
+            receiptID: otherTypeReceiptID,
+            syncIdentifier: "densoso.weight.\(recordID.uuidString.lowercased())",
+            syncVersion: 99
+        ))
+        context.insert(HealthSyncOutboxEntry(
+            operation: "upsertWeight",
+            recordID: weight.id,
+            receiptID: olderWeightReceiptID,
+            syncIdentifier: "densoso.weight.\(weight.id.uuidString.lowercased())",
+            syncVersion: 4
+        ))
+        context.insert(HealthSyncOutboxEntry(
+            operation: "deleteWeight",
+            recordID: weight.id,
+            syncIdentifier: "densoso.weight.\(weight.id.uuidString.lowercased())",
+            syncVersion: 6
+        ))
+        context.insert(HealthSyncOutboxEntry(
+            operation: "upsertWeight",
+            recordID: weight.id,
+            receiptID: latestWeightReceiptID,
+            syncIdentifier: "densoso.weight.\(weight.id.uuidString.lowercased())",
+            syncVersion: 5
+        ))
+        context.insert(HealthSyncOutboxEntry(
+            operation: "upsertMeal",
+            recordID: weight.id,
+            receiptID: otherTypeReceiptID,
+            syncIdentifier: "densoso.meal.\(weight.id.uuidString.lowercased())",
+            syncVersion: 999
+        ))
+        for index in 0..<200 {
+            context.insert(HealthSyncOutboxEntry(
+                operation: "upsertMeal",
+                recordID: UUID(),
+                receiptID: UUID(),
+                syncVersion: 1_000 + index
+            ))
+        }
+        try context.save()
+
+        let repository = HealthRepository(modelContext: context)
+        try repository.update(meal)
+        try repository.update(weight)
+
+        let targetPredicate = #Predicate<HealthSyncOutboxEntry> { $0.recordID == recordID }
+        let targetEntries = try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>(predicate: targetPredicate))
+        let appended = try XCTUnwrap(targetEntries.first { $0.syncVersion == 9 })
+        XCTAssertEqual(appended.operation, "upsertMeal")
+        XCTAssertEqual(appended.syncIdentifier, syncIdentifier)
+        XCTAssertEqual(appended.receiptID, latestReceiptID)
+        XCTAssertEqual(targetEntries.count, 5)
+
+        let weightRecordID = weight.id
+        let weightPredicate = #Predicate<HealthSyncOutboxEntry> { $0.recordID == weightRecordID }
+        let weightEntries = try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>(predicate: weightPredicate))
+        let appendedWeight = try XCTUnwrap(weightEntries.first { $0.syncVersion == 7 })
+        XCTAssertEqual(appendedWeight.operation, "upsertWeight")
+        XCTAssertEqual(appendedWeight.receiptID, latestWeightReceiptID)
+        XCTAssertEqual(weightEntries.count, 5)
+    }
+
     func testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs() async throws {
         let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
         let mealCount = ConfirmedFoodHistoryReadLimits.mealPageSize + 1

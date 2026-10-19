@@ -517,20 +517,47 @@ final class HealthRepository: HealthSyncRepository {
 
     private func enqueue(operation: String, recordID: UUID, syncType: String, receiptID: UUID? = nil) throws {
         let syncIdentifier = "densoso.\(syncType).\(recordID.uuidString.lowercased())"
-        let priorEntries = try modelContext.fetch(FetchDescriptor<HealthSyncOutboxEntry>())
-            .filter { existing in
-                guard let canonical = Self.canonicalSyncIdentifier(
-                    operation: existing.operation,
-                    recordID: existing.recordID
-                ) else { return false }
-                return canonical == syncIdentifier
+        let expectedOperations: (upsert: String, delete: String)?
+        switch syncType {
+        case "meal": expectedOperations = ("upsertMeal", "deleteMeal")
+        case "weight": expectedOperations = ("upsertWeight", "deleteWeight")
+        default: expectedOperations = nil
+        }
+
+        var priorVersion = 0
+        var linkedReceiptID = receiptID
+        if let expectedOperations {
+            let upsertOperation = expectedOperations.upsert
+            let deleteOperation = expectedOperations.delete
+            let versionPredicate = #Predicate<HealthSyncOutboxEntry> {
+                $0.recordID == recordID
+                    && ($0.operation == upsertOperation || $0.operation == deleteOperation)
             }
-        let priorVersion = priorEntries
-            .map(\.syncVersion)
-            .max() ?? 0
-        let linkedReceiptID = receiptID ?? priorEntries
-            .filter { $0.receiptID != nil }
-            .max(by: { $0.syncVersion < $1.syncVersion })?.receiptID
+            var versionDescriptor = FetchDescriptor<HealthSyncOutboxEntry>(
+                predicate: versionPredicate,
+                sortBy: [SortDescriptor(\HealthSyncOutboxEntry.syncVersion, order: .reverse)]
+            )
+            versionDescriptor.fetchLimit = 1
+            priorVersion = try modelContext.fetch(versionDescriptor).first?.syncVersion ?? 0
+
+            if linkedReceiptID == nil {
+                let receiptPredicate = #Predicate<HealthSyncOutboxEntry> {
+                    $0.recordID == recordID
+                        && ($0.operation == upsertOperation || $0.operation == deleteOperation)
+                        && $0.receiptID != nil
+                }
+                var receiptDescriptor = FetchDescriptor<HealthSyncOutboxEntry>(
+                    predicate: receiptPredicate,
+                    sortBy: [
+                        SortDescriptor(\HealthSyncOutboxEntry.syncVersion, order: .reverse),
+                        SortDescriptor(\HealthSyncOutboxEntry.createdAt, order: .reverse),
+                        SortDescriptor(\HealthSyncOutboxEntry.idempotencyKey, order: .reverse),
+                    ]
+                )
+                receiptDescriptor.fetchLimit = 1
+                linkedReceiptID = try modelContext.fetch(receiptDescriptor).first?.receiptID
+            }
+        }
         modelContext.insert(HealthSyncOutboxEntry(
             operation: operation,
             recordID: recordID,

@@ -65,6 +65,9 @@ to domain/persistence behavior and have a dedicated evidence artifact.
 3. concurrent duplicate staging/confirmation produces one record, receipt, and
    logical outbox entry;
 4. unconfirmed, rejected, and expired actions write zero health records;
+   expired pending rows are retired in stable 64-row batches while committing
+   actions remain visible, covered by
+   `ConfirmationCoordinatorTests.testActiveActionsExpiresPendingRowsAcrossBoundedBatchesAndKeepsCommitting`;
 5. transaction fault injection rolls back record/projection/receipt/outbox;
 6. a crash after commit returns the existing receipt without duplication;
 7. interrupted outbox sends become retryable while retaining attempt state;

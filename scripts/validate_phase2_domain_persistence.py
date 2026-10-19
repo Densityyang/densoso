@@ -120,6 +120,8 @@ def main() -> int:
             "HealthSyncState.retryable.rawValue",
             "reprojectDailyHealthSnapshot",
             "let expiredPredicate = #Predicate<PendingActionRecord>",
+            "static let expiredActionBatchSize = 64",
+            "expiredDescriptor.fetchLimit = Self.expiredActionBatchSize",
             "let activePredicate = #Predicate<PendingActionRecord>",
             "let committingPredicate = #Predicate<PendingActionRecord>",
             "let sendingPredicate = #Predicate<HealthSyncOutboxEntry>",
@@ -200,6 +202,7 @@ def main() -> int:
         (
             "testTransactionFaultRollsBackThenRecoveryRestoresPending",
             "testPendingActionSurvivesRepositoryRecreation",
+            "testActiveActionsExpiresPendingRowsAcrossBoundedBatchesAndKeepsCommitting",
         ),
         errors,
     )

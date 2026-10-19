@@ -24,6 +24,8 @@ target snapshot. HealthKit sample values and device metadata are reduced to
 daily summaries before persistence; a sample-ID interval index with unresolved
 projection-day keys supports deletion and moved-sample rebuilds. Ambiguous
 full-day reads retain history but suppress it from the live projection.
+HealthIntelligenceReadModel pages daily meal protein, weight and workout history
+inside its bounded date window.
 Historical HealthKit weight lookup walks the V6 bodyMass index in bounded,
 newest-first batches, fetches each batch's daily snapshots together, and skips
 deleted or unknown summaries.
@@ -50,6 +52,8 @@ deleted or unknown summaries.
   `HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches`,
   `HealthProjectionActorTests.testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites`,
   `HealthProjectionActorTests.testHealthContextSummaryAggregatesMealProteinAcrossStableFetchPages`,
+  `HealthProjectionActorTests.testLoadDaysIncludesAllWorkoutsAcrossStableFetchPages`,
+  `HealthProjectionActorTests.testLoadDaysIncludesAllWeightsAcrossStableFetchPages`,
   `HealthProjectionActorTests.testActorHistoryRetainsExistingRangeValidation`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents`,
   `HealthNarrativePolicyTests`,

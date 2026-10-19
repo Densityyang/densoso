@@ -66,9 +66,13 @@ def main() -> int:
             "PricingDescriptor",
             "exact provider, model and capability",
             "retain unknown cost",
+            "stable 64-row keyset pages",
+            "cross-page currency fixture",
             "Normalize local and cloud turns as `AgentTurnResult`",
             "Local capture detection is a proposal only",
             "workout cannot be classified as a future workout plan",
+            "stable 64-row",
+            "invalid rows and valid ties across the page boundary",
         ],
         errors,
     )
@@ -234,7 +238,20 @@ def main() -> int:
             "func userPreferences(limit:",
             "UserPreferenceSource.userReported.rawValue",
             "UserPreferenceCategory(rawValue: record.categoryRaw)",
+            "static let userPreferenceFetchBatchSize = 64",
+            "sourceActionKey > cursorSourceActionKey",
+            "descriptor.fetchLimit = Self.userPreferenceFetchBatchSize",
             "AgentUserPreference(category:",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataProviderGovernanceRepository.swift",
+        [
+            "static let monthlyUsageBatchSize = 64",
+            "private struct UsageCursor",
+            "record.usageKey > cursorUsageKey",
+            "descriptor.fetchLimit = Self.monthlyUsageBatchSize",
         ],
         errors,
     )
@@ -248,6 +265,7 @@ def main() -> int:
         [
             "testToolUsesStrictEmptyReadOnlySchemaAndExplicitRequestPolicy",
             "testRepositoryReturnsOnlyConfirmedUserReportedCategoriesWithoutWritesOrIDs",
+            "testRepositoryPagesInvalidRowsAndPreservesIDOrderAcrossTimestampCutoff",
             "testOutputSizeLimitRemovesItemsAndReportsHasMore",
         ],
         errors,
@@ -358,6 +376,7 @@ def main() -> int:
         [
             "testConsentAndUsageDedupResolveExactKeysWithoutDuplicatingRows",
             "testMonthlyUsageQueriesProviderAndHalfOpenDateWindowAndKeepsUnknownCost",
+            "testMonthlyUsagePagesLastCrossCurrencyRecordAndFiltersProviderWindow",
         ],
         errors,
     )
