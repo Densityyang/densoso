@@ -1,5 +1,6 @@
 # XcodeGen / Xcode
 Densoso.xcodeproj
+DensosoApp-Info.plist
 *.xcworkspace
 xcuserdata/
 *.ipa

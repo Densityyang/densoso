@@ -201,6 +201,22 @@ protocol VoiceTranscriberFactory: AnyObject {
 
 protocol CloudSpeechProvider: Sendable {
     func transcribe(audio: SanitizedAudio, locale: Locale) async throws -> CloudTranscript
+    func transcribe(
+        audio: SanitizedAudio,
+        locale: Locale,
+        requestID: UUID
+    ) async throws -> CloudTranscript
+}
+
+extension CloudSpeechProvider {
+    /// Compatibility path for providers that do not yet attach usage to a caller request.
+    func transcribe(
+        audio: SanitizedAudio,
+        locale: Locale,
+        requestID: UUID
+    ) async throws -> CloudTranscript {
+        try await transcribe(audio: audio, locale: locale)
+    }
 }
 
 protocol SpeechAudioStoring: Sendable {

@@ -477,6 +477,7 @@ final class SpeechService {
 
     private func finalizeCapture(cancelled: Bool) async {
         guard isActiveCapture, state != .finalizing else { return }
+        let captureRequestID = activeRequestID
         state = .finalizing
         let finalizingBackend = activeBackend
         let oldDurationTask = durationTask
@@ -585,7 +586,8 @@ final class SpeechService {
               cloudStillAllowed,
               let audio,
               audio.durationSeconds >= policy.minimumCloudFallbackSeconds,
-              let cloudProvider else {
+              let cloudProvider,
+              let captureRequestID else {
             await audioStore.discard()
             runtime = .manualEntry
             let failure = makeFailure(
@@ -603,11 +605,15 @@ final class SpeechService {
         }
 
         do {
-            let cloud = try await cloudProvider.transcribe(audio: audio, locale: locale)
+            let cloud = try await cloudProvider.transcribe(
+                audio: audio,
+                locale: locale,
+                requestID: captureRequestID
+            )
             transcribedText = cloud.text
             transcriptSource = .qwenASR
             runtime = .qwenASR
-            if let usageLedger, let requestID = activeRequestID {
+            if let usageLedger {
                 try? await usageLedger.record(
                     ProviderUsage(
                         provider: .qwen,
@@ -618,7 +624,7 @@ final class SpeechService {
                         audioSeconds: cloud.billedAudioSeconds,
                         attempt: cloud.attempt
                     ),
-                    requestID: requestID
+                    requestID: captureRequestID
                 )
             }
             state = .completed

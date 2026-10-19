@@ -15,6 +15,7 @@ targets:
       - path: Densoso/Resources
         type: folder
     info:
+      path: DensosoApp-Info.plist
       properties:
         BGTaskSchedulerPermittedIdentifiers:
           - com.densoso.densoso.daily-loop.refresh

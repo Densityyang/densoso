@@ -29,6 +29,14 @@ struct QwenASRProvider: CloudSpeechProvider {
     }
 
     func transcribe(audio: SanitizedAudio, locale: Locale) async throws -> CloudTranscript {
+        try await transcribe(audio: audio, locale: locale, requestID: UUID())
+    }
+
+    func transcribe(
+        audio: SanitizedAudio,
+        locale: Locale,
+        requestID: UUID
+    ) async throws -> CloudTranscript {
         guard audio.mimeType == "audio/wav",
               audio.sampleRate == SpeechAudioFrame.canonicalSampleRate,
               audio.channelCount == SpeechAudioFrame.canonicalChannelCount,
@@ -57,7 +65,6 @@ struct QwenASRProvider: CloudSpeechProvider {
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.httpBody = body
 
-        let requestID = UUID()
         let startedAt = Date()
         let result: ProviderHTTPResult
         do {
@@ -135,13 +142,21 @@ struct ConfiguredQwenASRProvider: CloudSpeechProvider {
     }
 
     func transcribe(audio: SanitizedAudio, locale: Locale) async throws -> CloudTranscript {
+        try await transcribe(audio: audio, locale: locale, requestID: UUID())
+    }
+
+    func transcribe(
+        audio: SanitizedAudio,
+        locale: Locale,
+        requestID: UUID
+    ) async throws -> CloudTranscript {
         let endpoint = try UserDefaultsQwenASREndpointSource().endpoint()
         return try await QwenASRProvider(
             endpoint: endpoint,
             credentialSource: credentialSource,
             transport: transport,
             logSink: logSink
-        ).transcribe(audio: audio, locale: locale)
+        ).transcribe(audio: audio, locale: locale, requestID: requestID)
     }
 }
 

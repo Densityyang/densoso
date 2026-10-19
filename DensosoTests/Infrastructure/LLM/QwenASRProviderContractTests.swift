@@ -13,13 +13,16 @@ final class QwenASRProviderContractTests: XCTestCase {
             ]
         )
         let clock = TestProviderRetryClock()
+        let logSink = RecordingProviderLogSink()
         let provider = QwenASRProvider(
             endpoint: URL(string: "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions")!,
             credentialSource: TestCredentialSource(values: [.qwen: "secret-qwen-key"]),
             transport: transport,
             clock: clock,
+            logSink: logSink,
             jitter: { _ in 0 }
         )
+        let requestID = UUID()
         let audio = SanitizedAudio(
             data: Data("RIFF-gate04".utf8),
             mimeType: "audio/wav",
@@ -30,12 +33,14 @@ final class QwenASRProviderContractTests: XCTestCase {
 
         let transcript = try await provider.transcribe(
             audio: audio,
-            locale: Locale(identifier: "zh-CN")
+            locale: Locale(identifier: "zh-CN"),
+            requestID: requestID
         )
 
         XCTAssertEqual(transcript.text, "午饭吃了米饭二百克")
         XCTAssertEqual(transcript.model, "qwen3-asr-flash")
         XCTAssertEqual(transcript.billedAudioSeconds, 1)
+        XCTAssertEqual(logSink.recordedMetadata().first?.requestID, requestID)
         let requests = await transport.recordedRequests()
         let request = try XCTUnwrap(requests.first)
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret-qwen-key")

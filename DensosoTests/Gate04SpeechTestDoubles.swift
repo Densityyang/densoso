@@ -199,6 +199,7 @@ actor FakeCloudSpeechProvider: CloudSpeechProvider {
     )
     var error: Error?
     private var capturedAudio: [SanitizedAudio] = []
+    private var capturedRequestIDs: [UUID] = []
 
     func transcribe(audio: SanitizedAudio, locale: Locale) throws -> CloudTranscript {
         capturedAudio.append(audio)
@@ -206,7 +207,17 @@ actor FakeCloudSpeechProvider: CloudSpeechProvider {
         return result
     }
 
+    func transcribe(
+        audio: SanitizedAudio,
+        locale: Locale,
+        requestID: UUID
+    ) throws -> CloudTranscript {
+        capturedRequestIDs.append(requestID)
+        return try transcribe(audio: audio, locale: locale)
+    }
+
     func callCount() -> Int { capturedAudio.count }
+    func requestIDs() -> [UUID] { capturedRequestIDs }
 }
 
 actor InMemorySpeechAudioStore: SpeechAudioStoring {

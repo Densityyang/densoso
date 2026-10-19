@@ -106,8 +106,15 @@ final class SpeechCaptureStateMachineTests: XCTestCase {
         XCTAssertEqual(harness.service.state, .completed)
         let discardCalls = await harness.store.discardCalls
         let usageCount = await harness.governance.usageCount()
+        let requestIDs = await harness.cloud.requestIDs()
+        let captureRequestID = try XCTUnwrap(requestIDs.first)
+        let usageKeys = await harness.governance.recordedUsageKeys()
         XCTAssertGreaterThanOrEqual(discardCalls, 1)
         XCTAssertEqual(usageCount, 1)
+        XCTAssertEqual(requestIDs.count, 1)
+        XCTAssertTrue(usageKeys.contains("qwen|\(captureRequestID.uuidString.lowercased())|1|1"))
+        let diagnosticEvents = await harness.diagnostics.recordedEvents()
+        XCTAssertTrue(diagnosticEvents.contains { $0.requestID == captureRequestID })
     }
 
     func testNoCapturedAudioNeverCallsQwenASR() async throws {

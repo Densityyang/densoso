@@ -261,6 +261,7 @@ actor InMemoryProviderGovernanceRepository: ProviderGovernanceRepository {
     }
 
     func usageCount() -> Int { usages.count }
+    func recordedUsageKeys() -> [String] { Array(usages.keys) }
 }
 
 actor BlockingConversationRepository: ConversationRepository {
