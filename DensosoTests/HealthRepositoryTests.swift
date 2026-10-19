@@ -374,6 +374,48 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metrics.first(where: { Calendar.current.isDate($0.date, inSameDayAs: date) })?.workoutCount, 0)
     }
 
+    func testImportedWorkoutDedupProcessesUUIDGroupsAcrossFetchBatchBoundary() throws {
+        let repository = HealthRepository(modelContext: context)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        for value in 1...399 {
+            let healthKitUUID = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", value))!
+            context.insert(WorkoutRecord(
+                date: date,
+                type: "unique-\(value)",
+                healthKitUUID: healthKitUUID
+            ))
+        }
+
+        let repeatedUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000400")!
+        let preferred = WorkoutRecord(
+            date: date,
+            type: "preferred",
+            notes: "older-created-row",
+            healthKitUUID: repeatedUUID
+        )
+        preferred.createdAt = Date(timeIntervalSince1970: 100)
+        let duplicate = WorkoutRecord(
+            date: date,
+            type: "duplicate",
+            notes: "newer-created-row",
+            healthKitUUID: repeatedUUID
+        )
+        duplicate.createdAt = Date(timeIntervalSince1970: 200)
+        context.insert(preferred)
+        context.insert(duplicate)
+        try context.save()
+
+        try repository.applyImportedWorkouts([], deletedHealthKitUUIDs: [], nextAnchorData: Data([9]))
+
+        let stored = try context.fetch(FetchDescriptor<WorkoutRecord>())
+        XCTAssertEqual(stored.count, 400)
+        let repeatedRows = stored.filter { $0.healthKitUUID == repeatedUUID }
+        XCTAssertEqual(repeatedRows.count, 1)
+        XCTAssertEqual(repeatedRows.first?.id, preferred.id)
+        XCTAssertEqual(repeatedRows.first?.notes, "older-created-row")
+        XCTAssertEqual(try repository.cursor(for: "workouts")?.anchorData, Data([9]))
+    }
+
     func testImportedWorkoutAndAnchorRollbackTogetherWhenSaveFails() throws {
         let repository = HealthRepository(modelContext: context, willSave: { throw TestSaveError.injected })
         let snapshot = try WorkoutSnapshot(

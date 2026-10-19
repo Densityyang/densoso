@@ -24,6 +24,7 @@ private struct HealthKitSampleIndexUpdate {
 @MainActor
 final class HealthRepository: HealthSyncRepository {
     private static let healthKitSampleIndexBatchSize = 400
+    private static let importedWorkoutBatchSize = 400
 
     private let modelContext: ModelContext
     private let willSave: (() throws -> Void)?
@@ -106,21 +107,59 @@ final class HealthRepository: HealthSyncRepository {
     ) throws {
         try write(affecting: snapshots.map(\.startedAt)) { affectedDates in
             let importedPredicate = #Predicate<WorkoutRecord> { $0.healthKitUUID != nil }
-            let importedWorkouts = try modelContext.fetch(
-                FetchDescriptor<WorkoutRecord>(predicate: importedPredicate)
+            var importedDescriptor = FetchDescriptor<WorkoutRecord>(
+                predicate: importedPredicate,
+                sortBy: [
+                    SortDescriptor(\WorkoutRecord.healthKitUUID),
+                    SortDescriptor(\WorkoutRecord.createdAt),
+                    SortDescriptor(\WorkoutRecord.id),
+                ]
             )
+            importedDescriptor.fetchLimit = Self.importedWorkoutBatchSize
+
+            let changedUUIDs = Set(snapshots.map(\.healthKitUUID)).union(deletedHealthKitUUIDs)
             var workoutsByHealthKitUUID: [UUID: WorkoutRecord] = [:]
+            var duplicateWorkoutIDs = Set<UUID>()
+            var currentHealthKitUUID: UUID?
+            var currentPreferredWorkout: WorkoutRecord?
+            var offset = 0
             // Keep the global one-record-per-HealthKit-UUID invariant while
-            // avoiding materializing local workouts that have no HealthKit ID.
-            for workout in importedWorkouts.sorted(by: Self.preferredImportedWorkout) {
-                guard let healthKitUUID = workout.healthKitUUID else { continue }
-                if workoutsByHealthKitUUID[healthKitUUID] == nil {
-                    workoutsByHealthKitUUID[healthKitUUID] = workout
-                } else {
-                    affectedDates.insert(workout.date)
-                    modelContext.delete(workout)
+            // avoiding materializing local workouts that have no HealthKit ID or
+            // loading every imported workout into memory at once.
+            while true {
+                importedDescriptor.fetchOffset = offset
+                let importedWorkouts = try modelContext.fetch(importedDescriptor)
+                guard !importedWorkouts.isEmpty else { break }
+                for workout in importedWorkouts {
+                    guard let healthKitUUID = workout.healthKitUUID else { continue }
+                    if currentHealthKitUUID != healthKitUUID {
+                        if let completedUUID = currentHealthKitUUID,
+                           let winner = currentPreferredWorkout,
+                           changedUUIDs.contains(completedUUID) {
+                            workoutsByHealthKitUUID[completedUUID] = winner
+                        }
+                        currentHealthKitUUID = healthKitUUID
+                        currentPreferredWorkout = workout
+                    } else if let existingWinner = currentPreferredWorkout {
+                        if Self.preferredImportedWorkout(workout, existingWinner) {
+                            duplicateWorkoutIDs.insert(existingWinner.id)
+                            affectedDates.insert(existingWinner.date)
+                            currentPreferredWorkout = workout
+                        } else {
+                            duplicateWorkoutIDs.insert(workout.id)
+                            affectedDates.insert(workout.date)
+                        }
+                    }
                 }
+                offset += importedWorkouts.count
+                if importedWorkouts.count < Self.importedWorkoutBatchSize { break }
             }
+            if let completedUUID = currentHealthKitUUID,
+               let winner = currentPreferredWorkout,
+               changedUUIDs.contains(completedUUID) {
+                workoutsByHealthKitUUID[completedUUID] = winner
+            }
+            try deleteWorkoutDuplicates(ids: duplicateWorkoutIDs)
 
             for snapshot in snapshots {
                 if let existing = workoutsByHealthKitUUID[snapshot.healthKitUUID] {
@@ -161,6 +200,20 @@ final class HealthRepository: HealthSyncRepository {
         lhs.createdAt == rhs.createdAt
             ? lhs.id.uuidString < rhs.id.uuidString
             : lhs.createdAt < rhs.createdAt
+    }
+
+    private func deleteWorkoutDuplicates(ids: Set<UUID>) throws {
+        let orderedIDs = ids.sorted { $0.uuidString < $1.uuidString }
+        var offset = 0
+        while offset < orderedIDs.count {
+            let batchEnd = min(offset + Self.importedWorkoutBatchSize, orderedIDs.count)
+            let batchIDs = Array(orderedIDs[offset..<batchEnd])
+            let predicate = #Predicate<WorkoutRecord> { batchIDs.contains($0.id) }
+            for workout in try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: predicate)) {
+                modelContext.delete(workout)
+            }
+            offset = batchEnd
+        }
     }
 
     func cursor(for stream: String) throws -> HealthKitImportCursor? {
