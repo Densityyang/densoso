@@ -297,24 +297,24 @@ private final class QwenVisionJSONSchemaNode: Encodable {
         case enumValues = "enum"
     }
 
-    static var boolean: Self {
-        Self(type: .single("boolean"), items: nil, enumValues: nil, maxLength: nil, maxItems: nil)
+    static var boolean: QwenVisionJSONSchemaNode {
+        QwenVisionJSONSchemaNode(type: .single("boolean"), items: nil, enumValues: nil, maxLength: nil, maxItems: nil)
     }
 
-    static func string(maxLength: Int) -> Self {
-        Self(type: .single("string"), items: nil, enumValues: nil, maxLength: maxLength, maxItems: nil)
+    static func string(maxLength: Int) -> QwenVisionJSONSchemaNode {
+        QwenVisionJSONSchemaNode(type: .single("string"), items: nil, enumValues: nil, maxLength: maxLength, maxItems: nil)
     }
 
-    static func nullableString(maxLength: Int) -> Self {
-        Self(type: .nullable("string"), items: nil, enumValues: nil, maxLength: maxLength, maxItems: nil)
+    static func nullableString(maxLength: Int) -> QwenVisionJSONSchemaNode {
+        QwenVisionJSONSchemaNode(type: .nullable("string"), items: nil, enumValues: nil, maxLength: maxLength, maxItems: nil)
     }
 
-    static func enumeration(_ values: [String]) -> Self {
-        Self(type: .single("string"), items: nil, enumValues: values, maxLength: nil, maxItems: nil)
+    static func enumeration(_ values: [String]) -> QwenVisionJSONSchemaNode {
+        QwenVisionJSONSchemaNode(type: .single("string"), items: nil, enumValues: values, maxLength: nil, maxItems: nil)
     }
 
-    static func array(of items: Self, maxItems: Int) -> Self {
-        Self(type: .single("array"), items: items, enumValues: nil, maxLength: nil, maxItems: maxItems)
+    static func array(of items: QwenVisionJSONSchemaNode, maxItems: Int) -> QwenVisionJSONSchemaNode {
+        QwenVisionJSONSchemaNode(type: .single("array"), items: items, enumValues: nil, maxLength: nil, maxItems: maxItems)
     }
 }
 
