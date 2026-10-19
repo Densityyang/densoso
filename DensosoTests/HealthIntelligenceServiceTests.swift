@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class HealthIntelligenceServiceTests: XCTestCase {
-    func testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash() throws {
+    func testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
         let reference = Date(timeIntervalSince1970: 1_800_000_000)
@@ -71,7 +71,8 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         try context.save()
 
         let service = HealthIntelligenceService(modelContainer: container)
-        let first = try XCTUnwrap(service.refresh(asOf: reference))
+        let firstResult = try await service.refresh(asOf: reference)
+        let first = try XCTUnwrap(firstResult)
         XCTAssertEqual(first.contextSummary.sevenDay.windowDays, 7)
         XCTAssertEqual(first.contextSummary.twentyEightDay.windowDays, 28)
         XCTAssertEqual(first.contextSummary.targetWeightKilograms, 68)
@@ -82,7 +83,7 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         )
         let firstHash = firstRecord.snapshotHash
         let firstPayload = firstRecord.payloadData
-        _ = try service.refresh(asOf: reference)
+        _ = try await service.refresh(asOf: reference)
         let unchanged = try XCTUnwrap(context.fetch(FetchDescriptor<DailyBriefRecord>()).first(where: { $0.dayKey == key }))
         XCTAssertEqual(unchanged.snapshotHash, firstHash)
         XCTAssertEqual(unchanged.payloadData, firstPayload)
@@ -90,17 +91,17 @@ final class HealthIntelligenceServiceTests: XCTestCase {
 
         metric.deficitKcal = 900
         try context.save()
-        _ = try service.refresh(asOf: reference)
+        _ = try await service.refresh(asOf: reference)
         let changed = try XCTUnwrap(context.fetch(FetchDescriptor<DailyBriefRecord>()).first(where: { $0.dayKey == key }))
         XCTAssertNotEqual(changed.snapshotHash, firstHash)
     }
 
-    func testSavingGoalUpdatesTheSinglePrimaryProfile() throws {
+    func testSavingGoalUpdatesTheSinglePrimaryProfile() async throws {
         let container = try makeContainer()
         let service = HealthIntelligenceService(modelContainer: container)
         let date = Date(timeIntervalSince1970: 1_800_000_000)
-        try service.saveGoalProfile(GoalProfile(effectiveFrom: date, targetWeightKilograms: 68, dailyDeficitKcal: 400))
-        try service.saveGoalProfile(GoalProfile(effectiveFrom: date.addingTimeInterval(60), targetWeightKilograms: 66, dailyDeficitKcal: 300))
+        try await service.saveGoalProfile(GoalProfile(effectiveFrom: date, targetWeightKilograms: 68, dailyDeficitKcal: 400))
+        try await service.saveGoalProfile(GoalProfile(effectiveFrom: date.addingTimeInterval(60), targetWeightKilograms: 66, dailyDeficitKcal: 300))
 
         let context = ModelContext(container)
         let goals = try context.fetch(FetchDescriptor<GoalProfileRecord>())
@@ -109,7 +110,7 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         XCTAssertEqual(goals[0].dailyDeficitKcal, 300)
     }
 
-    func testPreviousWeekUsesItsFullTwentyEightDayBaselineOnSunday() throws {
+    func testPreviousWeekUsesItsFullTwentyEightDayBaselineOnSunday() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
         var calendar = Calendar(identifier: .gregorian)
@@ -135,14 +136,14 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         try context.save()
 
         let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
-        _ = try service.refresh(asOf: reference)
+        _ = try await service.refresh(asOf: reference)
         let nutrition = try XCTUnwrap(service.weeklyBrief?.domainStatuses.first(where: { $0.domain == .nutrition }))
 
         XCTAssertEqual(nutrition.baseline.validDays, 28)
         XCTAssertEqual(nutrition.baseline.readiness, .mature)
     }
 
-    func testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches() throws {
+    func testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
         let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 1)))
@@ -189,7 +190,7 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         try context.save()
 
         let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
-        let history = try service.healthHistory(from: start, through: end)
+        let history = try await service.healthHistory(from: start, through: end)
 
         XCTAssertEqual(history.map(\.date), [
             start,
@@ -206,14 +207,24 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyBriefRecord>()), 0)
     }
 
-    func testHealthHistoryRejectsInvalidAndOversizedRanges() throws {
+    func testHealthHistoryRejectsInvalidAndOversizedRanges() async throws {
         let container = try makeContainer()
         let service = HealthIntelligenceService(modelContainer: container)
         let start = Date(timeIntervalSince1970: 1_780_000_000)
         let tooLate = Calendar.current.date(byAdding: .day, value: 14, to: start)!
 
-        XCTAssertThrowsError(try service.healthHistory(from: tooLate, through: start))
-        XCTAssertThrowsError(try service.healthHistory(from: start, through: tooLate))
+        do {
+            _ = try await service.healthHistory(from: tooLate, through: start)
+            XCTFail("Expected invalid historical range to be rejected")
+        } catch {
+            XCTAssertEqual(error as? HealthHistoryQueryError, .invalidRange)
+        }
+        do {
+            _ = try await service.healthHistory(from: start, through: tooLate)
+            XCTFail("Expected oversized historical range to be rejected")
+        } catch {
+            XCTAssertEqual(error as? HealthHistoryQueryError, .rangeTooLarge)
+        }
     }
 
     private func makeContainer() throws -> ModelContainer {

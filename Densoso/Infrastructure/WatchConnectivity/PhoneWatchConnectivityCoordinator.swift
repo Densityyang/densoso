@@ -253,7 +253,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 }
                 try? await agentSession.reloadPendingActions()
                 try inboxStore.setState(WatchReceiptState.processed, for: envelope.messageID)
-                _ = try? healthIntelligenceService.refresh()
+                _ = try? await healthIntelligenceService.refresh()
                 refreshApplicationContext()
                 return acknowledgement(for: envelope.messageID, state: .processed, detail: detail)
             case .reject(let actionID):

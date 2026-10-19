@@ -25,6 +25,9 @@ model training.
   aggregated 7/28-day cloud context, daily/weekly briefs, and goal profiles are
   computed locally. Stable source hashes reuse report caches; changed inputs
   recompute them.
+- Bounded source reads, deterministic brief calculation, and daily/weekly cache
+  upserts run on `HealthProjectionActor`; the MainActor service publishes
+  Sendable brief snapshots and preserves cache-hit and error behavior.
 - Long-range reads constrain snapshots, metrics, weights, meals and workouts
   by the report's date window before decoding. Goal and daily/weekly cache reads
   filter by key and limit cache lookups to one record.

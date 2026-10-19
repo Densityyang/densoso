@@ -38,6 +38,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "historical effective profiles",
                 "HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay",
                 "CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
+                "HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
                 "HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches",
                 "HealthProjectionActorTests",
                 "DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState",
@@ -104,17 +105,29 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "Densoso/Services/HealthIntelligenceService.swift",
-            ("func healthNarrativeContext(asOf date: Date = Date())", "never refreshes or writes"),
+            ("func healthNarrativeContext(asOf date: Date = Date()) async throws", "never refreshes or writes caches"),
             errors,
         )
         require(
             "Densoso/Services/HealthProjectionActor.swift",
             (
                 "@ModelActor",
+                "func refresh(asOf date: Date = Date()) throws -> HealthIntelligenceRefreshSnapshot",
+                "cachedDailyBrief(",
+                "cachedWeeklyBrief(",
                 "func todayHealthState(asOf date: Date = Date())",
                 "func healthHistory(from startDate: Date, through endDate: Date)",
                 "func healthNarrativeContext(asOf date: Date = Date())",
                 "HealthIntelligenceReadModel(calendar: calendar)",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/HealthIntelligenceService.swift",
+            (
+                "func refresh(asOf date: Date = Date()) async throws -> DailyHealthBrief?",
+                "try await projectionActor.refresh(asOf: date)",
+                "if snapshot.updatesWeeklyBrief",
             ),
             errors,
         )
@@ -132,6 +145,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/App/Dependencies.swift",
             (
                 "let healthProjectionActor: HealthProjectionActor",
+                "HealthIntelligenceService(projectionActor: healthProjectionActor)",
                 "try await healthProjectionActor.todayHealthState(asOf: date)",
                 "try await healthProjectionActor.healthHistory(from: start, through: end)",
                 "try? await healthProjectionActor.healthNarrativeContext()",
@@ -582,6 +596,7 @@ def main() -> int:
                 "--filter HealthNarrativeTests",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay",
                 "-only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
+                "-only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
                 "-only-testing:DensosoTests/HealthProjectionActorTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
                 "-only-testing:DensosoTests/HealthNarrativePolicyTests",

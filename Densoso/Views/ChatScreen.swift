@@ -35,8 +35,12 @@ struct ChatScreen: View {
                     runtimeBadge
                 }
             }
-            .onAppear(perform: prepareInitialState)
-            .task { restorePendingWatchTranscript() }
+            .onAppear {
+                Task {
+                    await prepareInitialState()
+                    restorePendingWatchTranscript()
+                }
+            }
             .onChange(of: dependencies.agentSession.pendingActions) { _, _ in
                 refreshDailyLoopSnapshot()
             }
@@ -331,8 +335,8 @@ struct ChatScreen: View {
         }
     }
 
-    private func prepareInitialState() {
-        _ = try? dependencies.healthIntelligenceService.refresh()
+    private func prepareInitialState() async {
+        _ = try? await dependencies.healthIntelligenceService.refresh()
         refreshDailyLoopSnapshot()
         if appState.shouldFocusComposer { focusComposer() }
         hydratePersistedMessagesIfNeeded()
@@ -558,7 +562,7 @@ struct ChatScreen: View {
         Task {
             do {
                 let message = try await dependencies.agentSession.confirmPendingAction(id: action.id)
-                _ = try? dependencies.healthIntelligenceService.refresh()
+                _ = try? await dependencies.healthIntelligenceService.refresh()
                 refreshDailyLoopSnapshot()
                 dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                 addMessage(text: message, isUser: false)

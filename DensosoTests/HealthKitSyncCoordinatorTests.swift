@@ -53,7 +53,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             observerRefreshCount += 1
             refreshSawCommittedWorkout = ((try? self.context.fetch(FetchDescriptor<WorkoutRecord>())) ?? [])
                 .contains(where: { $0.healthKitUUID == workoutID })
-            _ = try? intelligence.refresh(asOf: date)
+            _ = try? await intelligence.refresh(asOf: date)
             refreshedBriefDay = intelligence.dailyBrief?.dayStart
         }
         try await coordinator.startBackgroundObservers(using: repository)

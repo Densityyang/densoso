@@ -23,6 +23,7 @@ Sendable domain snapshots, with the UI refresh/cache-write path left separate.
   `HealthStateTests`, `DailyLoopSnapshotTests`, and `HealthNarrativeTests`.
 - iOS tests: `HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay`,
   `CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics`,
+  `HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash`,
   `HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches`,
   `HealthProjectionActorTests.testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites`,
   `HealthProjectionActorTests.testActorHistoryRetainsExistingRangeValidation`,

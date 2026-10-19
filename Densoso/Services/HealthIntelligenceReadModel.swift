@@ -2,9 +2,8 @@ import DensosoDomain
 import Foundation
 import SwiftData
 
-/// Shared read-only loader and deterministic health calculations.
-/// Callers own the executor and ModelContext: UI refreshes can use it on their
-/// existing path, while Agent reads use it from `HealthProjectionActor`.
+/// Shared read-only loader and deterministic calculations used by
+/// `HealthProjectionActor` for both Agent reads and explicit brief refreshes.
 struct HealthIntelligenceReadModel: Sendable {
     private let calendar: Calendar
     private let engine: HealthIntelligenceEngine

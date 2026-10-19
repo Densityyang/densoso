@@ -90,10 +90,10 @@ struct DashboardScreen: View {
                 }
                 .padding()
             }
-            .refreshable { loadData() }
+            .refreshable { await loadData() }
             .navigationTitle("趋势")
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear(perform: loadData)
+            .task { await loadData() }
         }
     }
 
@@ -211,10 +211,10 @@ struct DashboardScreen: View {
         .orbitCard()
     }
 
-    private func loadData() {
+    private func loadData() async {
         loadError = nil
         do {
-            _ = try dependencies.healthIntelligenceService.refresh()
+            _ = try await dependencies.healthIntelligenceService.refresh()
             let calendar = Calendar.current
             let today = calendar.startOfDay(for: Date())
             let predicate = #Predicate<DailyMetrics> { $0.date == today }
@@ -222,7 +222,7 @@ struct DashboardScreen: View {
             weekly = try WeeklyAnalyticsService(calendar: calendar).load(
                 referenceDate: today,
                 profile: profiles.first,
-                goal: try dependencies.healthIntelligenceService.goalProfile(asOf: today),
+                goal: try await dependencies.healthIntelligenceService.goalProfile(asOf: today),
                 in: modelContext
             )
         } catch {

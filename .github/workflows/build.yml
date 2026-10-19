@@ -989,6 +989,7 @@ jobs:
             -derivedDataPath "$GATE11_DERIVED_DATA_PATH" \
             -only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay \
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics \
+            -only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \
             -only-testing:DensosoTests/HealthProjectionActorTests \
             -only-testing:DensosoTests/HealthNarrativePolicyTests \

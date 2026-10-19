@@ -24,20 +24,20 @@ final class GetGoalToolTests: XCTestCase {
 
     func testMissingOrEmptyGoalsReturnUnavailableWithoutDefaults() throws {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
-        let missingTool = GetGoalTool(goalProvider: { _ in nil })
-        let missing = try jsonObject(missingTool.response(asOf: date))
+        let missingTool = GetGoalTool()
+        let missing = try jsonObject(missingTool.response(asOf: date, profile: nil))
         XCTAssertEqual(missing["status"] as? String, "unavailable")
         XCTAssertNil(missing["goal"])
 
-        let emptyTool = GetGoalTool(goalProvider: { date in GoalProfile(effectiveFrom: date) })
-        let empty = try jsonObject(emptyTool.response(asOf: date))
+        let emptyTool = GetGoalTool()
+        let empty = try jsonObject(emptyTool.response(asOf: date, profile: GoalProfile(effectiveFrom: date)))
         XCTAssertEqual(empty["status"] as? String, "unavailable")
         XCTAssertNil(empty["goal"])
         XCTAssertFalse(String(data: try JSONSerialization.data(withJSONObject: empty), encoding: .utf8)!
             .contains("dailyDeficitKcal"))
     }
 
-    func testServiceReturnsOnlyCurrentEffectiveGoalAndReadDoesNotWrite() throws {
+    func testModelActorReturnsOnlyCurrentEffectiveGoalAndReadDoesNotWrite() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
         let asOf = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 16, hour: 12)))
@@ -55,19 +55,19 @@ final class GetGoalToolTests: XCTestCase {
         )
         context.insert(record)
         try context.save()
-        let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
+        let projectionActor = HealthProjectionActor(modelContainer: container, calendar: calendar)
         let tool = GetGoalTool(calendar: calendar, goalProvider: { date in
-            try service.goalProfile(asOf: date)
+            try await projectionActor.goalProfile(asOf: date)
         })
         let beforeCount = try context.fetchCount(FetchDescriptor<GoalProfileRecord>())
 
-        let future = try jsonObject(tool.response(asOf: asOf))
+        let future = try jsonObject(try await tool.response(asOf: asOf))
         XCTAssertEqual(future["status"] as? String, "unavailable")
         XCTAssertNil(future["goal"])
 
         record.effectiveFrom = asOf.addingTimeInterval(-86_400)
         try context.save()
-        let current = try jsonObject(tool.response(asOf: asOf))
+        let current = try jsonObject(try await tool.response(asOf: asOf))
         XCTAssertEqual(current["status"] as? String, "available")
         XCTAssertEqual(current["asOf"] as? String, "2026-10-16")
         let goal = try XCTUnwrap(current["goal"] as? [String: Any])

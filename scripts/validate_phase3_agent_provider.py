@@ -415,7 +415,7 @@ def main() -> int:
         [
             "testToolUsesStrictEmptyReadOnlySchema",
             "testMissingOrEmptyGoalsReturnUnavailableWithoutDefaults",
-            "testServiceReturnsOnlyCurrentEffectiveGoalAndReadDoesNotWrite",
+            "testModelActorReturnsOnlyCurrentEffectiveGoalAndReadDoesNotWrite",
         ],
         errors,
     )

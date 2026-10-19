@@ -51,7 +51,7 @@ struct AppRoot: View {
                     await dependencies.restorePersistenceState()
                     if launchConfiguration.isUITesting {
                         prepareUITestState()
-                        _ = try? dependencies.healthIntelligenceService.refresh()
+                        _ = try? await dependencies.healthIntelligenceService.refresh()
                         return
                     }
                     dependencies.watchConnectivityCoordinator.activate()
@@ -62,8 +62,8 @@ struct AppRoot: View {
                     }
                     dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
                     await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
-                    dependencies.healthIntelligenceService.loadCachedBriefs()
-                    _ = try? dependencies.healthIntelligenceService.refresh()
+                    await dependencies.healthIntelligenceService.loadCachedBriefs()
+                    _ = try? await dependencies.healthIntelligenceService.refresh()
                     let dailyLoopSnapshot = try? dependencies.dailyLoopSnapshotService.snapshot()
                     await dependencies.briefNotificationScheduler.restoreSchedules(snapshot: dailyLoopSnapshot)
                     dependencies.watchConnectivityCoordinator.refreshApplicationContext()

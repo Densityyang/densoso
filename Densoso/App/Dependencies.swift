@@ -59,10 +59,10 @@ final class Dependencies {
             healthStore: healthKitService.client,
             observer: healthKitService.client
         )
-        let healthIntelligenceService = HealthIntelligenceService(modelContainer: modelContainer)
-        self.healthIntelligenceService = healthIntelligenceService
         let healthProjectionActor = HealthProjectionActor(modelContainer: modelContainer)
         self.healthProjectionActor = healthProjectionActor
+        let healthIntelligenceService = HealthIntelligenceService(projectionActor: healthProjectionActor)
+        self.healthIntelligenceService = healthIntelligenceService
         self.briefNotificationScheduler = BriefNotificationScheduler()
         let workoutPlanSchedulingService = WorkoutPlanSchedulingService(modelContainer: modelContainer)
         self.workoutPlanSchedulingService = workoutPlanSchedulingService
@@ -99,7 +99,7 @@ final class Dependencies {
                 try await healthProjectionActor.healthHistory(from: start, through: end)
             },
             goalProfileProvider: { date in
-                try healthIntelligenceService.goalProfile(asOf: date)
+                try await healthProjectionActor.goalProfile(asOf: date)
             }
         )
         self.intelligencePreferences = intelligencePreferences
@@ -162,7 +162,7 @@ final class Dependencies {
         )
         self.watchConnectivityCoordinator = watchConnectivityCoordinator
         healthKitSyncCoordinator.onObserverSyncCompleted = {
-            _ = try? healthIntelligenceService.refresh()
+            _ = try? await healthIntelligenceService.refresh()
             watchConnectivityCoordinator.refreshApplicationContext()
         }
         self.dailyLoopBackgroundScheduler = DailyLoopBackgroundScheduler(

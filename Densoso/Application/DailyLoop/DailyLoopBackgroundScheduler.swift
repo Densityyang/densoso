@@ -112,7 +112,7 @@ final class DailyLoopBackgroundScheduler {
                     taskBox.task.setTaskCompleted(success: false)
                     return
                 }
-                _ = try self.healthIntelligenceService.refresh()
+                _ = try await self.healthIntelligenceService.refresh()
                 let snapshot = try self.dailyLoopSnapshotService.snapshot()
                 await self.notificationScheduler.updateSnapshot(snapshot)
                 self.watchConnectivityCoordinator.refreshApplicationContext()

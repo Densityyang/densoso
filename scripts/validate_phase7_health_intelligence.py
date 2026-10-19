@@ -54,13 +54,42 @@ def main() -> int:
     service = require_text(
         "Densoso/Services/HealthIntelligenceService.swift",
         (
-            "func refresh(asOf date:",
+            "func refresh(asOf date: Date = Date()) async throws",
+            "try await projectionActor.refresh(asOf: date)",
+            "lastError = \"无法更新健康摘要：",
+            "if snapshot.updatesWeeklyBrief",
+            "func loadCachedBriefs() async",
+            "func saveGoalProfile(_ goal: GoalProfile) async throws",
+            "if snapshot.updatesWeeklyBrief",
+        ),
+        errors,
+    )
+    projection_actor = require_text(
+        "Densoso/Services/HealthProjectionActor.swift",
+        (
+            "@ModelActor",
+            "func refresh(asOf date: Date = Date()) throws -> HealthIntelligenceRefreshSnapshot",
+            "let reader = HealthIntelligenceReadModel(calendar: calendar)",
             "snapshotHash == snapshotHash",
             "cachedDailyBrief(",
             "cachedWeeklyBrief(",
+            "func loadCachedBriefs() -> HealthIntelligenceCachedBriefs",
             "saveGoalProfile(",
+            "descriptor.fetchLimit = 1",
+            "algorithmVersion: result.dailyBrief.algorithmVersion",
+            "existing.algorithmVersion == brief.algorithmVersion",
+            "struct HealthIntelligenceRefreshSnapshot: Sendable",
+            "struct HealthIntelligenceCachedBriefs: Sendable",
+        ),
+        errors,
+    )
+    require_text(
+        "Densoso/Services/HealthIntelligenceReadModel.swift",
+        (
             "DailyHealthSnapshotRecord",
             "WeightRecord",
+            "MealRecord",
+            "WorkoutRecord",
             "let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord>",
             "let metricsPredicate = #Predicate<DailyMetrics>",
             "let weightPredicate = #Predicate<WeightRecord>",

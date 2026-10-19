@@ -82,7 +82,7 @@ struct SettingsScreen: View {
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .task {
-                loadGoalFields()
+                await loadGoalFields()
                 if !AppLaunchConfiguration.current.isUITesting {
                     hasSavedAPIKey = (try? KeychainStore.shared.readAPIKey()) != nil
                     hasSavedQwenAPIKey = (try? KeychainStore.shared.readModelStudioAPIKey()) != nil
@@ -93,7 +93,7 @@ struct SettingsScreen: View {
             .onChange(of: healthImportCursors.first?.updatedAt) { _, _ in
                 Task {
                     await refreshDiagnostics()
-                    _ = try? dependencies.healthIntelligenceService.refresh()
+                    _ = try? await dependencies.healthIntelligenceService.refresh()
                 }
             }
             .sheet(isPresented: $showShareSheet) {
@@ -367,9 +367,9 @@ struct SettingsScreen: View {
         )
     }
 
-    private func loadGoalFields() {
+    private func loadGoalFields() async {
         do {
-            guard let goal = try dependencies.healthIntelligenceService.goalProfile() else { return }
+            guard let goal = try await dependencies.healthIntelligenceService.goalProfile() else { return }
             goalTargetWeight = goal.targetWeightKilograms.map { String($0) } ?? ""
             goalDailyDeficit = goal.dailyDeficitKcal.map(String.init) ?? ""
             goalDailyProtein = goal.dailyProteinGrams.map { String($0) } ?? ""
@@ -379,22 +379,24 @@ struct SettingsScreen: View {
     }
 
     private func saveGoalProfile() {
-        do {
-            let targetWeight = try optionalNumber(goalTargetWeight, field: "目标体重", range: 25...350)
-            let deficitValue = try optionalNumber(goalDailyDeficit, field: "每日缺口", range: 0...3_000)
-            let protein = try optionalNumber(goalDailyProtein, field: "蛋白质目标", range: 0...500)
-            let goal = GoalProfile(
-                effectiveFrom: Date(),
-                targetWeightKilograms: targetWeight,
-                dailyDeficitKcal: deficitValue.map { Int($0.rounded()) },
-                dailyProteinGrams: protein
-            )
-            try dependencies.healthIntelligenceService.saveGoalProfile(goal)
-            _ = try dependencies.healthIntelligenceService.refresh()
-            statusMessage = "健康目标已确认并保存。"
-            healthAuthorizationError = nil
-        } catch {
-            healthAuthorizationError = "未保存健康目标：\(error.localizedDescription)"
+        Task {
+            do {
+                let targetWeight = try optionalNumber(goalTargetWeight, field: "目标体重", range: 25...350)
+                let deficitValue = try optionalNumber(goalDailyDeficit, field: "每日缺口", range: 0...3_000)
+                let protein = try optionalNumber(goalDailyProtein, field: "蛋白质目标", range: 0...500)
+                let goal = GoalProfile(
+                    effectiveFrom: Date(),
+                    targetWeightKilograms: targetWeight,
+                    dailyDeficitKcal: deficitValue.map { Int($0.rounded()) },
+                    dailyProteinGrams: protein
+                )
+                try await dependencies.healthIntelligenceService.saveGoalProfile(goal)
+                _ = try await dependencies.healthIntelligenceService.refresh()
+                statusMessage = "健康目标已确认并保存。"
+                healthAuthorizationError = nil
+            } catch {
+                healthAuthorizationError = "未保存健康目标：\(error.localizedDescription)"
+            }
         }
     }
 

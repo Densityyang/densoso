@@ -62,7 +62,7 @@ final class HealthProjectionActorTests: XCTestCase {
         let actorState = try await actor.todayHealthState(asOf: today)
         let narrativeContext = try await actor.healthNarrativeContext(asOf: today)
         let actorHistory = try await actor.healthHistory(from: start, through: today)
-        let serviceHistory = try service.healthHistory(from: start, through: today)
+        let serviceHistory = try await service.healthHistory(from: start, through: today)
 
         XCTAssertNotNil(actorState)
         XCTAssertEqual(narrativeContext.healthState, actorState)

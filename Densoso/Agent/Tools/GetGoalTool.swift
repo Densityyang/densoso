@@ -1,7 +1,7 @@
 import DensosoDomain
 import Foundation
 
-typealias GoalProfileProvider = @MainActor (Date) throws -> GoalProfile?
+typealias GoalProfileProvider = @Sendable (Date) async throws -> GoalProfile?
 
 @MainActor
 struct GetGoalTool: AgentTool {
@@ -30,11 +30,15 @@ struct GetGoalTool: AgentTool {
         context: AgentSession,
         clientRequestID: UUID
     ) async throws -> String {
-        try response(asOf: Date())
+        try await response(asOf: Date())
     }
 
-    func response(asOf date: Date) throws -> String {
-        let profile = try goalProvider(date)
+    func response(asOf date: Date) async throws -> String {
+        let profile = try await goalProvider(date)
+        return try response(asOf: date, profile: profile)
+    }
+
+    func response(asOf date: Date, profile: GoalProfile?) throws -> String {
         let targetWeight = profile?.targetWeightKilograms.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
         let dailyDeficit = profile?.dailyDeficitKcal.flatMap { $0 >= 0 ? $0 : nil }
         let dailyProtein = profile?.dailyProteinGrams.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
