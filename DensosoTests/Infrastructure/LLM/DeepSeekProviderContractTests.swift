@@ -146,9 +146,13 @@ final class DeepSeekProviderContractTests: XCTestCase {
 
         let requests = await transport.recordedRequests()
         let sent = try XCTUnwrap(requests.first)
+        XCTAssertEqual(sent.url?.absoluteString, "https://api.deepseek.com/responses")
         let body = try XCTUnwrap(sent.httpBody)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(object["model"] as? String, "deepseek-flash")
+        XCTAssertNotEqual(object["model"] as? String, "deepseek-v4-flash-vision-exp")
         let input = try XCTUnwrap(object["input"] as? [[String: Any]])
+        XCTAssertEqual(input[0]["role"] as? String, "user")
         let userParts = try XCTUnwrap(input[0]["content"] as? [[String: Any]])
         XCTAssertEqual(userParts[1]["type"] as? String, "input_image")
         XCTAssertEqual(userParts[1]["detail"] as? String, "high")
