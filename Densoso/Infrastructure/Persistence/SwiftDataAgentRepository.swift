@@ -170,7 +170,7 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         let trainingPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
         let eventPredicate = #Predicate<ScheduleEvent> { event in
             (event.date >= start && event.date < end)
-                || (event.notes ?? "").contains(trainingPlanPrefix)
+                || event.notes?.contains(trainingPlanPrefix) == true
         }
         let eventSortBy = [
             SortDescriptor(\ScheduleEvent.date),

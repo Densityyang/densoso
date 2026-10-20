@@ -141,8 +141,8 @@ struct HealthIntelligenceReadModel: Sendable {
         let trainingPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
         let ordinaryEventPredicate = #Predicate<ScheduleEvent> { event in
             event.startTime >= tomorrow && event.startTime < end
-                && !((event.notes ?? "").contains(workoutPlanPrefix))
-                && !((event.notes ?? "").contains(trainingPlanPrefix))
+                && event.notes?.contains(workoutPlanPrefix) != true
+                && event.notes?.contains(trainingPlanPrefix) != true
         }
 
         var ordinaryEventDescriptor = FetchDescriptor<ScheduleEvent>(predicate: ordinaryEventPredicate)
@@ -152,8 +152,8 @@ struct HealthIntelligenceReadModel: Sendable {
 
         let planPredicate = #Predicate<ScheduleEvent> { event in
             event.startTime >= tomorrow && event.startTime < end
-                && ((event.notes ?? "").contains(workoutPlanPrefix)
-                    || (event.notes ?? "").contains(trainingPlanPrefix))
+                && (event.notes?.contains(workoutPlanPrefix) == true
+                    || event.notes?.contains(trainingPlanPrefix) == true)
         }
         let planSortDescriptors: [SortDescriptor<ScheduleEvent>] = [
             SortDescriptor(\ScheduleEvent.startTime),

@@ -172,6 +172,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "ordinaryEventDescriptor.fetchLimit = 1",
                 "planDescriptor.fetchLimit = Self.schedulePlanFetchBatchSize",
                 "planDescriptor.fetchOffset = planOffset",
+                "event.notes?.contains(workoutPlanPrefix) != true",
+                "event.notes?.contains(trainingPlanPrefix) != true",
+                "event.notes?.contains(workoutPlanPrefix) == true",
+                "event.notes?.contains(trainingPlanPrefix) == true",
                 "func todayHealthState(asOf date: Date, in context: ModelContext)",
                 "func healthHistory(",
                 "HealthIntelligenceEngine(calendar: calendar)",
@@ -225,8 +229,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "Densoso/Services/HealthProjectionActor.swift",
             (
-                "($0.notes ?? \"\").contains(workoutPlanPrefix)",
-                "($0.notes ?? \"\").contains(trainingPlanPrefix)",
+                "$0.notes?.contains(workoutPlanPrefix) == true",
+                "$0.notes?.contains(trainingPlanPrefix) == true",
                 "FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)",
             ),
             errors,
@@ -757,6 +761,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "建议强度：",
             "details.joined(separator: \"；\").prefix(600)",
             "ConfirmedWorkoutPlanEntry.decode(notes: event.notes) == nil",
+            "event.notes?.contains(trainingPlanPrefix) == true",
         ),
         errors,
     )
