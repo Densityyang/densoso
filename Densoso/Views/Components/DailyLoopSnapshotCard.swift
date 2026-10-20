@@ -4,11 +4,16 @@ import SwiftUI
 struct DailyLoopSnapshotCard: View {
     let snapshot: DailyLoopSnapshot?
     let errorMessage: String?
+    let isLoading: Bool
     let onRetry: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let errorMessage {
+            if isLoading {
+                ProgressView("正在读取今日概览…")
+                    .frame(maxWidth: .infinity, minHeight: 96, alignment: .center)
+                    .accessibilityIdentifier("daily-loop-snapshot-loading")
+            } else if let errorMessage {
                 VStack(alignment: .leading, spacing: 10) {
                     Label("今日概览读取失败", systemImage: "exclamationmark.triangle.fill")
                         .font(.headline)

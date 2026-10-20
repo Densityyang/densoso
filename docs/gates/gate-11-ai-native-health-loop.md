@@ -38,6 +38,9 @@ reports completion once while preventing a late expiration from cancelling
 subsequent work.
 The Today card distinguishes a snapshot read failure from optional health state
 that has no available data; read failures show their error and a retry action.
+It shows a progress indicator for the first asynchronous read and while retrying,
+and skips overlapping refresh calls while one is in flight so loading state
+remains consistent.
 
 ## Focused tests
 

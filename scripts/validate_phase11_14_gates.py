@@ -92,7 +92,12 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Views/ChatScreen.swift",
             (
                 "private var dailyLoopSnapshotReadError: String?",
+                "private var isLoadingDailyLoopSnapshot = true",
+                "guard !isRefreshingDailyLoopSnapshot else { return }",
+                "isLoadingDailyLoopSnapshot = true",
+                "isLoadingDailyLoopSnapshot = false",
                 "errorMessage: dailyLoopSnapshotReadError",
+                "isLoading: isLoadingDailyLoopSnapshot",
                 "dailyLoopSnapshotReadError = nil",
                 "读取今日概览失败：",
             ),
@@ -102,7 +107,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Views/Components/DailyLoopSnapshotCard.swift",
             (
                 "let errorMessage: String?",
+                "let isLoading: Bool",
                 "let onRetry: () -> Void",
+                "if isLoading {",
+                "ProgressView(\"正在读取今日概览…\")",
                 "今日概览读取失败",
                 'Button("重试", action: onRetry)',
                 "今日状态暂不可用",

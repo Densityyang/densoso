@@ -22,6 +22,8 @@ struct ChatScreen: View {
     @State private var pendingWatchAttemptRequestID: UUID?
     @State private var dailyLoopSnapshot: DailyLoopSnapshot?
     @State private var dailyLoopSnapshotReadError: String?
+    @State private var isLoadingDailyLoopSnapshot = true
+    @State private var isRefreshingDailyLoopSnapshot = false
 
     var body: some View {
         NavigationStack {
@@ -81,7 +83,8 @@ struct ChatScreen: View {
 
                     DailyLoopSnapshotCard(
                         snapshot: dailyLoopSnapshot,
-                        errorMessage: dailyLoopSnapshotReadError
+                        errorMessage: dailyLoopSnapshotReadError,
+                        isLoading: isLoadingDailyLoopSnapshot
                     ) {
                         Task { await refreshDailyLoopSnapshot() }
                     }
@@ -378,6 +381,14 @@ struct ChatScreen: View {
     }
 
     private func refreshDailyLoopSnapshot() async {
+        guard !isRefreshingDailyLoopSnapshot else { return }
+        isRefreshingDailyLoopSnapshot = true
+        isLoadingDailyLoopSnapshot = true
+        defer {
+            isRefreshingDailyLoopSnapshot = false
+            isLoadingDailyLoopSnapshot = false
+        }
+
         do {
             dailyLoopSnapshot = try await dependencies.dailyLoopSnapshotService.snapshot()
             dailyLoopSnapshotReadError = nil
