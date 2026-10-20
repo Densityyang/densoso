@@ -202,6 +202,17 @@ final class DeepSeekProviderContractTests: XCTestCase {
         XCTAssertTrue(recordedRequests.isEmpty)
     }
 
+    func testRetiredDeepSeekVisionCompatibilityAliasIsNotVisionCapable() {
+        XCTAssertFalse(
+            ProviderCapabilityCatalog
+                .deepSeekCapabilities(
+                    for: "deepseek-v4-flash-vision-exp",
+                    endpoint: ProviderCapabilityCatalog.deepSeekResponsesEndpoint
+                )
+                .contains(.vision)
+        )
+    }
+
     private func request(deadline: Date, thinking: ThinkingPolicy = .none) -> ModelRequest {
         ModelRequest(
             requestID: UUID(),
