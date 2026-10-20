@@ -693,9 +693,12 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         ),
         errors,
     )
-    require(
+    workout_plan_screen = require(
         "Densoso/Views/WorkoutPlanScreen.swift",
         (
+            "private static let confirmedPlanPageSize = 10",
+            "private var visibleConfirmedPlanLimit = 10",
+            "private func refreshConfirmedPlans()",
             "private var confirmedPlansReadError: String?",
             "if let confirmedPlansReadError",
             'Button("重试")',
@@ -703,9 +706,19 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "confirmedTrainingPlans = []",
             "读取已确认的计划失败：",
             "confirmedPlansReadError = nil",
+            "confirmedPlans.prefix(visibleConfirmedPlanLimit)",
+            "confirmedTrainingPlans.prefix(visibleConfirmedPlanLimit)",
+            "confirmedPlans.count > visibleConfirmedPlanLimit",
+            "confirmedTrainingPlans.count > visibleConfirmedPlanLimit",
+            'Button("加载更多已确认计划")',
+            "visibleConfirmedPlanLimit += Self.confirmedPlanPageSize",
         ),
         errors,
     )
+    refresh_method = workout_plan_screen.split("private func refreshConfirmedPlans()", 1)[-1]
+    refresh_method = refresh_method.split("\n    private func ", 1)[0]
+    if "visibleConfirmedPlanLimit" in refresh_method:
+        errors.append("Refreshing confirmed workout plans must preserve the visible row limit")
     require(
         "Packages/DensosoDomain/Tests/DensosoDomainTests/DailyLoopSnapshotTests.swift",
         ("testSnapshotRoundTripsStateGuidanceAndActionSummaries",),

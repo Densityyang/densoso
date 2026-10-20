@@ -23,7 +23,9 @@ pages before applying its existing decode and ordering rules; the phone
 snapshot filters terminal and past sessions before building summaries, then
 uses plan IDs to break equal-time ties deterministically.
 The phone plan editor shows a retryable read error instead of reporting an
-empty history when either confirmed-plan query fails.
+empty history when either confirmed-plan query fails. It renders at most ten
+single-session and ten multi-day plans initially, then reveals up to ten more
+of each per request while keeping the current visible limit across refreshes.
 Watch outbox and phone inbox tests cover replay semantics; the phone
 coordinator's activation path restores pending commands.
 

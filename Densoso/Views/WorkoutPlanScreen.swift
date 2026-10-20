@@ -11,6 +11,8 @@ private enum WorkoutPlanGoalKind: String, CaseIterable, Identifiable {
 
 /// Plans remain local, editable drafts until ConfirmationCoordinator commits them.
 struct WorkoutPlanScreen: View {
+    private static let confirmedPlanPageSize = 10
+
     @Environment(AppState.self) private var appState
     @Environment(Dependencies.self) private var dependencies
 
@@ -27,6 +29,7 @@ struct WorkoutPlanScreen: View {
     @State private var confirmedPlans: [ConfirmedWorkoutPlanEntry] = []
     @State private var confirmedTrainingPlans: [ConfirmedTrainingPlanEntry] = []
     @State private var confirmedPlansReadError: String?
+    @State private var visibleConfirmedPlanLimit = 10
 
     var body: some View {
         NavigationStack {
@@ -104,7 +107,7 @@ struct WorkoutPlanScreen: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(confirmedPlans, id: \.actionID) { entry in
+                        ForEach(confirmedPlans.prefix(visibleConfirmedPlanLimit), id: \.actionID) { entry in
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(entry.draft.name).font(.subheadline.weight(.semibold))
                                 Text(entry.draft.scheduledAt ?? Date(), format: .dateTime.month().day().hour().minute())
@@ -127,7 +130,7 @@ struct WorkoutPlanScreen: View {
                             }
                             .padding(.vertical, 4)
                         }
-                        ForEach(confirmedTrainingPlans, id: \.actionID) { entry in
+                        ForEach(confirmedTrainingPlans.prefix(visibleConfirmedPlanLimit), id: \.actionID) { entry in
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(entry.draft.name).font(.subheadline.weight(.semibold))
                                 Text(trainingPlanSummary(entry.draft))
@@ -158,6 +161,12 @@ struct WorkoutPlanScreen: View {
                                 }
                             }
                             .padding(.vertical, 4)
+                        }
+                        if confirmedPlans.count > visibleConfirmedPlanLimit
+                            || confirmedTrainingPlans.count > visibleConfirmedPlanLimit {
+                            Button("加载更多已确认计划") {
+                                visibleConfirmedPlanLimit += Self.confirmedPlanPageSize
+                            }
                         }
                     }
                 }
