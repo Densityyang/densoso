@@ -100,27 +100,191 @@ final class WatchMessageInboxStore {
         }
     }
 
+    func nextEligibleTranscript(excluding claimedIDs: Set<UUID> = []) throws -> PendingWatchTranscript? {
+        let context = ModelContext(modelContainer)
+        let messages = try pendingInboxMessages(in: context)
+        let pendingEnvelopes = messages.compactMap { try? WatchMessageCodec.decode($0.contentData) }
+        let states = try causalSequenceStates(for: pendingEnvelopes)
+        let earlierPendingIDs = Set(messages.compactMap(\.requestID))
+        let transcripts = messages.compactMap { message -> (WatchMessageEnvelope, PendingWatchTranscript)? in
+            guard let id = message.requestID,
+                  !claimedIDs.contains(id),
+                  let envelope = try? WatchMessageCodec.decode(message.contentData),
+                  case .transcript(let text) = envelope.payload,
+                  WatchCommandDependencyPolicy.decision(for: envelope, sequenceStates: states) == .ready,
+                  states[envelope.causalSequence ?? -1] != .conflict,
+                  !hasEarlierPendingCommand(
+                    before: message,
+                    messages: messages,
+                    pendingIDs: earlierPendingIDs,
+                    currentSequence: envelope.causalSequence
+                  ) else { return nil }
+            return (envelope, PendingWatchTranscript(messageID: id, text: text))
+        }
+        return WatchCommandOrderingPolicy.replayOrder(transcripts.map(\.0))
+            .compactMap { ordered in transcripts.first(where: { $0.0.messageID == ordered.messageID })?.1 }
+            .first
+    }
+
     func pendingCommandEnvelopes() throws -> [WatchMessageEnvelope] {
         let context = ModelContext(modelContainer)
         let messages = try pendingInboxMessages(in: context)
-        return messages.compactMap { message -> WatchMessageEnvelope? in
+        let envelopes = messages.compactMap { message -> WatchMessageEnvelope? in
             guard message.requestID != nil,
                   let envelope = try? WatchMessageCodec.decode(message.contentData) else { return nil }
             if case .transcript = envelope.payload { return nil }
             return envelope
         }
+        return WatchCommandOrderingPolicy.replayOrder(envelopes)
     }
 
-    func setState(_ state: String, for messageID: UUID) throws {
+    func pendingReplayEnvelopes() throws -> [WatchMessageEnvelope] {
+        let context = ModelContext(modelContainer)
+        let messages = try pendingInboxMessages(in: context)
+        let envelopes = messages.compactMap { message -> WatchMessageEnvelope? in
+            guard message.requestID != nil,
+                  let envelope = try? WatchMessageCodec.decode(message.contentData) else { return nil }
+            return envelope
+        }
+        return WatchCommandOrderingPolicy.replayOrder(envelopes)
+    }
+
+    func causalSequenceStates() throws -> [Int: WatchCommandSequenceState] {
+        var sequences = Set<Int>()
+        try forEachInboxMessage { message in
+            guard let envelope = try? WatchMessageCodec.decode(message.contentData),
+                  let sequence = envelope.causalSequence else { return }
+            _ = sequences.insert(sequence)
+        }
+        return try causalSequenceStates(for: sequences)
+    }
+
+    func causalSequenceStates(for envelopes: [WatchMessageEnvelope]) throws -> [Int: WatchCommandSequenceState] {
+        let sequences = Set(envelopes.flatMap { envelope in
+            [envelope.causalSequence, envelope.dependsOn].compactMap { $0 }
+        })
+        return try causalSequenceStates(for: sequences)
+    }
+
+    private func causalSequenceStates(for sequences: Set<Int>) throws -> [Int: WatchCommandSequenceState] {
+        guard !sequences.isEmpty else { return [:] }
+
+        var messageIDBySequence: [Int: String] = [:]
+        var duplicateSequences = Set<Int>()
+        try forEachInboxMessage { message in
+            guard let requestID = message.requestID,
+                  let envelope = try? WatchMessageCodec.decode(message.contentData),
+                  let sequence = envelope.causalSequence,
+                  sequences.contains(sequence),
+                  !duplicateSequences.contains(sequence) else { return }
+            if messageIDBySequence[sequence] != nil {
+                messageIDBySequence.removeValue(forKey: sequence)
+                duplicateSequences.insert(sequence)
+            } else {
+                messageIDBySequence[sequence] = requestID.uuidString.lowercased()
+            }
+        }
+
+        let requestedIDs = messageIDBySequence.values.sorted()
+        let context = ModelContext(modelContainer)
+        var receiptStates: [String: WatchCommandSequenceState] = [:]
+        var offset = 0
+        while offset < requestedIDs.count {
+            let batchEnd = min(offset + Self.pendingReceiptFetchBatchSize, requestedIDs.count)
+            let batchIDs = Array(requestedIDs[offset..<batchEnd])
+            let predicate = #Predicate<WatchMessageReceiptRecord> {
+                batchIDs.contains($0.messageID)
+            }
+            for receipt in try context.fetch(FetchDescriptor<WatchMessageReceiptRecord>(predicate: predicate)) {
+                switch receipt.state {
+                case WatchReceiptState.pending:
+                    receiptStates[receipt.messageID] = .pending
+                case WatchReceiptState.processed:
+                    receiptStates[receipt.messageID] = .processed
+                case WatchReceiptState.rejected:
+                    receiptStates[receipt.messageID] = .rejected
+                default:
+                    receiptStates[receipt.messageID] = .pending
+                }
+            }
+            offset = batchEnd
+        }
+
+        var states: [Int: WatchCommandSequenceState] = [:]
+        for sequence in sequences {
+            if duplicateSequences.contains(sequence) {
+                states[sequence] = .conflict
+            } else if let messageID = messageIDBySequence[sequence] {
+                states[sequence] = receiptStates[messageID] ?? .pending
+            }
+        }
+        return states
+    }
+
+    func hasEarlierPendingCommand(before messageID: UUID) throws -> Bool {
+        let context = ModelContext(modelContainer)
+        let messages = try pendingInboxMessages(in: context)
+        let pendingIDs = Set(messages.compactMap(\.requestID))
+        guard let current = messages.first(where: { $0.requestID == messageID }) else { return false }
+        let currentSequence = (try? WatchMessageCodec.decode(current.contentData))?.causalSequence
+        return hasEarlierPendingCommand(
+            before: current,
+            messages: messages,
+            pendingIDs: pendingIDs,
+            currentSequence: currentSequence
+        )
+    }
+
+    private func hasEarlierPendingCommand(
+        before current: MessageRecord,
+        messages: [MessageRecord],
+        pendingIDs: Set<UUID>,
+        currentSequence: Int?
+    ) -> Bool {
+        for message in messages where message.ordinal < current.ordinal
+            || (message.ordinal == current.ordinal && message.id < current.id) {
+            guard let requestID = message.requestID,
+                  pendingIDs.contains(requestID),
+                  let envelope = try? WatchMessageCodec.decode(message.contentData) else { continue }
+            switch envelope.payload {
+            case .transcript, .confirm, .reject:
+                // A later-arriving lower sequence must be allowed to repair an
+                // out-of-order delivery. Legacy work has no sequence and keeps
+                // its durable arrival-order barrier.
+                if let currentSequence,
+                   let earlierSequence = envelope.causalSequence,
+                   earlierSequence > currentSequence {
+                    continue
+                }
+                return true
+            case .requestTodaySnapshot, .acknowledgement, .todaySnapshot:
+                continue
+            }
+        }
+        return false
+    }
+
+    @discardableResult
+    func setState(_ state: String, for messageID: UUID) throws -> Int? {
         let context = ModelContext(modelContainer)
         let key = messageID.uuidString.lowercased()
         let predicate = #Predicate<WatchMessageReceiptRecord> { $0.messageID == key }
         var descriptor = FetchDescriptor<WatchMessageReceiptRecord>(predicate: predicate)
         descriptor.fetchLimit = 1
-        guard let receipt = try context.fetch(descriptor).first else { return }
+        guard let receipt = try context.fetch(descriptor).first else { return nil }
+        let inboxID = Self.conversationID
+        let role = "watch-envelope"
+        let messagePredicate = #Predicate<MessageRecord> { message in
+            message.conversationID == inboxID && message.roleRaw == role && message.requestID == messageID
+        }
+        var messageDescriptor = FetchDescriptor<MessageRecord>(predicate: messagePredicate)
+        messageDescriptor.fetchLimit = 1
+        let causalSequence = try context.fetch(messageDescriptor).first
+            .flatMap { try? WatchMessageCodec.decode($0.contentData).causalSequence }
         receipt.state = state
         receipt.processedAt = Date()
         try context.save()
+        return causalSequence
     }
 
     func recentProcessedMessageIDs(limit: Int = 100) throws -> [UUID] {
@@ -209,6 +373,38 @@ final class WatchMessageInboxStore {
         }
         return messages.sorted {
             $0.ordinal == $1.ordinal ? $0.id < $1.id : $0.ordinal < $1.ordinal
+        }
+    }
+
+    private func forEachInboxMessage(_ body: (MessageRecord) throws -> Void) throws {
+        let context = ModelContext(modelContainer)
+        let inboxID = Self.conversationID
+        let role = "watch-envelope"
+        let sortBy = [SortDescriptor(\.ordinal), SortDescriptor(\.id)]
+        var cursor: InboxMessageCursor?
+        while true {
+            let predicate: Predicate<MessageRecord>
+            if let cursor {
+                let cursorOrdinal = cursor.ordinal
+                let cursorID = cursor.id
+                predicate = #Predicate<MessageRecord> { message in
+                    message.conversationID == inboxID
+                        && message.roleRaw == role
+                        && (message.ordinal > cursorOrdinal
+                            || (message.ordinal == cursorOrdinal && message.id > cursorID))
+                }
+            } else {
+                predicate = #Predicate<MessageRecord> { message in
+                    message.conversationID == inboxID && message.roleRaw == role
+                }
+            }
+            var descriptor = FetchDescriptor<MessageRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.pendingReceiptFetchBatchSize
+            let page = try context.fetch(descriptor)
+            guard let lastMessage = page.last else { break }
+            for message in page { try body(message) }
+            cursor = InboxMessageCursor(ordinal: lastMessage.ordinal, id: lastMessage.id)
+            if page.count < Self.pendingReceiptFetchBatchSize { break }
         }
     }
 

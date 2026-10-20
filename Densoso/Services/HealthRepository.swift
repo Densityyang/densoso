@@ -24,6 +24,7 @@ private struct HealthKitSampleIndexUpdate {
 @MainActor
 final class HealthRepository: HealthSyncRepository {
     private static let healthKitSampleIndexBatchSize = 400
+    private static let healthKitSampleIndexPredicateBatchSize = 64
     private static let importedWorkoutBatchSize = 400
     private static let workoutEffortFetchBatchSize = 64
 
@@ -250,7 +251,7 @@ final class HealthRepository: HealthSyncRepository {
         if !requestedIDs.isEmpty {
             var offset = 0
             while offset < requestedIDs.count {
-                let batchEnd = min(offset + Self.healthKitSampleIndexBatchSize, requestedIDs.count)
+                let batchEnd = min(offset + Self.healthKitSampleIndexPredicateBatchSize, requestedIDs.count)
                 let sampleIDs = Array(requestedIDs[offset..<batchEnd])
                 let predicate = #Predicate<HealthKitSampleIndexRecord> {
                     $0.stream == stream && sampleIDs.contains($0.sampleID)
@@ -690,7 +691,7 @@ final class HealthRepository: HealthSyncRepository {
         let sampleIDs = orderedUpdates.map { $0.sample.id }
         var offset = 0
         while offset < sampleIDs.count {
-            let batchEnd = min(offset + Self.healthKitSampleIndexBatchSize, sampleIDs.count)
+            let batchEnd = min(offset + Self.healthKitSampleIndexPredicateBatchSize, sampleIDs.count)
             let batchIDs = Array(sampleIDs[offset..<batchEnd])
             let predicate = #Predicate<HealthKitSampleIndexRecord> {
                 batchIDs.contains($0.sampleID)
@@ -735,18 +736,25 @@ final class HealthRepository: HealthSyncRepository {
     }
 
     private func markHealthKitSampleIndexesForRequery(sampleIDs: Set<UUID>, stream: String) throws {
-        let orderedIDs = sampleIDs.sorted { $0.uuidString < $1.uuidString }
-        for sampleID in orderedIDs {
-            let predicate = #Predicate<HealthKitSampleIndexRecord> {
-                $0.stream == stream && $0.sampleID == sampleID
+        guard !sampleIDs.isEmpty else { return }
+        let predicate = #Predicate<HealthKitSampleIndexRecord> { $0.stream == stream }
+        let sortBy = [SortDescriptor(\HealthKitSampleIndexRecord.sampleID)]
+        var offset = 0
+        while true {
+            var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize
+            descriptor.fetchOffset = offset
+            let records = try modelContext.fetch(descriptor)
+            guard !records.isEmpty else { return }
+            // Keep the query and ordering fields unchanged while marking a deletion batch.
+            for record in records where sampleIDs.contains(record.sampleID) {
+                let pendingDayKeys = Self.pendingDayKeys(for: record)
+                    .union(Self.projectionDayKeys(for: record, stream: stream))
+                record.isDeleted = true
+                Self.setPendingDayKeys(pendingDayKeys, on: record)
             }
-            var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate)
-            descriptor.fetchLimit = 1
-            guard let record = try modelContext.fetch(descriptor).first else { continue }
-            let pendingDayKeys = Self.pendingDayKeys(for: record)
-                .union(Self.projectionDayKeys(for: record, stream: stream))
-            record.isDeleted = true
-            Self.setPendingDayKeys(pendingDayKeys, on: record)
+            if records.count < Self.healthKitSampleIndexBatchSize { return }
+            offset += records.count
         }
     }
 
@@ -757,7 +765,7 @@ final class HealthRepository: HealthSyncRepository {
         let orderedIDs = pendingDayKeys.keys.sorted { $0.uuidString < $1.uuidString }
         var offset = 0
         while offset < orderedIDs.count {
-            let batchEnd = min(offset + Self.healthKitSampleIndexBatchSize, orderedIDs.count)
+            let batchEnd = min(offset + Self.healthKitSampleIndexPredicateBatchSize, orderedIDs.count)
             let batchIDs = Array(orderedIDs[offset..<batchEnd])
             let predicate = #Predicate<HealthKitSampleIndexRecord> {
                 $0.stream == stream && batchIDs.contains($0.sampleID)
@@ -771,18 +779,25 @@ final class HealthRepository: HealthSyncRepository {
     }
 
     private func deleteHealthKitSampleIndexes(sampleIDs: Set<UUID>, stream: String) throws {
-        let orderedIDs = sampleIDs.sorted { $0.uuidString < $1.uuidString }
-        var offset = 0
-        while offset < orderedIDs.count {
-            let batchEnd = min(offset + Self.healthKitSampleIndexBatchSize, orderedIDs.count)
-            let batchIDs = Array(orderedIDs[offset..<batchEnd])
-            let predicate = #Predicate<HealthKitSampleIndexRecord> {
-                $0.stream == stream && $0.isDeleted && batchIDs.contains($0.sampleID)
-            }
-            let records = try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate))
-            for record in records { modelContext.delete(record) }
-            offset = batchEnd
+        guard !sampleIDs.isEmpty else { return }
+        let predicate = #Predicate<HealthKitSampleIndexRecord> {
+            $0.stream == stream && $0.isDeleted
         }
+        let sortBy = [SortDescriptor(\HealthKitSampleIndexRecord.sampleID)]
+        var offset = 0
+        var recordsToDelete: [HealthKitSampleIndexRecord] = []
+        // Collect matches before deleting so the offset-paged result set stays stable.
+        while true {
+            var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize
+            descriptor.fetchOffset = offset
+            let records = try modelContext.fetch(descriptor)
+            guard !records.isEmpty else { break }
+            recordsToDelete.append(contentsOf: records.filter { sampleIDs.contains($0.sampleID) })
+            if records.count < Self.healthKitSampleIndexBatchSize { break }
+            offset += records.count
+        }
+        for record in recordsToDelete { modelContext.delete(record) }
     }
 
     private func healthSnapshot(for day: Date) throws -> DailyHealthSnapshot? {

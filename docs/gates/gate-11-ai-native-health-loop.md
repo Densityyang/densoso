@@ -23,7 +23,10 @@ snapshot reads by the effective day and uses a keyed single-row lookup for the
 target snapshot. HealthKit sample values and device metadata are reduced to
 daily summaries before persistence; a sample-ID interval index with unresolved
 projection-day keys supports deletion and moved-sample rebuilds. Ambiguous
-full-day reads retain history but suppress it from the live projection.
+full-day reads retain history but suppress it from the live projection. Pending
+sample-index traversal uses stable, bounded 400-row pages; targeted UUID
+membership queries are limited to 64 IDs, and deletion cleanup collects target
+rows before changing the paged result set.
 HealthIntelligenceReadModel pages daily meal protein, weight and workout history
 inside its bounded date window.
 Daily-loop plan loading pages stored plan events and retains only active sessions

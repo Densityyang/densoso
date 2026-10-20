@@ -43,7 +43,6 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     private static let watchSnapshotEntryLimit = 10
 
     @ObservationIgnored private let session: WCSession
-    @ObservationIgnored private let modelContainer: ModelContainer
     @ObservationIgnored private let confirmationCoordinator: ConfirmationCoordinator
     @ObservationIgnored private let agentSession: AgentSession
     @ObservationIgnored private let healthIntelligenceService: HealthIntelligenceService
@@ -51,6 +50,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     @ObservationIgnored private let inboxStore: WatchMessageInboxStore
     @ObservationIgnored private var processingMessageIDs = Set<UUID>()
     @ObservationIgnored private var isResumingPendingCommands = false
+    @ObservationIgnored private var needsAnotherResumePass = false
 
     private(set) var isAvailable = false
     private(set) var isActivated = false
@@ -65,7 +65,6 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         workoutPlanSchedulingService: WorkoutPlanSchedulingService,
         session: WCSession = .default
     ) {
-        self.modelContainer = modelContainer
         self.confirmationCoordinator = confirmationCoordinator
         self.agentSession = agentSession
         self.healthIntelligenceService = healthIntelligenceService
@@ -83,27 +82,95 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         session.activate()
     }
 
-    private func resumePendingCommands() {
-        guard !isResumingPendingCommands else { return }
+    private func finishResumingPendingCommands() {
+        isResumingPendingCommands = false
+        if needsAnotherResumePass {
+            needsAnotherResumePass = false
+            resumePendingCommands()
+        }
+    }
 
-        let envelopes: [WatchMessageEnvelope]
-        do {
-            envelopes = try inboxStore.pendingCommandEnvelopes()
-        } catch {
-            lastError = "无法恢复 Watch 命令：\(error.localizedDescription)"
+    private func resumePendingCommands() {
+        guard !isResumingPendingCommands else {
+            needsAnotherResumePass = true
             return
         }
-        guard !envelopes.isEmpty else { return }
 
         isResumingPendingCommands = true
         Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.isResumingPendingCommands = false }
-            for envelope in envelopes {
-                guard let data = try? WatchMessageCodec.encode(envelope) else { continue }
-                _ = await self.receive(data)
-            }
+            repeat {
+                self.needsAnotherResumePass = false
+                let envelopes: [WatchMessageEnvelope]
+                do {
+                    envelopes = try self.inboxStore.pendingReplayEnvelopes()
+                } catch {
+                    self.lastError = "无法恢复 Watch 命令：\(error.localizedDescription)"
+                    self.finishResumingPendingCommands()
+                    return
+                }
+
+                var reachedTerminalState = false
+                for envelope in envelopes {
+                    guard let data = try? WatchMessageCodec.encode(envelope) else { continue }
+                    let response = await self.receive(data)
+                    reachedTerminalState = reachedTerminalState || Self.isTerminalAcknowledgement(response)
+                }
+                if reachedTerminalState { self.needsAnotherResumePass = true }
+            } while self.needsAnotherResumePass
+            self.finishResumingPendingCommands()
         }
+    }
+
+    private static func isTerminalAcknowledgement(_ data: Data?) -> Bool {
+        guard let data,
+              let envelope = try? WatchMessageCodec.decode(data),
+              case .acknowledgement(let acknowledgement) = envelope.payload else { return false }
+        switch acknowledgement.state {
+        case .processed, .duplicate, .rejected:
+            return true
+        case .accepted:
+            return false
+        }
+    }
+
+    private func setReceiptState(_ state: String, for messageID: UUID) throws {
+        _ = try inboxStore.setState(state, for: messageID)
+        if isResumingPendingCommands {
+            needsAnotherResumePass = true
+        } else {
+            resumePendingCommands()
+        }
+        refreshApplicationContext()
+    }
+
+    private func rejectPendingMessage(
+        _ envelope: WatchMessageEnvelope,
+        detail: String
+    ) throws -> Data? {
+        try setReceiptState(WatchReceiptState.rejected, for: envelope.messageID)
+        return acknowledgement(for: envelope.messageID, state: .rejected, detail: detail)
+    }
+
+    private func dependencyState(for envelope: WatchMessageEnvelope) throws -> WatchCommandDependencyDecision {
+        let states = try inboxStore.causalSequenceStates(for: [envelope])
+        if let sequence = envelope.causalSequence, states[sequence] == .conflict {
+            return .rejectedBecause(sequence)
+        }
+        return WatchCommandDependencyPolicy.decision(for: envelope, sequenceStates: states)
+    }
+
+    private func isCommandOrTranscript(_ payload: WatchPayload) -> Bool {
+        switch payload {
+        case .transcript, .confirm, .reject:
+            return true
+        case .requestTodaySnapshot, .acknowledgement, .todaySnapshot:
+            return false
+        }
+    }
+
+    private func resumeIfNotAlreadyReplaying() {
+        if !isResumingPendingCommands { resumePendingCommands() }
     }
 
     func refreshApplicationContext() {
@@ -120,12 +187,11 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     }
 
     func nextPendingTranscript(excluding claimedIDs: Set<UUID> = []) throws -> PendingWatchTranscript? {
-        try inboxStore.pendingTranscripts(excluding: claimedIDs).first
+        try inboxStore.nextEligibleTranscript(excluding: claimedIDs)
     }
 
     func markTranscriptProcessed(_ messageID: UUID) throws {
-        try inboxStore.setState(WatchReceiptState.processed, for: messageID)
-        refreshApplicationContext()
+        try setReceiptState(WatchReceiptState.processed, for: messageID)
     }
 
     func pendingActionSummaries() -> [WatchPendingActionSummary] {
@@ -154,19 +220,13 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     }
 
     private func makeTodaySnapshot() throws -> WatchTodaySnapshot {
-        let context = ModelContext(modelContainer)
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
         let dayAfterTomorrow = calendar.date(byAdding: .day, value: 2, to: today)!
         let todayBrief = healthIntelligenceService.dailyBrief.flatMap { brief in
             calendar.isDate(brief.dayStart, inSameDayAs: today) ? brief : nil
         }
-        let metricsPredicate = #Predicate<DailyMetrics> { $0.date >= today && $0.date < tomorrow }
-        var metricsDescriptor = FetchDescriptor<DailyMetrics>(predicate: metricsPredicate)
-        metricsDescriptor.fetchLimit = 1
-        let metrics = try context.fetch(metricsDescriptor).first
-        let received = try inboxStore.recentReceivedMessageIDs()
+        let received = try inboxStore.recentProcessedMessageIDs()
         let singleSessionPlans = try workoutPlanSchedulingService
             .upcomingConfirmedPlans(from: today, limit: Self.watchSnapshotEntryLimit)
             .map {
@@ -200,16 +260,20 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         return WatchTodaySnapshot(
             generatedAt: Date(),
             summary: todayBrief?.summary ?? "暂无本地健康摘要",
-            energyIntakeKcal: metrics?.totalIntakeKcal,
-            totalExpenditureKcal: metrics?.totalExpenditureKcal,
-            deficitKcal: metrics?.deficitKcal,
             domains: todayBrief?.domains.map {
                 WatchHealthDomainStatus(domain: $0.domain, status: $0.status)
             } ?? [],
             pendingActions: pendingActionSummaries(),
             workoutPlans: scheduledPlans,
             acknowledgedMessageIDs: received,
-            tomorrowGuidance: todayBrief?.healthState?.tomorrowGuidance,
+            tomorrowGuidance: todayBrief?.healthState?.tomorrowGuidance.map { guidance in
+                WatchTomorrowGuidanceSummary(
+                    expectedState: guidance.expectedState,
+                    confidence: guidance.confidence,
+                    recommendedAction: guidance.recommendedAction,
+                    conditionalNote: guidance.conditionalNote
+                )
+            },
             recoverySummary: todayBrief?.healthState.map { healthState in
                 WatchRecoverySummary(
                     status: healthState.recovery.status,
@@ -230,6 +294,31 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
             if disposition == .duplicateProcessed {
                 return acknowledgement(for: envelope.messageID, state: .duplicate, detail: nil)
             }
+            if isCommandOrTranscript(envelope.payload) {
+                switch try dependencyState(for: envelope) {
+                case .ready:
+                    if try inboxStore.hasEarlierPendingCommand(before: envelope.messageID) {
+                        resumeIfNotAlreadyReplaying()
+                        return acknowledgement(
+                            for: envelope.messageID,
+                            state: .accepted,
+                            detail: "已保存，等待更早的 Watch 消息处理完成"
+                        )
+                    }
+                case .waitingFor(let sequence):
+                    resumeIfNotAlreadyReplaying()
+                    return acknowledgement(
+                        for: envelope.messageID,
+                        state: .accepted,
+                        detail: "已保存，等待前序命令 \(sequence) 完成"
+                    )
+                case .rejectedBecause(let sequence):
+                    return try rejectPendingMessage(
+                        envelope,
+                        detail: "前序命令 \(sequence) 已拒绝或存在序号冲突，当前消息未执行。"
+                    )
+                }
+            }
             guard processingMessageIDs.insert(envelope.messageID).inserted else {
                 return acknowledgement(for: envelope.messageID, state: .accepted, detail: "消息正在处理")
             }
@@ -241,7 +330,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 refreshApplicationContext()
                 return acknowledgement(for: envelope.messageID, state: .accepted, detail: "转写已保存在本机，等待你检查")
             case .requestTodaySnapshot:
-                try inboxStore.setState(WatchReceiptState.processed, for: envelope.messageID)
+                try setReceiptState(WatchReceiptState.processed, for: envelope.messageID)
                 refreshApplicationContext()
                 return acknowledgement(for: envelope.messageID, state: .processed, detail: "已更新 Today 摘要")
             case .confirm(let actionID):
@@ -250,7 +339,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                     if case .trainingPlan = action.payload { return true }
                     return false
                 }) {
-                    try inboxStore.setState(WatchReceiptState.rejected, for: envelope.messageID)
+                    try setReceiptState(WatchReceiptState.rejected, for: envelope.messageID)
                     return acknowledgement(
                         for: envelope.messageID,
                         state: .rejected,
@@ -262,7 +351,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                     receipt = try await confirmationCoordinator.confirm(id: actionID)
                 } catch {
                     if let confirmationError = error as? ConfirmationError, !confirmationError.isRetryable {
-                        try inboxStore.setState(WatchReceiptState.rejected, for: envelope.messageID)
+                        try setReceiptState(WatchReceiptState.rejected, for: envelope.messageID)
                         return acknowledgement(
                             for: envelope.messageID,
                             state: .rejected,
@@ -281,7 +370,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                     }
                 }
                 try? await agentSession.reloadPendingActions()
-                try inboxStore.setState(WatchReceiptState.processed, for: envelope.messageID)
+                try setReceiptState(WatchReceiptState.processed, for: envelope.messageID)
                 _ = try? await healthIntelligenceService.refresh()
                 refreshApplicationContext()
                 return acknowledgement(for: envelope.messageID, state: .processed, detail: detail)
@@ -290,7 +379,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                     try await confirmationCoordinator.reject(id: actionID)
                 } catch {
                     if let confirmationError = error as? ConfirmationError, !confirmationError.isRetryable {
-                        try inboxStore.setState(WatchReceiptState.rejected, for: envelope.messageID)
+                        try setReceiptState(WatchReceiptState.rejected, for: envelope.messageID)
                         refreshApplicationContext()
                         return acknowledgement(
                             for: envelope.messageID,
@@ -301,11 +390,11 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                     throw error
                 }
                 try? await agentSession.reloadPendingActions()
-                try inboxStore.setState(WatchReceiptState.processed, for: envelope.messageID)
+                try setReceiptState(WatchReceiptState.processed, for: envelope.messageID)
                 refreshApplicationContext()
                 return acknowledgement(for: envelope.messageID, state: .processed, detail: "草稿已拒绝")
             case .acknowledgement, .todaySnapshot:
-                try inboxStore.setState(WatchReceiptState.rejected, for: envelope.messageID)
+                try setReceiptState(WatchReceiptState.rejected, for: envelope.messageID)
                 return acknowledgement(for: envelope.messageID, state: .rejected, detail: "此消息类型只能由 iPhone 发送")
             }
         } catch {

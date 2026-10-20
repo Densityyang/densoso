@@ -198,7 +198,7 @@ struct ChatScreen: View {
     private var promptChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(dailyLoopSnapshot?.quickActions ?? [], id: \.rawValue) { action in
+                ForEach(dailyLoopSnapshot?.quickActions ?? DailyLoopQuickAction.allCases, id: \.rawValue) { action in
                     promptButton(for: action)
                 }
             }

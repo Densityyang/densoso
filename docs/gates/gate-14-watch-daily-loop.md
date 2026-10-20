@@ -16,24 +16,42 @@ envelope whose optional request ID is nil; recent receipt IDs also skip that
 envelope while preserving durable inbox arrival order. Pending receipt IDs and
 inbox messages are read in stable, bounded pages; Swift matches non-nil request
 IDs in memory so SwiftData predicates do not force unwrap optional fields.
-The phone snapshot resolves today's DailyMetrics row with a bounded date query
-and one-row fetch limit. Its single-session plan query starts at today, reads
-note-prefix candidates in stable 64-row pages, skips terminal entries, and
-stops after the next ten plans; ordinary calendar events remain isolated. The
-iPhone plan editor keeps its complete confirmed-plan history query. The Watch
-snapshot uses a separate 64-row paged query for the current two-day window,
-skips terminal plans and rest days, and retains only the ten earliest sessions
-with stable tie ordering before building summaries. Pending draft summaries are
-also capped at ten, ordered by earliest expiry and action ID.
+Repeated offline Watch refresh taps coalesce while a snapshot request remains
+unacknowledged in the durable outbox. Once iPhone acknowledges it, a later tap
+can enqueue a new request; transcript, confirm, and reject messages remain
+independent queue entries.
+Incoming Watch messages are persisted before dependency checks or execution.
+New commands keep a monotonic sequence but depend only on the latest command
+still awaiting a terminal receipt, so an old rejection does not poison a later
+independent command. Sequenced commands wait while their predecessor is missing
+or pending, and the phone replays eligible work in causal-sequence order after a
+predecessor reaches processed. Rejected or conflicting predecessors terminally
+reject their successors. Legacy commands and transcripts retain the durable
+arrival-order barrier, including while an earlier transcript waits for iPhone
+consumption. Transcripts remain pending until the user sends or otherwise
+durably handles them, and are not surfaced before their dependencies are ready;
+app activation and receipt-state changes resume the pending replay queue.
+The Watch health snapshot derives today's health status and guidance from the
+current-day brief. It queries recent terminal inbox receipts and confirmed plans;
+it does not fetch DailyMetrics. Its single-session plan query starts at today,
+reads note-prefix candidates in stable 64-row pages, skips terminal entries,
+and stops after the next ten plans; ordinary calendar events remain isolated.
+The iPhone plan editor keeps its complete confirmed-plan history query. The
+Watch snapshot uses a separate 64-row paged query for the current two-day
+window, skips terminal plans and rest days, and retains only the ten earliest
+sessions with stable tie ordering before building summaries. Pending draft
+summaries are also capped at ten, ordered by earliest expiry and action ID.
 The Watch snapshot carries optional next-day guidance only from a brief for the
-current local day. Its domain payload contains only domain/status pairs, so
-numeric estimates, baselines, and evidence keys stay on iPhone; the Watch shows
-available nutrition, sleep, activity, and body status labels plus the recovery
-status/action. It shows the guidance's conditional note and action when present,
-and newer payloads remain decodable from snapshots sent by older app versions.
+current local day. Its health payload contains domain/status pairs and a compact
+recovery summary; numeric estimates, baselines, and evidence keys stay on
+iPhone. Legacy numeric fields from older snapshots are ignored and are not
+re-emitted. The Watch shows available nutrition, sleep, activity, and body
+status labels plus the recovery status/action. It shows the guidance's
+conditional note and action when present, and newer payloads remain decodable
+from snapshots sent by older app versions.
 The Watch compares `generatedAt` with the current day in its local calendar and
 rechecks the boundary periodically. After local midnight, an older snapshot is
-labeled with its most recent sync date; its health summary, metrics, recovery,
+labeled with its most recent sync date; its health summary, recovery,
 tomorrow guidance, and workout-plan schedule are hidden. Pending actions remain
 available only until their individual `expiresAt` time.
 The phone plan editor fetches ten single-session and ten multi-day plans per
@@ -43,21 +61,32 @@ be retried. An initial read failure shows a retryable error instead of an empty
 history.
 Watch outbox and phone inbox tests cover replay semantics; the phone
 coordinator's activation path restores pending commands.
+Whenever the published daily brief changes, the app rebuilds the notification
+snapshot and refreshes Watch application context so manual and foreground
+health refreshes reach the companion without waiting for another activation.
 
 ## Focused tests
 
 - DensosoDomain: `DailyLoopSnapshotTests`, `TrainingPlanDraftTests`,
-  `WatchMessageOutboxTests`, and `WatchWorkoutCoordinatorTests`.
+  `WatchMessageOutboxTests` (including
+  `testCausalSequenceSurvivesAcknowledgementAndOutboxRestore` and
+  `testCausalDependencyPolicyWaitsAndFailsOnRejectedOrConflictingPredecessors`),
+  and `WatchWorkoutCoordinatorTests`.
 - iOS tests: `DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState`,
   `DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays`,
   `DailyLoopSnapshotCompositionTests.testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary`,
   `WatchMessageInboxStoreTests.testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder`,
+  `WatchMessageInboxStoreTests.testCausalReplayWaitsForMissingAndPendingPredecessorThenOrdersBySequence`,
+  `WatchMessageInboxStoreTests.testRejectedAndConflictingPredecessorsRejectCausalSuccessors`,
+  `WatchMessageInboxStoreTests.testCausalTranscriptWaitsForPredecessorAndStaysPendingUntilConsumed`,
+  `WatchMessageInboxStoreTests.testLegacyPendingCommandAndTranscriptBlockNewerCommandUntilCompleted`,
   `WatchMessageInboxStoreTests.testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder`,
   `WatchMessageInboxStoreTests.testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages`,
   `WatchMessageInboxStoreTests.testOutOfOrderMessagesAreReturnedInDurableArrivalOrder`,
   `WatchMessageInboxStoreTests.testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder`,
   `WatchMessageOutboxTests.testTodaySnapshotRoundTripsTomorrowGuidanceAndDecodesLegacyPayload`,
   `WatchMessageOutboxTests.testTodaySnapshotExpiresAtInjectedCalendarLocalMidnight`,
+  `WatchMessageOutboxTests.testSnapshotRequestPolicyCoalescesOnlyUntilAcknowledged`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry`,
   `TrainingPlanSchedulingServiceTests.testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanHistoryPagesAcrossThe64EventBoundary`,

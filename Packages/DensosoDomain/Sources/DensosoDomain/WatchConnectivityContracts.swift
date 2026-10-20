@@ -6,6 +6,10 @@ public struct WatchMessageEnvelope: Codable, Equatable, Sendable, Identifiable {
     public let schemaVersion: Int
     public let messageID: UUID
     public let createdAt: Date
+    /// Positive sequence assigned to a new Watch command; nil preserves legacy arrival ordering.
+    public let causalSequence: Int?
+    /// The earlier causal sequence that must finish successfully before this command executes.
+    public let dependsOn: Int?
     public let payload: WatchPayload
 
     public var id: UUID { messageID }
@@ -14,11 +18,15 @@ public struct WatchMessageEnvelope: Codable, Equatable, Sendable, Identifiable {
         schemaVersion: Int = currentSchemaVersion,
         messageID: UUID = UUID(),
         createdAt: Date = Date(),
+        causalSequence: Int? = nil,
+        dependsOn: Int? = nil,
         payload: WatchPayload
     ) {
         self.schemaVersion = schemaVersion
         self.messageID = messageID
         self.createdAt = createdAt
+        self.causalSequence = causalSequence
+        self.dependsOn = dependsOn
         self.payload = payload
     }
 }
@@ -111,6 +119,57 @@ public struct WatchRecoverySummary: Codable, Equatable, Sendable {
     }
 }
 
+/// A Watch-safe projection of next-day guidance. Evidence is not sent to Watch;
+/// empty `reasons` remains present for decoding by older Watch app versions.
+public struct WatchTomorrowGuidanceSummary: Codable, Equatable, Sendable {
+    public let expectedState: NextDayState
+    public let confidence: EstimateConfidence
+    public let reasons: [EvidenceReference]
+    public let recommendedAction: RecommendationAction
+    public let conditionalNote: String
+
+    public init(
+        expectedState: NextDayState,
+        confidence: EstimateConfidence,
+        recommendedAction: RecommendationAction,
+        conditionalNote: String
+    ) {
+        self.expectedState = expectedState
+        self.confidence = confidence
+        self.reasons = []
+        self.recommendedAction = recommendedAction
+        self.conditionalNote = conditionalNote
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case expectedState
+        case confidence
+        case reasons
+        case recommendedAction
+        case conditionalNote
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        expectedState = try container.decode(NextDayState.self, forKey: .expectedState)
+        confidence = try container.decode(EstimateConfidence.self, forKey: .confidence)
+        // Consume but discard evidence keys from old full-guidance payloads.
+        _ = try container.decodeIfPresent([EvidenceReference].self, forKey: .reasons)
+        reasons = []
+        recommendedAction = try container.decode(RecommendationAction.self, forKey: .recommendedAction)
+        conditionalNote = try container.decode(String.self, forKey: .conditionalNote)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(expectedState, forKey: .expectedState)
+        try container.encode(confidence, forKey: .confidence)
+        try container.encode([], forKey: .reasons)
+        try container.encode(recommendedAction, forKey: .recommendedAction)
+        try container.encode(conditionalNote, forKey: .conditionalNote)
+    }
+}
+
 /// A compact Watch projection that exposes a domain's state without sending
 /// its numeric estimate, baseline, or evidence keys to the companion device.
 public struct WatchHealthDomainStatus: Codable, Equatable, Sendable {
@@ -128,37 +187,28 @@ public struct WatchHealthDomainStatus: Codable, Equatable, Sendable {
 public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
     public let generatedAt: Date
     public let summary: String
-    public let energyIntakeKcal: Int?
-    public let totalExpenditureKcal: Int?
-    public let deficitKcal: Int?
     /// Optional to keep snapshots encoded by older iPhone versions decodable.
     public let recoverySummary: WatchRecoverySummary?
     /// Optional to keep snapshots encoded by older iPhone versions decodable.
-    public let tomorrowGuidance: NextDayGuidance?
+    public let tomorrowGuidance: WatchTomorrowGuidanceSummary?
     public let domains: [WatchHealthDomainStatus]
     public let pendingActions: [WatchPendingActionSummary]
     public let workoutPlans: [WatchWorkoutPlanSummary]
-    /// Message IDs whose envelopes are durably stored on iPhone; their work may still be pending.
+    /// Message IDs whose receipt reached a processed/rejected terminal state.
     public let acknowledgedMessageIDs: [UUID]
 
     public init(
         generatedAt: Date = Date(),
         summary: String,
-        energyIntakeKcal: Int?,
-        totalExpenditureKcal: Int?,
-        deficitKcal: Int?,
         domains: [WatchHealthDomainStatus],
         pendingActions: [WatchPendingActionSummary],
         workoutPlans: [WatchWorkoutPlanSummary] = [],
         acknowledgedMessageIDs: [UUID],
-        tomorrowGuidance: NextDayGuidance? = nil,
+        tomorrowGuidance: WatchTomorrowGuidanceSummary? = nil,
         recoverySummary: WatchRecoverySummary? = nil
     ) {
         self.generatedAt = generatedAt
         self.summary = String(summary.prefix(500))
-        self.energyIntakeKcal = energyIntakeKcal.flatMap { $0 >= 0 ? $0 : nil }
-        self.totalExpenditureKcal = totalExpenditureKcal.flatMap { $0 >= 0 ? $0 : nil }
-        self.deficitKcal = deficitKcal
         self.recoverySummary = recoverySummary
         self.tomorrowGuidance = tomorrowGuidance
         self.domains = domains
@@ -181,13 +231,29 @@ public enum WatchMessageError: Error, Equatable, Sendable {
     case emptyTranscript
     case transcriptTooLong
     case messageIDCollision(UUID)
+    case invalidCausalSequence
+    case invalidCausalDependency
+    case causalSequenceExhausted
 }
 
 public struct WatchMessageOutbox: Codable, Equatable, Sendable {
     private var pendingByID: [UUID: WatchMessageEnvelope]
+    private var lastCausalSequence: Int?
 
     public init(pending: [WatchMessageEnvelope] = []) {
         self.pendingByID = Dictionary(uniqueKeysWithValues: pending.map { ($0.messageID, $0) })
+        self.lastCausalSequence = pending.compactMap(\.causalSequence).max()
+    }
+
+    public var latestCausalSequence: Int? {
+        let latest = max(lastCausalSequence ?? 0, pendingByID.values.compactMap(\.causalSequence).max() ?? 0)
+        return latest > 0 ? latest : nil
+    }
+
+    /// The last command that still needs a terminal phone receipt, if any.
+    /// New independent commands must not inherit a rejected historical dependency.
+    public var latestPendingCausalSequence: Int? {
+        pendingByID.values.compactMap(\.causalSequence).max()
     }
 
     @discardableResult
@@ -198,14 +264,40 @@ public struct WatchMessageOutbox: Codable, Equatable, Sendable {
             return false
         }
         pendingByID[envelope.messageID] = envelope
+        if let causalSequence = envelope.causalSequence {
+            lastCausalSequence = max(lastCausalSequence ?? 0, causalSequence)
+        }
         return true
+    }
+
+    public mutating func enqueueCausalCommand(
+        _ payload: WatchPayload,
+        dependsOn: Int? = nil,
+        messageID: UUID = UUID(),
+        createdAt: Date = Date()
+    ) throws -> WatchMessageEnvelope {
+        let previousSequence = latestCausalSequence ?? 0
+        guard previousSequence < Int.max else { throw WatchMessageError.causalSequenceExhausted }
+        let envelope = WatchMessageEnvelope(
+            messageID: messageID,
+            createdAt: createdAt,
+            causalSequence: previousSequence + 1,
+            dependsOn: dependsOn,
+            payload: payload
+        )
+        _ = try enqueue(envelope)
+        return envelope
     }
 
     public mutating func acknowledge(_ acknowledgement: WatchAcknowledgement) {
         switch acknowledgement.state {
-        // `accepted` is emitted only after the phone persists a receipt.
+        // Persisted acceptance is terminal for legacy envelopes only. Sequenced
+        // commands remain queued until their receipt reaches a terminal state.
         case .accepted, .processed, .duplicate, .rejected:
-            pendingByID.removeValue(forKey: acknowledgement.messageID)
+            if acknowledgement.state != .accepted
+                || pendingByID[acknowledgement.messageID]?.causalSequence == nil {
+                pendingByID.removeValue(forKey: acknowledgement.messageID)
+            }
         }
     }
 
@@ -214,10 +306,7 @@ public struct WatchMessageOutbox: Codable, Equatable, Sendable {
     }
 
     public var pending: [WatchMessageEnvelope] {
-        pendingByID.values.sorted {
-            if $0.createdAt == $1.createdAt { return $0.messageID.uuidString < $1.messageID.uuidString }
-            return $0.createdAt < $1.createdAt
-        }
+        WatchCommandOrderingPolicy.dispatchOrder(Array(pendingByID.values))
     }
 }
 
@@ -243,6 +332,22 @@ public enum WatchMessageCodec {
     public static func validate(_ envelope: WatchMessageEnvelope) throws {
         guard envelope.schemaVersion == WatchMessageEnvelope.currentSchemaVersion else {
             throw WatchMessageError.unsupportedSchemaVersion(envelope.schemaVersion)
+        }
+        if let causalSequence = envelope.causalSequence {
+            guard causalSequence > 0 else { throw WatchMessageError.invalidCausalSequence }
+            switch envelope.payload {
+            case .transcript, .confirm, .reject:
+                break
+            case .requestTodaySnapshot, .acknowledgement, .todaySnapshot:
+                throw WatchMessageError.invalidCausalSequence
+            }
+        }
+        if let dependsOn = envelope.dependsOn {
+            guard dependsOn > 0,
+                  let causalSequence = envelope.causalSequence,
+                  dependsOn < causalSequence else {
+                throw WatchMessageError.invalidCausalDependency
+            }
         }
         if case .transcript(let text) = envelope.payload {
             let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)

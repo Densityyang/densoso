@@ -92,7 +92,10 @@ struct AppRoot: View {
                     await refreshStaleDailyBriefAfterActivation()
                 }
                 .onChange(of: dependencies.healthIntelligenceService.dailyBrief) { _, _ in
-                    Task { await refreshNotificationSnapshot() }
+                    Task {
+                        await refreshNotificationSnapshot()
+                        dependencies.watchConnectivityCoordinator.refreshApplicationContext()
+                    }
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {

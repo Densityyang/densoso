@@ -770,6 +770,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "daily snapshot summaries",
             "offline replay deduplication",
             "arrival ordering",
+            "Sequenced commands wait while their predecessor is missing",
+            "Rejected or conflicting predecessors terminally",
+            "Transcripts remain pending until the user sends",
             "TrainingPlanDraftTests",
             "goal, location, intensity, and reason details",
             "After local midnight, an older snapshot is",
@@ -822,8 +825,12 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "testHundredOfflineMessagesRemainOrderedAndDuplicateReplaysDoNotAddRows",
             "testAcceptedAcknowledgementRemovesMessageAfterPhonePersistsItsReceipt",
+            "testCausalSequenceSurvivesAcknowledgementAndOutboxRestore",
+            "testCausalDependencyPolicyWaitsAndFailsOnRejectedOrConflictingPredecessors",
+            "testSnapshotRequestPolicyCoalescesOnlyUntilAcknowledged",
             "testTodaySnapshotRoundTripsTomorrowGuidanceAndDecodesLegacyPayload",
             "testTodaySnapshotExpiresAtInjectedCalendarLocalMidnight",
+            "XCTAssertEqual(decodedLegacyPayload.tomorrowGuidance?.reasons, [])",
             "XCTAssertEqual(snapshot.activePendingActions(asOf: afterMidnight), [activeAction])",
             'XCTAssertEqual(Set(try XCTUnwrap(encodedDomains.first).keys), ["domain", "status"])',
             "XCTAssertEqual(roundTripped.recoverySummary, recoverySummary)",
@@ -834,14 +841,44 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         "Packages/DensosoDomain/Sources/DensosoDomain/WatchConnectivityContracts.swift",
         (
             "public struct WatchRecoverySummary: Codable, Equatable, Sendable",
+            "public struct WatchTomorrowGuidanceSummary: Codable, Equatable, Sendable",
+            "public let reasons: [EvidenceReference]",
+            "reasons = []",
+            "decodeIfPresent([EvidenceReference].self, forKey: .reasons)",
+            "try container.encode([], forKey: .reasons)",
             "public struct WatchHealthDomainStatus: Codable, Equatable, Sendable",
             "public let domains: [WatchHealthDomainStatus]",
             "public let recoverySummary: WatchRecoverySummary?",
-            "public let tomorrowGuidance: NextDayGuidance?",
-            "tomorrowGuidance: NextDayGuidance? = nil",
+            "public let tomorrowGuidance: WatchTomorrowGuidanceSummary?",
+            "tomorrowGuidance: WatchTomorrowGuidanceSummary? = nil",
             "recoverySummary: WatchRecoverySummary? = nil",
+            "Message IDs whose receipt reached a processed/rejected terminal state.",
             "public func isCurrentLocalDay(asOf date: Date, calendar: Calendar) -> Bool",
             "public func activePendingActions(asOf date: Date) -> [WatchPendingActionSummary]",
+        ),
+        errors,
+    )
+    watch_contract = read_text("Packages/DensosoDomain/Sources/DensosoDomain/WatchConnectivityContracts.swift", errors)
+    watch_snapshot_contract = watch_contract.split("public struct WatchTodaySnapshot:", 1)[-1].split("public enum WatchMessageError", 1)[0]
+    for legacy_watch_field in ("energyIntakeKcal", "totalExpenditureKcal", "deficitKcal"):
+        if legacy_watch_field in watch_snapshot_contract:
+            errors.append(f"WatchTodaySnapshot must not expose numeric health field {legacy_watch_field}")
+    if "DailyMetrics" in watch_snapshot_contract:
+        errors.append("WatchTodaySnapshot must not expose DailyMetrics data")
+    guidance_contract = watch_contract.split("public struct WatchTomorrowGuidanceSummary:", 1)[-1].split(
+        "public struct WatchHealthDomainStatus:", 1
+    )[0]
+    if "container.encode(reasons" in guidance_contract:
+        errors.append("Watch tomorrow guidance must not re-emit evidence reasons")
+    require(
+        "Packages/DensosoDomain/Sources/DensosoDomain/WatchConnectivityContracts.swift",
+        (
+            "private var lastCausalSequence: Int?",
+            "public var latestCausalSequence: Int?",
+            "public var latestPendingCausalSequence: Int?",
+            "causalSequence: previousSequence + 1",
+            "case .accepted, .processed, .duplicate, .rejected:",
+            "pendingByID[acknowledgement.messageID]?.causalSequence == nil",
         ),
         errors,
     )
@@ -874,6 +911,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         "DensosoTests/WatchMessageInboxStoreTests.swift",
         (
             "testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",
+            "testCausalReplayWaitsForMissingAndPendingPredecessorThenOrdersBySequence",
+            "testRejectedAndConflictingPredecessorsRejectCausalSuccessors",
+            "testCausalTranscriptWaitsForPredecessorAndStaysPendingUntilConsumed",
+            "testLegacyPendingCommandAndTranscriptBlockNewerCommandUntilCompleted",
             "testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder",
             "testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages",
             "testPendingInboxPagesMoreThan64ReceiptsInArrivalOrder",
@@ -934,13 +975,12 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     require(
         "Densoso/Infrastructure/WatchConnectivity/PhoneWatchConnectivityCoordinator.swift",
         (
-            "let metricsPredicate = #Predicate<DailyMetrics> { $0.date >= today && $0.date < tomorrow }",
-            "metricsDescriptor.fetchLimit = 1",
-            "let metrics = try context.fetch(metricsDescriptor).first",
             "calendar.isDate(brief.dayStart, inSameDayAs: today) ? brief : nil",
+            "let received = try inboxStore.recentProcessedMessageIDs()",
             "upcomingConfirmedPlans(from: today, limit: Self.watchSnapshotEntryLimit)",
-            "upcomingConfirmedTrainingSessions(in: today..<dayAfterTomorrow, limit: 10)",
-            "tomorrowGuidance: todayBrief?.healthState?.tomorrowGuidance",
+            "upcomingConfirmedTrainingSessions(in: today..<dayAfterTomorrow, limit: Self.watchSnapshotEntryLimit)",
+            "tomorrowGuidance: todayBrief?.healthState?.tomorrowGuidance.map",
+            "WatchTomorrowGuidanceSummary(",
             "recoverySummary: todayBrief?.healthState.map",
             "WatchHealthDomainStatus(domain: $0.domain, status: $0.status)",
             "private static let watchSnapshotEntryLimit = 10",
@@ -948,6 +988,48 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "lhs.id.uuidString < rhs.id.uuidString",
             ".prefix(Self.watchSnapshotEntryLimit)",
             "return lhs.actionID.uuidString < rhs.actionID.uuidString",
+        ),
+        errors,
+    )
+    phone_watch_coordinator = read_text(
+        "Densoso/Infrastructure/WatchConnectivity/PhoneWatchConnectivityCoordinator.swift", errors
+    )
+    if "DailyMetrics" in phone_watch_coordinator:
+        errors.append("Phone Watch snapshot must not query DailyMetrics")
+    require(
+        "Densoso/Infrastructure/WatchConnectivity/PhoneWatchConnectivityCoordinator.swift",
+        (
+            "inboxStore.pendingReplayEnvelopes()",
+            "inboxStore.causalSequenceStates(for: [envelope])",
+            "case .waitingFor(let sequence)",
+            "case .rejectedBecause(let sequence)",
+            "inboxStore.hasEarlierPendingCommand(before: envelope.messageID)",
+            "inboxStore.nextEligibleTranscript(excluding: claimedIDs)",
+            "private func setReceiptState(_ state: String, for messageID: UUID) throws",
+            "func markTranscriptProcessed(_ messageID: UUID) throws",
+            "try setReceiptState(WatchReceiptState.processed, for: messageID)",
+        ),
+        errors,
+    )
+    require(
+        "Densoso/Infrastructure/WatchConnectivity/WatchMessageInboxStore.swift",
+        (
+            "func pendingReplayEnvelopes() throws -> [WatchMessageEnvelope]",
+            "func nextEligibleTranscript(excluding claimedIDs: Set<UUID> = []) throws -> PendingWatchTranscript?",
+            "func recentProcessedMessageIDs(limit: Int = 100) throws -> [UUID]",
+            "private func forEachInboxMessage(_ body: (MessageRecord) throws -> Void) throws",
+            "func causalSequenceStates(for envelopes: [WatchMessageEnvelope]) throws",
+            "sequences.contains(sequence)",
+            "duplicateSequences.insert(sequence)",
+            "WatchCommandDependencyPolicy.decision(for: envelope, sequenceStates: states) == .ready",
+        ),
+        errors,
+    )
+    require(
+        "DensosoWatchExtension/WatchConnectivityClient.swift",
+        (
+            "let predecessorSequence = outbox.latestPendingCausalSequence",
+            "dependsOn: predecessorSequence",
         ),
         errors,
     )
@@ -1177,6 +1259,10 @@ def main() -> int:
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",
+                "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testCausalReplayWaitsForMissingAndPendingPredecessorThenOrdersBySequence",
+                "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testRejectedAndConflictingPredecessorsRejectCausalSuccessors",
+                "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testCausalTranscriptWaitsForPredecessorAndStaysPendingUntilConsumed",
+                "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testLegacyPendingCommandAndTranscriptBlockNewerCommandUntilCompleted",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder",
                 "-only-testing:DensosoTests/AgentCoordinatorTests/testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce",
             ),

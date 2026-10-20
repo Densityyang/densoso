@@ -65,9 +65,24 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
     }
 
     private func enqueue(_ payload: WatchPayload) {
-        let envelope = WatchMessageEnvelope(payload: payload)
+        if case .requestTodaySnapshot = payload,
+           !WatchSnapshotRequestCoalescingPolicy.shouldEnqueue(pendingMessages: outbox.pending) {
+            statusMessage = "刷新请求已在队列中，等待 iPhone 确认。"
+            return
+        }
         do {
-            _ = try outbox.enqueue(envelope)
+            let envelope: WatchMessageEnvelope
+            switch payload {
+            case .transcript, .confirm, .reject:
+                let predecessorSequence = outbox.latestPendingCausalSequence
+                envelope = try outbox.enqueueCausalCommand(
+                    payload,
+                    dependsOn: predecessorSequence
+                )
+            case .requestTodaySnapshot, .acknowledgement, .todaySnapshot:
+                envelope = WatchMessageEnvelope(payload: payload)
+                _ = try outbox.enqueue(envelope)
+            }
             persistOutbox()
             dispatch(envelope)
             statusMessage = "消息已排队；确认仍由 iPhone 本地事务处理。"

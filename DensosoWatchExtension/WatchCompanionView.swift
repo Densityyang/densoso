@@ -79,18 +79,6 @@ struct WatchCompanionView: View {
                         LabeledContent("建议动作", value: recommendedActionName(recovery.recommendedAction))
                             .font(.caption2)
                     }
-                    if let intake = snapshot.energyIntakeKcal {
-                        LabeledContent("摄入", value: "\(intake) kcal")
-                            .font(.caption2)
-                    }
-                    if let expenditure = snapshot.totalExpenditureKcal {
-                        LabeledContent("总消耗", value: "\(expenditure) kcal")
-                            .font(.caption2)
-                    }
-                    if let deficit = snapshot.deficitKcal {
-                        LabeledContent("能量差", value: "\(deficit) kcal")
-                            .font(.caption2)
-                    }
                 } else {
                     Text("最近同步")
                         .font(.subheadline.weight(.semibold))

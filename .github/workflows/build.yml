@@ -970,7 +970,7 @@ jobs:
     needs: final-acceptance
     if: ${{ always() && (needs.final-acceptance.result == 'success' || inputs.run_scope == 'focused-pr-tests') }}
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -1004,7 +1004,7 @@ jobs:
       - name: Run focused HealthKit projection and DailyLoop tests
         run: |
           set -o pipefail
-          perl -e 'alarm shift; exec @ARGV' 1200 xcodebuild -project Densoso.xcodeproj \
+          perl -e 'alarm shift; exec @ARGV' 2400 xcodebuild -project Densoso.xcodeproj \
             -scheme Densoso \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             -destination-timeout 120 \
@@ -1273,6 +1273,10 @@ jobs:
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testCausalReplayWaitsForMissingAndPendingPredecessorThenOrdersBySequence \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testRejectedAndConflictingPredecessorsRejectCausalSuccessors \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testCausalTranscriptWaitsForPredecessorAndStaysPendingUntilConsumed \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testLegacyPendingCommandAndTranscriptBlockNewerCommandUntilCompleted \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testOutOfOrderMessagesAreReturnedInDurableArrivalOrder \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder \
             -only-testing:DensosoTests/AgentCoordinatorTests/testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce \

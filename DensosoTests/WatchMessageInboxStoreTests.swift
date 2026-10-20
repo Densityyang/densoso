@@ -80,6 +80,139 @@ final class WatchMessageInboxStoreTests: XCTestCase {
         XCTAssertEqual(try store.pendingTranscripts().map(\.messageID), [transcript.messageID])
     }
 
+    func testCausalReplayWaitsForMissingAndPendingPredecessorThenOrdersBySequence() throws {
+        let store = try makeStore()
+        let predecessor = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000721")!,
+            causalSequence: 1,
+            payload: .confirm(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000731")!)
+        )
+        let successor = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000722")!,
+            causalSequence: 2,
+            dependsOn: 1,
+            payload: .reject(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000732")!)
+        )
+
+        XCTAssertEqual(try store.ingest(successor), .accepted)
+        XCTAssertEqual(
+            WatchCommandDependencyPolicy.decision(
+                for: successor,
+                sequenceStates: try store.causalSequenceStates()
+            ),
+            .waitingFor(1)
+        )
+        XCTAssertEqual(try store.ingest(predecessor), .accepted)
+        XCTAssertEqual(try store.pendingReplayEnvelopes().map(\.messageID), [predecessor.messageID, successor.messageID])
+        XCTAssertFalse(try store.hasEarlierPendingCommand(before: predecessor.messageID))
+        XCTAssertFalse(try store.hasEarlierPendingCommand(before: successor.messageID))
+
+        try store.setState(WatchReceiptState.processed, for: predecessor.messageID)
+        XCTAssertEqual(
+            WatchCommandDependencyPolicy.decision(
+                for: successor,
+                sequenceStates: try store.causalSequenceStates()
+            ),
+            .ready
+        )
+    }
+
+    func testRejectedAndConflictingPredecessorsRejectCausalSuccessors() throws {
+        let store = try makeStore()
+        let predecessor = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000723")!,
+            causalSequence: 1,
+            payload: .confirm(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000733")!)
+        )
+        let successor = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000724")!,
+            causalSequence: 2,
+            dependsOn: 1,
+            payload: .reject(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000734")!)
+        )
+        XCTAssertEqual(try store.ingest(predecessor), .accepted)
+        XCTAssertEqual(try store.ingest(successor), .accepted)
+        try store.setState(WatchReceiptState.rejected, for: predecessor.messageID)
+        XCTAssertEqual(
+            WatchCommandDependencyPolicy.decision(
+                for: successor,
+                sequenceStates: try store.causalSequenceStates()
+            ),
+            .rejectedBecause(1)
+        )
+
+        let conflicting = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000725")!,
+            causalSequence: 1,
+            payload: .confirm(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000735")!)
+        )
+        XCTAssertEqual(try store.ingest(conflicting), .accepted)
+        XCTAssertEqual(try store.causalSequenceStates()[1], .conflict)
+        XCTAssertEqual(
+            WatchCommandDependencyPolicy.decision(
+                for: successor,
+                sequenceStates: try store.causalSequenceStates()
+            ),
+            .rejectedBecause(1)
+        )
+    }
+
+    func testCausalTranscriptWaitsForPredecessorAndStaysPendingUntilConsumed() throws {
+        let store = try makeStore()
+        let transcript = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000726")!,
+            causalSequence: 2,
+            dependsOn: 1,
+            payload: .transcript("记录午餐")
+        )
+        let predecessor = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000727")!,
+            causalSequence: 1,
+            payload: .confirm(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000737")!)
+        )
+
+        XCTAssertEqual(try store.ingest(transcript), .accepted)
+        XCTAssertEqual(try store.pendingTranscripts().map(\.messageID), [transcript.messageID])
+        XCTAssertNil(try store.nextEligibleTranscript())
+        XCTAssertEqual(try store.ingest(predecessor), .accepted)
+        XCTAssertNil(try store.nextEligibleTranscript())
+        try store.setState(WatchReceiptState.processed, for: predecessor.messageID)
+        XCTAssertEqual(try store.nextEligibleTranscript()?.messageID, transcript.messageID)
+        XCTAssertTrue(try store.pendingReplayEnvelopes().map(\.messageID).contains(transcript.messageID))
+
+        try store.setState(WatchReceiptState.processed, for: transcript.messageID)
+        XCTAssertTrue(try store.pendingTranscripts().isEmpty)
+        XCTAssertEqual(try store.causalSequenceStates(), [1: .processed, 2: .processed])
+    }
+
+    func testLegacyPendingCommandAndTranscriptBlockNewerCommandUntilCompleted() throws {
+        let store = try makeStore()
+        let transcript = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000728")!,
+            payload: .transcript("记录训练")
+        )
+        let legacyCommand = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000730")!,
+            payload: .reject(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000740")!)
+        )
+        let newerCommand = WatchMessageEnvelope(
+            messageID: UUID(uuidString: "00000000-0000-0000-0000-000000000729")!,
+            causalSequence: 1,
+            payload: .confirm(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000739")!)
+        )
+        XCTAssertEqual(try store.ingest(transcript), .accepted)
+        XCTAssertEqual(try store.ingest(legacyCommand), .accepted)
+        XCTAssertEqual(try store.ingest(newerCommand), .accepted)
+        XCTAssertTrue(try store.hasEarlierPendingCommand(before: legacyCommand.messageID))
+        XCTAssertTrue(try store.hasEarlierPendingCommand(before: newerCommand.messageID))
+        XCTAssertEqual(try store.pendingTranscripts().map(\.messageID), [transcript.messageID])
+
+        try store.setState(WatchReceiptState.processed, for: transcript.messageID)
+        XCTAssertTrue(try store.hasEarlierPendingCommand(before: newerCommand.messageID))
+        try store.setState(WatchReceiptState.processed, for: legacyCommand.messageID)
+        XCTAssertFalse(try store.hasEarlierPendingCommand(before: newerCommand.messageID))
+    }
+
     func testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder() throws {
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
