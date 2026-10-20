@@ -117,6 +117,58 @@ final class WatchMessageOutboxTests: XCTestCase {
         XCTAssertNil(legacyConstruction.recoverySummary)
     }
 
+    func testTodaySnapshotExpiresAtInjectedCalendarLocalMidnight() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let generatedAt = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 10,
+            day: 19,
+            hour: 23,
+            minute: 55
+        )))
+        let beforeMidnight = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 10,
+            day: 19,
+            hour: 23,
+            minute: 59
+        )))
+        let afterMidnight = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 10,
+            day: 20,
+            hour: 0,
+            minute: 1
+        )))
+        let expiredAction = WatchPendingActionSummary(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000701")!,
+            title: "Expired",
+            summary: "Expired action",
+            expiresAt: beforeMidnight
+        )
+        let activeAction = WatchPendingActionSummary(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000702")!,
+            title: "Active",
+            summary: "Still valid after midnight",
+            expiresAt: afterMidnight.addingTimeInterval(3_600)
+        )
+        let snapshot = WatchTodaySnapshot(
+            generatedAt: generatedAt,
+            summary: "local summary",
+            energyIntakeKcal: nil,
+            totalExpenditureKcal: nil,
+            deficitKcal: nil,
+            domains: [],
+            pendingActions: [expiredAction, activeAction],
+            acknowledgedMessageIDs: []
+        )
+
+        XCTAssertTrue(snapshot.isCurrentLocalDay(asOf: beforeMidnight, calendar: calendar))
+        XCTAssertFalse(snapshot.isCurrentLocalDay(asOf: afterMidnight, calendar: calendar))
+        XCTAssertEqual(snapshot.activePendingActions(asOf: afterMidnight), [activeAction])
+    }
+
     func testCodecRejectsUnsupportedSchemaAndUnboundedTranscript() {
         XCTAssertThrowsError(try WatchMessageCodec.encode(
             WatchMessageEnvelope(schemaVersion: 2, payload: .requestTodaySnapshot)

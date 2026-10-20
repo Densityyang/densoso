@@ -141,7 +141,7 @@ final class Dependencies {
             conversationRepository: agentRepository,
             confirmedFoodHistory: confirmedFoodHistory,
             healthNarrativeContextProvider: {
-                try? await healthProjectionActor.healthNarrativeContext()
+                try await healthProjectionActor.healthNarrativeContext()
             },
             confirmedWorkoutPlanHandler: { actionID in
                 try await workoutPlanSchedulingService.scheduleConfirmedPlan(actionID: actionID)

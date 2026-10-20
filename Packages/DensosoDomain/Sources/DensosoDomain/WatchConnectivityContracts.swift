@@ -166,6 +166,14 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
         self.workoutPlans = Array(workoutPlans.prefix(10))
         self.acknowledgedMessageIDs = Array(acknowledgedMessageIDs.suffix(100))
     }
+
+    public func isCurrentLocalDay(asOf date: Date, calendar: Calendar) -> Bool {
+        calendar.startOfDay(for: generatedAt) == calendar.startOfDay(for: date)
+    }
+
+    public func activePendingActions(asOf date: Date) -> [WatchPendingActionSummary] {
+        pendingActions.filter { $0.expiresAt > date }
+    }
 }
 
 public enum WatchMessageError: Error, Equatable, Sendable {

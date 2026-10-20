@@ -4,23 +4,30 @@ import SwiftUI
 struct WatchCompanionView: View {
     @State private var connectivity = WatchConnectivityClient()
     @State private var transcript = ""
+    private let calendar: Calendar
+
+    init(calendar: Calendar = .autoupdatingCurrent) {
+        self.calendar = calendar
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                header
-                todaySection
-                tomorrowGuidanceSection
-                transcriptSection
-                pendingActionsSection
-                workoutPlansSection
-                Text(connectivity.statusMessage)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        TimelineView(.periodic(from: .now, by: 60)) { timeline in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    header
+                    todaySection(asOf: timeline.date)
+                    tomorrowGuidanceSection(asOf: timeline.date)
+                    transcriptSection
+                    pendingActionsSection(asOf: timeline.date)
+                    workoutPlansSection(asOf: timeline.date)
+                    Text(connectivity.statusMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
         }
         .task {
             connectivity.activate()
@@ -39,48 +46,59 @@ struct WatchCompanionView: View {
     }
 
     @ViewBuilder
-    private var todaySection: some View {
+    private func todaySection(asOf date: Date) -> some View {
         if let snapshot = connectivity.todaySnapshot {
+            let isCurrent = snapshot.isCurrentLocalDay(asOf: date, calendar: calendar)
             VStack(alignment: .leading, spacing: 6) {
-                Text("今天").font(.subheadline.weight(.semibold))
-                Text(snapshot.summary)
-                    .font(.caption2)
-                    .fixedSize(horizontal: false, vertical: true)
-                if !snapshot.domains.isEmpty {
-                    Divider()
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("今日状态")
-                            .font(.caption.weight(.semibold))
-                        ForEach(HealthDomain.allCases, id: \.self) { domain in
-                            if let result = snapshot.domains.first(where: { $0.domain == domain }) {
-                                HStack {
-                                    Text(domainName(domain))
-                                    Spacer(minLength: 6)
-                                    Text(domainStatusName(result.status))
-                                        .foregroundStyle(.secondary)
+                if isCurrent {
+                    Text("今天").font(.subheadline.weight(.semibold))
+                    Text(snapshot.summary)
+                        .font(.caption2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !snapshot.domains.isEmpty {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("今日状态")
+                                .font(.caption.weight(.semibold))
+                            ForEach(HealthDomain.allCases, id: \.self) { domain in
+                                if let result = snapshot.domains.first(where: { $0.domain == domain }) {
+                                    HStack {
+                                        Text(domainName(domain))
+                                        Spacer(minLength: 6)
+                                        Text(domainStatusName(result.status))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .font(.caption2)
                                 }
-                                .font(.caption2)
                             }
                         }
                     }
-                }
-                if let recovery = snapshot.recoverySummary {
-                    LabeledContent("恢复", value: recoveryStatusName(recovery.status))
+                    if let recovery = snapshot.recoverySummary {
+                        LabeledContent("恢复", value: recoveryStatusName(recovery.status))
+                            .font(.caption2)
+                        LabeledContent("建议动作", value: recommendedActionName(recovery.recommendedAction))
+                            .font(.caption2)
+                    }
+                    if let intake = snapshot.energyIntakeKcal {
+                        LabeledContent("摄入", value: "\(intake) kcal")
+                            .font(.caption2)
+                    }
+                    if let expenditure = snapshot.totalExpenditureKcal {
+                        LabeledContent("总消耗", value: "\(expenditure) kcal")
+                            .font(.caption2)
+                    }
+                    if let deficit = snapshot.deficitKcal {
+                        LabeledContent("能量差", value: "\(deficit) kcal")
+                            .font(.caption2)
+                    }
+                } else {
+                    Text("最近同步")
+                        .font(.subheadline.weight(.semibold))
+                    Text(syncDateLabel(snapshot.generatedAt))
                         .font(.caption2)
-                    LabeledContent("建议动作", value: recommendedActionName(recovery.recommendedAction))
+                    Text("此摘要已跨越本地日期，不代表今天的健康状态或日程。")
                         .font(.caption2)
-                }
-                if let intake = snapshot.energyIntakeKcal {
-                    LabeledContent("摄入", value: "\(intake) kcal")
-                        .font(.caption2)
-                }
-                if let expenditure = snapshot.totalExpenditureKcal {
-                    LabeledContent("总消耗", value: "\(expenditure) kcal")
-                        .font(.caption2)
-                }
-                if let deficit = snapshot.deficitKcal {
-                    LabeledContent("能量差", value: "\(deficit) kcal")
-                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
                 Button("刷新") { connectivity.requestTodaySnapshot() }
                     .font(.caption2)
@@ -94,8 +112,8 @@ struct WatchCompanionView: View {
     }
 
     @ViewBuilder
-    private var tomorrowGuidanceSection: some View {
-        if let guidance = connectivity.todaySnapshot?.tomorrowGuidance {
+    private func tomorrowGuidanceSection(asOf date: Date) -> some View {
+        if let guidance = currentSnapshot(asOf: date)?.tomorrowGuidance {
             VStack(alignment: .leading, spacing: 6) {
                 Text("明日建议")
                     .font(.subheadline.weight(.semibold))
@@ -128,42 +146,45 @@ struct WatchCompanionView: View {
     }
 
     @ViewBuilder
-    private var pendingActionsSection: some View {
-        if let snapshot = connectivity.todaySnapshot, !snapshot.pendingActions.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("待确认草稿").font(.subheadline.weight(.semibold))
-                ForEach(snapshot.pendingActions) { action in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(action.title)
-                            .font(.caption.weight(.semibold))
-                        Text(action.summary)
-                            .font(.caption2)
-                            .lineLimit(3)
-                        HStack {
-                            if action.requiresPhoneReview == true {
-                                Text("请在 iPhone 查看完整安排后确认")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Button("确认") { connectivity.confirm(actionID: action.actionID) }
+    private func pendingActionsSection(asOf now: Date) -> some View {
+        if let snapshot = connectivity.todaySnapshot {
+            let validActions = snapshot.activePendingActions(asOf: now)
+            if !validActions.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("待确认草稿").font(.subheadline.weight(.semibold))
+                    ForEach(validActions) { action in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(action.title)
+                                .font(.caption.weight(.semibold))
+                            Text(action.summary)
+                                .font(.caption2)
+                                .lineLimit(3)
+                            HStack {
+                                if action.requiresPhoneReview == true {
+                                    Text("请在 iPhone 查看完整安排后确认")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Button("确认") { connectivity.confirm(actionID: action.actionID) }
+                                }
+                                Button("拒绝", role: .destructive) { connectivity.reject(actionID: action.actionID) }
                             }
-                            Button("拒绝", role: .destructive) { connectivity.reject(actionID: action.actionID) }
+                            .font(.caption2)
                         }
-                        .font(.caption2)
+                        .padding(7)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9))
                     }
-                    .padding(7)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9))
+                    Text("确认和拒绝由 iPhone 的本地事务幂等处理。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
-                Text("确认和拒绝由 iPhone 的本地事务幂等处理。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
         }
     }
 
     @ViewBuilder
-    private var workoutPlansSection: some View {
-        if let snapshot = connectivity.todaySnapshot, !snapshot.workoutPlans.isEmpty {
+    private func workoutPlansSection(asOf date: Date) -> some View {
+        if let snapshot = currentSnapshot(asOf: date), !snapshot.workoutPlans.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text("WorkoutKit 计划").font(.subheadline.weight(.semibold))
                 ForEach(snapshot.workoutPlans) { plan in
@@ -183,6 +204,22 @@ struct WatchCompanionView: View {
                 }
             }
         }
+    }
+
+    private func currentSnapshot(asOf date: Date) -> WatchTodaySnapshot? {
+        guard let snapshot = connectivity.todaySnapshot,
+              snapshot.isCurrentLocalDay(asOf: date, calendar: calendar) else { return nil }
+        return snapshot
+    }
+
+    private func syncDateLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = .autoupdatingCurrent
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 
     private func planState(_ state: String) -> String {

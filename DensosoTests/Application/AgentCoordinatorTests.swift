@@ -71,6 +71,7 @@ final class AgentCoordinatorTests: XCTestCase {
     func testHealthContextLoadsOnlyForRelevantHealthQuestions() async throws {
         let provider = ScriptedTextProvider(scripts: [
             [.textDelta("给你讲个笑话。"), .completed(.completed)],
+            [.textDelta("体重草稿已准备好。"), .completed(.completed)],
         ])
         let readCounter = HealthContextReadCounter()
         let harness = try await Harness(
@@ -85,11 +86,31 @@ final class AgentCoordinatorTests: XCTestCase {
         let unrelatedReadCount = await readCounter.value()
         XCTAssertEqual(unrelatedReadCount, 0)
 
+        _ = try await harness.session.send(userText: "记录体重 62.5 公斤")
+        let captureReadCount = await readCounter.value()
+        XCTAssertEqual(captureReadCount, 0)
+
         let healthResponse = try await harness.session.send(userText: "我的睡眠状态如何？")
         let relevantReadCount = await readCounter.value()
         XCTAssertEqual(relevantReadCount, 1)
         XCTAssertTrue(healthResponse.text.contains("没有可用的本地健康数据"))
-        XCTAssertEqual(provider.recordedRequests().count, 1)
+        XCTAssertEqual(provider.recordedRequests().count, 2)
+    }
+
+    func testHealthContextReadFailureDoesNotClaimDataIsMissing() async throws {
+        let provider = ScriptedTextProvider(scripts: [])
+        let harness = try await Harness(
+            provider: provider,
+            healthNarrativeContextProvider: {
+                throw HealthContextReadTestFailure.injected
+            }
+        )
+
+        let response = try await harness.session.send(userText: "我的睡眠状态如何？")
+
+        XCTAssertTrue(response.text.contains("读取本机健康状态失败"))
+        XCTAssertFalse(response.text.contains("没有可用的本地健康数据"))
+        XCTAssertEqual(provider.recordedRequests().count, 0)
     }
 
     func testReplayedWatchRequestIDDoesNotStartAnotherProviderRound() async throws {
@@ -459,7 +480,7 @@ private struct Harness {
         provider: any TextModelProvider,
         conversationRepository: (any ConversationRepository)? = nil,
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
-        healthNarrativeContextProvider: (@Sendable () async -> HealthNarrativeContext?)? = nil
+        healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil
     ) async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV5.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
@@ -499,4 +520,8 @@ private actor HealthContextReadCounter {
     }
 
     func value() -> Int { readCount }
+}
+
+private enum HealthContextReadTestFailure: Error, Sendable {
+    case injected
 }

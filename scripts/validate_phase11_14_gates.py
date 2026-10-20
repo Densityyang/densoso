@@ -285,7 +285,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "HealthIntelligenceService(projectionActor: healthProjectionActor)",
                 "try await healthProjectionActor.todayHealthState(asOf: date)",
                 "try await healthProjectionActor.healthHistory(from: start, through: end)",
-                "try? await healthProjectionActor.healthNarrativeContext()",
+                "try await healthProjectionActor.healthNarrativeContext()",
                 "DailyLoopSnapshotService(healthProjectionActor: healthProjectionActor)",
             ),
             errors,
@@ -293,15 +293,21 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "Densoso/Agent/AgentSession.swift",
             (
-                "(@Sendable () async -> HealthNarrativeContext?)?",
-                "narrativeContext = await healthNarrativeContextProvider?()",
-                "if HealthContextPromptBuilder.shouldIncludeSummary(for: promptUserText)",
+                "(@Sendable () async throws -> HealthNarrativeContext?)?",
+                "narrativeContext = try await healthNarrativeContextProvider?()",
+                "let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(for: promptUserText)",
+                "if wantsHealthNarrative",
+                "catch is CancellationError",
+                "读取本机健康状态失败，请重试",
             ),
             errors,
         )
         require(
             "DensosoTests/Application/AgentCoordinatorTests.swift",
-            ("testHealthContextLoadsOnlyForRelevantHealthQuestions",),
+            (
+                "testHealthContextLoadsOnlyForRelevantHealthQuestions",
+                "testHealthContextReadFailureDoesNotClaimDataIsMissing",
+            ),
             errors,
         )
         require(
@@ -726,6 +732,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "arrival ordering",
             "TrainingPlanDraftTests",
             "goal, location, intensity, and reason details",
+            "After local midnight, an older snapshot is",
+            "Pending actions remain",
             "manual Gate 15",
             "Simulator evidence does not prove Watch pairing",
         ),
@@ -775,6 +783,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "testHundredOfflineMessagesRemainOrderedAndDuplicateReplaysDoNotAddRows",
             "testAcceptedAcknowledgementRemovesMessageAfterPhonePersistsItsReceipt",
             "testTodaySnapshotRoundTripsTomorrowGuidanceAndDecodesLegacyPayload",
+            "testTodaySnapshotExpiresAtInjectedCalendarLocalMidnight",
+            "XCTAssertEqual(snapshot.activePendingActions(asOf: afterMidnight), [activeAction])",
             'XCTAssertEqual(Set(try XCTUnwrap(encodedDomains.first).keys), ["domain", "status"])',
             "XCTAssertEqual(roundTripped.recoverySummary, recoverySummary)",
         ),
@@ -790,19 +800,28 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "public let tomorrowGuidance: NextDayGuidance?",
             "tomorrowGuidance: NextDayGuidance? = nil",
             "recoverySummary: WatchRecoverySummary? = nil",
+            "public func isCurrentLocalDay(asOf date: Date, calendar: Calendar) -> Bool",
+            "public func activePendingActions(asOf date: Date) -> [WatchPendingActionSummary]",
         ),
         errors,
     )
     require(
         "DensosoWatchExtension/WatchCompanionView.swift",
         (
-            "todaySnapshot?.tomorrowGuidance",
+            "currentSnapshot(asOf: date)?.tomorrowGuidance",
             "Text(guidance.conditionalNote)",
             "recommendedActionName(guidance.recommendedAction)",
             "snapshot.recoverySummary",
             'LabeledContent("恢复", value: recoveryStatusName(recovery.status))',
             "ForEach(HealthDomain.allCases, id: \\.self)",
             "domainStatusName(result.status)",
+            "TimelineView(.periodic(from: .now, by: 60))",
+            "snapshot.isCurrentLocalDay(asOf: date, calendar: calendar)",
+            'Text("最近同步")',
+            "Text(syncDateLabel(snapshot.generatedAt))",
+            "formatter.calendar = calendar",
+            "snapshot.activePendingActions(asOf: now)",
+            "if let snapshot = currentSnapshot(asOf: date), !snapshot.workoutPlans.isEmpty",
         ),
         errors,
     )

@@ -41,6 +41,9 @@ that has no available data; read failures show their error and a retry action.
 It shows a progress indicator for the first asynchronous read and while retrying,
 and skips overlapping refresh calls while one is in flight so loading state
 remains consistent.
+Agent context reads run only for health questions that need a narrative; plain
+capture requests skip the history read. A failed local read is reported as a
+read failure rather than presented as missing health data.
 
 ## Focused tests
 
@@ -64,6 +67,7 @@ remains consistent.
   `HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches`,
   `HealthProjectionActorTests.testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites`,
   `AgentCoordinatorTests.testHealthContextLoadsOnlyForRelevantHealthQuestions`,
+  `AgentCoordinatorTests.testHealthContextReadFailureDoesNotClaimDataIsMissing`,
   `GetTodayHealthStateToolTests.testUnavailableTrainingLoadEncodesMissingRecentLoadAsNull`,
   `GetHealthHistoryToolTests.testResponseCoalescesDuplicateLocalDaysAndDomainStatuses`,
   `GetHealthHistoryToolTests.testResponseTieBreaksEqualTimestampPointsIndependentOfInputOrder`,

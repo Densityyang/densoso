@@ -31,6 +31,11 @@ numeric estimates, baselines, and evidence keys stay on iPhone; the Watch shows
 available nutrition, sleep, activity, and body status labels plus the recovery
 status/action. It shows the guidance's conditional note and action when present,
 and newer payloads remain decodable from snapshots sent by older app versions.
+The Watch compares `generatedAt` with the current day in its local calendar and
+rechecks the boundary periodically. After local midnight, an older snapshot is
+labeled with its most recent sync date; its health summary, metrics, recovery,
+tomorrow guidance, and workout-plan schedule are hidden. Pending actions remain
+available only until their individual `expiresAt` time.
 The phone plan editor fetches ten single-session and ten multi-day plans per
 page instead of loading the complete history up front. “Load more” appends the
 next page for each plan type; a failed page read preserves loaded rows and can
@@ -52,6 +57,7 @@ coordinator's activation path restores pending commands.
   `WatchMessageInboxStoreTests.testOutOfOrderMessagesAreReturnedInDurableArrivalOrder`,
   `WatchMessageInboxStoreTests.testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder`,
   `WatchMessageOutboxTests.testTodaySnapshotRoundTripsTomorrowGuidanceAndDecodesLegacyPayload`,
+  `WatchMessageOutboxTests.testTodaySnapshotExpiresAtInjectedCalendarLocalMidnight`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry`,
   `TrainingPlanSchedulingServiceTests.testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanHistoryPagesAcrossThe64EventBoundary`,
