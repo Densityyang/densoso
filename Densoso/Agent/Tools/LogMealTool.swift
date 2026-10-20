@@ -259,15 +259,17 @@ struct LogMealTool: ConfirmationRequiredTool {
                 )
             }
             drafts.append(
-                try mealEstimator.estimateDish(
-                    MealDishEstimationInput(
-                        name: name,
-                        cookingMethod: rawDish.cookingMethod,
-                        ingredients: ingredients,
-                        inferredOilGrams: oilRange,
-                        inferredOilEvidence: oilEvidence
+                try PerformanceSignposts.measure("Meal.DeterministicEstimate") {
+                    try mealEstimator.estimateDish(
+                        MealDishEstimationInput(
+                            name: name,
+                            cookingMethod: rawDish.cookingMethod,
+                            ingredients: ingredients,
+                            inferredOilGrams: oilRange,
+                            inferredOilEvidence: oilEvidence
+                        )
                     )
-                )
+                }
             )
         }
 

@@ -24,21 +24,23 @@ final class HealthIntelligenceService {
 
     @discardableResult
     func refresh(asOf date: Date = Date()) async throws -> DailyHealthBrief? {
-        lastError = nil
-        do {
-            let snapshot = try await projectionActor.refresh(asOf: date)
-            dailyBrief = snapshot.dailyBrief
-            if snapshot.updatesWeeklyBrief {
-                weeklyBrief = snapshot.weeklyBrief
+        try await PerformanceSignposts.measureAsync("Health.StateRefresh") {
+            lastError = nil
+            do {
+                let snapshot = try await projectionActor.refresh(asOf: date)
+                dailyBrief = snapshot.dailyBrief
+                if snapshot.updatesWeeklyBrief {
+                    weeklyBrief = snapshot.weeklyBrief
+                }
+                return snapshot.dailyBrief
+            } catch {
+                let errorMessage = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .projectionFailedFallback
+                ).userMessage
+                lastError = "无法更新健康摘要：\(errorMessage)"
+                throw error
             }
-            return snapshot.dailyBrief
-        } catch {
-            let errorMessage = SharedErrorDescriptor.mapped(
-                from: error,
-                fallback: .projectionFailedFallback
-            ).userMessage
-            lastError = "无法更新健康摘要：\(errorMessage)"
-            throw error
         }
     }
 

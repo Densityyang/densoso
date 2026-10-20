@@ -595,22 +595,24 @@ final class MealCaptureApplicationService {
         let oilEstimate: EstimateRange? = oilAnswer == .noAdditionalOil
             ? nil
             : review.inferredOilGrams
-        let dish = try mealEstimator.estimateDish(
-            MealDishEstimationInput(
-                name: review.label,
-                cookingMethod: review.cookingMethod,
-                ingredients: [
-                    MealIngredientEstimationInput(
-                        label: review.label,
-                        resolution: confirmedResolution,
-                        portion: portion,
-                        massBasis: selected.entry.preparation == .cooked ? .cooked : .edibleRaw,
-                        additionalEvidence: captureEvidence
-                    )
-                ],
-                inferredOilGrams: oilEstimate
+        let dish = try PerformanceSignposts.measure("Meal.DeterministicEstimate") {
+            try mealEstimator.estimateDish(
+                MealDishEstimationInput(
+                    name: review.label,
+                    cookingMethod: review.cookingMethod,
+                    ingredients: [
+                        MealIngredientEstimationInput(
+                            label: review.label,
+                            resolution: confirmedResolution,
+                            portion: portion,
+                            massBasis: selected.entry.preparation == .cooked ? .cooked : .edibleRaw,
+                            additionalEvidence: captureEvidence
+                        )
+                    ],
+                    inferredOilGrams: oilEstimate
+                )
             )
-        )
+        }
         let trimmedUserNote = userNote?.trimmingCharacters(in: .whitespacesAndNewlines)
         let payload = ActionPayload.meal(
             MealDraft(
@@ -841,23 +843,25 @@ final class MealCaptureApplicationService {
         oilRange: EstimateRange?
     ) throws -> ClarificationQuestion? {
         guard !resolution.candidates.isEmpty else { return nil }
-        let provisional = try mealEstimator.estimateDish(
-            MealDishEstimationInput(
-                name: label,
-                cookingMethod: cookingMethod,
-                ingredients: [
-                    MealIngredientEstimationInput(
-                        label: label,
-                        resolution: resolution,
-                        portion: portion,
-                        massBasis: resolution.autoPreselect?.entry.preparation == .cooked
-                            ? .cooked
-                            : .edibleRaw
-                    )
-                ],
-                inferredOilGrams: oilRange
+        let provisional = try PerformanceSignposts.measure("Meal.DeterministicEstimate") {
+            try mealEstimator.estimateDish(
+                MealDishEstimationInput(
+                    name: label,
+                    cookingMethod: cookingMethod,
+                    ingredients: [
+                        MealIngredientEstimationInput(
+                            label: label,
+                            resolution: resolution,
+                            portion: portion,
+                            massBasis: resolution.autoPreselect?.entry.preparation == .cooked
+                                ? .cooked
+                                : .edibleRaw
+                        )
+                    ],
+                    inferredOilGrams: oilRange
+                )
             )
-        )
+        }
         var candidates: [ClarificationCandidate] = []
         if resolution.autoPreselect == nil {
             candidates.append(

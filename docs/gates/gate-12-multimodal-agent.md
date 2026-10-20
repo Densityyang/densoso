@@ -3,6 +3,16 @@
 Status: focused CI gate over the text, voice and image routes through one
 AgentSession.
 
+Performance points of interest mark `App.LaunchStart`,
+`Today.InitialContentRendered`, `Today.InitialDataReady`, `Health.StateRefresh`,
+`Meal.DeterministicEstimate`, `Meal.DeterministicToolDraft`,
+`Speech.CaptureToFirstTranscript`, `Provider.DeepSeekFirstTextDelta`,
+`Agent.TranscriptToFirstToken`, and `Agent.TranscriptToActionDraft`. The local
+food catalog is cached as an immutable in-process snapshot so Agent meal turns
+do not re-read and remap the full SQLite catalog on every request. These spans
+make the PR targets inspectable in Instruments; they do not claim those targets
+have been met on user hardware.
+
 ## Current implementation boundary
 
 Text and voice-transcribed text are sent through `AgentSession`. Photo meal
@@ -31,6 +41,12 @@ the [DeepSeek Vision guide](https://api-docs.deepseek.com/guides/vision/) and
 [Responses API guide](https://api-docs.deepseek.com/guides/responses_api/).
 Image parts are allowed only in user messages; provider validation rejects any
 other image role before sending a request.
+DeepSeek's current V4.1 Flash API model has native visual understanding and is
+called by its canonical API name, `deepseek-flash`; the retired
+`deepseek-v4-flash-vision-exp` name is only a compatibility alias routed to the
+current Flash model. The app therefore sends images to `deepseek-flash` through
+the Responses API instead of requiring a separate vision model or silently
+switching to Qwen.
 Text that the user dictated or edited before opening the photo picker is kept
 as supplemental text in the same user turn as the sanitized image. It is sent
 once to the same AgentSession; if no text was supplied, the photo request keeps
@@ -95,6 +111,7 @@ history remains readable before new turns use the current v2 tool definitions.
 - `MealCaptureApplicationServiceTests.testOptionalQwenOpenPhotoRequiresSeparateQwenConsent`
 - `MealCaptureApplicationServiceTests.testDeepSeekPhotoModeNeverFallsThroughToOptionalQwenVision`
 - `MealCaptureApplicationServiceTests.testDefaultClosedQualityGateRequiresManualFallbackWithoutStaging`
+- `FoodDatabaseTests.testCatalogEntriesRemainStableAcrossRepeatedReads`
 - `AppLaunchConfigurationTests.testSeededProfileRequiresUITestMode`
 - `AppLaunchConfigurationTests.testUITestArgumentsEnableDeterministicSeed`
 - `MealCaptureApplicationServiceTests.testMealCaptureErrorsExposeSharedSafeDescriptors`

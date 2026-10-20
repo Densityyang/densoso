@@ -706,6 +706,16 @@ final class AgentSession {
         clientRequestID: UUID
     ) async -> String {
         do {
+            if call.name == "log_meal" {
+                return try await PerformanceSignposts.measureAsync("Meal.DeterministicToolDraft") {
+                    try await registry.execute(
+                        name: call.name,
+                        arguments: call.arguments,
+                        context: self,
+                        clientRequestID: clientRequestID
+                    )
+                }
+            }
             return try await registry.execute(
                 name: call.name,
                 arguments: call.arguments,

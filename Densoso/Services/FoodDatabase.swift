@@ -9,6 +9,8 @@ final class FoodDatabase {
         let score: Double
     }
     private let dbQueue: DatabaseQueue
+    private let catalogCacheLock = NSLock()
+    private var catalogEntriesCache: [FoodCatalogEntry]?
 
     init() throws {
         guard let dbURL = Bundle.main.url(forResource: "food_composition", withExtension: "db") else {
@@ -162,8 +164,12 @@ final class FoodDatabase {
     }
 
     func catalogEntries() throws -> [FoodCatalogEntry] {
+        catalogCacheLock.lock()
+        defer { catalogCacheLock.unlock() }
+        if let catalogEntriesCache { return catalogEntriesCache }
+
         let items = try dbQueue.read { db in try FoodItem.order(Column("id")).fetchAll(db) }
-        return items.map { item in
+        let entries = items.map { item in
             FoodCatalogEntry(
                 id: "food:\(item.id)",
                 localFoodID: String(item.id),
@@ -184,6 +190,8 @@ final class FoodDatabase {
                 sourceVersion: "food-composition-6"
             )
         }
+        catalogEntriesCache = entries
+        return entries
     }
 
     var count: Int {

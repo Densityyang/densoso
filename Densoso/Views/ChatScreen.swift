@@ -28,6 +28,7 @@ struct ChatScreen: View {
     @State private var dailyLoopSnapshotReadError: String?
     @State private var isLoadingDailyLoopSnapshot = true
     @State private var isRefreshingDailyLoopSnapshot = false
+    @State private var didRecordInitialTodayContent = false
 
     var body: some View {
         NavigationStack {
@@ -44,7 +45,9 @@ struct ChatScreen: View {
             }
             .onAppear {
                 Task {
-                    await prepareInitialState()
+                    await PerformanceSignposts.measureAsync("Today.InitialDataReady") {
+                        await prepareInitialState()
+                    }
                     restorePendingWatchTranscript()
                 }
             }
@@ -93,6 +96,11 @@ struct ChatScreen: View {
                         subtitle: "告诉我吃了什么、练了什么；涉及写入时会先生成可检查的草稿。"
                     )
                     .padding(.bottom, 4)
+                    .onAppear {
+                        guard !didRecordInitialTodayContent else { return }
+                        didRecordInitialTodayContent = true
+                        PerformanceSignposts.event("Today.InitialContentRendered")
+                    }
 
                     DailyLoopSnapshotCard(
                         snapshot: dailyLoopSnapshot,
@@ -567,6 +575,10 @@ struct ChatScreen: View {
     private func send(text: String, multimodalRequest: MultimodalModelRequest? = nil) async {
         let userText = (multimodalRequest?.userText ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !userText.isEmpty else { return }
+        let performanceClock = ContinuousClock()
+        let agentRequestStartedAt = performanceClock.now
+        var recordedFirstToken = false
+        var recordedActionDraft = false
         let sourceForRequest = inputSource
         guard !agentUIState.isBusy else { return }
         if multimodalRequest?.image == nil {
@@ -671,6 +683,22 @@ struct ChatScreen: View {
                 for try await event in eventStream {
                     transitionAgentUI(using: event)
                     transitionImageUI(using: event)
+                    if !recordedFirstToken, case .assistantDelta = event {
+                        PerformanceSignposts.event(
+                            "Agent.TranscriptToFirstToken",
+                            elapsedMillisecondsSince: agentRequestStartedAt,
+                            clock: performanceClock
+                        )
+                        recordedFirstToken = true
+                    }
+                    if !recordedActionDraft, case .pendingAction = event {
+                        PerformanceSignposts.event(
+                            "Agent.TranscriptToActionDraft",
+                            elapsedMillisecondsSince: agentRequestStartedAt,
+                            clock: performanceClock
+                        )
+                        recordedActionDraft = true
+                    }
                     if case .completed(let response) = event {
                         completedResponse = response
                     }

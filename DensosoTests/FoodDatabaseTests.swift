@@ -23,6 +23,16 @@ final class FoodDatabaseTests: XCTestCase {
         XCTAssertTrue(try database.ftsSearch(query: "鸡胸肉", limit: -1).isEmpty)
     }
 
+    func testCatalogEntriesRemainStableAcrossRepeatedReads() throws {
+        let database = try FoodDatabase(seedJSON: seedData)
+
+        let firstRead = try database.catalogEntries()
+        let secondRead = try database.catalogEntries()
+
+        XCTAssertEqual(firstRead.map(\.id), secondRead.map(\.id))
+        XCTAssertEqual(firstRead.first?.name, "鸡胸肉")
+    }
+
     private var seedData: Data {
         Data(
             """

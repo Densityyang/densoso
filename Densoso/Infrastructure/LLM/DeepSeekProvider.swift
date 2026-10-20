@@ -35,6 +35,9 @@ struct DeepSeekProvider: MultimodalModelProvider {
         AsyncThrowingStream { continuation in
             let task = Task {
                 let startedAt = Date()
+                let performanceClock = ContinuousClock()
+                let providerRequestStartedAt = performanceClock.now
+                var didRecordFirstTextDelta = false
                 do {
                     try validate(request)
                     guard let key = try credentialSource.credential(for: .deepSeek),
@@ -75,6 +78,14 @@ struct DeepSeekProvider: MultimodalModelProvider {
                                 }
                                 if !delta.isEmpty {
                                     didEmitText = true
+                                    if !didRecordFirstTextDelta {
+                                        PerformanceSignposts.event(
+                                            "Provider.DeepSeekFirstTextDelta",
+                                            elapsedMillisecondsSince: providerRequestStartedAt,
+                                            clock: performanceClock
+                                        )
+                                        didRecordFirstTextDelta = true
+                                    }
                                     continuation.yield(.textDelta(delta))
                                 }
                             case "response.refusal.delta":

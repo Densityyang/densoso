@@ -1146,6 +1146,7 @@ jobs:
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testOptionalQwenOpenPhotoRequiresSeparateQwenConsent \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testDeepSeekPhotoModeNeverFallsThroughToOptionalQwenVision \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testDefaultClosedQualityGateRequiresManualFallbackWithoutStaging \
+            -only-testing:DensosoTests/FoodDatabaseTests/testCatalogEntriesRemainStableAcrossRepeatedReads \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testMealCaptureErrorsExposeSharedSafeDescriptors \
             -only-testing:DensosoTests/MealRecordAuditPresentationTests/testMealRecordPresentationShowsSanitizedSourcesAndAlgorithmVersion \
             -only-testing:DensosoTests/AgentUIStateMachineTests/testAgentEventsMoveThroughThinkingToolDraftConfirmationCommitAndFailureStates \

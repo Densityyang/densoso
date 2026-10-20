@@ -36,6 +36,8 @@ include the recommendation-policy version, while DailyLoop exposes its own
 algorithm version for its on-demand composed snapshot.
 HealthIntelligenceReadModel pages daily meal protein, weight and workout history
 inside its bounded date window.
+The `Health.StateRefresh` Instruments interval covers the explicit local
+read/compute/cache operation and contains no provider/network request.
 Daily-loop plan loading pages stored plan events and retains only active sessions
 that can appear in today's or tomorrow's snapshot.
 Tomorrow-plan inference first checks for any event, then pages confirmed plan

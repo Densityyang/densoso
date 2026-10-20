@@ -8,6 +8,7 @@ struct DensosoApp: App {
     private let launchConfiguration: AppLaunchConfiguration
 
     init() {
+        PerformanceSignposts.event("App.LaunchStart")
         let launchConfiguration = AppLaunchConfiguration.current
         let persistence = PersistenceBootstrap.make(inMemory: launchConfiguration.isUITesting)
         let dependencies = Dependencies(

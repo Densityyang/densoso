@@ -209,6 +209,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "Densoso/App/DensosoApp.swift",
+            ('PerformanceSignposts.event("App.LaunchStart")',),
+            errors,
+        )
+        require(
             "Densoso/Views/Components/DailyLoopSnapshotCard.swift",
             (
                 "let errorMessage: String?",
@@ -307,6 +312,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "func refresh(asOf date: Date = Date()) async throws -> DailyHealthBrief?",
                 "try await projectionActor.refresh(asOf: date)",
+                "PerformanceSignposts.measureAsync(\"Health.StateRefresh\")",
                 "if snapshot.updatesWeeklyBrief",
                 "fallback: .projectionFailedFallback",
                 "lastError = \"无法更新健康摘要：\\(errorMessage)\"",
@@ -749,6 +755,17 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "Image parts are allowed only in user messages",
                 "Production launch does not seed a profile",
                 "Qwen open-photo quality remains closed by",
+                "Performance points of interest mark `App.LaunchStart`",
+                "App.LaunchStart",
+                "Today.InitialContentRendered",
+                "Today.InitialDataReady",
+                "Health.StateRefresh",
+                "Meal.DeterministicEstimate",
+                "Meal.DeterministicToolDraft",
+                "Speech.CaptureToFirstTranscript",
+                "Provider.DeepSeekFirstTextDelta",
+                "Agent.TranscriptToFirstToken",
+                "Agent.TranscriptToActionDraft",
                 "OCR/evidence text is not persisted",
                 "ephemeral provider message for the current round",
                 "require the regular health-text consent",
@@ -1054,6 +1071,46 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "Densoso/Services/PerformanceSignposts.swift",
+            (
+                "OSSignposter",
+                "func measure<T>(",
+                "func measureAsync<T>(",
+                "func event(",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Views/ChatScreen.swift",
+            (
+                "Today.InitialContentRendered",
+                "Today.InitialDataReady",
+                "Agent.TranscriptToFirstToken",
+                "Agent.TranscriptToActionDraft",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/HealthIntelligenceService.swift",
+            ("Health.StateRefresh",),
+            errors,
+        )
+        require(
+            "Densoso/Services/SpeechService.swift",
+            ("Speech.CaptureToFirstTranscript", "recordFirstTranscriptLatencyIfNeeded"),
+            errors,
+        )
+        require(
+            "Densoso/Services/FoodDatabase.swift",
+            ("catalogEntriesCache", "catalogCacheLock.lock()"),
+            errors,
+        )
+        require(
+            "DensosoTests/FoodDatabaseTests.swift",
+            ("testCatalogEntriesRemainStableAcrossRepeatedReads",),
+            errors,
+        )
+        require(
             "DensosoTests/AppLaunchConfigurationTests.swift",
             (
                 "testSeededProfileRequiresUITestMode",
@@ -1079,6 +1136,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "capabilities: ProviderCapabilityCatalog.deepSeekCapabilities(for: model, endpoint: endpoint)",
                 "input_image",
                 "imageMessages.allSatisfy({ $0.role == .user })",
+                "Provider.DeepSeekFirstTextDelta",
             ),
             errors,
         )
@@ -1103,7 +1161,18 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "allowsQwenMealVision,",
                 "Optional Qwen review path",
                 "qualityGate: MealVisionQualityGate = .unavailable",
+                'PerformanceSignposts.measure("Meal.DeterministicEstimate")',
             ),
+            errors,
+        )
+        require(
+            "Densoso/Agent/Tools/LogMealTool.swift",
+            ('PerformanceSignposts.measure("Meal.DeterministicEstimate")',),
+            errors,
+        )
+        require(
+            "Densoso/Agent/AgentSession.swift",
+            ('PerformanceSignposts.measureAsync("Meal.DeterministicToolDraft")',),
             errors,
         )
         require(
@@ -1396,6 +1465,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testOptionalQwenOpenPhotoRequiresSeparateQwenConsent",
                 "testDeepSeekPhotoModeNeverFallsThroughToOptionalQwenVision",
                 "testDefaultClosedQualityGateRequiresManualFallbackWithoutStaging",
+                "FoodDatabaseTests.testCatalogEntriesRemainStableAcrossRepeatedReads",
                 "testPrepareForAgentRoutesResolvedBarcodeLocallyAndStagesPendingAction",
                 "testPrepareForAgentKeepsCompleteLabelLocalAndAsksOnceForMissingPortion",
                 "testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto",
@@ -1980,6 +2050,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testOptionalQwenOpenPhotoRequiresSeparateQwenConsent",
                 "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testDeepSeekPhotoModeNeverFallsThroughToOptionalQwenVision",
                 "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testDefaultClosedQualityGateRequiresManualFallbackWithoutStaging",
+                "-only-testing:DensosoTests/FoodDatabaseTests/testCatalogEntriesRemainStableAcrossRepeatedReads",
                 "-only-testing:DensosoTests/SpeechCaptureStateMachineTests/testLocalOnlyModeNeverUsesQwenFallbackEvenWhenFallbackAndConsentAreEnabled",
                 "-only-testing:DensosoTests/DeepSeekProviderContractTests/testImageStructuredOutputAndStatelessToolHistoryEncoding",
                 "-only-testing:DensosoTests/DeepSeekProviderContractTests/testImageMustBeInUserMessageAndFailsBeforeNetwork",

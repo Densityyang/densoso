@@ -38,6 +38,9 @@ final class SpeechService {
     private var fallbackInProgress = false
     private var captureGeneration: UInt64 = 0
     private var temporaryAudioFailure: SpeechCaptureFailure?
+    private let performanceClock = ContinuousClock()
+    private var captureStartedAt: ContinuousClock.Instant?
+    private var didRecordFirstTranscript = false
 
     private var frameTask: Task<Void, Never>?
     private var resultTask: Task<Void, Never>?
@@ -124,6 +127,8 @@ final class SpeechService {
         let requestID = UUID()
         activeRequestID = requestID
         transcribedText = ""
+        captureStartedAt = nil
+        didRecordFirstTranscript = false
         durationWarning = nil
         error = nil
 
@@ -251,6 +256,7 @@ final class SpeechService {
         }
         audioStarted = true
         state = .recording
+        captureStartedAt = performanceClock.now
         await recordDiagnostic(
             stage: .recording,
             backend: activeBackend,
@@ -329,6 +335,7 @@ final class SpeechService {
                     guard !Task.isCancelled,
                           self.captureGeneration == generation else { return }
                     self.transcribedText = update.text
+                    self.recordFirstTranscriptLatencyIfNeeded()
                     if !update.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         self.localTranscriptionFailed = false
                     }
@@ -614,6 +621,7 @@ final class SpeechService {
                 requestID: captureRequestID
             )
             transcribedText = cloud.text
+            recordFirstTranscriptLatencyIfNeeded()
             transcriptSource = .qwenASR
             runtime = .qwenASR
             if let usageLedger {
@@ -730,6 +738,8 @@ final class SpeechService {
         localTranscriptionFailed = false
         fallbackInProgress = false
         temporaryAudioFailure = nil
+        captureStartedAt = nil
+        didRecordFirstTranscript = false
         state = .idle
     }
 
@@ -746,6 +756,18 @@ final class SpeechService {
 
     private func isUsableLocalTranscript(_ text: String) -> Bool {
         text.count >= 2
+    }
+
+    private func recordFirstTranscriptLatencyIfNeeded() {
+        guard !didRecordFirstTranscript,
+              let captureStartedAt,
+              !transcribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        didRecordFirstTranscript = true
+        PerformanceSignposts.event(
+            "Speech.CaptureToFirstTranscript",
+            elapsedMillisecondsSince: captureStartedAt,
+            clock: performanceClock
+        )
     }
 
     private func makeFailure(
