@@ -116,6 +116,9 @@ struct LogMealTool: ConfirmationRequiredTool {
         let packageServingParser = PackageServingGramsParser()
         let userText = context.currentMealUserText()
         let agentImageEvidence = context.currentMealImageEvidence()
+        let hasPhotoPortionEstimate = arguments.dishes
+            .flatMap(\.ingredients)
+            .contains { $0.quantityEvidence.kind == .photoEstimate }
         let packageLabelTexts = agentImageEvidence
             .filter { $0.kind == .nutritionLabel }
             .map(\.value)
@@ -257,6 +260,7 @@ struct LogMealTool: ConfirmationRequiredTool {
         )
         if let energy = mealDraft.totalNutrients?.energyKcal,
            case .needsClarification = CaloriePresentationPolicy().presentation(for: energy),
+           !hasPhotoPortionEstimate,
            !context.hasIssuedMealClarification(),
            !context.currentMealClarificationWasAnswered() {
             let dishName = drafts.max { lhs, rhs in

@@ -172,7 +172,7 @@ final class UserPreferenceConfirmationTests: XCTestCase {
         let configuration = ModelConfiguration("Densoso", schema: schema, url: storeURL)
         let container = try ModelContainer(
             for: schema,
-            migrationPlan: DensosoMigrationPlan.self,
+            migrationPlan: DensosoMigrationTestPlanV5.self,
             configurations: [configuration]
         )
 

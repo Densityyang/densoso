@@ -748,9 +748,12 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",
             "testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder",
             "testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages",
+            "testPendingInboxPagesMoreThan64ReceiptsInArrivalOrder",
             "ordinal: 4",
             "1...65",
+            "0..<65",
             "pendingCommands.map(\\.messageID), [laterRequestID, firstRequestID]",
+            "pendingCommandEnvelopes().map(\\.messageID), expectedCommandIDs",
             "00000000-0000-0000-0000-000000000000",
             "requestID: nil",
             "store.recentReceivedMessageIDs(), [firstID, zeroID]",
@@ -759,18 +762,25 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         ),
         errors,
     )
-    require(
+    inbox_store = require(
         "Densoso/Infrastructure/WatchConnectivity/WatchMessageInboxStore.swift",
         (
             "let pendingIDs = try pendingMessageIDs(in: context)",
-            "message.requestID != nil",
-            "messageIDs.contains(message.requestID!)",
+            "private func pendingMessageIDs(in context: ModelContext) throws -> Set<UUID>",
+            "pendingIDs.formUnion(receipts.compactMap { UUID(uuidString: $0.messageID) })",
+            "message.conversationID == inboxID",
+            "message.roleRaw == role",
+            "guard let requestID = message.requestID else { return false }",
+            "return pendingIDs.contains(requestID)",
+            "descriptor.fetchLimit = Self.pendingReceiptFetchBatchSize",
             "$0.ordinal == $1.ordinal ? $0.id < $1.id : $0.ordinal < $1.ordinal",
             "descriptor.fetchLimit = boundedLimit",
             "SortDescriptor(\\.ordinal, order: .reverse)",
         ),
         errors,
     )
+    if "message.requestID!" in inbox_store:
+        errors.append("Watch inbox SwiftData predicates must not force unwrap optional request IDs")
     require(
         "Densoso/Infrastructure/WatchConnectivity/PhoneWatchConnectivityCoordinator.swift",
         (

@@ -1072,6 +1072,36 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(Set(affectedDays), expectedDays)
     }
 
+    func testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages() throws {
+        let repository = HealthRepository(modelContext: context)
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let dayKey = Self.dayKey(day)
+        for index in 1...401 {
+            let sampleID = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!
+            context.insert(HealthKitSampleIndexRecord(
+                sampleID: sampleID,
+                stream: HealthMetricID.bodyMass.rawValue,
+                dayKey: dayKey,
+                startDate: day,
+                endDate: day,
+                needsRequery: true,
+                pendingDayKeys: [dayKey],
+                isDeleted: true
+            ))
+        }
+        try context.save()
+
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [], nextAnchorData: Data([4]), readState: .available),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: day,
+            lookbackStart: day,
+            replacements: [HealthSampleDaySnapshot(dayStart: day, samples: [], readState: .available)]
+        )
+
+        XCTAssertTrue(try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).isEmpty)
+    }
+
     func testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval() throws {
         let repository = HealthRepository(modelContext: context)
         let calendar = Calendar.current

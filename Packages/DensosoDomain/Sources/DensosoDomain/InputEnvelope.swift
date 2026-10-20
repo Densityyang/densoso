@@ -31,6 +31,8 @@ public struct InputEnvelope: Codable, Equatable, Sendable {
     public let id: UUID
     public let createdAt: Date
     public let source: Source
+    /// Identifies the on-device or provider speech path without retaining audio.
+    public let voiceSource: VoiceCommandEnvelope.Source?
     public let text: String?
     public let imageAttachments: [ImageAttachment]
     public let locale: String
@@ -38,6 +40,7 @@ public struct InputEnvelope: Codable, Equatable, Sendable {
     public var isWellFormed: Bool {
         guard imageAttachments.count <= 4,
               locale.count <= 64,
+              voiceSource == nil || source == .voice || source == .voiceAndImage,
               Set(imageAttachments.map(\.id)).count == imageAttachments.count else { return false }
         let hasText = text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let hasImages = !imageAttachments.isEmpty
@@ -55,6 +58,7 @@ public struct InputEnvelope: Codable, Equatable, Sendable {
         id: UUID = UUID(),
         createdAt: Date = Date(),
         source: Source,
+        voiceSource: VoiceCommandEnvelope.Source? = nil,
         text: String?,
         imageAttachments: [ImageAttachment] = [],
         locale: String = Locale.current.identifier
@@ -62,6 +66,7 @@ public struct InputEnvelope: Codable, Equatable, Sendable {
         self.id = id
         self.createdAt = createdAt
         self.source = source
+        self.voiceSource = voiceSource
         self.text = text
         self.imageAttachments = Array(imageAttachments.prefix(4))
         self.locale = String(locale.prefix(64))
@@ -90,6 +95,7 @@ public extension VoiceCommandEnvelope {
             id: UUID(),
             createdAt: capturedAt,
             source: envelopeSource,
+            voiceSource: isVoiceSource ? source : nil,
             text: text,
             imageAttachments: imageAttachments,
             locale: localeIdentifier

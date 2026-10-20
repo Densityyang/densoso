@@ -201,6 +201,11 @@ public struct FoodResolverV2: Sendable {
         let terms = [entry.name] + entry.aliases
         let normalizedTerms = terms.map(FoodResolver.normalize).filter { !$0.isEmpty }
         if normalizedTerms.contains(label) { return 1 }
+        // One-character Han labels can be useful broad vision hints, but must
+        // remain far below the automatic-match threshold so the user chooses.
+        if isSingleHanCharacter(label), normalizedTerms.contains(where: { $0.contains(label) }) {
+            return 0.45
+        }
         if terms.contains(where: {
             matchesFoodTerm($0, term: rawLabel) || matchesFoodTerm(rawLabel, term: $0)
         }) {
@@ -208,6 +213,16 @@ public struct FoodResolverV2: Sendable {
         }
         guard label.count >= 5 else { return 0 }
         return normalizedTerms.map { bigramSimilarity(label, $0) }.max() ?? 0
+    }
+
+    private func isSingleHanCharacter(_ value: String) -> Bool {
+        let scalars = Array(value.unicodeScalars)
+        guard scalars.count == 1, let scalar = scalars.first else { return false }
+        return (0x3400...0x4DBF).contains(scalar.value)
+            || (0x4E00...0x9FFF).contains(scalar.value)
+            || (0xF900...0xFAFF).contains(scalar.value)
+            || (0x20000...0x2FA1F).contains(scalar.value)
+            || (0x30000...0x3134F).contains(scalar.value)
     }
 
     private func aliasScore(label: String, rawLabel: String, entry: FoodCatalogEntry) -> Double {

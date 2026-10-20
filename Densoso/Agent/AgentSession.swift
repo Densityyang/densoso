@@ -330,6 +330,19 @@ final class AgentSession {
                 }
             }
 
+            if let existingRequest = try await conversationRepository.agentRequest(
+                requestID: requestID,
+                conversationID: conversationID
+            ),
+               existingRequest.containsTransientImage,
+               (existingRequest.state == .running || existingRequest.state == .interrupted),
+               multimodalRequest.image == nil {
+                // A boolean marker cannot prove that fresh local OCR/evidence is
+                // the same transient input as the interrupted turn. Require an
+                // actual reattached image, without consuming a resume attempt.
+                throw AgentError.transientImageRequired
+            }
+
             let requestSnapshot = try await conversationRepository.beginAgentRequest(
                 requestID: requestID,
                 conversationID: conversationID,

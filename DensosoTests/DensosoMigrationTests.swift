@@ -625,7 +625,7 @@ final class DensosoMigrationTests: XCTestCase {
         let configuration = ModelConfiguration("Densoso", schema: schema, url: url)
         return try ModelContainer(
             for: schema,
-            migrationPlan: DensosoMigrationPlan.self,
+            migrationPlan: DensosoMigrationTestPlanV4.self,
             configurations: [configuration]
         )
     }
@@ -700,6 +700,26 @@ final class DensosoMigrationTests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+}
+
+enum DensosoMigrationTestPlanV4: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] {
+        Array(DensosoMigrationPlan.schemas.prefix(6))
+    }
+
+    static var stages: [MigrationStage] {
+        Array(DensosoMigrationPlan.stages.prefix(5))
+    }
+}
+
+enum DensosoMigrationTestPlanV5: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] {
+        Array(DensosoMigrationPlan.schemas.prefix(7))
+    }
+
+    static var stages: [MigrationStage] {
+        Array(DensosoMigrationPlan.stages.prefix(6))
     }
 }
 

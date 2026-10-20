@@ -142,13 +142,13 @@ final class HealthRepository: HealthSyncRepository {
                         currentHealthKitUUID = healthKitUUID
                         currentPreferredWorkout = workout
                     } else if let existingWinner = currentPreferredWorkout {
+                        affectedDates.insert(existingWinner.date)
+                        affectedDates.insert(workout.date)
                         if Self.preferredImportedWorkout(workout, existingWinner) {
                             duplicateWorkoutIDs.insert(existingWinner.id)
-                            affectedDates.insert(existingWinner.date)
                             currentPreferredWorkout = workout
                         } else {
                             duplicateWorkoutIDs.insert(workout.id)
-                            affectedDates.insert(workout.date)
                         }
                     }
                 }
@@ -356,10 +356,6 @@ final class HealthRepository: HealthSyncRepository {
 
                 try upsertHealthSnapshot(updated, for: day)
             }
-            try markHealthKitSampleIndexesForRequery(
-                sampleIDs: Set(page.deletedSampleIDs),
-                stream: stream
-            )
             var sampleIndexUpdates: [UUID: HealthKitSampleIndexUpdate] = [:]
             for sample in page.samples where sample.metric.rawValue == stream {
                 let update = HealthKitSampleIndexUpdate(
@@ -397,6 +393,12 @@ final class HealthRepository: HealthSyncRepository {
                 sampleIndexUpdates,
                 stream: stream,
                 replacementsByDay: replacementsByDay
+            )
+            // Samples present in this update supersede same-page deletions; remaining IDs stay tombstoned.
+            let reintroducedSampleIDs = Set(sampleIndexUpdates.keys)
+            try markHealthKitSampleIndexesForRequery(
+                sampleIDs: Set(page.deletedSampleIDs).subtracting(reintroducedSampleIDs),
+                stream: stream
             )
             var pendingDayKeyUpdates: [UUID: Set<String>] = [:]
             var deletedTombstoneIDs = Set<UUID>()
@@ -656,26 +658,29 @@ final class HealthRepository: HealthSyncRepository {
         stream: String,
         _ body: ([HealthKitSampleIndexRecord]) throws -> Void
     ) throws {
-        let predicate = #Predicate<HealthKitSampleIndexRecord> {
-            $0.stream == stream && $0.needsRequery
-        }
-        var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(
-            predicate: predicate,
-            sortBy: [
-                SortDescriptor(\HealthKitSampleIndexRecord.dayKey),
-                SortDescriptor(\HealthKitSampleIndexRecord.startDate),
-                SortDescriptor(\HealthKitSampleIndexRecord.endDate),
-                SortDescriptor(\HealthKitSampleIndexRecord.sampleID),
-            ]
-        )
-        descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize
-        var offset = 0
+        let sortBy = [SortDescriptor(\HealthKitSampleIndexRecord.sampleID)]
+        var cursorSampleID: UUID?
         while true {
-            descriptor.fetchOffset = offset
+            let predicate: Predicate<HealthKitSampleIndexRecord>
+            if let cursorSampleID {
+                let lastSampleID = cursorSampleID
+                predicate = #Predicate<HealthKitSampleIndexRecord> { record in
+                    record.stream == stream
+                        && record.needsRequery
+                        && record.sampleID > lastSampleID
+                }
+            } else {
+                predicate = #Predicate<HealthKitSampleIndexRecord> {
+                    $0.stream == stream && $0.needsRequery
+                }
+            }
+            var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize
             let records = try modelContext.fetch(descriptor)
-            guard !records.isEmpty else { return }
+            guard let lastRecord = records.last else { return }
+            // The callback may clear the predicate or delete this page, so offset paging can skip rows.
             try body(records)
-            offset += records.count
+            cursorSampleID = lastRecord.sampleID
             if records.count < Self.healthKitSampleIndexBatchSize { return }
         }
     }

@@ -13,7 +13,9 @@ equal ordinals use message ID as a deterministic tie-breaker across receipt
 pages.
 The pending-command query matches a zero UUID receipt without admitting an
 envelope whose optional request ID is nil; recent receipt IDs also skip that
-envelope while preserving durable inbox arrival order.
+envelope while preserving durable inbox arrival order. Pending receipt IDs and
+inbox messages are read in stable, bounded pages; Swift matches non-nil request
+IDs in memory so SwiftData predicates do not force unwrap optional fields.
 The phone snapshot resolves today's DailyMetrics row with a bounded date query
 and one-row fetch limit. Its single-session plan query starts at today, reads
 note-prefix candidates in stable 64-row pages, skips terminal entries, and

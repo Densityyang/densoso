@@ -66,7 +66,7 @@ enum HealthContextPromptBuilder {
         let captureTerms = ["记录", "记一下", "保存", "打卡", "吃了", "摄入", "安排训练", "训练计划"]
         guard !captureTerms.contains(where: normalized.contains) else { return false }
         let queryTerms = [
-            "分析", "总结", "趋势", "状态", "恢复", "怎么样", "如何", "是否", "多少", "多久",
+            "分析", "总结", "趋势", "状态", "怎么样", "如何", "是否", "多少", "多久",
             "为什么", "适合", "应该", "太累", "疲劳", "乏力", "要不要", "可以吗", "吗", "查看", "看看", "查询", "?", "？",
             "analyze", "trend", "how is", "how am", "should i",
         ]

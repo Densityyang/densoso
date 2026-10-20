@@ -234,6 +234,43 @@ private enum CanonicalPayload: Encodable {
         case .userPreference(let preference): self = .userPreference(try CanonicalUserPreference(preference))
         }
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case meal
+        case weight
+        case workoutPlan
+        case trainingPlan
+        case dailyCheckIn
+        case userPreference
+    }
+
+    private enum LegacyAssociatedValueKeys: String, CodingKey {
+        case _0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        // Keep the original synthesized single-value enum shape for V1-V4 action
+        // payloads so already-persisted idempotency bytes remain stable.
+        case .meal(let value):
+            var payload = container.nestedContainer(keyedBy: LegacyAssociatedValueKeys.self, forKey: .meal)
+            try payload.encode(value, forKey: ._0)
+        case .weight(let value):
+            var payload = container.nestedContainer(keyedBy: LegacyAssociatedValueKeys.self, forKey: .weight)
+            try payload.encode(value, forKey: ._0)
+        case .workoutPlan(let value):
+            var payload = container.nestedContainer(keyedBy: LegacyAssociatedValueKeys.self, forKey: .workoutPlan)
+            try payload.encode(value, forKey: ._0)
+        case .trainingPlan(let value):
+            var payload = container.nestedContainer(keyedBy: LegacyAssociatedValueKeys.self, forKey: .trainingPlan)
+            try payload.encode(value, forKey: ._0)
+        case .dailyCheckIn(let value):
+            try container.encode(value, forKey: .dailyCheckIn)
+        case .userPreference(let value):
+            try container.encode(value, forKey: .userPreference)
+        }
+    }
 }
 
 private struct CanonicalUserPreference: Encodable {

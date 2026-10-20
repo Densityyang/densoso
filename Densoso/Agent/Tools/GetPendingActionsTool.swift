@@ -27,7 +27,14 @@ struct GetPendingActionsTool: AgentTool {
     func response(actions: [PendingAction], asOf date: Date) throws -> String {
         let candidates = actions
             .filter { !$0.state.isTerminal && $0.expiresAt > date }
-            .sorted { $0.createdAt > $1.createdAt }
+            .sorted { lhs, rhs in
+                if lhs.state != rhs.state {
+                    if lhs.state == .committing { return true }
+                    if rhs.state == .committing { return false }
+                }
+                if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
         var summaries = Array(candidates.prefix(Self.maximumReturnedActions)).map { action in
             PendingActionSummary(
                 actionID: action.id.uuidString.lowercased(),

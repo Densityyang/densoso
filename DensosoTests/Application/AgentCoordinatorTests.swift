@@ -75,8 +75,8 @@ final class AgentCoordinatorTests: XCTestCase {
         let harness = try await Harness(provider: provider)
         let messageID = UUID(uuidString: "00000000-0000-0000-0000-000000000705")!
 
-        _ = try await harness.session.send(userText: "帮我查看本周趋势", requestID: messageID)
-        let replay = try await harness.session.send(userText: "帮我查看本周趋势", requestID: messageID)
+        _ = try await harness.session.send(userText: "请概括一下你的功能", requestID: messageID)
+        let replay = try await harness.session.send(userText: "请概括一下你的功能", requestID: messageID)
 
         XCTAssertTrue(replay.text.contains("不会因 Watch 重放而重复处理"))
         XCTAssertEqual(provider.recordedRequests().count, 1)

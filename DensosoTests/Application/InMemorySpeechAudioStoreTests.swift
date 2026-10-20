@@ -4,7 +4,8 @@ import XCTest
 
 final class InMemorySpeechAudioStoreTests: XCTestCase {
     func testCreatesBoundedWAVInMemoryAndDiscardClearsIt() async throws {
-        let store = InMemorySpeechAudioStore()
+        // Gate04SpeechTestDoubles declares a same-named actor; qualify the app implementation.
+        let store = Densoso.InMemorySpeechAudioStore()
         try await store.begin(requestID: UUID())
         try await store.append(SpeechAudioFrame(
             pcm16LittleEndian: Data(repeating: 0x01, count: 3_200),
@@ -20,7 +21,10 @@ final class InMemorySpeechAudioStoreTests: XCTestCase {
         XCTAssertEqual(audio.durationSeconds, 0.1, accuracy: 0.0001)
         XCTAssertEqual(String(data: audio.data.prefix(4), encoding: .ascii), "RIFF")
         XCTAssertEqual(String(data: audio.data.dropFirst(8).prefix(4), encoding: .ascii), "WAVE")
+        XCTAssertEqual(String(data: audio.data.dropFirst(12).prefix(4), encoding: .ascii), "fmt ")
+        XCTAssertEqual(String(data: audio.data.dropFirst(36).prefix(4), encoding: .ascii), "data")
         XCTAssertEqual(audio.data.count, 44 + 3_200)
+        XCTAssertEqual(Array(audio.data.suffix(3_200)), Array(repeating: 0x01, count: 3_200))
 
         await store.discard()
         let discarded = try await store.finalize()
@@ -28,7 +32,8 @@ final class InMemorySpeechAudioStoreTests: XCTestCase {
     }
 
     func testSixtySecondMemoryCeilingFailsClosedWithoutPartialAudio() async throws {
-        let store = InMemorySpeechAudioStore()
+        // This must exercise the production byte ceiling, not the SpeechService test double.
+        let store = Densoso.InMemorySpeechAudioStore()
         let overLimit = SpeechAudioFrame(
             pcm16LittleEndian: Data(repeating: 0, count: 16_000 * 60 * 2 + 1),
             frameCount: 16_000 * 60,

@@ -360,7 +360,7 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         )
         let database = try FoodDatabase(seedJSON: Data(Self.foodSeed.utf8))
         session.foodDatabase = database
-        return MealQuantityHarness(container: container, session: session)
+        return MealQuantityHarness(container: container, session: session, foodDatabase: database)
     }
 
     private static let foodSeed = #"""
@@ -375,4 +375,5 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
 private struct MealQuantityHarness {
     let container: ModelContainer
     let session: AgentSession
+    let foodDatabase: FoodDatabase
 }
