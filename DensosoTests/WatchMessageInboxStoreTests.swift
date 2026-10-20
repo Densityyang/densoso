@@ -122,6 +122,57 @@ final class WatchMessageInboxStoreTests: XCTestCase {
         XCTAssertEqual(try store.recentReceivedMessageIDs(), [firstID, zeroID])
     }
 
+    func testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages() throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let store = WatchMessageInboxStore(modelContainer: container)
+        let firstRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let laterRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000065")!
+        let firstPageMessageRowID = UUID(uuidString: "f0000000-0000-0000-0000-000000000001")!
+        let secondPageMessageRowID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let firstEnvelope = WatchMessageEnvelope(
+            messageID: firstRequestID,
+            payload: .confirm(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000071")!)
+        )
+        let laterEnvelope = WatchMessageEnvelope(
+            messageID: laterRequestID,
+            payload: .reject(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000072")!)
+        )
+        let context = ModelContext(container)
+
+        for index in 1...65 {
+            let receiptID = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!
+            context.insert(WatchMessageReceiptRecord(
+                messageID: receiptID.uuidString.lowercased(),
+                schemaVersion: WatchMessageEnvelope.currentSchemaVersion,
+                payloadHash: "fixture-\(index)"
+            ))
+        }
+        context.insert(MessageRecord(
+            id: secondPageMessageRowID,
+            conversationID: WatchMessageInboxStore.conversationID,
+            roleRaw: "watch-envelope",
+            contentData: try WatchMessageCodec.encode(laterEnvelope),
+            ordinal: 4,
+            requestID: laterRequestID
+        ))
+        context.insert(MessageRecord(
+            id: firstPageMessageRowID,
+            conversationID: WatchMessageInboxStore.conversationID,
+            roleRaw: "watch-envelope",
+            contentData: try WatchMessageCodec.encode(firstEnvelope),
+            ordinal: 4,
+            requestID: firstRequestID
+        ))
+        try context.save()
+
+        let pendingCommands = try store.pendingCommandEnvelopes()
+
+        XCTAssertEqual(pendingCommands.map(\.messageID), [laterRequestID, firstRequestID])
+        XCTAssertEqual(pendingCommands.map(\.payload), [laterEnvelope.payload, firstEnvelope.payload])
+    }
+
     func testPendingInboxPagesMoreThan64ReceiptsInArrivalOrder() throws {
         let store = try makeStore()
         var expectedTranscriptIDs: [UUID] = []

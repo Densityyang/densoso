@@ -8,7 +8,9 @@ remains separate.
 Checks daily snapshot summaries, pending-action confirmation boundaries,
 durable quick-record envelopes, offline replay deduplication, arrival ordering,
 and retry/resume behavior. Inbox reads push state, identity, sort order, and
-recent-item limits into SwiftData while preserving durable arrival ordering.
+recent-item limits into SwiftData while preserving durable arrival ordering;
+equal ordinals use message ID as a deterministic tie-breaker across receipt
+pages.
 The pending-command query matches a zero UUID receipt without admitting an
 envelope whose optional request ID is nil; recent receipt IDs also skip that
 envelope while preserving durable inbox arrival order.
@@ -30,6 +32,7 @@ coordinator's activation path restores pending commands.
   `DailyLoopSnapshotCompositionTests.testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary`,
   `WatchMessageInboxStoreTests.testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder`,
   `WatchMessageInboxStoreTests.testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder`,
+  `WatchMessageInboxStoreTests.testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages`,
   `WatchMessageInboxStoreTests.testOutOfOrderMessagesAreReturnedInDurableArrivalOrder`,
   `WatchMessageInboxStoreTests.testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry`,

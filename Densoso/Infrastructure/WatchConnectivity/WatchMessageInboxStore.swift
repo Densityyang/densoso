@@ -196,7 +196,9 @@ final class WatchMessageInboxStore {
             cursorMessageID = lastReceipt.messageID
             if receipts.count < Self.pendingReceiptFetchBatchSize { break }
         }
-        return messages.sorted { $0.ordinal < $1.ordinal }
+        return messages.sorted {
+            $0.ordinal == $1.ordinal ? $0.id < $1.id : $0.ordinal < $1.ordinal
+        }
     }
 
     private func pendingInboxMessages(

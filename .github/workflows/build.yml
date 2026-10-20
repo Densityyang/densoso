@@ -1242,6 +1242,7 @@ jobs:
             -only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents \
             -only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testOutOfOrderMessagesAreReturnedInDurableArrivalOrder \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder \
