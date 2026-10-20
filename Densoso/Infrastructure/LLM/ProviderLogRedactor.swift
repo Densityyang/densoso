@@ -1,4 +1,5 @@
 import Foundation
+import DensosoDomain
 
 struct ProviderLogMetadata: Codable, Equatable, Sendable {
     let requestID: UUID
@@ -43,8 +44,12 @@ enum ProviderLogRedactor {
     }
 
     static func safeProviderCode(_ raw: String) -> String {
-        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let allowlist: Set<String> = [
+        let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let sharedCode = SharedErrorCode(rawValue: candidate) {
+            return sharedCode.rawValue
+        }
+        let normalized = candidate.lowercased()
+        let legacyAllowlist: Set<String> = [
             "authentication_error",
             "budget_exceeded",
             "cancelled",
@@ -64,7 +69,7 @@ enum ProviderLogRedactor {
             "timeout",
             "unsupported_capability",
         ]
-        return allowlist.contains(normalized) ? normalized : "redacted"
+        return legacyAllowlist.contains(normalized) ? normalized : "redacted"
     }
 
     static func safeModel(_ raw: String) -> String {
@@ -80,27 +85,9 @@ enum ProviderLogRedactor {
 
     static func errorCode(for error: Error) -> String {
         guard let error = error as? ProviderError else {
-            return "network_error"
+            return SharedErrorCode.providerUnavailable.rawValue
         }
-        let code: String = switch error {
-        case .configurationMissing: "configuration_missing"
-        case .consentRequired: "consent_required"
-        case .unauthorized: "authentication_error"
-        case .quotaExhausted: "quota_exhausted"
-        case .rateLimited: "rate_limit"
-        case .requestRejected: "invalid_request_error"
-        case .requestTooLarge: "request_too_large"
-        case .server: "server_error"
-        case .network: "network_error"
-        case .timeout: "timeout"
-        case .malformedResponse: "malformed_response"
-        case .schemaViolation: "schema_violation"
-        case .contentRejected: "content_filter"
-        case .unsupportedCapability: "unsupported_capability"
-        case .cancelled: "cancelled"
-        case .budgetExceeded: "budget_exceeded"
-        }
-        return safeProviderCode(code)
+        return error.sharedErrorDescriptor.code.rawValue
     }
 }
 

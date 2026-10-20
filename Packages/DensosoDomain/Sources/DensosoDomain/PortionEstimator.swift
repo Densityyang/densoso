@@ -34,7 +34,7 @@ public protocol PortionEstimating: Sendable {
 }
 
 public struct PortionEstimator: PortionEstimating, Sendable {
-    public static let algorithmVersion = "portion-estimator-v2"
+    public static let algorithmVersion = AlgorithmVersions.portionEstimator
 
     public init() {}
 

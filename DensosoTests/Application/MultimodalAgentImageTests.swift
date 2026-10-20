@@ -38,7 +38,11 @@ final class MultimodalAgentImageTests: XCTestCase {
         XCTAssertEqual(request.inputEnvelope.imageAttachments.map(\.mediaType), [.jpeg])
         let requestID = UUID()
 
-        _ = try await harness.session.send(multimodalRequest: request, requestID: requestID)
+        var response: AgentResponse?
+        for try await event in harness.session.sendEvents(multimodalRequest: request, requestID: requestID) {
+            if case .completed(let completed) = event { response = completed }
+        }
+        XCTAssertEqual(response?.toolCallsCount, 1)
 
         XCTAssertEqual(harness.session.pendingActions.count, 1)
         guard case .meal(let meal) = try XCTUnwrap(harness.session.pendingActions.first).payload else {
@@ -224,7 +228,12 @@ final class MultimodalAgentImageTests: XCTestCase {
             _ = try await resumeHarness.session.send(userText: "继续", requestID: requestID)
             XCTFail("Transient evidence must not be lost on text-only resume")
         } catch {
-            XCTAssertEqual(error as? AgentError, .transientImageRequired)
+            let agentError = error as? AgentError
+            XCTAssertEqual(agentError, .transientImageRequired)
+            XCTAssertEqual(agentError?.sharedErrorDescriptor.code, .toolArgumentsInvalid)
+            XCTAssertEqual(agentError?.sharedErrorDescriptor.reason, .transientImageRequired)
+            XCTAssertTrue(agentError?.localizedDescription.contains("重新选择照片") == true)
+            XCTAssertFalse(agentError?.sharedErrorDescriptor.diagnosticSafeDetail.contains(privateOCRText) ?? true)
         }
         XCTAssertTrue(resumeProvider.recordedRequests().isEmpty)
 
@@ -235,6 +244,10 @@ final class MultimodalAgentImageTests: XCTestCase {
             XCTAssertEqual(error as? AgentError, .transientImageRequired)
         }
         XCTAssertTrue(resumeProvider.recordedRequests().isEmpty)
+
+        let invalidEnvelopeError = AgentError.invalidInputEnvelope
+        XCTAssertEqual(invalidEnvelopeError.sharedErrorDescriptor.code, .toolArgumentsInvalid)
+        XCTAssertTrue(invalidEnvelopeError.localizedDescription.contains("检查后重新发送"))
 
         _ = try await resumeHarness.session.send(multimodalRequest: request, requestID: UUID())
         XCTAssertTrue(resumeProvider.recordedRequests().first?.messages.contains { message in
@@ -487,7 +500,7 @@ final class MultimodalAgentImageTests: XCTestCase {
         conversationID: UUID = UUID(),
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() }
     ) throws -> ImageAgentHarness {
-        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

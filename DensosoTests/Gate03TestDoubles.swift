@@ -382,6 +382,8 @@ actor BlockingConversationRepository: ConversationRepository {
 
     func containsCompletedResponse(requestID: UUID, conversationID: UUID) -> Bool { false }
 
+    func toolSchemaVersion(conversationID: UUID) -> Int { ToolSchemaVersion.current }
+
     func reset(conversationID: UUID) {}
 
     func hasAppendStarted() -> Bool { appendStarted }

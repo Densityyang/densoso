@@ -3,6 +3,19 @@ import DensosoDomain
 @testable import Densoso
 
 final class WorkoutPlanCompilerTests: XCTestCase {
+    func testWorkoutKitErrorsUseSharedCodesAndSafeMessages() {
+        let authorizationError = WorkoutPlanCompileError.scheduleAuthorizationDenied
+        XCTAssertEqual(authorizationError.sharedErrorDescriptor.code, .workoutKitUnauthorized)
+        XCTAssertEqual(authorizationError.localizedDescription, authorizationError.sharedErrorDescriptor.userMessage)
+
+        let unsupportedError = WorkoutPlanCompileError.schedulingUnavailable
+        XCTAssertEqual(unsupportedError.sharedErrorDescriptor.code, .watchUnavailable)
+
+        let invalidPlan = TrainingPlanCompileError.invalidDraft(.invalidReason)
+        XCTAssertEqual(invalidPlan.sharedErrorDescriptor.code, .toolArgumentsInvalid)
+        XCTAssertEqual(invalidPlan.localizedDescription, invalidPlan.sharedErrorDescriptor.userMessage)
+    }
+
     func testSupportedSingleGoalDraftValidatesWithoutStrengthSetData() throws {
         let draft = WorkoutPlanDraft(
             name: "晚间步行",

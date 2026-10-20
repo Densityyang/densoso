@@ -117,6 +117,30 @@ final class SpeechCaptureStateMachineTests: XCTestCase {
         XCTAssertTrue(diagnosticEvents.contains { $0.requestID == captureRequestID })
     }
 
+    func testLocalOnlyModeNeverUsesQwenFallbackEvenWhenFallbackAndConsentAreEnabled() async throws {
+        let harness = try await SpeechHarness(
+            cloudEnabled: true,
+            audioConsent: true,
+            allowsCloudFallbackForMode: false
+        )
+        harness.factory.modernAvailable = false
+        _ = await harness.service.requestAuthorization()
+        try await harness.service.startRecording()
+        harness.streamer.emit(Gate04Fixtures.frame())
+        await drainTasks()
+        harness.factory.legacy.fail()
+        await drainTasks(iterations: 20)
+
+        await harness.service.stopRecording()
+
+        let cloudCalls = await harness.cloud.callCount()
+        XCTAssertEqual(cloudCalls, 0)
+        guard case .failed(let failure) = harness.service.state else {
+            return XCTFail("Expected local-only transcription failure")
+        }
+        XCTAssertEqual(failure.kind, .transcriptionUnavailable)
+    }
+
     func testNoCapturedAudioNeverCallsQwenASR() async throws {
         let harness = try await SpeechHarness(cloudEnabled: true, audioConsent: true)
         harness.factory.modernAvailable = false
@@ -390,6 +414,7 @@ private struct SpeechHarness {
     init(
         cloudEnabled: Bool = false,
         audioConsent: Bool = false,
+        allowsCloudFallbackForMode: Bool = true,
         policy: SpeechCapturePolicy = .phase4
     ) async throws {
         let governance = InMemoryProviderGovernanceRepository()
@@ -415,7 +440,8 @@ private struct SpeechHarness {
             providerConfiguration: configuration,
             audioStore: store,
             diagnostics: diagnostics,
-            policy: policy
+            policy: policy,
+            cloudFallbackModeIsAllowed: { allowsCloudFallbackForMode }
         )
     }
 }

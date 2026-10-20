@@ -61,6 +61,9 @@ page instead of loading the complete history up front. “Load more” appends t
 next page for each plan type; a failed page read preserves loaded rows and can
 be retried. An initial read failure shows a retryable error instead of an empty
 history.
+Local confirmation and WorkoutKit scheduling remain separate states. If the
+system cannot schedule a confirmed plan, its local intent remains retryable and
+the UI says the system schedule is pending until a later attempt succeeds.
 Watch outbox and phone inbox tests cover replay semantics; the phone
 coordinator's activation path restores pending commands.
 Whenever the published daily brief changes, the app rebuilds the notification
@@ -98,7 +101,9 @@ health refreshes reach the companion without waiting for another activation.
   `TrainingPlanSchedulingServiceTests.testUpcomingTrainingSessionsAreBoundedAndOrderedAcrossPages`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanPagesKeepAllRowsAcrossTiedTenRowBoundaries`,
   `WorkoutPlanSchedulingServiceTests.testConfirmedScheduleIsIdempotentAcrossRetries`,
+  `WorkoutPlanSchedulingServiceTests.testTransientWorkoutKitFailureLeavesAUserRetryableScheduleIntent`,
   `WorkoutPlanSchedulingServiceTests.testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries`,
+  `WorkoutPlanCompilerTests.testWorkoutKitErrorsUseSharedCodesAndSafeMessages`,
   `TrainingPlanScheduleQueryTests.testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions`,

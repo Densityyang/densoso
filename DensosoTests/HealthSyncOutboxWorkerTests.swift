@@ -94,6 +94,8 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         let firstAttempt = Date(timeIntervalSince1970: 1_700_000_000)
         await worker.processPending(in: context, now: firstAttempt)
         XCTAssertEqual(entry.state, "retryable")
+        XCTAssertEqual(entry.lastError, SharedErrorDescriptor.healthKitUnavailableFallback.diagnosticSafeDetail)
+        XCTAssertFalse(entry.lastError?.contains("FakeHealthStoreError") ?? true)
 
         await worker.processPending(in: context, now: firstAttempt.addingTimeInterval(86_400))
         XCTAssertEqual(entry.state, "succeeded")

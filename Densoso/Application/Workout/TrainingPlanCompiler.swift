@@ -23,23 +23,30 @@ struct CompiledTrainingPlan {
     }
 }
 
-enum TrainingPlanCompileError: Error, LocalizedError, Equatable {
+enum TrainingPlanCompileError: Equatable, SharedErrorDescribing {
     case invalidDraft(TrainingPlanDraftValidationError)
     case sessionInPast
 
-    var errorDescription: String? {
+    var sharedErrorDescriptor: SharedErrorDescriptor {
         switch self {
-        case .sessionInPast: "计划中有已经开始或过期的训练日，请重新生成计划。"
-        case .invalidDraft(.invalidName): "训练计划需要一个不超过 100 个字符的名称。"
-        case .invalidDraft(.invalidDate): "训练计划包含无效日期。"
-        case .invalidDraft(.invalidSessionCount): "训练计划需要包含 1 到 14 天。"
-        case .invalidDraft(.duplicateSessionIdentity): "训练计划包含重复的训练记录。"
-        case .invalidDraft(.invalidReason): "每天都需要填写不超过 240 个字符的安排说明。"
-        case .invalidDraft(.invalidRestSession): "休息日不能同时包含运动、目标、地点或强度。"
-        case .invalidDraft(.invalidWorkoutSession): "训练日需要受支持的活动类型、目标、地点和强度。"
-        case .invalidDraft(.invalidGoal): "训练目标超出可安排范围。"
+        case .invalidDraft:
+            SharedErrorDescriptor(
+                code: .toolArgumentsInvalid,
+                userMessage: "训练计划暂时无法安排，请检查计划内容后重试。",
+                subsystem: .workoutKit,
+                reason: .invalidWorkoutPlan
+            )
+        case .sessionInPast:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "计划中有已经开始或过期的训练日，请重新生成计划。",
+                subsystem: .workoutKit,
+                reason: .workoutPlanConflict
+            )
         }
     }
+
+    var errorDescription: String? { sharedErrorDescriptor.userMessage }
 }
 
 /// Converts every workout day in a confirmed multi-day plan to an independent

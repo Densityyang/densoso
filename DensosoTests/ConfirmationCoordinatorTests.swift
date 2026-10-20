@@ -6,6 +6,15 @@ import XCTest
 @MainActor
 final class ConfirmationCoordinatorTests: XCTestCase {
     func testConfirmationErrorsDistinguishRetryableWatchReplayFromTerminalFailures() {
+        let expiredError = ConfirmationError.expired
+        XCTAssertEqual(expiredError.sharedErrorDescriptor.code, .confirmationExpired)
+        XCTAssertEqual(expiredError.localizedDescription, expiredError.sharedErrorDescriptor.userMessage)
+
+        let sensitiveInvariant = ConfirmationError.invariantViolation("private payload detail")
+        XCTAssertEqual(sensitiveInvariant.sharedErrorDescriptor.code, .actionConflict)
+        XCTAssertFalse(sensitiveInvariant.localizedDescription.contains("private payload detail"))
+        XCTAssertFalse(sensitiveInvariant.sharedErrorDescriptor.diagnosticSafeDetail.contains("private payload detail"))
+
         XCTAssertTrue(ConfirmationError.alreadyCommitting.isRetryable)
         XCTAssertTrue(ConfirmationError.persistenceReadOnly(diagnosticID: "recovery").isRetryable)
         XCTAssertTrue(ConfirmationError.commitFailed(retryable: true).isRetryable)
@@ -41,6 +50,39 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyMetrics>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyReport>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 1)
+    }
+
+    func testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+
+        let receipt = try await harness.coordinator.confirm(id: action.id)
+        let context = ModelContext(harness.container)
+        let actionID = action.id
+        let actionIdempotencyKey = action.idempotencyKey
+        let receiptID = receipt.id
+        let pendingPredicate = #Predicate<PendingActionRecord> { $0.id == actionID }
+        let storedAction = try XCTUnwrap(context.fetch(FetchDescriptor<PendingActionRecord>(predicate: pendingPredicate)).first)
+        let mealPredicate = #Predicate<MealRecord> { $0.sourceActionKey == actionIdempotencyKey }
+        let meal = try XCTUnwrap(context.fetch(FetchDescriptor<MealRecord>(predicate: mealPredicate)).first)
+        let receiptPredicate = #Predicate<CommittedActionReceiptRecord> { $0.actionID == actionID }
+        let storedReceipt = try XCTUnwrap(context.fetch(FetchDescriptor<CommittedActionReceiptRecord>(predicate: receiptPredicate)).first)
+        let outboxPredicate = #Predicate<HealthSyncOutboxEntry> { $0.receiptID == receiptID }
+        let outbox = try XCTUnwrap(context.fetch(FetchDescriptor<HealthSyncOutboxEntry>(predicate: outboxPredicate)).first)
+
+        XCTAssertEqual(storedAction.stateRaw, PendingActionState.committed.rawValue)
+        XCTAssertEqual(receipt.actionID, actionID)
+        XCTAssertEqual(receipt.idempotencyKey, actionIdempotencyKey)
+        XCTAssertEqual(storedReceipt.id, receipt.id)
+        XCTAssertEqual(storedReceipt.localRecordID, meal.id)
+        XCTAssertEqual(storedReceipt.idempotencyKey, meal.sourceActionKey)
+        XCTAssertEqual(receipt.outboxIDs, [outbox.id])
+        XCTAssertEqual(outbox.recordID, meal.id)
+        XCTAssertEqual(outbox.receiptID, storedReceipt.id)
+        XCTAssertEqual(outbox.idempotencyKey, "\(actionIdempotencyKey):health-sync")
     }
 
     func testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts() async throws {
@@ -238,6 +280,57 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         )
         XCTAssertEqual(savedSnapshot.activeEnergyKcal, 640)
         XCTAssertEqual(savedSnapshot.restingEnergyKcal, 1_410)
+    }
+
+    func testHistoricalConfirmationKeepsPendingMetricsWhenProfileAndWeightAreMissing() async throws {
+        let harness = try Harness()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
+        let dayKey = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            activeEnergyKcal: 640,
+            restingEnergyKcal: 1_410,
+            healthReadStates: [
+                HealthMetricID.activeEnergy.rawValue: .available,
+                HealthMetricID.restingEnergy.rawValue: .available,
+            ],
+            algorithmVersion: "v3"
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        let context = ModelContext(harness.container)
+        let pendingMetrics = DailyMetrics(
+            date: day,
+            totalExpenditureKcal: 0,
+            expenditureEnergyLikelyKcal: 0,
+            energyQuality: "unavailable",
+            sourceFingerprint: "legacy-pending",
+            requiresRecompute: true
+        )
+        context.insert(pendingMetrics)
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey,
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "historical-confirmation-observed-energy",
+            algorithmVersion: snapshot.algorithmVersion
+        ))
+        try context.save()
+
+        let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
+        _ = try await harness.coordinator.confirm(id: action.id)
+
+        let resultContext = ModelContext(harness.container)
+        let result = try XCTUnwrap(resultContext.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertTrue(result.requiresRecompute)
+        XCTAssertEqual(result.energyQuality, "unavailable")
+        XCTAssertEqual(result.totalExpenditureKcal, 0)
+        XCTAssertEqual(result.expenditureEnergyLikelyKcal, 0)
+        XCTAssertEqual(result.sourceFingerprint, "legacy-pending")
     }
 
     func testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision() async throws {

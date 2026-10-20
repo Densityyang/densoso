@@ -9,7 +9,11 @@ struct ChatScreen: View {
     @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
     @State private var inputSource: VoiceCommandEnvelope.Source = .manualText
-    @State private var isProcessing = false
+    @State private var agentUIState: AgentUIState = .idle
+    @State private var voiceUIState: VoiceCaptureUIState = .idle
+    @State private var imageCaptureState: MealImageCaptureState = .idle
+    @State private var pendingActionIDsAtTurnStart = Set<UUID>()
+    @State private var currentTurnHasDraft = false
     @State private var voiceDraftSummary: String?
     @State private var didHydratePersistedMessages = false
     @State private var showMealCapture = false
@@ -65,7 +69,16 @@ struct ChatScreen: View {
             .onChange(of: dependencies.speechService.transcribedText) { _, newValue in
                 inputText = newValue
                 inputSource = dependencies.speechService.envelopeSource
+                updateVoiceUIState(from: dependencies.speechService.state, transcribedText: newValue)
                 if !newValue.isEmpty { showTextEditor = true }
+            }
+            .onChange(of: dependencies.speechService.state) { _, newValue in
+                updateVoiceUIState(from: newValue, transcribedText: dependencies.speechService.transcribedText)
+            }
+            .onChange(of: dependencies.agentSession.latestEvent) { _, event in
+                guard let event else { return }
+                transitionAgentUI(using: event)
+                transitionImageUI(using: event)
             }
         }
     }
@@ -99,7 +112,7 @@ struct ChatScreen: View {
                             .id(message.id)
                     }
 
-                    if isProcessing, !dependencies.agentSession.streamedText.isEmpty {
+                    if agentUIState.isBusy, !dependencies.agentSession.streamedText.isEmpty {
                         MessageBubble(
                             message: ChatMessage(
                                 text: dependencies.agentSession.streamedText,
@@ -116,11 +129,21 @@ struct ChatScreen: View {
                                 Task {
                                     do {
                                         try await dependencies.agentSession.rejectPendingAction(id: action.id)
+                                        setAgentUIState(
+                                            dependencies.agentSession.pendingActions.isEmpty
+                                                ? .completed
+                                                : .awaitingConfirmation
+                                        )
                                         await refreshDailyLoopSnapshot()
                                         dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                                         addMessage(text: "已拒绝该记录草稿，未保存任何健康数据。", isUser: false)
                                     } catch {
-                                        addMessage(text: "无法拒绝草稿：\(error.localizedDescription)", isUser: false)
+                                        let errorMessage = SharedErrorDescriptor.mapped(
+                                            from: error,
+                                            fallback: .actionConflictFallback
+                                        ).userMessage
+                                        setAgentUIState(.failed)
+                                        addMessage(text: "无法拒绝草稿：\(errorMessage)", isUser: false)
                                     }
                                 }
                             }
@@ -135,10 +158,29 @@ struct ChatScreen: View {
                             .orbitCard()
                     }
 
-                    if isProcessing {
+                    if agentUIState.isBusy || agentUIState == .draftReady || agentUIState == .awaitingConfirmation {
                         HStack(spacing: 10) {
-                            ProgressView()
-                            Text("正在整理草稿")
+                            if agentUIState.isBusy { ProgressView() }
+                            Text(agentUIState.statusMessage ?? "正在整理你的请求")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                    if !agentUIState.isBusy, let voiceStatus = voiceUIState.statusMessage {
+                        HStack(spacing: 10) {
+                            if voiceUIState.isTransitioning { ProgressView() }
+                            Text(voiceStatus)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                    if imageCaptureState.shouldShowInConversation,
+                       let imageStatus = imageCaptureState.statusMessage {
+                        HStack(spacing: 10) {
+                            if imageCaptureState.isRemoteProcessing { ProgressView() }
+                            Text(imageStatus)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -185,9 +227,16 @@ struct ChatScreen: View {
                                 dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                                 addMessage(text: "本机识别已生成待确认餐食草稿，请检查后确认。", isUser: false)
                             } catch {
-                                addMessage(text: "待确认草稿已生成，但列表刷新失败：\(error.localizedDescription)", isUser: false)
+                                let errorMessage = SharedErrorDescriptor.mapped(
+                                    from: error,
+                                    fallback: .actionConflictFallback
+                                ).userMessage
+                                addMessage(text: "待确认草稿已生成，但列表刷新失败：\(errorMessage)", isUser: false)
                             }
                         }
+                    },
+                    onImageStateChange: { state in
+                        imageCaptureState = state
                     }
                 )
                 .presentationBackground { OrbitBackground() }
@@ -242,7 +291,7 @@ struct ChatScreen: View {
                         .textFieldStyle(.plain)
                         .focused($composerFocused)
                         .submitLabel(.send)
-                        .disabled(isProcessing)
+                        .disabled(agentUIState.isBusy)
                         .accessibilityIdentifier("today-composer")
                         .onSubmit {
                             Task { await send(text: inputText) }
@@ -256,7 +305,7 @@ struct ChatScreen: View {
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.circle)
                     .controlSize(.large)
-                    .disabled(isProcessing || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(agentUIState.isBusy || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityLabel("发送")
                     .accessibilityIdentifier("today-send")
                 }
@@ -275,7 +324,7 @@ struct ChatScreen: View {
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.circle)
                 .controlSize(.large)
-                .disabled(isProcessing)
+                .disabled(agentUIState.isBusy)
                 .accessibilityLabel("照片记餐")
                 .accessibilityIdentifier("today-photo-secondary")
 
@@ -284,23 +333,20 @@ struct ChatScreen: View {
                 Button {
                     Task { await toggleVoice() }
                 } label: {
-                    Label(
-                        dependencies.speechService.isRecording ? "停止录音" : "开始说话",
-                        systemImage: dependencies.speechService.isRecording ? "stop.fill" : "mic.fill"
-                    )
+                    Label(voiceUIState.buttonTitle, systemImage: voiceUIState.buttonSystemImage)
                     .fontWeight(.semibold)
                     .padding(.horizontal, 8)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .tint(dependencies.speechService.isRecording ? OrbitPalette.coral : OrbitPalette.gold)
-                .disabled(isProcessing)
-                .accessibilityLabel(dependencies.speechService.isRecording ? "停止录音" : "开始说话")
+                .tint(voiceUIState.isRecording ? OrbitPalette.coral : OrbitPalette.gold)
+                .disabled(agentUIState.isBusy || voiceUIState.isCaptureControlLocked)
+                .accessibilityLabel(voiceUIState.buttonTitle)
                 .accessibilityIdentifier("today-voice-primary")
 
                 Spacer(minLength: 0)
 
-                if isProcessing {
+                if agentUIState.canCancel {
                     Button {
                         dependencies.agentSession.cancelActiveRequest()
                     } label: {
@@ -394,7 +440,11 @@ struct ChatScreen: View {
             dailyLoopSnapshotReadError = nil
         } catch {
             dailyLoopSnapshot = nil
-            dailyLoopSnapshotReadError = "读取今日概览失败：\(error.localizedDescription)"
+            let errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
+            dailyLoopSnapshotReadError = "读取今日概览失败：\(errorMessage)"
         }
     }
 
@@ -402,6 +452,73 @@ struct ChatScreen: View {
         showTextEditor = true
         composerFocused = true
         appState.shouldFocusComposer = false
+    }
+
+    private func transitionAgentUI(using event: AgentEvent) {
+        if case .pendingAction(let action) = event,
+           !pendingActionIDsAtTurnStart.contains(action.id) {
+            currentTurnHasDraft = true
+        }
+        let nextState = AgentUIStateMachine.transition(
+            from: agentUIState,
+            event: event,
+            hasDraftInCurrentTurn: currentTurnHasDraft
+        )
+        setAgentUIState(nextState)
+        switch event {
+        case .completed(_):
+            pendingActionIDsAtTurnStart = []
+            currentTurnHasDraft = false
+        case .cancelled(_):
+            break
+        default:
+            break
+        }
+    }
+
+    private func transitionImageUI(using event: AgentEvent) {
+        switch event {
+        case .imageUploading:
+            imageCaptureState = .uploading
+        case .imageVision:
+            imageCaptureState = .vision
+        case .imageResolved:
+            imageCaptureState = .resolved
+        case .completed(_) where imageCaptureState.isRemoteProcessing:
+            imageCaptureState = .resolved
+        case .cancelled(_) where imageCaptureState.isRemoteProcessing:
+            imageCaptureState = .cancelled
+        case .failed(_) where imageCaptureState.isRemoteProcessing:
+            imageCaptureState = .failed
+        default:
+            break
+        }
+    }
+
+    private func setAgentUIState(_ state: AgentUIState) {
+        agentUIState = state
+        appState.isAgentProcessing = state.isBusy
+    }
+
+    private func updateVoiceUIState(from speechState: SpeechCaptureState, transcribedText: String) {
+        let state = AgentUIStateMachine.voiceState(from: speechState, transcribedText: transcribedText)
+        voiceUIState = state
+        switch state {
+        case .listening:
+            setAgentUIState(.listening)
+        case .transcribing, .finalizing:
+            setAgentUIState(.transcribing)
+        case .starting, .submitted, .completed, .cancelled, .idle:
+            if agentUIState == .listening || agentUIState == .transcribing {
+                setAgentUIState(.idle)
+            }
+        case .permissionDenied, .microphoneUnavailable, .speechUnavailable:
+            setAgentUIState(.failed)
+        case .processing:
+            break
+        case .failed(let message):
+            setAgentUIState(.failed)
+        }
     }
 
     private func toggleVoice() async {
@@ -420,15 +537,28 @@ struct ChatScreen: View {
                 voiceDraftSummary = "已生成\(kind.displayName)草稿，请检查文字后点击发送；尚未保存任何记录。"
             }
         } else {
+            voiceUIState = .starting
             await speech.refreshRuntime()
             let authorized = await speech.requestAuthorization()
             if authorized {
                 do {
                     try await speech.startRecording()
+                    updateVoiceUIState(from: speech.state, transcribedText: speech.transcribedText)
                 } catch {
-                    addMessage(text: "无法启动语音：\(error.localizedDescription)。", isUser: false)
+                    updateVoiceUIState(from: speech.state, transcribedText: speech.transcribedText)
+                    let errorMessage = SharedErrorDescriptor.mapped(
+                        from: error,
+                        fallback: SharedErrorDescriptor(
+                            code: .providerUnavailable,
+                            userMessage: "暂时无法启动语音，请重试或改用文字输入。",
+                            subsystem: .agent,
+                            reason: .unsupportedCapability
+                        )
+                    ).userMessage
+                    addMessage(text: errorMessage, isUser: false)
                 }
             } else {
+                updateVoiceUIState(from: speech.state, transcribedText: speech.transcribedText)
                 addMessage(text: "请在系统设置中开启麦克风和语音识别权限。", isUser: false)
             }
         }
@@ -437,14 +567,16 @@ struct ChatScreen: View {
     private func send(text: String, multimodalRequest: MultimodalModelRequest? = nil) async {
         let userText = (multimodalRequest?.userText ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !userText.isEmpty else { return }
-        guard !isProcessing else { return }
-        isProcessing = true
-        appState.isAgentProcessing = true
-        defer {
-            isProcessing = false
-            appState.isAgentProcessing = false
-        }
         let sourceForRequest = inputSource
+        guard !agentUIState.isBusy else { return }
+        if multimodalRequest?.image == nil {
+            imageCaptureState = .idle
+        }
+        pendingActionIDsAtTurnStart = Set(dependencies.agentSession.pendingActions.map(\.id))
+        currentTurnHasDraft = false
+        setAgentUIState(.thinking)
+        if sourceForRequest != .manualText { voiceUIState = .processing }
+        defer { appState.isAgentProcessing = agentUIState.isBusy }
         let watchMessageID = sourceForRequest == .watchDictation ? pendingWatchMessageID : nil
         let agentRequestID: UUID?
         if let watchMessageID {
@@ -514,11 +646,13 @@ struct ChatScreen: View {
                     originalText: userText,
                     source: sourceForRequest
                 )
+                setAgentUIState(.completed)
+                if sourceForRequest != .manualText { voiceUIState = .completed }
             case .cloudDeepSeek, .cloudQwen:
                 let pendingActionIDsBeforeTurn = Set(dependencies.agentSession.pendingActions.map(\.id))
-                let response: AgentResponse
+                let eventStream: AsyncThrowingStream<AgentEvent, Error>
                 if let multimodalRequest {
-                    response = try await dependencies.agentSession.send(
+                    eventStream = dependencies.agentSession.sendEvents(
                         multimodalRequest: multimodalRequest,
                         requestID: agentRequestID
                     )
@@ -527,11 +661,22 @@ struct ChatScreen: View {
                         text: userText,
                         source: sourceForRequest
                     ).asInputEnvelope()
-                    response = try await dependencies.agentSession.send(
+                    eventStream = dependencies.agentSession.sendEvents(
                         userText: userText,
                         inputEnvelope: inputEnvelope,
                         requestID: agentRequestID
                     )
+                }
+                var completedResponse: AgentResponse?
+                for try await event in eventStream {
+                    transitionAgentUI(using: event)
+                    transitionImageUI(using: event)
+                    if case .completed(let response) = event {
+                        completedResponse = response
+                    }
+                }
+                guard let response = completedResponse else {
+                    throw AgentError.invalidInputEnvelope
                 }
                 let stagedActions = dependencies.agentSession.pendingActions.filter {
                     !pendingActionIDsBeforeTurn.contains($0.id)
@@ -543,11 +688,35 @@ struct ChatScreen: View {
                 )
                 watchTranscriptWasDurablyHandled = watchMessageID != nil
                 await refreshDailyLoopSnapshot()
+                if sourceForRequest != .manualText { voiceUIState = .completed }
             case .manual:
+                inputText = userText
+                inputSource = sourceForRequest
+                showTextEditor = true
                 addMessage(text: "本地智能当前不可用；你的输入尚未保存。可在设置中选择 DeepSeek 云端处理，或继续手动编辑。", isUser: false)
+                setAgentUIState(.completed)
+                if sourceForRequest != .manualText { voiceUIState = .submitted }
             }
         } catch {
-            addMessage(text: "处理失败：\(error.localizedDescription)。你的记录尚未保存。", isUser: false)
+            if (error as? ProviderError) == .cancelled {
+                let hasNewPendingAction = currentTurnHasDraft && dependencies.agentSession.pendingActions.contains {
+                    !pendingActionIDsAtTurnStart.contains($0.id) && $0.state == .pending
+                }
+                setAgentUIState(hasNewPendingAction ? .awaitingConfirmation : .idle)
+                if imageCaptureState.isRemoteProcessing { imageCaptureState = .cancelled }
+                pendingActionIDsAtTurnStart = []
+                currentTurnHasDraft = false
+                if sourceForRequest != .manualText { voiceUIState = .cancelled }
+                return
+            }
+            let errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .providerUnavailableFallback
+            ).userMessage
+            setAgentUIState(.failed)
+            if imageCaptureState.isRemoteProcessing { imageCaptureState = .failed }
+            if sourceForRequest != .manualText { voiceUIState = .failed(errorMessage) }
+            addMessage(text: "处理失败：\(errorMessage)你的记录尚未保存。", isUser: false)
         }
     }
 
@@ -585,6 +754,7 @@ struct ChatScreen: View {
     }
 
     private func confirm(_ action: PendingAction) {
+        setAgentUIState(.committing)
         Task {
             do {
                 let message = try await dependencies.agentSession.confirmPendingAction(id: action.id)
@@ -592,8 +762,18 @@ struct ChatScreen: View {
                 await refreshDailyLoopSnapshot()
                 dependencies.watchConnectivityCoordinator.refreshApplicationContext()
                 addMessage(text: message, isUser: false)
+                setAgentUIState(
+                    dependencies.agentSession.pendingActions.isEmpty
+                        ? .completed
+                        : .awaitingConfirmation
+                )
             } catch {
-                addMessage(text: "未能保存：\(error.localizedDescription)", isUser: false)
+                let errorMessage = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .actionConflictFallback
+                ).userMessage
+                setAgentUIState(.failed)
+                addMessage(text: "未能保存：\(errorMessage)", isUser: false)
             }
         }
     }
@@ -614,7 +794,11 @@ struct ChatScreen: View {
             showTextEditor = true
             voiceDraftSummary = "已收到 Watch 系统听写；检查或编辑后发送，涉及写入时仍需确认。"
         } catch {
-            voiceDraftSummary = "无法读取 Watch 草稿：\(error.localizedDescription)"
+            let errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .watchUnavailableFallback
+            ).userMessage
+            voiceDraftSummary = "无法读取 Watch 草稿：\(errorMessage)"
         }
     }
 

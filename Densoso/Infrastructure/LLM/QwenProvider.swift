@@ -138,7 +138,7 @@ struct QwenProvider: TextModelProvider {
                             status: nil,
                             attempt: 1,
                             latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
-                            providerCode: "cancelled",
+                            providerCode: ProviderLogRedactor.errorCode(for: ProviderError.cancelled),
                             model: descriptor.model
                         )
                     )
@@ -164,7 +164,7 @@ struct QwenProvider: TextModelProvider {
                             status: nil,
                             attempt: 1,
                             latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
-                            providerCode: "malformed_response",
+                            providerCode: ProviderLogRedactor.errorCode(for: ProviderError.malformedResponse),
                             model: descriptor.model
                         )
                     )

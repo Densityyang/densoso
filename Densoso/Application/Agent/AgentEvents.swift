@@ -7,11 +7,16 @@ enum AgentEvent: Equatable, Sendable {
     case assistantDelta(String)
     case toolCallStarted(name: String, index: Int)
     case pendingAction(PendingAction)
+    case awaitingConfirmation
+    case committing(actionID: UUID)
+    case imageUploading
+    case imageVision
+    case imageResolved
     case usage(ProviderUsage)
     case budgetWarning(provider: ProviderID)
     case completed(AgentResponse)
     case cancelled(requestID: UUID)
-    case failed(String)
+    case failed(SharedErrorDescriptor)
 }
 
 struct AgentResponse: Equatable, Sendable {

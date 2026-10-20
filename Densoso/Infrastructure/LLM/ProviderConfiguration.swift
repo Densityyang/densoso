@@ -6,6 +6,18 @@ protocol ProviderCredentialSource: Sendable {
 }
 
 enum ProviderCapabilityCatalog {
+    static let deepSeekFlashModel = "deepseek-flash"
+    static let deepSeekResponsesEndpoint = URL(string: "https://api.deepseek.com/responses")!
+
+    static func deepSeekCapabilities(for model: String, endpoint: URL) -> Set<ProviderCapability> {
+        let baseline: Set<ProviderCapability> = [
+            .text, .toolCalling, .structuredOutput, .reasoning, .streaming,
+        ]
+        guard model == deepSeekFlashModel,
+              endpoint == deepSeekResponsesEndpoint else { return baseline }
+        return baseline.union([.vision])
+    }
+
     static let qwenAvailable: Set<ProviderCapability> = [
         .text, .toolCalling, .structuredOutput, .vision, .speech,
     ]

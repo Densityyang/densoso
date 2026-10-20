@@ -1,4 +1,5 @@
 import Combine
+import DensosoDomain
 import SwiftData
 import SwiftUI
 
@@ -155,6 +156,13 @@ struct HistoryScreen: View {
                             Text(meal.date, format: .dateTime.month().day().hour().minute())
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
+                            Text(MealRecordAuditPresentation.summary(
+                                evidenceData: meal.evidenceData,
+                                algorithmVersion: meal.algorithmVersion
+                            ))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
                         }
 
                         Spacer()
@@ -273,7 +281,10 @@ struct HistoryScreen: View {
         do {
             syncSummary = try pageReader.syncSummary(in: modelContext)
         } catch {
-            loadError = "暂时无法更新 HealthKit 同步状态，请稍后重试。"
+            loadError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .healthKitUnavailableFallback
+            ).userMessage
         }
     }
 
@@ -309,7 +320,10 @@ struct HistoryScreen: View {
                 weightsHaveMore = page.hasMore
             }
         } catch {
-            loadError = "暂时无法加载记录，请稍后重试。"
+            loadError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
         }
     }
 
@@ -388,7 +402,10 @@ struct HistoryScreen: View {
                 weightsHaveMore = page.hasMore
             }
         } catch {
-            loadError = "暂时无法加载更早记录，请稍后重试。"
+            loadError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
         }
     }
 
@@ -409,7 +426,10 @@ struct HistoryScreen: View {
                 try HealthRepository(modelContext: modelContext).delete(meal)
                 meals.removeAll { $0.id == meal.id }
             } catch {
-                loadError = "暂时无法删除这条餐食记录，请稍后重试。"
+                loadError = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .actionConflictFallback
+                ).userMessage
             }
         }
         loadSyncSummary()
@@ -422,7 +442,10 @@ struct HistoryScreen: View {
                 try HealthRepository(modelContext: modelContext).delete(workout)
                 workouts.removeAll { $0.id == workout.id }
             } catch {
-                loadError = "暂时无法删除这条运动记录，请稍后重试。"
+                loadError = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .actionConflictFallback
+                ).userMessage
             }
         }
         loadSyncSummary()
@@ -435,7 +458,10 @@ struct HistoryScreen: View {
                 try HealthRepository(modelContext: modelContext).delete(weight)
                 weights.removeAll { $0.id == weight.id }
             } catch {
-                loadError = "暂时无法删除这条体重记录，请稍后重试。"
+                loadError = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .actionConflictFallback
+                ).userMessage
             }
         }
         loadSyncSummary()

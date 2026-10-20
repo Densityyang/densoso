@@ -27,6 +27,13 @@ full-day reads retain history but suppress it from the live projection. Pending
 sample-index traversal uses stable, bounded 400-row pages; targeted UUID
 membership queries are limited to 64 IDs, and deletion cleanup collects target
 rows before changing the paged result set.
+DailyMetrics fingerprints include source-record revisions, only HealthKit
+cursors covering the projected day, the effective profile and goal revisions,
+and the calorie-accounting algorithm version. Both projection entry points
+share the same fingerprint comparison and skip writes when inputs are unchanged;
+pending legacy rows still run through projection. Daily-brief cache versions
+include the recommendation-policy version, while DailyLoop exposes its own
+algorithm version for its on-demand composed snapshot.
 HealthIntelligenceReadModel pages daily meal protein, weight and workout history
 inside its bounded date window.
 Daily-loop plan loading pages stored plan events and retains only active sessions
@@ -36,6 +43,21 @@ markers and returns on the first non-terminal plan.
 Historical HealthKit weight lookup walks the V6 bodyMass index in bounded,
 newest-first batches, fetches each batch's daily snapshots together, and skips
 deleted or unknown summaries.
+HealthKit stream failures retain a safe `HealthKitSyncError` diagnostic with
+the stream, descriptor code/reason, and request ID; raw underlying error text
+is omitted.
+Historical DailyMetrics recompute scans only the existing `requiresRecompute`
+rows in the most recent 90 local days. It preflights the effective profile's
+valid DOB and that day's `WeightTimeline` result before calling the sole
+`DailyMetricsProjector`; complete HealthKit basal/active values cannot bypass
+either missing prerequisite. Ineligible rows surface no expenditure estimate;
+the row and `requiresRecompute` flag stay unchanged, so legacy values are not
+shown and no value is invented. The background batch projects at most ten eligible
+days, saves each completed row before continuing, and yields between rows so
+BGAppRefresh cancellation stops later work. Remaining eligible days request an
+earlier retry; a restart can resume from rows whose flag is still set. No schema
+field or migration is needed. Ordinary reproject callers use the same gate for
+pending historical rows while preserving current-day behavior.
 BGAppRefreshTask expiration stops later refresh stages, and its completion box
 reports completion once while preventing a late expiration from cancelling
 subsequent work.
@@ -55,7 +77,9 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
 
 - DensosoDomain: `EffectiveProfileTests`, `WeightTimelineTests`,
   `DailyHealthSampleSummaryTests`, `HealthStateTests`, `DailyLoopSnapshotTests`,
-  and `HealthNarrativeTests`.
+  `HealthNarrativeTests`, and `SharedErrorDescriptorTests` (the shared error
+  code and safe HealthKit/Watch description contract). `DailyLoopSnapshotTests`
+  also pins all main-PR algorithm versions and the daily-brief cache version.
 - iOS tests: `HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay`,
   `HealthRepositoryTests.testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs`,
   `HealthRepositoryTests.testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData`,
@@ -63,6 +87,11 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `HealthRepositoryTests.testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages`,
   `HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor`,
   `HealthKitSyncCoordinatorTests.testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder`,
+  `HealthKitSyncCoordinatorTests.testOneFailedStreamDoesNotBlockOtherHealthMetrics`,
+  `HealthSyncOutboxWorkerTests.testRetryReusesStableSyncIdentifierAndVersion`,
+  `HealthSyncOutboxWorkerTests.testInterruptedSendingEntryIsRecoveredAndRetried`,
+  `HealthSyncOutboxWorkerTests.testInterruptedOutboxRecoveryAndProcessingPagePastBoundedBatch`,
+  `BriefNotificationSchedulerTests.testNotificationErrorsExposeSharedSafeDescriptors`,
   `HealthRepositoryTests.testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches`,
   `HealthRepositoryTests.testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable`,
   `HealthRepositoryTests.testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown`,
@@ -70,6 +99,9 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `HealthRepositoryTests.testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner`,
   `ConfirmationCoordinatorTests.testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision`,
   `CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics`,
+  `DailyMetricsProjectionFingerprintTests.testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected`,
+  `DailyMetricsProjectionFingerprintTests.testSourceCursorProfileAndGoalRevisionsChangeProjectionFingerprint`,
+  `DailyMetricsProjectionFingerprintTests.testWorkoutEnergyAndProvenanceChangesProjectionFingerprint`,
   `HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash`,
   `HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches`,
   `HealthProjectionActorTests.testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites`,
@@ -88,6 +120,13 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `HealthProjectionActorTests.testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions`,
   `DailyLoopBackgroundSchedulerTests.testExpirationAndCompletionAreIdempotentAndLateExpirationDoesNotCancelNextWork`,
+  `HistoricalMetricsRecomputeServiceTests.testRecomputesOnlyExistingEligiblePendingMetricsWithinBatch`,
+  `HistoricalMetricsRecomputeServiceTests.testMissingDOBDoesNotLetObservedEnergyClearRecomputeFlag`,
+  `HistoricalMetricsRecomputeServiceTests.testOrdinaryHistoricalReprojectKeepsPendingFlagWhenDOBMissingWithObservedEnergy`,
+  `HistoricalMetricsRecomputeServiceTests.testCurrentDayReprojectRetainsObservedEnergyBehaviorWithoutProfileOrWeight`,
+  `HistoricalMetricsRecomputeServiceTests.testMissingWeightDoesNotLetObservedEnergyClearRecomputeFlag`,
+  `HistoricalMetricsRecomputeServiceTests.testCancellationStopsAfterSavedRowAndReportsRetryableWork`,
+  `ConfirmationCoordinatorTests.testHistoricalConfirmationKeepsPendingMetricsWhenProfileAndWeightAreMissing`,
   `HealthNarrativePolicyTests`,
   `DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState`,
   and `DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays`.

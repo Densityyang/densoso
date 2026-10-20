@@ -4,6 +4,8 @@ import Observation
 
 /// Agent 系统提示词
 struct AgentSystemPrompt {
+    static let version = AgentPromptVersion.current
+
     var text: String {
         """
         你是 densoso，一个专注于运动和饮食健康管理的 AI 助手。
@@ -198,11 +200,29 @@ final class AgentSession {
     /// Starts one request and preserves every typed Agent event in order.
     /// Cancelling the consumer cancels the full Agent/Provider request chain.
     func sendEvents(userText: String, requestID: UUID? = nil) -> AsyncThrowingStream<AgentEvent, Error> {
+        sendEvents(multimodalRequest: MultimodalModelRequest(userText: userText), requestID: requestID)
+    }
+
+    func sendEvents(
+        userText: String,
+        inputEnvelope: InputEnvelope,
+        requestID: UUID? = nil
+    ) -> AsyncThrowingStream<AgentEvent, Error> {
+        sendEvents(
+            multimodalRequest: MultimodalModelRequest(userText: userText, inputEnvelope: inputEnvelope),
+            requestID: requestID
+        )
+    }
+
+    func sendEvents(
+        multimodalRequest: MultimodalModelRequest,
+        requestID: UUID? = nil
+    ) -> AsyncThrowingStream<AgentEvent, Error> {
         return AsyncThrowingStream { continuation in
             let request: (id: UUID, task: Task<AgentResponse, Error>)
             do {
                 request = try startRequest(
-                    multimodalRequest: MultimodalModelRequest(userText: userText),
+                    multimodalRequest: multimodalRequest,
                     requestID: requestID,
                     observer: continuation
                 )
@@ -280,12 +300,15 @@ final class AgentSession {
             conversationID: conversationID,
             state: .completed
         )
+        if transientMealHasImage { emit(.imageResolved) }
         emit(.completed(response))
         return response
     }
 
     private func run(multimodalRequest: MultimodalModelRequest, requestID: UUID) async throws -> AgentResponse {
         let userText = multimodalRequest.userText
+        let containsImage = multimodalRequest.image != nil
+        let pendingActionIDsBeforeRequest = Set(pendingActions.map(\.id))
         transientMealImageEvidence = multimodalRequest.mealEvidence
         transientMealHasImage = multimodalRequest.image != nil
         transientMealUserText = userText
@@ -346,6 +369,13 @@ final class AgentSession {
                 throw AgentError.transientImageRequired
             }
 
+            let toolSchemaVersion = try await conversationRepository.toolSchemaVersion(
+                conversationID: conversationID
+            )
+            guard ToolSchemaVersion.supportsRestore(toolSchemaVersion) else {
+                throw AgentError.unsupportedToolSchemaVersion(toolSchemaVersion)
+            }
+
             let requestSnapshot = try await conversationRepository.beginAgentRequest(
                 requestID: requestID,
                 conversationID: conversationID,
@@ -383,6 +413,7 @@ final class AgentSession {
             if hasPersistedHistory {
                 // Rebuild from the saved conversation and original user turn. Partial assistant
                 // tool turns are discarded so a restarted provider does not need persisted CoT.
+                // V1 history uses the legacy message decoder; new turns use the current v2 tools.
                 // The request ledger retains the original deadline and cumulative consumption.
                 let persisted = try await conversationRepository.resumeHistory(
                     conversationID: conversationID,
@@ -496,6 +527,7 @@ final class AgentSession {
                     dataClass: .healthText
                 )
             }
+            if containsImage { emit(.imageUploading) }
 
             var tracker = AgentBudgetTracker(
                 budget: requestSnapshot.budget,
@@ -511,6 +543,7 @@ final class AgentSession {
                         round: tracker.providerRounds
                     )
                 )
+                if containsImage { emit(.imageVision) }
                 let request = ModelRequest(
                     requestID: requestID,
                     conversationID: conversationID,
@@ -610,6 +643,10 @@ final class AgentSession {
                     conversationID: conversationID,
                     state: .completed
                 )
+                if pendingActions.contains(where: { !pendingActionIDsBeforeRequest.contains($0.id) }) {
+                    emit(.awaitingConfirmation)
+                }
+                if containsImage { emit(.imageResolved) }
                 emit(.completed(response))
                 return response
             }
@@ -628,11 +665,17 @@ final class AgentSession {
                     requestID: requestID
                 )
             }
-            emit(.failed(error.localizedDescription))
+            emit(.failed(SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .providerUnavailableFallback
+            )))
             throw error
         } catch {
             if requestRecordStarted { await persist(state: .interrupted, requestID: requestID) }
-            emit(.failed(error.localizedDescription))
+            emit(.failed(SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .providerUnavailableFallback
+            )))
             throw error
         }
     }
@@ -683,7 +726,8 @@ final class AgentSession {
         } catch DraftError.clarificationLimitReached {
             return encodedToolError(code: "clarification_limit_reached")
         } catch {
-            return #"{"error": "\#(error.localizedDescription)"}"#
+            let descriptor = SharedErrorDescriptor.mapped(from: error, fallback: .actionConflictFallback)
+            return encodedToolError(descriptor: descriptor)
         }
     }
 
@@ -724,6 +768,18 @@ final class AgentSession {
         return (try? payload.encodedData())
             .flatMap { String(data: $0, encoding: .utf8) }
             ?? #"{"error":"clarification_limit_reached","saved":false}"#
+    }
+
+    private func encodedToolError(descriptor: SharedErrorDescriptor) -> String {
+        let payload: JSONValue = .object([
+            "error": .string(descriptor.code.rawValue),
+            "reason": .string(descriptor.reason.rawValue),
+            "message": .string(descriptor.userMessage),
+            "saved": .boolean(false),
+        ])
+        return (try? payload.encodedData())
+            .flatMap { String(data: $0, encoding: .utf8) }
+            ?? #"{"error":"ActionConflict","saved":false}"#
     }
 
     private static func containsMealClarification(in messages: [ModelMessage]) -> Bool {
@@ -901,6 +957,7 @@ final class AgentSession {
 
     func confirmPendingAction(id: UUID) async throws -> String {
         let pendingPlan = pendingActions.first(where: { $0.id == id })
+        emit(.committing(actionID: id))
         let receipt = try await confirmationCoordinator.confirm(id: id)
         pendingActions = try await confirmationCoordinator.activeActions()
         switch receipt.actionType {
@@ -929,9 +986,13 @@ final class AgentSession {
                     ? "多日训练计划已确认，并已交给 WorkoutKit 安排。"
                     : "训练计划已确认，并已交给 WorkoutKit 安排。"
             } catch {
+                let errorMessage = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .workoutKitUnavailableFallback
+                ).userMessage
                 return receipt.actionType == .trainingPlan
-                    ? "多日训练计划已在本机确认，但安排尚未完成：\(error.localizedDescription)。可在计划页重试。"
-                    : "训练计划已在本机确认，但同步尚未完成：\(error.localizedDescription)。可在趋势页的计划入口重试。"
+                    ? "多日训练计划已在本机确认，但安排尚未完成：\(errorMessage)可在计划页重试。"
+                    : "训练计划已在本机确认，但同步尚未完成：\(errorMessage)可在趋势页的计划入口重试。"
             }
         case .dailyCheckIn:
             return "每日状态已保存为用户自述，不会写入 HealthKit。"
@@ -1189,19 +1250,63 @@ struct PersistedChatMessage: Identifiable, Equatable {
     let isUser: Bool
 }
 
-enum AgentError: Error, LocalizedError, Equatable, Sendable {
+enum AgentError: Equatable, Sendable, SharedErrorDescribing {
     case emptyResponse
     case requestAlreadyRunning
     case requestAlreadyCompleted
     case transientImageRequired
     case invalidInputEnvelope
-    var errorDescription: String? {
+    case unsupportedToolSchemaVersion(Int)
+
+    var sharedErrorDescriptor: SharedErrorDescriptor {
         switch self {
-        case .emptyResponse: "Agent 未返回有效响应"
-        case .requestAlreadyRunning: "已有 Agent 请求正在运行"
-        case .requestAlreadyCompleted: "Agent 请求已完成，无法继续恢复"
-        case .transientImageRequired: "这条请求依赖临时照片或本机扫描线索，原请求不能仅靠文本恢复。请重新选择照片或重新扫描并发起新请求；本机没有保存原图或识别文本。"
-        case .invalidInputEnvelope: "输入草稿的文字、来源和临时附件不匹配，请检查后重新发送。"
+        case .emptyResponse:
+            SharedErrorDescriptor(
+                code: .structuredOutputInvalid,
+                userMessage: "暂时无法处理服务响应，请重试。",
+                subsystem: .agent,
+                reason: .agentEmptyResponse
+            )
+        case .requestAlreadyRunning:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "已有 Agent 请求正在运行，请稍后再试。",
+                subsystem: .agent,
+                reason: .requestAlreadyRunning
+            )
+        case .requestAlreadyCompleted:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "Agent 请求已完成，无法继续恢复。",
+                subsystem: .agent,
+                reason: .requestAlreadyCompleted
+            )
+        case .transientImageRequired:
+            SharedErrorDescriptor(
+                code: .toolArgumentsInvalid,
+                userMessage: "这条请求依赖临时照片或本机扫描线索，原请求不能仅靠文本恢复。请重新选择照片或重新扫描并发起新请求；本机没有保存原图或识别文本。",
+                subsystem: .agent,
+                reason: .transientImageRequired
+            )
+        case .invalidInputEnvelope:
+            SharedErrorDescriptor(
+                code: .toolArgumentsInvalid,
+                userMessage: "输入草稿的文字、来源和临时附件不匹配，请检查后重新发送。",
+                subsystem: .agent,
+                reason: .invalidInputEnvelope
+            )
+        case .unsupportedToolSchemaVersion(let version):
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "这段对话使用了不兼容的工具版本，无法安全恢复；请新建对话。",
+                subsystem: .agent,
+                reason: .unsupportedToolSchemaVersion,
+                numericCode: version
+            )
         }
+    }
+
+    var errorDescription: String? {
+        sharedErrorDescriptor.userMessage
     }
 }

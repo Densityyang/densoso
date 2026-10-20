@@ -70,7 +70,7 @@ public struct CookingOilPriorTable: Sendable {
 }
 
 public struct MealEstimator: Sendable {
-    public static let algorithmVersion = "meal-estimator-v2"
+    public static let algorithmVersion = AlgorithmVersions.mealEstimator
 
     public init() {}
 

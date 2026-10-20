@@ -101,7 +101,10 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
                 } catch {
                     let terminal = isTerminal(error) || entry.attemptCount >= maximumAttempts
                     entry.state = terminal ? "terminal" : "retryable"
-                    entry.lastError = String(String(describing: error).prefix(500))
+                    entry.lastError = SharedErrorDescriptor.mapped(
+                        from: error,
+                        fallback: .healthKitUnavailableFallback
+                    ).diagnosticSafeDetail
                     let delay = min(pow(2.0, Double(min(entry.attemptCount, 10))) * 30, 21_600)
                     entry.nextAttemptAt = terminal ? nil : now.addingTimeInterval(delay)
                     updateActionReceipt(for: entry, in: modelContext, state: entry.state)
@@ -283,8 +286,34 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
     }
 }
 
-private enum HealthOutboxError: Error {
+private enum HealthOutboxError: SharedErrorDescribing {
     case missingSourceRecord
     case refuseHealthKitEcho
     case unsupportedOperation(String)
+
+    var sharedErrorDescriptor: SharedErrorDescriptor {
+        switch self {
+        case .missingSourceRecord:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "源记录已不可用，无法同步到 Apple Health。",
+                subsystem: .healthKit,
+                reason: .actionNotFound
+            )
+        case .refuseHealthKitEcho:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "此记录来自 Apple Health，无需再次写回。",
+                subsystem: .healthKit,
+                reason: .refusedHealthKitEcho
+            )
+        case .unsupportedOperation(_):
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "该记录类型暂不支持 Apple Health 同步。",
+                subsystem: .healthKit,
+                reason: .unsupportedHealthMetric
+            )
+        }
+    }
 }

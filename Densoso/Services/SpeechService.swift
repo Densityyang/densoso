@@ -25,6 +25,7 @@ final class SpeechService {
     private let audioStore: any SpeechAudioStoring
     private let diagnostics: any SpeechDiagnosticsRecording
     private let policy: SpeechCapturePolicy
+    private let cloudFallbackModeIsAllowed: @MainActor () -> Bool
 
     private var activeRequestID: UUID?
     private var activeTranscriber: (any VoiceTranscribing)?
@@ -66,7 +67,8 @@ final class SpeechService {
         providerConfiguration: ProviderConfigurationPreferences? = nil,
         audioStore: any SpeechAudioStoring = InMemorySpeechAudioStore(),
         diagnostics: any SpeechDiagnosticsRecording = SpeechDiagnosticsStore(),
-        policy: SpeechCapturePolicy = .phase4
+        policy: SpeechCapturePolicy = .phase4,
+        cloudFallbackModeIsAllowed: @escaping @MainActor () -> Bool = { true }
     ) {
         self.locale = locale
         self.audioSession = audioSession
@@ -79,6 +81,7 @@ final class SpeechService {
         self.audioStore = audioStore
         self.diagnostics = diagnostics
         self.policy = policy
+        self.cloudFallbackModeIsAllowed = cloudFallbackModeIsAllowed
     }
 
     func cleanupStaleTemporaryAudio() async {
@@ -731,7 +734,8 @@ final class SpeechService {
     }
 
     private func shouldAllowCloudFallback() async -> Bool {
-        guard cloudProvider != nil,
+        guard cloudFallbackModeIsAllowed(),
+              cloudProvider != nil,
               providerConfiguration?.qwenSpeechFallbackEnabled == true,
               let governanceRepository else { return false }
         return (try? await governanceRepository.isConsentGranted(

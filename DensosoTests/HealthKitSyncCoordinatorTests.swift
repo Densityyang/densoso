@@ -138,11 +138,22 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         ], for: .activeEnergy)
         await fake.failAggregate(for: .restingEnergy)
         let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+        let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000711")!
 
-        let report = try await coordinator.syncAvailableData(using: HealthRepository(modelContext: context), now: now)
+        let report = try await coordinator.syncAvailableData(
+            using: HealthRepository(modelContext: context),
+            now: now,
+            requestID: requestID
+        )
 
         XCTAssertTrue(report.completedStreams.contains(.activeEnergy))
-        XCTAssertNotNil(report.failedStreams[.restingEnergy])
+        let failure = try XCTUnwrap(report.failedStreams[.restingEnergy])
+        XCTAssertEqual(failure.stream, .restingEnergy)
+        XCTAssertEqual(failure.requestID, requestID)
+        XCTAssertTrue(failure.diagnosticSafeDetail.contains("HealthKitSyncError stream=restingEnergy"))
+        XCTAssertTrue(failure.diagnosticSafeDetail.contains("reason=healthKitQueryFailed"))
+        XCTAssertTrue(failure.diagnosticSafeDetail.contains("requestID=\(requestID.uuidString.lowercased())"))
+        XCTAssertFalse(failure.diagnosticSafeDetail.contains("fake aggregate failure"))
         let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(metrics.activeCaloriesKcal, 610)
     }

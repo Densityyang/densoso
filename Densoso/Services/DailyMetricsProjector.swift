@@ -3,12 +3,160 @@ import SwiftData
 import DensosoDomain
 
 /// The sole projection path from health records to their daily aggregate.
+enum DailyMetricsProjectionError: Equatable, Sendable, SharedErrorDescribing {
+    case failed
+
+    var sharedErrorDescriptor: SharedErrorDescriptor {
+        SharedErrorDescriptor(
+            code: .projectionFailed,
+            userMessage: "暂时没能更新今天的状态。",
+            subsystem: .projection,
+            reason: .dailyMetricsProjectionFailed
+        )
+    }
+
+    var errorDescription: String? { sharedErrorDescriptor.userMessage }
+}
+
 @MainActor
 enum DailyMetricsProjector {
     static func reproject(on date: Date, in modelContext: ModelContext) throws {
-        let calendar = Calendar.current
-        let day = calendar.startOfDay(for: date)
-        let projectionInputs = try DailyMetricsProjectionInputReader.read(on: day, in: modelContext)
+        try withProjectionErrorMapping {
+            let calendar = Calendar.current
+            let day = calendar.startOfDay(for: date)
+            let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
+            let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first
+            let effectiveInputs = try resolveEffectiveInputs(on: day, in: modelContext)
+            if let existing,
+               existing.requiresRecompute,
+               day < calendar.startOfDay(for: Date()),
+               !HistoricalMetricsEligibilityPolicy.hasValidInputs(
+                   profile: effectiveInputs.profile,
+                   weight: effectiveInputs.weight,
+                   on: day,
+                   calendar: calendar
+               ) {
+                return
+            }
+            let projectionInputs = try DailyMetricsProjectionInputReader.read(on: day, in: modelContext)
+            let healthSnapshot = try healthSnapshot(for: day, in: modelContext)
+            let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
+                on: day,
+                inputs: projectionInputs,
+                profileRevision: effectiveInputs.profileRevision,
+                weightObservations: effectiveInputs.weightObservations,
+                in: modelContext
+            )
+            let expectedFingerprint = CaloricEngine.projectionFingerprint(
+                day: day,
+                meals: projectionInputs.meals,
+                workouts: projectionInputs.workouts,
+                profile: effectiveInputs.profile,
+                weight: effectiveInputs.weight,
+                activeEnergy: healthSnapshot?.activeEnergyForProjection,
+                basalEnergy: healthSnapshot?.restingEnergyForProjection,
+                steps: healthSnapshot?.stepCountForProjection,
+                exerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
+                context: fingerprintContext
+            )
+            if let existing,
+               DailyMetricsProjectionFingerprint.isCurrent(
+                   storedFingerprint: existing.sourceFingerprint,
+                   storedAlgorithmVersion: existing.projectionVersion,
+                   requiresRecompute: existing.requiresRecompute,
+                   expectedFingerprint: expectedFingerprint,
+                   expectedAlgorithmVersion: fingerprintContext.algorithmVersion
+               ) {
+                return
+            }
+            let projected = makeProjection(
+                on: day,
+                effectiveInputs: effectiveInputs,
+                projectionInputs: projectionInputs,
+                healthSnapshot: healthSnapshot,
+                fingerprintContext: fingerprintContext
+            )
+
+            if let existing {
+                copy(projected, to: existing)
+            } else {
+                modelContext.insert(projected)
+            }
+        }
+    }
+
+    static func hasValidHistoricalRecomputeInputs(on date: Date, in modelContext: ModelContext) throws -> Bool {
+        try withProjectionErrorMapping {
+            let day = Calendar.current.startOfDay(for: date)
+            guard try hasPendingMetric(on: day, in: modelContext) else { return false }
+            let effectiveInputs = try resolveEffectiveInputs(on: day, in: modelContext)
+            return HistoricalMetricsEligibilityPolicy.hasValidInputs(
+                profile: effectiveInputs.profile,
+                weight: effectiveInputs.weight,
+                on: day
+            )
+        }
+    }
+
+    @discardableResult
+    static func reprojectHistoricalIfInputsAvailable(on date: Date, in modelContext: ModelContext) throws -> Bool {
+        try withProjectionErrorMapping {
+            let day = Calendar.current.startOfDay(for: date)
+            let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
+            guard let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first,
+                  existing.requiresRecompute else { return false }
+
+            let effectiveInputs = try resolveEffectiveInputs(on: day, in: modelContext)
+            guard HistoricalMetricsEligibilityPolicy.hasValidInputs(
+                profile: effectiveInputs.profile,
+                weight: effectiveInputs.weight,
+                on: day
+            ) else { return false }
+
+            let projectionInputs = try DailyMetricsProjectionInputReader.read(on: day, in: modelContext)
+            let healthSnapshot = try healthSnapshot(for: day, in: modelContext)
+            let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
+                on: day,
+                inputs: projectionInputs,
+                profileRevision: effectiveInputs.profileRevision,
+                weightObservations: effectiveInputs.weightObservations,
+                in: modelContext
+            )
+            let projected = makeProjection(
+                on: day,
+                effectiveInputs: effectiveInputs,
+                projectionInputs: projectionInputs,
+                healthSnapshot: healthSnapshot,
+                fingerprintContext: fingerprintContext
+            )
+            copy(projected, to: existing)
+            return true
+        }
+    }
+
+    private static func withProjectionErrorMapping<T>(_ operation: () throws -> T) throws -> T {
+        do {
+            return try operation()
+        } catch {
+            throw DailyMetricsProjectionError.failed
+        }
+    }
+
+    private struct EffectiveProjectionInputs {
+        let profile: EffectiveProfile?
+        let weight: EffectiveWeight?
+        let profileRevision: ProfileRevisionRecord?
+        let weightObservations: [WeightObservation]
+    }
+
+    private static func hasPendingMetric(on day: Date, in modelContext: ModelContext) throws -> Bool {
+        let predicate = #Predicate<DailyMetrics> { $0.date == day && $0.requiresRecompute }
+        var descriptor = FetchDescriptor<DailyMetrics>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first != nil
+    }
+
+    private static func resolveEffectiveInputs(on day: Date, in modelContext: ModelContext) throws -> EffectiveProjectionInputs {
         let primaryProfileKey = "primary"
         let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
         var profileDescriptor = FetchDescriptor<UserProfile>(predicate: profilePredicate)
@@ -36,25 +184,33 @@ enum DailyMetricsProjector {
             profileWeightKg: effectiveRevision?.weightKg,
             profileEffectiveFrom: effectiveRevision?.effectiveFrom
         )
-        let healthSnapshot = try healthSnapshot(for: day, in: modelContext)
-        let projected = CaloricEngine.computeDailyMetrics(
+        return EffectiveProjectionInputs(
+            profile: effectiveProfile,
+            weight: effectiveWeight,
+            profileRevision: effectiveRevision,
+            weightObservations: weightObservations
+        )
+    }
+
+    private static func makeProjection(
+        on day: Date,
+        effectiveInputs: EffectiveProjectionInputs,
+        projectionInputs: DailyMetricsProjectionInputs,
+        healthSnapshot: DailyHealthSnapshot?,
+        fingerprintContext: DailyMetricsProjectionFingerprintContext
+    ) -> DailyMetrics {
+        CaloricEngine.computeDailyMetrics(
             date: day,
             meals: projectionInputs.meals,
             workouts: projectionInputs.workouts,
-            effectiveProfile: effectiveProfile,
-            effectiveWeight: effectiveWeight,
+            effectiveProfile: effectiveInputs.profile,
+            effectiveWeight: effectiveInputs.weight,
             healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
             healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection,
             healthKitSteps: healthSnapshot?.stepCountForProjection,
-            healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection
+            healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
+            fingerprintContext: fingerprintContext
         )
-
-        let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
-        if let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first {
-            copy(projected, to: existing)
-        } else {
-            modelContext.insert(projected)
-        }
     }
 
     private static func domainRevision(_ record: ProfileRevisionRecord) -> ProfileRevision {
@@ -81,14 +237,21 @@ enum DailyMetricsProjector {
     }
 
     private static func healthSnapshot(for day: Date, in modelContext: ModelContext) throws -> DailyHealthSnapshot? {
+        guard let record = try healthSnapshotRecord(for: day, in: modelContext) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        return try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+    }
+
+    private static func healthSnapshotRecord(
+        for day: Date,
+        in modelContext: ModelContext
+    ) throws -> DailyHealthSnapshotRecord? {
         let targetDayKey = dayKey(for: day)
         let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == targetDayKey }
         var descriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate)
         descriptor.fetchLimit = 1
-        guard let record = try modelContext.fetch(descriptor).first else { return nil }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .millisecondsSince1970
-        return try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+        return try modelContext.fetch(descriptor).first
     }
 
     private static func dayKey(for day: Date) -> String {

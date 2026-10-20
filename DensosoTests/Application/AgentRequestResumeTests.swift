@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class AgentRequestResumeTests: XCTestCase {
     func testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -48,6 +48,11 @@ final class AgentRequestResumeTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? AgentError, .emptyResponse)
         }
+
+        let createdConversationToolSchemaVersion = try await firstRepository.toolSchemaVersion(
+            conversationID: conversationID
+        )
+        XCTAssertEqual(createdConversationToolSchemaVersion, ToolSchemaVersion.current)
 
         let beforeResumeValue = try await firstRepository.agentRequest(
             requestID: requestID,
@@ -138,6 +143,67 @@ final class AgentRequestResumeTests: XCTestCase {
         let userMessages = try context.fetch(FetchDescriptor<MessageRecord>())
             .filter { $0.requestID == requestID && $0.roleRaw == ModelRole.user.rawValue }
         XCTAssertEqual(userMessages.count, 1)
+    }
+
+    func testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000911")!
+        let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000912")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let context = ModelContext(container)
+        context.insert(ConversationRecord(id: conversationID))
+        context.insert(MessageRecord(
+            conversationID: conversationID,
+            roleRaw: ModelRole.user.rawValue,
+            contentData: try JSONEncoder().encode(ModelMessage(role: .user, text: "旧版对话内容")),
+            ordinal: 0,
+            requestID: requestID
+        ))
+        context.insert(AgentRequestRecord(
+            requestID: requestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(120),
+            maximumProviderRounds: 3,
+            maximumToolCalls: 2,
+            containsTransientImage: false,
+            stateRaw: AgentRequestState.interrupted.rawValue
+        ))
+        try context.save()
+
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let legacyVersion = try await repository.toolSchemaVersion(conversationID: conversationID)
+        XCTAssertEqual(legacyVersion, ToolSchemaVersion.legacy)
+
+        let provider = ScriptedTextProvider(scripts: [[
+            .textDelta("已安全恢复。"),
+            .completed(.completed),
+        ]])
+        let session = makeSession(
+            container: container,
+            repository: repository,
+            provider: provider,
+            conversationID: conversationID,
+            budget: AgentBudget(maximumProviderRounds: 4, maximumToolCalls: 4, deadline: .distantFuture)
+        )
+        try await session.restore()
+        let response = try await session.send(userText: "继续", requestID: requestID)
+
+        XCTAssertEqual(response.text, "已安全恢复。")
+        let currentVersion = try await repository.toolSchemaVersion(conversationID: conversationID)
+        XCTAssertEqual(currentVersion, ToolSchemaVersion.current)
+        let request = try XCTUnwrap(provider.recordedRequests().first)
+        let resumedUserText = request.messages
+            .flatMap { $0.content.compactMap { content -> String? in
+                if case .text(let text) = content { return text }
+                return nil
+            } }
+            .joined(separator: "\n")
+        XCTAssertTrue(resumedUserText.contains("旧版对话内容"))
     }
 
     func testV4StoreMigratesToV5AndAddsAnEmptyRequestLedger() throws {

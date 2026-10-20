@@ -30,9 +30,19 @@ protocol HealthSyncRepository {
 
 struct HealthSyncResult: Sendable {
     let completedStreams: Set<HealthMetricID>
-    let failedStreams: [HealthMetricID: String]
+    let failedStreams: [HealthMetricID: HealthSyncFailure]
 
     var hasFailures: Bool { !failedStreams.isEmpty }
+}
+
+struct HealthSyncFailure: Equatable, Sendable {
+    let stream: HealthMetricID
+    let requestID: UUID
+    let descriptor: SharedErrorDescriptor
+
+    var diagnosticSafeDetail: String {
+        "HealthKitSyncError stream=\(stream.rawValue) underlying=\(descriptor.diagnosticSafeDetail) requestID=\(requestID.uuidString.lowercased())"
+    }
 }
 
 @MainActor
@@ -95,24 +105,25 @@ final class HealthKitSyncCoordinator {
     func syncAvailableData(
         using repository: any HealthSyncRepository,
         now: Date = Date(),
+        requestID: UUID = UUID(),
         forceRebaseline: Bool = false
     ) async throws -> HealthSyncResult {
         guard await healthStore.isAvailable() else { throw HealthStoreClientError.unavailable }
         if forceRebaseline { try repository.resetHealthKitCursors() }
         var completedStreams = Set<HealthMetricID>()
-        var failedStreams: [HealthMetricID: String] = [:]
+        var failedStreams: [HealthMetricID: HealthSyncFailure] = [:]
         do {
             try await syncWorkouts(repository: repository)
             completedStreams.insert(.workout)
         } catch {
-            failedStreams[.workout] = String(String(describing: error).prefix(300))
+            failedStreams[.workout] = makeFailure(error, stream: .workout, requestID: requestID)
         }
         for metric in Self.aggregateStreams.sorted(by: { $0.rawValue < $1.rawValue }) {
             do {
                 try await syncAggregate(metric, repository: repository, now: now)
                 completedStreams.insert(metric)
             } catch {
-                failedStreams[metric] = String(String(describing: error).prefix(300))
+                failedStreams[metric] = makeFailure(error, stream: metric, requestID: requestID)
             }
         }
         for metric in Self.sampleStreams.sorted(by: { $0.rawValue < $1.rawValue }) {
@@ -120,10 +131,21 @@ final class HealthKitSyncCoordinator {
                 try await syncSamples(metric, repository: repository, now: now)
                 completedStreams.insert(metric)
             } catch {
-                failedStreams[metric] = String(String(describing: error).prefix(300))
+                failedStreams[metric] = makeFailure(error, stream: metric, requestID: requestID)
             }
         }
         return HealthSyncResult(completedStreams: completedStreams, failedStreams: failedStreams)
+    }
+
+    private func makeFailure(_ error: Error, stream: HealthMetricID, requestID: UUID) -> HealthSyncFailure {
+        HealthSyncFailure(
+            stream: stream,
+            requestID: requestID,
+            descriptor: SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .healthKitUnavailableFallback
+            )
+        )
     }
 
     private func sync(stream metric: HealthMetricID, using repository: any HealthSyncRepository, now: Date) async throws {

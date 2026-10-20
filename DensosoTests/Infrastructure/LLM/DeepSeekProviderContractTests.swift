@@ -162,6 +162,42 @@ final class DeepSeekProviderContractTests: XCTestCase {
         XCTAssertEqual(textFormat["name"] as? String, "MealVisionIntent")
     }
 
+    func testImageMustBeInUserMessageAndFailsBeforeNetwork() async throws {
+        let transport = ScriptedProviderHTTPTransport(steps: [])
+        let provider = DeepSeekProvider(
+            credentialSource: TestCredentialSource(values: [.deepSeek: "fixture"]),
+            transport: transport,
+            logSink: RecordingProviderLogSink(),
+            jitter: { _ in 0 }
+        )
+        let image = ImageInput(
+            mimeType: "image/jpeg",
+            base64Data: Data([0xFF, 0xD8, 0xFF]).base64EncodedString()
+        )
+        let request = ModelRequest(
+            requestID: UUID(),
+            conversationID: UUID(),
+            systemPrompt: "fixture",
+            messages: [
+                ModelMessage(role: .user, text: "请看图"),
+                ModelMessage(role: .assistant, content: [.image(image)]),
+            ],
+            tools: [],
+            maxOutputTokens: 128,
+            thinking: .none,
+            deadline: Date().addingTimeInterval(45)
+        )
+
+        do {
+            _ = try await collect(provider.stream(request))
+            XCTFail("Images in assistant messages are rejected by the provider contract")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .schemaViolation(path: "messages.image.role"))
+        }
+        let recordedRequests = await transport.recordedRequests()
+        XCTAssertTrue(recordedRequests.isEmpty)
+    }
+
     private func request(deadline: Date, thinking: ThinkingPolicy = .none) -> ModelRequest {
         ModelRequest(
             requestID: UUID(),

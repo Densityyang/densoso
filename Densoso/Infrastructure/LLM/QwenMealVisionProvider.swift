@@ -2,6 +2,8 @@ import DensosoDomain
 import Foundation
 
 struct QwenMealVisionProvider: MealVisionProviding {
+    static let promptVersion = VisionPromptVersion.current
+
     static let model = "qwen3.7-flash-2026-07-15"
     static let requiredCapabilities: Set<ProviderCapability> = [.vision, .structuredOutput]
     static let maximumRequestBytes = 20_000_000

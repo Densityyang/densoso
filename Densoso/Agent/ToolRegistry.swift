@@ -3,6 +3,8 @@ import Foundation
 
 @MainActor
 final class ToolRegistry {
+    static let toolSchemaVersion = ToolSchemaVersion.current
+
     private let todayHealthStateProvider: TodayHealthStateProvider
     private let healthHistoryProvider: HealthHistoryProvider
     private let goalProfileProvider: GoalProfileProvider
@@ -70,15 +72,31 @@ final class ToolRegistry {
     }
 }
 
-enum ToolError: Error, LocalizedError {
+enum ToolError: Equatable, Sendable, SharedErrorDescribing {
     case unknownTool(String)
     case invalidArguments
 
-    var errorDescription: String? {
+    var sharedErrorDescriptor: SharedErrorDescriptor {
         switch self {
-        case .unknownTool(let name): "未知工具: \(name)"
-        case .invalidArguments: "工具参数无法编码"
+        case .unknownTool:
+            SharedErrorDescriptor(
+                code: .toolArgumentsInvalid,
+                userMessage: "暂时无法处理该请求，请重试。",
+                subsystem: .agent,
+                reason: .unknownTool
+            )
+        case .invalidArguments:
+            SharedErrorDescriptor(
+                code: .toolArgumentsInvalid,
+                userMessage: "请求参数暂时无法处理，请重试。",
+                subsystem: .agent,
+                reason: .invalidToolArguments
+            )
         }
+    }
+
+    var errorDescription: String? {
+        sharedErrorDescriptor.userMessage
     }
 }
 

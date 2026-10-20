@@ -5038,6 +5038,10 @@ Qwen ASR
 
 并且各 data class 独立 consent。
 
+默认开放照片走已显式选择的 DeepSeek multimodal Agent，并使用独立的
+`mealImage` consent。Qwen Vision 仅作为 Qwen 模式下的独立可选能力；当前
+质量门禁关闭时要明确提示不可用，不能作为 DeepSeek 的静默 fallback。
+
 ---
 
 # 128. Test Matrix

@@ -6,7 +6,17 @@ import XCTest
 
 @MainActor
 final class DensosoMigrationTests: XCTestCase {
-    func testV1DiskFixtureMigratesToV4WithoutRecalculation() throws {
+    func testPersistenceBootstrapErrorsUseSafeReadOnlyDescriptor() {
+        let error = PersistenceBootstrapError.backupFailed
+        let descriptor = error.sharedErrorDescriptor
+
+        XCTAssertEqual(descriptor.code, .actionConflict)
+        XCTAssertEqual(descriptor.reason, .persistenceReadOnly)
+        XCTAssertEqual(error.localizedDescription, descriptor.userMessage)
+        XCTAssertTrue(descriptor.diagnosticSafeDetail.contains("subsystem=projection"))
+    }
+
+    func testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation() throws {
         let seed = try Gate02FixtureLoader.load("v1-seed", as: Gate02Seed.self)
         let expected = try Gate02FixtureLoader.load(
             "expected-migration",
@@ -16,7 +26,7 @@ final class DensosoMigrationTests: XCTestCase {
         defer { location.remove() }
         try createV1Store(seed: seed, at: location.storeURL)
 
-        let container = try openV4Store(at: location.storeURL)
+        let container = try openV7Store(at: location.storeURL)
         let context = ModelContext(container)
         let meal = try XCTUnwrap(context.fetch(FetchDescriptor<MealRecord>()).first)
         let dish = try XCTUnwrap(context.fetch(FetchDescriptor<DishEntry>()).first)
@@ -68,7 +78,7 @@ final class DensosoMigrationTests: XCTestCase {
         )
     }
 
-    func testV2DiskFixtureMigratesToV4AndPreservesCursorAndOutbox() throws {
+    func testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox() throws {
         let seed = try Gate02FixtureLoader.load("v2-seed", as: Gate02Seed.self)
         let expected = try Gate02FixtureLoader.load(
             "expected-migration",
@@ -78,7 +88,7 @@ final class DensosoMigrationTests: XCTestCase {
         defer { location.remove() }
         try createV2Store(seed: seed, at: location.storeURL)
 
-        var container: ModelContainer? = try openV4Store(at: location.storeURL)
+        var container: ModelContainer? = try openV7Store(at: location.storeURL)
         var context: ModelContext? = ModelContext(container!)
         let meal = try XCTUnwrap(context!.fetch(FetchDescriptor<MealRecord>()).first)
         let dish = try XCTUnwrap(context!.fetch(FetchDescriptor<DishEntry>()).first)
@@ -105,7 +115,7 @@ final class DensosoMigrationTests: XCTestCase {
 
         context = nil
         container = nil
-        container = try openV4Store(at: location.storeURL)
+        container = try openV7Store(at: location.storeURL)
         context = ModelContext(container!)
         XCTAssertEqual(try context!.fetchCount(FetchDescriptor<MealRecord>()), 1)
         XCTAssertEqual(try context!.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
@@ -121,7 +131,7 @@ final class DensosoMigrationTests: XCTestCase {
         )
     }
 
-    func testV3MigrationCreatesTimeAwareProfileAndWeightRecords() throws {
+    func testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords() throws {
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
         var container: ModelContainer? = try makeContainer(
@@ -158,7 +168,7 @@ final class DensosoMigrationTests: XCTestCase {
         context = nil
         container = nil
 
-        container = try openV4Store(at: location.storeURL)
+        container = try openV7Store(at: location.storeURL)
         context = ModelContext(container!)
         let migratedProfile = try XCTUnwrap(context!.fetch(FetchDescriptor<UserProfile>()).first)
         let revision = try XCTUnwrap(context!.fetch(FetchDescriptor<ProfileRevisionRecord>()).first)
@@ -180,6 +190,35 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(metric.intakeEnergyHighKcal, 700)
         XCTAssertEqual(metric.energyQuality, "legacy")
         XCTAssertTrue(metric.requiresRecompute)
+    }
+
+    func testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1() async throws {
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        var container: ModelContainer? = try makeContainer(version: DensosoSchemaV6.self, url: location.storeURL)
+        var context: ModelContext? = ModelContext(container!)
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000707")!
+        let legacyMessage = ModelMessage(role: .user, text: "迁移前的对话")
+        context!.insert(ConversationRecord(id: conversationID))
+        context!.insert(MessageRecord(
+            conversationID: conversationID,
+            roleRaw: ModelRole.user.rawValue,
+            contentData: try JSONEncoder().encode(legacyMessage),
+            ordinal: 0
+        ))
+        try context!.save()
+        context = nil
+        container = nil
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "6.0.0")
+
+        let migrated = try openV7Store(at: location.storeURL)
+        let repository = SwiftDataAgentRepository(modelContainer: migrated)
+        let schemaVersion = try await repository.toolSchemaVersion(conversationID: conversationID)
+        XCTAssertEqual(schemaVersion, ToolSchemaVersion.legacy)
+        let restoredMessages = try await repository.messageData(conversationID: conversationID)
+        XCTAssertEqual(restoredMessages.count, 1)
+        XCTAssertEqual(try JSONDecoder().decode(ModelMessage.self, from: restoredMessages[0]), legacyMessage)
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "7.0.0")
     }
 
     func testV5MigrationMovesRawSamplesIntoIndexAndDailySummary() throws {
@@ -635,6 +674,16 @@ final class DensosoMigrationTests: XCTestCase {
         let configuration = ModelConfiguration("Densoso", schema: schema, url: url)
         return try ModelContainer(
             for: schema,
+            migrationPlan: DensosoMigrationTestPlanV6.self,
+            configurations: [configuration]
+        )
+    }
+
+    private func openV7Store(at url: URL) throws -> ModelContainer {
+        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
+        let configuration = ModelConfiguration("Densoso", schema: schema, url: url)
+        return try ModelContainer(
+            for: schema,
             migrationPlan: DensosoMigrationPlan.self,
             configurations: [configuration]
         )
@@ -723,6 +772,16 @@ enum DensosoMigrationTestPlanV5: SchemaMigrationPlan {
     }
 }
 
+enum DensosoMigrationTestPlanV6: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] {
+        Array(DensosoMigrationPlan.schemas.prefix(8))
+    }
+
+    static var stages: [MigrationStage] {
+        Array(DensosoMigrationPlan.stages.prefix(7))
+    }
+}
+
 private struct TemporaryStoreLocation {
     let directoryURL: URL
     let storeURL: URL
@@ -766,7 +825,7 @@ private enum Gate02FaultingMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
         [
             DensosoSchemaV2.self, DensosoSchemaV3.self, DensosoSchemaV4.self,
-            DensosoSchemaV5.self, DensosoSchemaV6.self,
+            DensosoSchemaV5.self, DensosoSchemaV6.self, DensosoSchemaV7.self,
         ]
     }
 
@@ -790,7 +849,8 @@ private enum Gate02FaultingMigrationPlan: SchemaMigrationPlan {
                 toVersion: DensosoSchemaV6.self,
                 willMigrate: nil,
                 didMigrate: nil
-            )
+            ),
+            .lightweight(fromVersion: DensosoSchemaV6.self, toVersion: DensosoSchemaV7.self),
         ]
     }
 }

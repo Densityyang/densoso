@@ -1,16 +1,21 @@
 import Foundation
 import SwiftData
+import DensosoDomain
 
-enum PersistenceBootstrapError: LocalizedError {
+enum PersistenceBootstrapError: SharedErrorDescribing {
     case backupRequired
-    case backupFailed(String)
+    case backupFailed
 
-    var errorDescription: String? {
-        switch self {
-        case .backupRequired: "A migration backup was required but was not created."
-        case .backupFailed(let detail): "Migration backup failed: \(detail)"
-        }
+    var sharedErrorDescriptor: SharedErrorDescriptor {
+        SharedErrorDescriptor(
+            code: .actionConflict,
+            userMessage: "本地数据迁移未完成，当前处于只读诊断模式。请保留诊断编号。",
+            subsystem: .projection,
+            reason: .persistenceReadOnly
+        )
     }
+
+    var errorDescription: String? { sharedErrorDescriptor.userMessage }
 }
 
 struct PersistenceBootstrap {
@@ -46,7 +51,7 @@ struct PersistenceBootstrap {
             try MigrationBackupManager.createBackupIfPresent(storeURL: $0)
         }
     ) -> PersistenceBootstrap {
-        let schema = Schema(versionedSchema: DensosoSchemaV6.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
         if inMemory {
             let configuration = ModelConfiguration(
                 "DensosoUITests",
@@ -61,7 +66,8 @@ struct PersistenceBootstrap {
                     backupManifest: nil
                 )
             } catch {
-                fatalError("Unable to create the UI test model container: \(error.localizedDescription)")
+                let diagnostic = Self.diagnosticSafeDetail(for: error)
+                fatalError("Unable to create the UI test model container (\(diagnostic)).")
             }
         }
 
@@ -96,7 +102,7 @@ struct PersistenceBootstrap {
             backupManifest = manifest
         } catch {
             return makeRecoveryBootstrap(
-                migrationError: PersistenceBootstrapError.backupFailed(error.localizedDescription),
+                migrationError: PersistenceBootstrapError.backupFailed,
                 schema: schema,
                 backupManifest: nil
             )
@@ -163,7 +169,7 @@ struct PersistenceBootstrap {
             let container = try ModelContainer(for: schema, configurations: [diagnosticConfiguration])
             let restoreStatus: String
             if let restoreError {
-                restoreStatus = "原 store 自动恢复未完成；迁移前备份仍保留：\(restoreError.localizedDescription)"
+                restoreStatus = "原 store 自动恢复未完成（\(Self.diagnosticSafeDetail(for: restoreError))）；迁移前备份仍保留。"
             } else if backupManifest != nil {
                 restoreStatus = "原 store 已从迁移前备份恢复。"
             } else {
@@ -171,12 +177,24 @@ struct PersistenceBootstrap {
             }
             return PersistenceBootstrap(
                 container: container,
-                warning: "本地数据迁移失败，当前为禁止写入的诊断模式（\(diagnosticID)）。\n\(restoreStatus)\n\(migrationError.localizedDescription)",
+                warning: "本地数据迁移未完成，当前处于只读诊断模式（\(diagnosticID)）。\n\(restoreStatus)\n\(Self.diagnosticSafeDetail(for: migrationError))",
                 state: recoveryState,
                 backupManifest: backupManifest
             )
         } catch {
-            fatalError("Unable to create the in-memory diagnostic container: \(error.localizedDescription)")
+            let diagnostic = Self.diagnosticSafeDetail(for: error)
+            fatalError("Unable to create the in-memory diagnostic container (\(diagnostic)).")
         }
+    }
+
+    private static func diagnosticSafeDetail(for error: Error) -> String {
+        let fallback = SharedErrorDescriptor(
+            code: .actionConflict,
+            userMessage: "本地数据迁移未完成，当前处于只读诊断模式。请保留诊断编号。",
+            subsystem: .projection,
+            reason: .persistenceReadOnly,
+            numericCode: (error as NSError).code
+        )
+        return SharedErrorDescriptor.mapped(from: error, fallback: fallback).diagnosticSafeDetail
     }
 }

@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import Densoso
 
@@ -18,6 +19,39 @@ final class IntelligenceRoutingPolicyTests: XCTestCase {
         let capabilities = PlatformCapabilities(onDeviceLanguageModelAvailable: true, modernSpeechAvailable: true)
         XCTAssertEqual(policy.path(for: .cloudDeepSeek, capabilities: capabilities), .cloudDeepSeek)
         XCTAssertEqual(policy.path(for: .cloudQwen, capabilities: capabilities), .cloudQwen)
+    }
+
+    @MainActor
+    func testDefaultModeIsCloudDeepSeek() {
+        XCTAssertEqual(IntelligencePreferences.defaultMode, .cloudDeepSeek)
+        XCTAssertTrue(DeepSeekProvider().descriptor.capabilities.contains(.vision))
+    }
+
+    func testDeepSeekVisionCapabilityIsScopedToDocumentedModelAndEndpoint() {
+        XCTAssertTrue(
+            ProviderCapabilityCatalog
+                .deepSeekCapabilities(
+                    for: ProviderCapabilityCatalog.deepSeekFlashModel,
+                    endpoint: ProviderCapabilityCatalog.deepSeekResponsesEndpoint
+                )
+                .contains(.vision)
+        )
+        XCTAssertFalse(
+            ProviderCapabilityCatalog
+                .deepSeekCapabilities(
+                    for: "unconfigured-deepseek-model",
+                    endpoint: ProviderCapabilityCatalog.deepSeekResponsesEndpoint
+                )
+                .contains(.vision)
+        )
+        XCTAssertFalse(
+            ProviderCapabilityCatalog
+                .deepSeekCapabilities(
+                    for: ProviderCapabilityCatalog.deepSeekFlashModel,
+                    endpoint: URL(string: "https://unconfigured-endpoint.example/responses")!
+                )
+                .contains(.vision)
+        )
     }
 
     func testSpeechUsesLegacyBackendWhenModernSpeechIsUnavailable() {

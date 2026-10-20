@@ -7,13 +7,16 @@ import DensosoDomain
 @MainActor
 @Observable
 final class HealthKitService {
-    enum HealthError: LocalizedError {
+    enum HealthError: Equatable, Sendable, SharedErrorDescribing {
         case unavailable
 
-        var errorDescription: String? {
-            switch self {
-            case .unavailable: "此设备无法使用 Apple Health。"
-            }
+        var sharedErrorDescriptor: SharedErrorDescriptor {
+            SharedErrorDescriptor(
+                code: .healthKitUnavailable,
+                userMessage: "暂时没能更新今天的状态。",
+                subsystem: .healthKit,
+                reason: .healthKitUnavailable
+            )
         }
     }
 

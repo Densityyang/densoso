@@ -237,6 +237,8 @@ jobs:
             -only-testing:DensosoTests/ConfirmationCoordinatorTests \
             -only-testing:DensosoTests/ConversationPersistenceTests \
             -only-testing:DensosoTests/DensosoMigrationTests \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests/testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox \
             -only-testing:DensosoTests/MigrationBackupManagerTests \
             -only-testing:DensosoTests/AgentPersistenceBoundaryTests \
             -only-testing:DensosoTests/HealthRepositoryTests \
@@ -989,6 +991,7 @@ jobs:
           swift test --package-path Packages/DensosoDomain --filter HealthStateTests 2>&1 | tee -a gate11-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter DailyLoopSnapshotTests 2>&1 | tee -a gate11-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter HealthNarrativeTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter SharedErrorDescriptorTests 2>&1 | tee -a gate11-domain-contracts.log
 
       - name: Generate Xcode project and select iPhone Simulator
         run: |
@@ -1016,13 +1019,22 @@ jobs:
             -only-testing:DensosoTests/HealthRepositoryTests/testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages \
             -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor \
             -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder \
+            -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testOneFailedStreamDoesNotBlockOtherHealthMetrics \
+            -only-testing:DensosoTests/HealthSyncOutboxWorkerTests/testRetryReusesStableSyncIdentifierAndVersion \
+            -only-testing:DensosoTests/HealthSyncOutboxWorkerTests/testInterruptedSendingEntryIsRecoveredAndRetried \
+            -only-testing:DensosoTests/HealthSyncOutboxWorkerTests/testInterruptedOutboxRecoveryAndProcessingPagePastBoundedBatch \
+            -only-testing:DensosoTests/BriefNotificationSchedulerTests/testNotificationErrorsExposeSharedSafeDescriptors \
             -only-testing:DensosoTests/HealthRepositoryTests/testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches \
             -only-testing:DensosoTests/HealthRepositoryTests/testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable \
             -only-testing:DensosoTests/HealthRepositoryTests/testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown \
             -only-testing:DensosoTests/HealthRepositoryTests/testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays \
             -only-testing:DensosoTests/HealthRepositoryTests/testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner \
             -only-testing:DensosoTests/ConfirmationCoordinatorTests/testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests/testHistoricalConfirmationKeepsPendingMetricsWhenProfileAndWeightAreMissing \
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testSourceCursorProfileAndGoalRevisionsChangeProjectionFingerprint \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testWorkoutEnergyAndProvenanceChangesProjectionFingerprint \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \
             -only-testing:DensosoTests/HealthProjectionActorTests \
@@ -1032,6 +1044,7 @@ jobs:
             -only-testing:DensosoTests/AgentCoordinatorTests/testHealthContextReadFailureDoesNotClaimDataIsMissing \
             -only-testing:DensosoTests/DailyBriefRefreshPolicyTests/testActivationRefreshWaitsForInitialRefreshAndOnlyRefreshesStaleLocalDay \
             -only-testing:DensosoTests/DailyLoopBackgroundSchedulerTests \
+            -only-testing:DensosoTests/HistoricalMetricsRecomputeServiceTests \
             -only-testing:DensosoTests/HealthNarrativePolicyTests \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerUsesMatchingExistingBriefAndPreservesOptionalState \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays \
@@ -1108,16 +1121,42 @@ jobs:
             -only-testing:DensosoTests/MultimodalAgentImageTests/testImageRequiresVisionCapabilityAndSeparateMealImageConsent \
             -only-testing:DensosoTests/AgentCoordinatorTests/testRealRoundAndToolCountsAndPendingAction \
             -only-testing:DensosoTests/AgentCoordinatorTests/testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testTypedEventStreamPreservesOrderAndRealCounts \
             -only-testing:DensosoTests/AgentCoordinatorTests/testProviderReasoningContinuesInMemoryButIsNeverPersisted \
             -only-testing:DensosoTests/AgentCoordinatorTests/testCloudProviderRequiresExplicitConsent \
             -only-testing:DensosoTests/AgentCoordinatorTests/testNinthToolCallStopsRequest \
             -only-testing:DensosoTests/AgentRequestResumeTests/testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage \
+            -only-testing:DensosoTests/AgentRequestResumeTests/testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1 \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords \
+            -only-testing:DensosoTests/DensosoMigrationTests/testPersistenceBootstrapErrorsUseSafeReadOnlyDescriptor \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests/testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox \
+            -only-testing:DensosoTests/PromptVersioningTests/testPromptAndToolSchemaVersionsMatchMainPR111And112 \
             -only-testing:DensosoTests/DeepSeekProviderContractTests/testResponsesAPIRequestAndStreamingToolContract \
             -only-testing:DensosoTests/DeepSeekProviderContractTests/testImageStructuredOutputAndStatelessToolHistoryEncoding \
+            -only-testing:DensosoTests/DeepSeekProviderContractTests/testImageMustBeInUserMessageAndFailsBeforeNetwork \
+            -only-testing:DensosoTests/AppLaunchConfigurationTests/testSeededProfileRequiresUITestMode \
+            -only-testing:DensosoTests/AppLaunchConfigurationTests/testUITestArgumentsEnableDeterministicSeed \
             -only-testing:DensosoTests/QwenASRProviderContractTests/testOpenAICompatibleAudioRequestAndResponseContract \
             -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testPinnedQwen37SnapshotUsesImageAndStructuredObservationContract \
+            -only-testing:DensosoTests/DiagnosticsExportPrivacyTests/testProviderErrorsExportOnlyAllowlistedCodes \
             -only-testing:DensosoTests/SpeechCaptureStateMachineTests/testLocalFailureWithCapturedAudioUsesQwenOnceAndDeletesTemporaryAudio \
-            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testOpenPhotoRequiresSeparateImageConsent \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testOptionalQwenOpenPhotoRequiresSeparateQwenConsent \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testDeepSeekPhotoModeNeverFallsThroughToOptionalQwenVision \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testDefaultClosedQualityGateRequiresManualFallbackWithoutStaging \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testMealCaptureErrorsExposeSharedSafeDescriptors \
+            -only-testing:DensosoTests/MealRecordAuditPresentationTests/testMealRecordPresentationShowsSanitizedSourcesAndAlgorithmVersion \
+            -only-testing:DensosoTests/AgentUIStateMachineTests/testAgentEventsMoveThroughThinkingToolDraftConfirmationCommitAndFailureStates \
+            -only-testing:DensosoTests/AgentUIStateMachineTests/testVoiceUIStateMapsExistingSpeechCaptureStatesAndFailureKinds \
+            -only-testing:DensosoTests/MealImageCaptureStateMachineTests/testOpenPhotoRequiresConsentBeforeUploadAndMovesThroughVisionResolution \
+            -only-testing:DensosoTests/MealImageCaptureStateMachineTests/testLocalResolutionAndCancellationNeverBecomeUploadable \
+            -only-testing:DensosoTests/IntelligenceRoutingPolicyTests/testDefaultModeIsCloudDeepSeek \
+            -only-testing:DensosoTests/IntelligenceRoutingPolicyTests/testDeepSeekVisionCapabilityIsScopedToDocumentedModelAndEndpoint \
+            -only-testing:DensosoTests/IntelligenceRoutingPolicyTests/testCloudRequiresExplicitCloudMode \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testLocalOnlyBarcodeScanNeverCallsPackagedFoodProvider \
+            -only-testing:DensosoTests/SpeechCaptureStateMachineTests/testLocalOnlyModeNeverUsesQwenFallbackEvenWhenFallbackAndConsentAreEnabled \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentRoutesResolvedBarcodeLocallyAndStagesPendingAction \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentKeepsCompleteLabelLocalAndAsksOnceForMissingPortion \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto \
@@ -1266,7 +1305,9 @@ jobs:
             -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testUpcomingTrainingSessionsAreBoundedAndOrderedAcrossPages \
             -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanPagesKeepAllRowsAcrossTiedTenRowBoundaries \
             -only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testConfirmedScheduleIsIdempotentAcrossRetries \
+            -only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testTransientWorkoutKitFailureLeavesAUserRetryableScheduleIntent \
             -only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries \
+            -only-testing:DensosoTests/WorkoutPlanCompilerTests/testWorkoutKitErrorsUseSharedCodesAndSafeMessages \
             -only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay \
             -only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents \
             -only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions \

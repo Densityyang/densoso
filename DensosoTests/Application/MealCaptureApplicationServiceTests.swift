@@ -8,6 +8,17 @@ import XCTest
 
 @MainActor
 final class MealCaptureApplicationServiceTests: XCTestCase {
+    func testMealCaptureErrorsExposeSharedSafeDescriptors() {
+        let photoError = MealCaptureApplicationError.noPhotoEvidence
+        let consentError = MealCaptureApplicationError.mealVisionConsentRequired
+
+        XCTAssertEqual(photoError.sharedErrorDescriptor.code, .toolArgumentsInvalid)
+        XCTAssertEqual(photoError.localizedDescription, photoError.sharedErrorDescriptor.userMessage)
+        XCTAssertEqual(consentError.sharedErrorDescriptor.code, .actionConflict)
+        XCTAssertEqual(consentError.sharedErrorDescriptor.reason, .consentRequired)
+        XCTAssertEqual(consentError.localizedDescription, consentError.sharedErrorDescriptor.userMessage)
+    }
+
     func testLocalMealPortionAnswerSupportsCountsAndRejectsPackageSpecsAsConsumedAmount() {
         let parser = LocalMealPortionAnswerParser()
 
@@ -307,6 +318,7 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
             visionProvider: vision,
             imageConsent: true,
             imageEnabled: true,
+            allowsQwenMealVision: true,
             qualityGate: .syntheticContractV1
         )
 
@@ -317,12 +329,39 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
         XCTAssertEqual(visionCalls, 0)
     }
 
-    func testOpenPhotoRequiresSeparateImageConsent() async throws {
+    func testLocalOnlyBarcodeScanNeverCallsPackagedFoodProvider() async throws {
+        let scanner = FakeMealImageScanner(evidence: [
+            MealEvidence(kind: .barcode, value: "6901234567892", confidence: 1)
+        ])
+        let packaged = CountingPackagedFoodProvider(match: nil)
+        let vision = FakeMealVisionProvider()
+        let harness = try await MealCaptureHarness(
+            scanner: scanner,
+            packagedFoodProvider: packaged,
+            visionProvider: vision,
+            imageConsent: true,
+            imageEnabled: true,
+            allowsRemotePackagedFoodLookup: false
+        )
+
+        let result = try await harness.service.prepareForAgent(originalData: try fixtureJPEG())
+
+        guard case .textOnlyFallback = result else {
+            return XCTFail("Local Only barcode misses must stay in the local text fallback")
+        }
+        let packagedLookupCalls = await packaged.callCount()
+        XCTAssertEqual(packagedLookupCalls, 0)
+        let visionCalls = await vision.callCount()
+        XCTAssertEqual(visionCalls, 0)
+    }
+
+    func testOptionalQwenOpenPhotoRequiresSeparateQwenConsent() async throws {
         let harness = try await MealCaptureHarness(
             scanner: FakeMealImageScanner(evidence: []),
             visionProvider: FakeMealVisionProvider(),
             imageConsent: false,
-            imageEnabled: true
+            imageEnabled: true,
+            allowsQwenMealVision: true
         )
 
         do {
@@ -331,6 +370,24 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? MealCaptureApplicationError, .mealVisionConsentRequired)
         }
+    }
+
+    func testDeepSeekPhotoModeNeverFallsThroughToOptionalQwenVision() async throws {
+        let vision = FakeMealVisionProvider()
+        let harness = try await MealCaptureHarness(
+            scanner: FakeMealImageScanner(evidence: []),
+            visionProvider: vision,
+            imageConsent: true,
+            imageEnabled: true,
+            allowsQwenMealVision: false,
+            qualityGate: .syntheticContractV1
+        )
+
+        let review = try await harness.service.analyzePhoto(try fixtureJPEG())
+
+        XCTAssertEqual(review.route, .manualDescription)
+        let visionCalls = await vision.callCount()
+        XCTAssertEqual(visionCalls, 0)
     }
 
     func testLowConfidenceVisionCannotStageFoodIDWithoutUserSelection() async throws {
@@ -346,7 +403,8 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
             scanner: FakeMealImageScanner(evidence: []),
             visionProvider: vision,
             imageConsent: true,
-            imageEnabled: true
+            imageEnabled: true,
+            allowsQwenMealVision: true
         )
         let review = try await harness.service.analyzePhoto(try fixtureJPEG())
 
@@ -388,7 +446,8 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
             visionProvider: vision,
             confirmedFoodHistory: FakeConfirmedFoodHistory(foodIDs: ["2"]),
             imageConsent: true,
-            imageEnabled: true
+            imageEnabled: true,
+            allowsQwenMealVision: true
         )
 
         let review = try await harness.service.analyzePhoto(try fixtureJPEG())
@@ -423,7 +482,8 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
             scanner: FakeMealImageScanner(evidence: []),
             visionProvider: vision,
             imageConsent: true,
-            imageEnabled: true
+            imageEnabled: true,
+            allowsQwenMealVision: true
         )
         let review = try await harness.service.analyzePhoto(try fixtureJPEG())
 
@@ -569,6 +629,20 @@ private struct FakePackagedFoodProvider: PackagedFoodProvider {
     func lookup(barcode: String) async throws -> PackagedFoodMatch? { match }
 }
 
+private actor CountingPackagedFoodProvider: PackagedFoodProvider {
+    let match: PackagedFoodMatch?
+    private var calls = 0
+
+    init(match: PackagedFoodMatch?) { self.match = match }
+
+    func lookup(barcode: String) async throws -> PackagedFoodMatch? {
+        calls += 1
+        return match
+    }
+
+    func callCount() -> Int { calls }
+}
+
 private struct ThrowingPackagedFoodProvider: PackagedFoodProvider {
     func lookup(barcode: String) async throws -> PackagedFoodMatch? {
         throw PackagedFoodProviderError.offlineWithoutCache
@@ -596,6 +670,8 @@ private struct MealCaptureHarness {
         confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)? = nil,
         imageConsent: Bool,
         imageEnabled: Bool,
+        allowsRemotePackagedFoodLookup: Bool = true,
+        allowsQwenMealVision: Bool = false,
         qualityGate: MealVisionQualityGate = .syntheticContractV1
     ) async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
@@ -625,8 +701,10 @@ private struct MealCaptureHarness {
             foodDatabase: foodDatabase,
             scanner: scanner,
             packagedFoodProvider: packagedFoodProvider,
+            allowsRemotePackagedFoodLookup: allowsRemotePackagedFoodLookup,
             confirmedFoodHistory: confirmedFoodHistory,
             visionProvider: visionProvider,
+            allowsQwenMealVision: allowsQwenMealVision,
             governanceRepository: governance,
             providerConfiguration: configuration,
             usageLedger: ProviderUsageLedger(repository: governance),

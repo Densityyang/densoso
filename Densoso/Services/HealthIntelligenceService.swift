@@ -33,7 +33,11 @@ final class HealthIntelligenceService {
             }
             return snapshot.dailyBrief
         } catch {
-            lastError = "无法更新健康摘要：\(error.localizedDescription)"
+            let errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
+            lastError = "无法更新健康摘要：\(errorMessage)"
             throw error
         }
     }

@@ -12,6 +12,7 @@ struct MealCaptureSheet: View {
     let supplementalText: String
     let onSendToAgent: (MultimodalModelRequest) -> Void
     let onLocalPendingAction: (PendingAction) -> Void
+    let onImageStateChange: (MealImageCaptureState) -> Void
 
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showCamera = false
@@ -24,6 +25,11 @@ struct MealCaptureSheet: View {
     @State private var isStagingLocal = false
     @State private var errorMessage: String?
     @State private var preparationTask: Task<Void, Never>?
+    @State private var consentTask: Task<Void, Never>?
+    @State private var imageCaptureState: MealImageCaptureState = .idle
+    @State private var imageConsentGranted = false
+    @State private var isSavingImageConsent = false
+    @State private var activePreparationID: UUID?
 
     var body: some View {
         NavigationStack {
@@ -87,6 +93,7 @@ struct MealCaptureSheet: View {
                         Text(textOnlyFallback)
                             .font(.footnote)
                         Button("继续用文字整理", systemImage: "text.bubble") {
+                            transitionImageState(.resolved)
                             onSendToAgent(MultimodalModelRequest(userText: textOnlyFallback))
                             dismiss()
                         }
@@ -109,10 +116,65 @@ struct MealCaptureSheet: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         Button("发送给 Agent 整理待确认草稿", systemImage: "paperplane") {
+                            guard canSendPhotoToAgent else { return }
+                            transitionImageState(
+                                .uploadStarted,
+                                preparedRequestExists: preparedRequest != nil,
+                                consentGranted: imageConsentGranted && selectedProviderSupportsVision
+                            )
                             onSendToAgent(preparedRequest)
                             dismiss()
                         }
-                        .disabled(isPreparing)
+                        .disabled(!canSendPhotoToAgent || isPreparing)
+                    }
+                }
+
+                if imageCaptureState == .deepseekRequired || imageCaptureState == .consent {
+                    Section("DeepSeek 照片上传同意") {
+                        Text("开放照片只有在你单独同意后才会发送给 DeepSeek。发送前会在本机清理照片元数据；原图和 OCR 原文不会保存到对话历史。DeepSeek 健康文字同意不能代替照片同意。")
+                            .font(.footnote)
+                        Text("开放照片默认通过 DeepSeek Agent 处理；Qwen Vision 不会作为自动替代，当前 Qwen 开放照片入口未启用。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Text("这项照片授权会保存到设置中，可随时撤回；同意后仍需再点“发送给 Agent”，不会自动上传。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        if let imageProviderMessage {
+                            Text(imageProviderMessage)
+                                .font(.footnote)
+                                .foregroundStyle(OrbitPalette.coral)
+                        } else if imageConsentGranted {
+                            Label("已单独同意 DeepSeek 餐食照片处理", systemImage: "checkmark.shield")
+                                .font(.footnote)
+                        } else {
+                            Button(isSavingImageConsent ? "正在保存同意" : "保存照片上传同意", systemImage: "hand.raised") {
+                                consentTask?.cancel()
+                                consentTask = Task { await grantImageUploadConsent() }
+                            }
+                            .disabled(isSavingImageConsent || !selectedProviderSupportsVision)
+                        }
+                        Button("取消照片处理", systemImage: "xmark.circle") {
+                            cancelImageProcessing()
+                        }
+                        .disabled(isSavingImageConsent)
+                    }
+                }
+
+                if let stateMessage = imageCaptureState.statusMessage,
+                   imageCaptureState != .idle,
+                   imageCaptureState != .deepseekRequired,
+                   imageCaptureState != .consent {
+                    Section {
+                        HStack(spacing: 10) {
+                            if imageCaptureState == .sanitizing
+                                || imageCaptureState == .localScanning
+                                || imageCaptureState == .uploading
+                                || imageCaptureState == .vision {
+                                ProgressView()
+                            }
+                            Text(stateMessage)
+                                .font(.footnote)
+                        }
                     }
                 }
 
@@ -133,27 +195,55 @@ struct MealCaptureSheet: View {
             .onChange(of: selectedPhoto) { _, item in
                 guard let item else { return }
                 preparationTask?.cancel()
+                consentTask?.cancel()
+                consentTask = nil
+                isSavingImageConsent = false
+                let preparationID = UUID()
+                activePreparationID = preparationID
+                transitionImageState(.selected)
                 preparationTask = Task { @MainActor in
                     do {
                         guard let data = try await item.loadTransferable(type: Data.self) else {
                             throw MealCaptureApplicationError.noPhotoEvidence
                         }
                         try Task.checkCancellation()
-                        await prepareCapture(data)
+                        guard activePreparationID == preparationID else { return }
+                        await prepareCapture(data, preparationID: preparationID)
                     } catch is CancellationError {
+                        if activePreparationID == preparationID {
+                            transitionImageState(.cancelled)
+                        }
                         return
                     } catch {
-                        errorMessage = error.localizedDescription
+                        guard activePreparationID == preparationID else { return }
+                        transitionImageState(.failed)
+                        errorMessage = SharedErrorDescriptor.mapped(
+                            from: error,
+                            fallback: .actionConflictFallback
+                        ).userMessage
                     }
-                    selectedPhoto = nil
+                    if activePreparationID == preparationID { selectedPhoto = nil }
                 }
             }
             .onDisappear {
+                let sentToAgent = imageCaptureState == .uploading || imageCaptureState == .vision
+                activePreparationID = nil
                 preparationTask?.cancel()
                 preparationTask = nil
+                consentTask?.cancel()
+                consentTask = nil
+                isSavingImageConsent = false
                 preparedRequest = nil
                 localReview = nil
                 textOnlyFallback = nil
+                selectedPhoto = nil
+                imageConsentGranted = false
+                if !sentToAgent,
+                   imageCaptureState != .resolved,
+                   imageCaptureState != .failed,
+                   imageCaptureState != .cancelled {
+                    transitionImageState(.cancelled)
+                }
             }
             .sheet(isPresented: $showCamera) {
                 CameraImagePicker { result in
@@ -161,31 +251,65 @@ struct MealCaptureSheet: View {
                     switch result {
                     case .success(let data):
                         guard let data else { return }
-                        preparationTask?.cancel()
-                        preparationTask = Task { @MainActor in await prepareCapture(data) }
+                        beginPreparation(data)
                     case .failure(let error):
-                        errorMessage = error.localizedDescription
+                        transitionImageState(.failed)
+                        errorMessage = SharedErrorDescriptor.mapped(
+                            from: error,
+                            fallback: .actionConflictFallback
+                        ).userMessage
                     }
                 }
             }
         }
     }
 
-    private func prepareCapture(_ originalData: Data) async {
+    private func beginPreparation(_ originalData: Data) {
+        preparationTask?.cancel()
+        consentTask?.cancel()
+        consentTask = nil
+        isSavingImageConsent = false
+        let preparationID = UUID()
+        activePreparationID = preparationID
+        transitionImageState(.selected)
+        preparationTask = Task { @MainActor in
+            await prepareCapture(originalData, preparationID: preparationID)
+        }
+    }
+
+    private func prepareCapture(_ originalData: Data, preparationID: UUID) async {
         isPreparing = true
         preparedRequest = nil
         localReview = nil
         textOnlyFallback = nil
+        imageConsentGranted = false
         errorMessage = nil
-        defer { isPreparing = false }
+        defer {
+            if activePreparationID == preparationID { isPreparing = false }
+        }
         do {
             let result = try await dependencies.makeMealCaptureService()
-                .prepareForAgent(originalData: originalData)
+                .prepareForAgent(originalData: originalData) { state in
+                    guard activePreparationID == preparationID, !Task.isCancelled else { return }
+                    setImageCaptureState(state)
+                }
+            try Task.checkCancellation()
+            guard activePreparationID == preparationID else { return }
             switch result {
             case .agentRequest(let request):
                 preparedRequest = request
+                transitionImageState(.deepseekRequired)
+                guard selectedProviderSupportsVision else { return }
+                imageConsentGranted = try await dependencies.providerGovernanceRepository.isConsentGranted(
+                    provider: .deepSeek,
+                    dataClass: .mealImage
+                )
+                try Task.checkCancellation()
+                guard activePreparationID == preparationID else { return }
+                transitionImageState(.consentPrompt)
             case .localReview(let review):
                 localReview = review
+                transitionImageState(.localResolved)
                 selectedLocalFoodID = review.resolution?.autoPreselect?.id
                 if let answer = LocalMealPortionAnswerParser().parse(
                     supplementalText,
@@ -203,10 +327,108 @@ struct MealCaptureSheet: View {
                 }
             case .textOnlyFallback(let prompt):
                 textOnlyFallback = prompt
+                transitionImageState(.localResolved)
             }
+        } catch is CancellationError {
+            if activePreparationID == preparationID { transitionImageState(.cancelled) }
         } catch {
-            errorMessage = error.localizedDescription
+            guard activePreparationID == preparationID else { return }
+            transitionImageState(.failed)
+            errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .actionConflictFallback
+            ).userMessage
         }
+    }
+
+    private var selectedProviderSupportsVision: Bool {
+        IntelligenceRoutingPolicy().path(
+            for: dependencies.intelligencePreferences.mode,
+            capabilities: .current
+        ) == .cloudDeepSeek
+    }
+
+    private var imageProviderMessage: String? {
+        switch dependencies.intelligencePreferences.mode {
+        case .cloudDeepSeek:
+            nil
+        case .cloudQwen:
+            "当前 Qwen 模式暂未启用开放照片输入。请在设置中明确切换到 DeepSeek；不会自动切换提供方或上传照片。"
+        case .localOnly:
+            "当前为 Local Only，照片仍留在本机但不能发送到云端。若要使用开放照片，请在设置中明确切换到 DeepSeek；不会自动联网。"
+        }
+    }
+
+    private var canSendPhotoToAgent: Bool {
+        imageCaptureState.canSend(
+            preparedRequestExists: preparedRequest != nil,
+            consentGranted: imageConsentGranted && selectedProviderSupportsVision
+        )
+    }
+
+    private func setImageCaptureState(_ state: MealImageCaptureState) {
+        guard !Task.isCancelled || state == .cancelled else { return }
+        imageCaptureState = state
+        onImageStateChange(state)
+    }
+
+    private func transitionImageState(
+        _ event: MealImageCaptureEvent,
+        preparedRequestExists: Bool = false,
+        consentGranted: Bool = false
+    ) {
+        setImageCaptureState(MealImageCaptureStateMachine.transition(
+            from: imageCaptureState,
+            event: event,
+            preparedRequestExists: preparedRequestExists,
+            consentGranted: consentGranted
+        ))
+    }
+
+    private func grantImageUploadConsent() async {
+        guard selectedProviderSupportsVision,
+              preparedRequest != nil,
+              let preparationID = activePreparationID else { return }
+        isSavingImageConsent = true
+        defer {
+            if activePreparationID == preparationID { isSavingImageConsent = false }
+        }
+        do {
+            try await dependencies.providerGovernanceRepository.setConsent(
+                provider: .deepSeek,
+                dataClass: .mealImage,
+                granted: true,
+                policyVersion: "deepseek-sanitized-meal-image-v1"
+            )
+            let consentGranted = try await dependencies.providerGovernanceRepository.isConsentGranted(
+                provider: .deepSeek,
+                dataClass: .mealImage
+            )
+            try Task.checkCancellation()
+            guard activePreparationID == preparationID, preparedRequest != nil else { return }
+            imageConsentGranted = consentGranted
+            transitionImageState(.consentGranted)
+        } catch {
+            guard activePreparationID == preparationID else { return }
+            transitionImageState(.failed)
+            errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .providerUnavailableFallback
+            ).userMessage
+        }
+    }
+
+    private func cancelImageProcessing() {
+        activePreparationID = nil
+        preparationTask?.cancel()
+        preparationTask = nil
+        consentTask?.cancel()
+        consentTask = nil
+        isSavingImageConsent = false
+        preparedRequest = nil
+        selectedPhoto = nil
+        imageConsentGranted = false
+        transitionImageState(.cancelled)
     }
 
     private func canStageLocalReview(_ review: MealCaptureReview) -> Bool {
@@ -282,10 +504,14 @@ struct MealCaptureSheet: View {
                 correctedPortion: correction,
                 userNote: supplementalText
             )
+            transitionImageState(.resolved)
             onLocalPendingAction(action)
             dismiss()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .actionConflictFallback
+            ).userMessage
         }
     }
 
@@ -357,10 +583,17 @@ private struct CameraImagePicker: UIViewControllerRepresentable {
     }
 }
 
-private enum CameraImagePickerError: Error, LocalizedError {
+private enum CameraImagePickerError: SharedErrorDescribing {
     case unableToNormalizeOrientation
 
-    var errorDescription: String? {
-        "无法安全校正照片方向，请改用照片库选择或重新拍摄。"
+    var sharedErrorDescriptor: SharedErrorDescriptor {
+        SharedErrorDescriptor(
+            code: .toolArgumentsInvalid,
+            userMessage: "无法安全校正照片方向，请改用照片库选择或重新拍摄。",
+            subsystem: .agent,
+            reason: .invalidInputEnvelope
+        )
     }
+
+    var errorDescription: String? { sharedErrorDescriptor.userMessage }
 }

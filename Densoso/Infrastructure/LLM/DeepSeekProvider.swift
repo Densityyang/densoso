@@ -8,8 +8,8 @@ struct DeepSeekProvider: MultimodalModelProvider {
     private let logSink: any ProviderLogSink
 
     init(
-        endpoint: URL = URL(string: "https://api.deepseek.com/responses")!,
-        model: String = "deepseek-flash",
+        endpoint: URL = ProviderCapabilityCatalog.deepSeekResponsesEndpoint,
+        model: String = ProviderCapabilityCatalog.deepSeekFlashModel,
         credentialSource: any ProviderCredentialSource = KeychainStore.shared,
         transport: any ProviderHTTPTransport = URLSessionProviderTransport(),
         clock: any ProviderRetryClock = SystemProviderRetryClock(),
@@ -27,7 +27,7 @@ struct DeepSeekProvider: MultimodalModelProvider {
         self.descriptor = ProviderDescriptor(
             id: .deepSeek,
             model: model,
-            capabilities: [.text, .toolCalling, .structuredOutput, .vision, .reasoning, .streaming]
+            capabilities: ProviderCapabilityCatalog.deepSeekCapabilities(for: model, endpoint: endpoint)
         )
     }
 
@@ -136,7 +136,7 @@ struct DeepSeekProvider: MultimodalModelProvider {
                             status: nil,
                             attempt: 1,
                             latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
-                            providerCode: "cancelled",
+                            providerCode: ProviderLogRedactor.errorCode(for: ProviderError.cancelled),
                             model: descriptor.model
                         )
                     )
@@ -162,7 +162,7 @@ struct DeepSeekProvider: MultimodalModelProvider {
                             status: nil,
                             attempt: 1,
                             latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
-                            providerCode: "malformed_response",
+                            providerCode: ProviderLogRedactor.errorCode(for: ProviderError.malformedResponse),
                             model: descriptor.model
                         )
                     )
@@ -183,10 +183,16 @@ struct DeepSeekProvider: MultimodalModelProvider {
         if request.responseFormat != nil && !descriptor.capabilities.contains(.structuredOutput) {
             throw ProviderError.unsupportedCapability(.structuredOutput)
         }
-        if request.messages.contains(where: { message in
+        let imageMessages = request.messages.filter { message in
             message.content.contains { if case .image = $0 { true } else { false } }
-        }) && !descriptor.capabilities.contains(.vision) {
-            throw ProviderError.unsupportedCapability(.vision)
+        }
+        if !imageMessages.isEmpty {
+            guard descriptor.capabilities.contains(.vision) else {
+                throw ProviderError.unsupportedCapability(.vision)
+            }
+            guard imageMessages.allSatisfy({ $0.role == .user }) else {
+                throw ProviderError.schemaViolation(path: "messages.image.role")
+            }
         }
         if request.thinking != .none && !descriptor.capabilities.contains(.reasoning) {
             throw ProviderError.unsupportedCapability(.reasoning)

@@ -226,6 +226,10 @@ def main() -> int:
     require_text(
         ROOT / "DensosoTests/DensosoMigrationTests.swift",
         [
+            "testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation",
+            "testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox",
+            "testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords",
+            "openV7Store(at: location.storeURL)",
             "testV5MigrationMovesRawSamplesIntoIndexAndDailySummary",
             "testV5MigrationIndexesSleepSamplesAcrossMidnightAndAdjacentWindows",
             "existingDaySnapshot.healthKitSampleSummary?.workoutEffort.first?.score",
@@ -242,6 +246,7 @@ def main() -> int:
             "testConfirmedWeightCreatesAndUpdatesPrimaryWhenOnlySecondaryProfileExists",
             "testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts",
             "testConfirmationDailySnapshotPagesMealsAndReadsLatestWeightOnly",
+            "testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox",
             "testRecoveryPagesCommittingActionsAndSendingOutboxAcrossBoundaries",
             "testRecoveryFindsInterruptedWorkoutPlanAfterFirstScheduleEventPage",
         ),

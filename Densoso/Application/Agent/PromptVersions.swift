@@ -1,0 +1,18 @@
+/// Increment these identifiers when the corresponding prompt contract changes.
+/// They are stable labels for diagnostics and version-aware conversation handling;
+/// they are deliberately kept out of user-visible prompt text.
+enum AgentPromptVersion {
+    static let current = "agent-v2"
+}
+
+enum NarrativePromptVersion {
+    static let current = "health-narrative-v1"
+}
+
+enum MealPromptVersion {
+    static let current = "meal-v2"
+}
+
+enum VisionPromptVersion {
+    static let current = "meal-vision-v2"
+}

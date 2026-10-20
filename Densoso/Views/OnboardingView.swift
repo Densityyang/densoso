@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import DensosoDomain
 
 /// First launch remains a local-first, explicit-consent flow. The visual steps
 /// reorganize the existing fields without changing persistence semantics.
@@ -29,7 +30,7 @@ struct OnboardingView: View {
     @State private var weight = ""
     @State private var activity = ""
     @State private var deficitTarget = ""
-    @State private var intelligenceMode: IntelligenceMode = .localOnly
+    @State private var intelligenceMode: IntelligenceMode = .cloudDeepSeek
     @State private var errorMessage: String?
     @State private var isSaving = false
 
@@ -191,7 +192,7 @@ struct OnboardingView: View {
                 TextField("Workspace ID", text: $qwenWorkspaceID)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Text("北京区域可选文本和单次 Qwen ASR；开放式照片在真实质量门禁完成前保持关闭。")
+                Text("北京区域可选文本和单次 Qwen ASR；Qwen 开放照片在质量门禁完成前不可用，照片默认走 DeepSeek 并需单独授权。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -367,7 +368,10 @@ struct OnboardingView: View {
             appState.isOnboarded = true
             appState.userProfile = profile
         } catch {
-            errorMessage = "保存失败：\(error.localizedDescription)"
+            errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .actionConflictFallback
+            ).userMessage
         }
     }
 }

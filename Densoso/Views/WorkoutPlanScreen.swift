@@ -248,12 +248,19 @@ struct WorkoutPlanScreen: View {
                 try await dependencies.workoutPlanSchedulingService.scheduleConfirmedPlan(actionID: action.id)
                 resultMessage = "计划已确认，并已交给 WorkoutKit 安排。"
             } catch {
-                resultMessage = "计划已在本机确认；系统安排待处理，可在下方重试：\(error.localizedDescription)"
+                let errorMessage = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .workoutKitUnavailableFallback
+                ).userMessage
+                resultMessage = "计划已在本机确认；系统安排待处理，可在下方重试：\(errorMessage)"
             }
             dependencies.watchConnectivityCoordinator.refreshApplicationContext()
             refreshConfirmedPlans()
         } catch {
-            resultMessage = error.localizedDescription
+            resultMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .actionConflictFallback
+            ).userMessage
         }
     }
 
@@ -265,7 +272,10 @@ struct WorkoutPlanScreen: View {
             try await dependencies.workoutPlanSchedulingService.scheduleConfirmedPlan(actionID: actionID)
             resultMessage = "WorkoutKit 计划状态已更新。"
         } catch {
-            resultMessage = error.localizedDescription
+            resultMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .workoutKitUnavailableFallback
+            ).userMessage
         }
         dependencies.watchConnectivityCoordinator.refreshApplicationContext()
         refreshConfirmedPlans()
@@ -286,7 +296,11 @@ struct WorkoutPlanScreen: View {
             confirmedTrainingPlans = []
             confirmedPlansNextOffset = nil
             confirmedTrainingPlansNextOffset = nil
-            confirmedPlansReadError = "读取已确认的计划失败：\(error.localizedDescription)"
+            let errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .actionConflictFallback
+            ).userMessage
+            confirmedPlansReadError = "读取已确认的计划失败：\(errorMessage)"
         }
     }
 
@@ -320,7 +334,11 @@ struct WorkoutPlanScreen: View {
             confirmedPlansReadError = nil
             shouldRetryLoadingMoreConfirmedPlans = false
         } catch {
-            confirmedPlansReadError = "读取更多已确认的计划失败：\(error.localizedDescription)"
+            let errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .actionConflictFallback
+            ).userMessage
+            confirmedPlansReadError = "读取更多已确认的计划失败：\(errorMessage)"
             shouldRetryLoadingMoreConfirmedPlans = true
         }
     }

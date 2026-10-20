@@ -203,7 +203,7 @@ enum MealCaptureOilAnswer: String, CaseIterable, Sendable {
     case useEstimatedRange
 }
 
-enum MealCaptureApplicationError: Error, LocalizedError, Equatable {
+enum MealCaptureApplicationError: Equatable, SharedErrorDescribing {
     case foodDatabaseUnavailable
     case noPhotoEvidence
     case candidateSelectionRequired
@@ -212,27 +212,49 @@ enum MealCaptureApplicationError: Error, LocalizedError, Equatable {
     case mealVisionConsentRequired
     case clarificationAnswerRequired
 
-    var errorDescription: String? {
+    private var safeDetails: (code: SharedErrorCode, reason: SharedErrorReason, message: String) {
         switch self {
-        case .foodDatabaseUnavailable: "本地食物库尚未准备好。"
-        case .noPhotoEvidence: "照片没有提供足够的条码、标签或菜品线索，请用语音补充。"
-        case .candidateSelectionRequired: "请先确认最接近的食物候选。"
-        case .invalidCandidate: "所选食物候选已经失效，请重新识别。"
-        case .portionUnavailable: "请补充大致份量后再生成草稿。"
-        case .mealVisionConsentRequired: "开放式照片需要单独同意向 Qwen 上传处理后的图片。"
-        case .clarificationAnswerRequired: "请先回答这条识别澄清，再生成待确认草稿。"
+        case .foodDatabaseUnavailable:
+            (.providerUnavailable, .unsupportedCapability, "本地食物库尚未准备好。")
+        case .noPhotoEvidence:
+            (.toolArgumentsInvalid, .invalidToolArguments, "照片没有提供足够的条码、标签或菜品线索，请用语音补充。")
+        case .candidateSelectionRequired:
+            (.toolArgumentsInvalid, .invalidToolArguments, "请先确认最接近的食物候选。")
+        case .invalidCandidate:
+            (.actionConflict, .actionNotFound, "所选食物候选已经失效，请重新识别。")
+        case .portionUnavailable:
+            (.toolArgumentsInvalid, .invalidToolArguments, "请补充大致份量后再生成草稿。")
+        case .mealVisionConsentRequired:
+            (.actionConflict, .consentRequired, "开放式照片需要单独同意向 Qwen 上传处理后的图片。")
+        case .clarificationAnswerRequired:
+            (.toolArgumentsInvalid, .invalidToolArguments, "请先回答这条识别澄清，再生成待确认草稿。")
         }
     }
+
+    var sharedErrorDescriptor: SharedErrorDescriptor {
+        SharedErrorDescriptor(
+            code: safeDetails.code,
+            userMessage: safeDetails.message,
+            subsystem: .agent,
+            reason: safeDetails.reason
+        )
+    }
+
+    var errorDescription: String? { sharedErrorDescriptor.userMessage }
 }
 
 @MainActor
 final class MealCaptureApplicationService {
+    static let promptVersion = MealPromptVersion.current
+
     private let foodDatabase: FoodDatabase?
     private let photoSanitizer: any MealPhotoSanitizing
     private let scanner: any MealImageScanning
     private let packagedFoodProvider: (any PackagedFoodProvider)?
+    private let allowsRemotePackagedFoodLookup: Bool
     private let confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)?
     private let visionProvider: (any MealVisionProviding)?
+    private let allowsQwenMealVision: Bool
     private let governanceRepository: any ProviderGovernanceRepository
     private let providerConfiguration: ProviderConfigurationPreferences
     private let usageLedger: ProviderUsageLedger
@@ -247,8 +269,10 @@ final class MealCaptureApplicationService {
         photoSanitizer: any MealPhotoSanitizing = ImageIOMealPhotoSanitizer(),
         scanner: any MealImageScanning = LocalMealImageScanner(),
         packagedFoodProvider: (any PackagedFoodProvider)? = nil,
+        allowsRemotePackagedFoodLookup: Bool = true,
         confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)? = nil,
         visionProvider: (any MealVisionProviding)? = nil,
+        allowsQwenMealVision: Bool = false,
         governanceRepository: any ProviderGovernanceRepository,
         providerConfiguration: ProviderConfigurationPreferences,
         usageLedger: ProviderUsageLedger,
@@ -262,8 +286,10 @@ final class MealCaptureApplicationService {
         self.photoSanitizer = photoSanitizer
         self.scanner = scanner
         self.packagedFoodProvider = packagedFoodProvider
+        self.allowsRemotePackagedFoodLookup = allowsRemotePackagedFoodLookup
         self.confirmedFoodHistory = confirmedFoodHistory
         self.visionProvider = visionProvider
+        self.allowsQwenMealVision = allowsQwenMealVision
         self.governanceRepository = governanceRepository
         self.providerConfiguration = providerConfiguration
         self.usageLedger = usageLedger
@@ -274,13 +300,18 @@ final class MealCaptureApplicationService {
         self.nutritionParser = nutritionParser
     }
 
+    /// Optional Qwen review path. The default photo flow uses the selected
+    /// multimodal Agent provider; this path is enabled only for an explicitly
+    /// selected Qwen mode with its own feature gate and consent.
     func analyzePhoto(_ originalData: Data, locale: Locale = Locale(identifier: "zh-CN")) async throws -> MealCaptureReview {
         guard let foodDatabase else { throw MealCaptureApplicationError.foodDatabaseUnavailable }
         let sanitized = try await photoSanitizer.sanitize(originalData: originalData)
         let localEvidence = try await scanner.scan(imageJPEG: sanitized)
 
         let barcode = localEvidence.first(where: { $0.kind == .barcode })
-        if let barcode, let packagedFoodProvider {
+        if allowsRemotePackagedFoodLookup,
+           let barcode,
+           let packagedFoodProvider {
             do {
                 if let packaged = try await packagedFoodProvider.lookup(barcode: barcode.value) {
                     return try await packagedReview(
@@ -305,6 +336,7 @@ final class MealCaptureApplicationService {
         if barcode != nil { return manualReview(evidence: localEvidence) }
 
         guard qualityGate.allowsOpenPhoto,
+              allowsQwenMealVision,
               providerConfiguration.qwenMealVisionEnabled,
               let visionProvider else {
             return manualReview(evidence: localEvidence)
@@ -399,13 +431,19 @@ final class MealCaptureApplicationService {
     /// stages a pending action after the model invokes the existing meal tool.
     func prepareForAgent(
         originalData: Data,
-        userText: String = "请根据这张餐食照片协助我记录，生成待确认草稿；不确定的部分先提出一个问题。"
+        userText: String = "请根据这张餐食照片协助我记录，生成待确认草稿；不确定的部分先提出一个问题。",
+        onImageStateChange: (@MainActor (MealImageCaptureState) -> Void)? = nil
     ) async throws -> MealCapturePreparation {
+        onImageStateChange?(.sanitizing)
         let sanitized = try await photoSanitizer.sanitize(originalData: originalData)
+        try Task.checkCancellation()
+        onImageStateChange?(.localScanning)
         let localEvidence = try await scanner.scan(imageJPEG: sanitized)
+        try Task.checkCancellation()
 
         if let barcode = localEvidence.first(where: { $0.kind == .barcode }) {
-            if let packagedFoodProvider {
+            if allowsRemotePackagedFoodLookup,
+               let packagedFoodProvider {
                 do {
                     if let packaged = try await packagedFoodProvider.lookup(barcode: barcode.value) {
                         let review = try await packagedReview(
@@ -414,8 +452,10 @@ final class MealCaptureApplicationService {
                             evidence: localEvidence
                         )
                         if review.route == .packagedBarcode {
+                            onImageStateChange?(.localResolved)
                             return .localReview(review)
                         }
+                        onImageStateChange?(.localResolved)
                         return .textOnlyFallback(
                             "本机识别到包装候选「\(packaged.displayName)」，但没有可用营养能量信息。请让用户补充包装营养信息或用文字描述；不要从条码推测营养，也不要上传这张图片。\n\n\(userText)"
                         )
@@ -426,6 +466,7 @@ final class MealCaptureApplicationService {
                     // A scanned barcode remains a text-only/manual path on provider failure.
                 }
             }
+            onImageStateChange?(.localResolved)
             return .textOnlyFallback(
                 "本机识别到包装条码，但没有可用的本地商品匹配。请让用户补充商品名称或营养信息；不要把条码数字当作食物名称，也不要上传这张图片。\n\n\(userText)"
             )
@@ -435,9 +476,12 @@ final class MealCaptureApplicationService {
             .filter { $0.kind == .nutritionLabel }
             .flatMap { $0.value.split(separator: "\n").map(String.init) }
         if let nutrition = nutritionParser.parse(lines: labelLines) {
+            onImageStateChange?(.localResolved)
             return .localReview(try await nutritionLabelReview(nutrition, evidence: localEvidence))
         }
 
+        try Task.checkCancellation()
+        onImageStateChange?(.deepseekRequired)
         return .agentRequest(try MultimodalModelRequest(
             userText: userText,
             imageJPEG: sanitized,

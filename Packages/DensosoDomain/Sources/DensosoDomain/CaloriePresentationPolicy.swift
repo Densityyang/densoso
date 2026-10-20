@@ -36,7 +36,7 @@ public enum CaloriePresentation: Codable, Equatable, Sendable {
 /// Presents the likely point estimate while reserving a single clarification
 /// for unusually broad energy ranges.
 public struct CaloriePresentationPolicy: Sendable {
-    public static let algorithmVersion = "calorie-accounting-v2"
+    public static let algorithmVersion = AlgorithmVersions.calorieAccounting
 
     public init() {}
 

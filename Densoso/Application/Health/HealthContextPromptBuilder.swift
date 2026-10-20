@@ -2,6 +2,8 @@ import DensosoDomain
 import Foundation
 
 enum HealthContextPromptBuilder {
+    static let promptVersion = NarrativePromptVersion.current
+
     private static let healthTerms = [
         "今日", "今天", "本周", "上周", "趋势", "睡眠", "体重", "活动量", "运动负荷",
         "训练", "运动", "活动", "步数", "心率", "hrv", "疲劳", "状态", "休息",

@@ -126,7 +126,8 @@ final class Dependencies {
             cloudProvider: ConfiguredQwenASRProvider(logSink: providerLogBuffer),
             governanceRepository: governanceRepository,
             usageLedger: usageLedger,
-            providerConfiguration: providerConfiguration
+            providerConfiguration: providerConfiguration,
+            cloudFallbackModeIsAllowed: { intelligencePreferences.mode != .localOnly }
         )
 
         let agentSession = AgentSession(
@@ -168,6 +169,7 @@ final class Dependencies {
         self.dailyLoopBackgroundScheduler = DailyLoopBackgroundScheduler(
             modelContainer: modelContainer,
             healthSyncCoordinator: healthKitSyncCoordinator,
+            historicalMetricsRecomputer: HistoricalMetricsRecomputeService(modelContainer: modelContainer),
             healthIntelligenceService: healthIntelligenceService,
             dailyLoopSnapshotService: dailyLoopSnapshotService,
             notificationScheduler: briefNotificationScheduler,
@@ -206,11 +208,19 @@ final class Dependencies {
     }
 
     func makeMealCaptureService() -> MealCaptureApplicationService {
+        let mode = intelligencePreferences.mode
+        let localOnly = mode == .localOnly
+        let explicitlySelectedQwen = mode == .cloudQwen
+        let visionProvider: (any MealVisionProviding)? = explicitlySelectedQwen
+            ? ConfiguredQwenMealVisionProvider(logSink: providerLogBuffer)
+            : nil
         return MealCaptureApplicationService(
             foodDatabase: foodDatabase,
-            packagedFoodProvider: packagedFoodProvider,
+            packagedFoodProvider: localOnly ? nil : packagedFoodProvider,
+            allowsRemotePackagedFoodLookup: !localOnly,
             confirmedFoodHistory: confirmedFoodHistoryRepository,
-            visionProvider: ConfiguredQwenMealVisionProvider(logSink: providerLogBuffer),
+            visionProvider: visionProvider,
+            allowsQwenMealVision: explicitlySelectedQwen,
             governanceRepository: providerGovernanceRepository,
             providerConfiguration: providerConfiguration,
             usageLedger: providerUsageLedger,

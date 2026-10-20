@@ -33,6 +33,7 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         startedAt: Date,
         containsTransientImage: Bool
     ) throws -> AgentRequestSnapshot {
+        try ensureConversation(id: conversationID)
         let descriptor = FetchDescriptor<AgentRequestRecord>(
             predicate: #Predicate { $0.requestID == requestID }
         )
@@ -397,9 +398,43 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
             predicate: #Predicate { $0.id == id }
         )
         descriptor.fetchLimit = 1
-        guard try modelContext.fetch(descriptor).first == nil else { return }
-        modelContext.insert(ConversationRecord(id: id))
+        let existingConversation = try modelContext.fetch(descriptor).first
+        if existingConversation == nil {
+            modelContext.insert(ConversationRecord(id: id))
+        }
+
+        let versionPredicate = #Predicate<ConversationToolSchemaVersionRecord> {
+            $0.conversationID == id
+        }
+        var versionDescriptor = FetchDescriptor<ConversationToolSchemaVersionRecord>(predicate: versionPredicate)
+        versionDescriptor.fetchLimit = 1
+        if try modelContext.fetch(versionDescriptor).first == nil {
+            let hasHistory: Bool
+            if existingConversation != nil {
+                hasHistory = try hasPersistedConversationHistory(id: id)
+            } else {
+                hasHistory = false
+            }
+            let schemaVersion = hasHistory ? ToolSchemaVersion.legacy : ToolSchemaVersion.current
+            modelContext.insert(ConversationToolSchemaVersionRecord(
+                conversationID: id,
+                toolSchemaVersion: schemaVersion
+            ))
+        }
         try modelContext.save()
+    }
+
+    func toolSchemaVersion(conversationID: UUID) throws -> Int {
+        try ensureConversation(id: conversationID)
+        let predicate = #Predicate<ConversationToolSchemaVersionRecord> {
+            $0.conversationID == conversationID
+        }
+        var descriptor = FetchDescriptor<ConversationToolSchemaVersionRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        guard let record = try modelContext.fetch(descriptor).first else {
+            throw AgentRequestPersistenceError.invalidState("conversation tool schema metadata missing")
+        }
+        return record.toolSchemaVersion
     }
 
     func appendMessage(
@@ -432,8 +467,34 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         conversationDescriptor.fetchLimit = 1
         if let conversation = try modelContext.fetch(conversationDescriptor).first {
             conversation.updatedAt = Date()
+            let versionPredicate = #Predicate<ConversationToolSchemaVersionRecord> {
+                $0.conversationID == conversationID
+            }
+            var versionDescriptor = FetchDescriptor<ConversationToolSchemaVersionRecord>(predicate: versionPredicate)
+            versionDescriptor.fetchLimit = 1
+            if let version = try modelContext.fetch(versionDescriptor).first {
+                version.toolSchemaVersion = ToolSchemaVersion.current
+                version.updatedAt = Date()
+            } else {
+                modelContext.insert(ConversationToolSchemaVersionRecord(
+                    conversationID: conversationID,
+                    toolSchemaVersion: ToolSchemaVersion.current
+                ))
+            }
         }
         try modelContext.save()
+    }
+
+    private func hasPersistedConversationHistory(id: UUID) throws -> Bool {
+        let messagePredicate = #Predicate<MessageRecord> { $0.conversationID == id }
+        var messageDescriptor = FetchDescriptor<MessageRecord>(predicate: messagePredicate)
+        messageDescriptor.fetchLimit = 1
+        if try modelContext.fetch(messageDescriptor).first != nil { return true }
+
+        let requestPredicate = #Predicate<AgentRequestRecord> { $0.conversationID == id }
+        var requestDescriptor = FetchDescriptor<AgentRequestRecord>(predicate: requestPredicate)
+        requestDescriptor.fetchLimit = 1
+        return try modelContext.fetch(requestDescriptor).first != nil
     }
 
     func messageData(conversationID: UUID) throws -> [Data] {
@@ -574,6 +635,20 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         conversationDescriptor.fetchLimit = 1
         if let conversation = try modelContext.fetch(conversationDescriptor).first {
             conversation.updatedAt = Date()
+            let versionPredicate = #Predicate<ConversationToolSchemaVersionRecord> {
+                $0.conversationID == conversationID
+            }
+            var versionDescriptor = FetchDescriptor<ConversationToolSchemaVersionRecord>(predicate: versionPredicate)
+            versionDescriptor.fetchLimit = 1
+            if let version = try modelContext.fetch(versionDescriptor).first {
+                version.toolSchemaVersion = ToolSchemaVersion.current
+                version.updatedAt = Date()
+            } else {
+                modelContext.insert(ConversationToolSchemaVersionRecord(
+                    conversationID: conversationID,
+                    toolSchemaVersion: ToolSchemaVersion.current
+                ))
+            }
         }
         try modelContext.save()
     }

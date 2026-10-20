@@ -273,15 +273,33 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
     func testProviderErrorsExportOnlyAllowlistedCodes() {
         XCTAssertEqual(
             ProviderLogRedactor.errorCode(for: ProviderError.server(status: 503)),
-            "server_error"
+            "ProviderUnavailable"
         )
         XCTAssertEqual(
             ProviderLogRedactor.errorCode(for: ProviderError.schemaViolation(path: "PRIVATE-ERROR-PATH")),
-            "schema_violation"
+            "ToolArgumentsInvalid"
         )
         XCTAssertEqual(
             ProviderLogRedactor.errorCode(for: ProviderError.network(code: 45_678)),
-            "network_error"
+            "NetworkUnavailable"
+        )
+        XCTAssertEqual(ProviderLogRedactor.safeProviderCode("server_error"), "server_error")
+        XCTAssertEqual(ProviderLogRedactor.safeProviderCode("ProviderUnavailable"), "ProviderUnavailable")
+        XCTAssertEqual(
+            ProviderError.schemaViolation(path: "PRIVATE-ERROR-PATH").errorDescription,
+            "请求参数暂时无法处理，请重试。"
+        )
+        XCTAssertEqual(
+            ProviderError.requestRejected(status: 400).sharedErrorDescriptor.code,
+            .providerUnavailable
+        )
+        XCTAssertEqual(
+            ProviderError.requestRejected(status: 400).sharedErrorDescriptor.reason,
+            .requestRejected
+        )
+        XCTAssertEqual(
+            ProviderError.contentRejected.sharedErrorDescriptor.code,
+            .providerUnavailable
         )
     }
 }

@@ -9,18 +9,30 @@ enum BriefNotificationKind: String, Sendable {
     case weekly
 }
 
-enum BriefNotificationError: LocalizedError, Equatable {
+enum BriefNotificationError: Equatable, SharedErrorDescribing {
     case authorizationDenied
     case invalidTime
 
-    var errorDescription: String? {
+    var sharedErrorDescriptor: SharedErrorDescriptor {
         switch self {
         case .authorizationDenied:
-            "未获得通知权限，健康回顾提醒保持关闭。"
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "未获得通知权限，健康回顾提醒保持关闭。",
+                subsystem: .projection,
+                reason: .consentRequired
+            )
         case .invalidTime:
-            "提醒时间无效，请选择一天中的有效时间。"
+            SharedErrorDescriptor(
+                code: .toolArgumentsInvalid,
+                userMessage: "提醒时间无效，请选择一天中的有效时间。",
+                subsystem: .projection,
+                reason: .invalidToolArguments
+            )
         }
     }
+
+    var errorDescription: String? { sharedErrorDescriptor.userMessage }
 }
 
 @MainActor
@@ -154,7 +166,10 @@ final class BriefNotificationScheduler {
             if eveningEnabled { try await schedule(.evening) }
             lastError = nil
         } catch {
-            lastError = error.localizedDescription
+            lastError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .actionConflictFallback
+            ).userMessage
         }
     }
 
@@ -168,7 +183,10 @@ final class BriefNotificationScheduler {
             if weeklyEnabled { try await schedule(.weekly) }
             lastError = nil
         } catch {
-            lastError = error.localizedDescription
+            lastError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .actionConflictFallback
+            ).userMessage
         }
     }
 
@@ -185,7 +203,7 @@ final class BriefNotificationScheduler {
         guard try await client.requestAuthorization() else {
             persist(false, kind: kind)
             client.remove(identifier: identifier)
-            lastError = BriefNotificationError.authorizationDenied.localizedDescription
+            lastError = BriefNotificationError.authorizationDenied.sharedErrorDescriptor.userMessage
             throw BriefNotificationError.authorizationDenied
         }
         try await schedule(kind)

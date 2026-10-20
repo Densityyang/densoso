@@ -11,6 +11,10 @@ struct PendingWatchTranscript: Equatable, Identifiable, Sendable {
     var id: UUID { messageID }
 }
 
+private func safeWatchErrorMessage(_ error: Error) -> String {
+    SharedErrorDescriptor.mapped(from: error, fallback: .watchUnavailableFallback).userMessage
+}
+
 /// WCSession's Objective-C reply closure is non-Sendable. This single-use box
 /// transfers it across the actor hop and invokes it exactly once after inbox persistence.
 private final class WatchSessionReplyHandler: @unchecked Sendable {
@@ -105,7 +109,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 do {
                     envelopes = try self.inboxStore.pendingReplayEnvelopes()
                 } catch {
-                    self.lastError = "无法恢复 Watch 命令：\(error.localizedDescription)"
+                    self.lastError = "无法恢复 Watch 命令：\(safeWatchErrorMessage(error))"
                     self.finishResumingPendingCommands()
                     return
                 }
@@ -182,7 +186,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
             try session.updateApplicationContext([Self.payloadKey: data])
             lastError = nil
         } catch {
-            lastError = "无法同步 Watch 摘要：\(error.localizedDescription)"
+            lastError = "无法同步 Watch 摘要：\(safeWatchErrorMessage(error))"
         }
     }
 
@@ -400,7 +404,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 return acknowledgement(for: envelope.messageID, state: .rejected, detail: "此消息类型只能由 iPhone 发送")
             }
         } catch {
-            lastError = "Watch 消息未处理：\(error.localizedDescription)"
+            lastError = "Watch 消息未处理：\(safeWatchErrorMessage(error))"
             return nil
         }
     }
@@ -423,7 +427,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         error: Error?
     ) {
         let isActivated = activationState == .activated
-        let errorMessage = error?.localizedDescription
+        let errorMessage = error.map(safeWatchErrorMessage)
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.isActivated = isActivated

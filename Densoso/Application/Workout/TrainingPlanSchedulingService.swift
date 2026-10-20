@@ -263,7 +263,10 @@ final class TrainingPlanSchedulingService {
             compiled = try compiler.compile(entry.draft)
         } catch {
             entry.state = .terminal
-            entry.lastError = String(error.localizedDescription.prefix(500))
+            entry.lastError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .workoutKitUnavailableFallback
+            ).userMessage
             event.notes = try entry.encodedNotes()
             try context.save()
             throw error
@@ -300,7 +303,10 @@ final class TrainingPlanSchedulingService {
             try context.save()
         } catch {
             entry.state = .retryable
-            entry.lastError = String(error.localizedDescription.prefix(500))
+            entry.lastError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .workoutKitUnavailableFallback
+            ).userMessage
             event.notes = try entry.encodedNotes()
             try? context.save()
             throw error

@@ -198,7 +198,7 @@ public enum HealthReadState: String, Codable, Equatable, Sendable {
     case healthDataUnavailable
 }
 
-public enum HealthStoreClientError: LocalizedError, Equatable, Sendable {
+public enum HealthStoreClientError: Equatable, Sendable, SharedErrorDescribing {
     case unavailable
     case authorizationDenied
     case authorizationNotDetermined
@@ -208,26 +208,68 @@ public enum HealthStoreClientError: LocalizedError, Equatable, Sendable {
     case invalidAnchor
     case queryFailed(String)
 
-    public var errorDescription: String? {
+    public var sharedErrorDescriptor: SharedErrorDescriptor {
         switch self {
-        case .unavailable:
-            "此设备无法使用 Apple Health。"
         case .authorizationDenied:
-            "Apple Health 未允许写入此数据类型。"
+            SharedErrorDescriptor(
+                code: .healthKitUnauthorized,
+                userMessage: "暂时没能更新今天的状态。",
+                subsystem: .healthKit,
+                reason: .healthKitAuthorizationDenied
+            )
         case .authorizationNotDetermined:
-            "该 HealthKit 写入类型尚未完成授权请求。"
+            SharedErrorDescriptor(
+                code: .healthKitUnauthorized,
+                userMessage: "暂时没能更新今天的状态。",
+                subsystem: .healthKit,
+                reason: .healthKitAuthorizationUndetermined
+            )
+        case .unavailable:
+            SharedErrorDescriptor(
+                code: .healthKitUnavailable,
+                userMessage: "暂时没能更新今天的状态。",
+                subsystem: .healthKit,
+                reason: .healthKitUnavailable
+            )
         case .healthDataRestricted:
-            "当前设备策略限制了 HealthKit。"
+            SharedErrorDescriptor(
+                code: .healthKitUnavailable,
+                userMessage: "暂时没能更新今天的状态。",
+                subsystem: .healthKit,
+                reason: .healthDataRestricted
+            )
         case .dataStoreLocked:
-            "设备锁定时 HealthKit 数据暂不可读取。"
-        case .unsupportedMetric(let metric):
-            "当前系统不提供 HealthKit 数据类型：\(metric.rawValue)。"
+            SharedErrorDescriptor(
+                code: .healthKitUnavailable,
+                userMessage: "暂时没能更新今天的状态。",
+                subsystem: .healthKit,
+                reason: .healthDataLocked
+            )
+        case .unsupportedMetric:
+            SharedErrorDescriptor(
+                code: .healthKitUnavailable,
+                userMessage: "暂时没能更新今天的状态。",
+                subsystem: .healthKit,
+                reason: .unsupportedHealthMetric
+            )
         case .invalidAnchor:
-            "HealthKit 同步游标无法读取。"
-        case .queryFailed(let detail):
-            "HealthKit 操作失败：\(detail)"
+            SharedErrorDescriptor(
+                code: .healthKitUnavailable,
+                userMessage: "暂时没能更新今天的状态。",
+                subsystem: .healthKit,
+                reason: .invalidHealthKitAnchor
+            )
+        case .queryFailed:
+            SharedErrorDescriptor(
+                code: .healthKitUnavailable,
+                userMessage: "暂时没能更新今天的状态。",
+                subsystem: .healthKit,
+                reason: .healthKitQueryFailed
+            )
         }
     }
+
+    public var errorDescription: String? { sharedErrorDescriptor.userMessage }
 }
 
 public struct HealthSamplePage: Codable, Equatable, Sendable {

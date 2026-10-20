@@ -23,6 +23,11 @@ meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
   consent and quality gate all allow it.
   Production defaults this quality gate to unavailable/closed because the
   checked-in synthetic set does not prove real-photo VLM accuracy.
+- In the cumulative main PR, the default open-photo route is the explicitly
+  selected DeepSeek multimodal Agent path with its separate `.mealImage`
+  consent. The optional Qwen review adapter is only available when Qwen is
+  explicitly selected and its own feature, quality and consent gates are open;
+  it is never a fallback for a DeepSeek request.
 - The pinned model receives sanitized image input and a strict JSON Schema
   response contract. Its model response must identify the pinned snapshot;
   rolling aliases are rejected. The model supports Function Calling too, but

@@ -18,7 +18,7 @@ protocol ConfirmationRepository: Sendable {
     func recoverInterruptedCommits(now: Date) async throws
 }
 
-enum ConfirmationError: LocalizedError, Equatable, Sendable {
+enum ConfirmationError: Equatable, Sendable, SharedErrorDescribing {
     case notFound
     case expired
     case rejected
@@ -28,6 +28,74 @@ enum ConfirmationError: LocalizedError, Equatable, Sendable {
     case unsupportedAction
     case invariantViolation(String)
     case commitFailed(retryable: Bool)
+
+    var sharedErrorDescriptor: SharedErrorDescriptor {
+        switch self {
+        case .expired:
+            SharedErrorDescriptor(
+                code: .confirmationExpired,
+                userMessage: "待确认操作已过期，请重新生成草稿。",
+                subsystem: .confirmation,
+                reason: .confirmationExpired
+            )
+        case .notFound:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "待确认操作不存在，请重新生成草稿。",
+                subsystem: .confirmation,
+                reason: .actionNotFound
+            )
+        case .rejected:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "该操作已拒绝，未写入健康数据。",
+                subsystem: .confirmation,
+                reason: .actionRejected
+            )
+        case .alreadyCommitting:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "该操作正在提交，请稍后查看状态。",
+                subsystem: .confirmation,
+                reason: .actionAlreadyCommitting
+            )
+        case .payloadCorrupt:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "待确认数据无法读取，请重新生成草稿。",
+                subsystem: .confirmation,
+                reason: .confirmationPayloadCorrupt
+            )
+        case .persistenceReadOnly:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "本地数据暂不可写入，请稍后重试。",
+                subsystem: .confirmation,
+                reason: .persistenceReadOnly
+            )
+        case .unsupportedAction:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "该操作类型暂不支持确认写入。",
+                subsystem: .confirmation,
+                reason: .unsupportedConfirmationAction
+            )
+        case .invariantViolation:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "该操作暂时无法完成，请重新检查后重试。",
+                subsystem: .confirmation,
+                reason: .confirmationInvariantViolation
+            )
+        case .commitFailed(let retryable):
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: retryable ? "提交失败，请稍后重试。" : "提交失败，请重新检查该操作。",
+                subsystem: .confirmation,
+                reason: .confirmationCommitFailed
+            )
+        }
+    }
 
     var isRetryable: Bool {
         switch self {
@@ -41,17 +109,6 @@ enum ConfirmationError: LocalizedError, Equatable, Sendable {
     }
 
     var errorDescription: String? {
-        switch self {
-        case .notFound: "待确认操作不存在"
-        case .expired: "待确认操作已过期，请重新生成草稿"
-        case .rejected: "该操作已拒绝，未写入健康数据"
-        case .alreadyCommitting: "该操作正在提交"
-        case .payloadCorrupt: "待确认数据无法解析"
-        case .persistenceReadOnly(let diagnosticID):
-            "本地数据处于只读恢复模式（\(diagnosticID)）"
-        case .unsupportedAction: "该操作类型尚未开放确认写入"
-        case .invariantViolation(let detail): "确认事务不变量异常：\(detail)"
-        case .commitFailed(let retryable): retryable ? "提交失败，可重试" : "提交失败，需要诊断"
-        }
+        sharedErrorDescriptor.userMessage
     }
 }

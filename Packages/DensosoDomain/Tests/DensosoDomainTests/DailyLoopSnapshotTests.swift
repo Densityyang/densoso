@@ -3,6 +3,21 @@ import XCTest
 @testable import DensosoDomain
 
 final class DailyLoopSnapshotTests: XCTestCase {
+    func testMainPRAlgorithmVersionsAreCentralizedAndInvalidateDailyBriefCache() {
+        XCTAssertEqual(AlgorithmVersions.calorieAccounting, "calorie-accounting-v2")
+        XCTAssertEqual(AlgorithmVersions.mealEstimator, "meal-estimator-v2")
+        XCTAssertEqual(AlgorithmVersions.portionEstimator, "portion-estimator-v2")
+        XCTAssertEqual(AlgorithmVersions.healthIntelligence, "health-intelligence-v2")
+        XCTAssertEqual(AlgorithmVersions.recommendationPolicy, "recommendation-policy-v1")
+        XCTAssertEqual(AlgorithmVersions.dailyLoop, "daily-loop-v1")
+        XCTAssertEqual(RecommendationEngine.algorithmVersion, AlgorithmVersions.recommendationPolicy)
+        XCTAssertEqual(DailyLoopSnapshot.currentAlgorithmVersion, AlgorithmVersions.dailyLoop)
+        XCTAssertEqual(
+            HealthIntelligenceEngine.dailyBriefCacheAlgorithmVersion,
+            "health-intelligence-v2+recommendation-policy-v1"
+        )
+    }
+
     func testDailyLoopPhasesAndQuickActionsHaveStableCases() {
         XCTAssertEqual(DailyLoopPhase.allCases, [.morning, .daytime, .evening])
         XCTAssertEqual(

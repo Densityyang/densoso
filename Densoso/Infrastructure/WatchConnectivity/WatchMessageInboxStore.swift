@@ -504,7 +504,7 @@ final class WatchMessageInboxStore {
         let context = ModelContext(modelContainer)
         let inboxID = Self.conversationID
         let role = "watch-envelope"
-        let sortBy = [SortDescriptor(\.ordinal), SortDescriptor(\.id)]
+        let sortBy = [SortDescriptor(\MessageRecord.ordinal), SortDescriptor(\MessageRecord.id)]
         var cursor: InboxMessageCursor?
         while true {
             let predicate: Predicate<MessageRecord>

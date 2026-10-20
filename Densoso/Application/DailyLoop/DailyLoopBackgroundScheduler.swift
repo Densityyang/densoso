@@ -2,6 +2,22 @@ import BackgroundTasks
 import Foundation
 import Observation
 import SwiftData
+import DensosoDomain
+
+struct HistoricalMetricsRecomputeResult: Equatable, Sendable {
+    let processedCount: Int
+    let hasMoreEligibleWork: Bool
+    let stoppedEarly: Bool
+}
+
+@MainActor
+protocol HistoricalMetricsRecomputing {
+    func recomputePendingMetrics(
+        now: Date,
+        batchSize: Int,
+        shouldStop: @MainActor () -> Bool
+    ) async throws -> HistoricalMetricsRecomputeResult
+}
 
 /// Schedules opportunistic local convergence of HealthKit projections and the daily loop.
 /// HealthKit observer delivery remains the primary change signal; this refresh is a retry path.
@@ -9,9 +25,18 @@ import SwiftData
 @Observable
 final class DailyLoopBackgroundScheduler {
     static let taskIdentifier = "com.densoso.densoso.daily-loop.refresh"
+    private static let historicalRecomputeBatchSize = 10
+    private static let historicalRecomputeRetryInterval: TimeInterval = 15 * 60
+    private static let projectionFailureFallback = SharedErrorDescriptor(
+        code: .projectionFailed,
+        userMessage: "暂时没能更新今天的状态。",
+        subsystem: .projection,
+        reason: .dailyMetricsProjectionFailed
+    )
 
     private let modelContainer: ModelContainer
     private let healthSyncCoordinator: HealthKitSyncCoordinator
+    private let historicalMetricsRecomputer: any HistoricalMetricsRecomputing
     private let healthIntelligenceService: HealthIntelligenceService
     private let dailyLoopSnapshotService: DailyLoopSnapshotService
     private let notificationScheduler: BriefNotificationScheduler
@@ -26,6 +51,7 @@ final class DailyLoopBackgroundScheduler {
     init(
         modelContainer: ModelContainer,
         healthSyncCoordinator: HealthKitSyncCoordinator,
+        historicalMetricsRecomputer: any HistoricalMetricsRecomputing,
         healthIntelligenceService: HealthIntelligenceService,
         dailyLoopSnapshotService: DailyLoopSnapshotService,
         notificationScheduler: BriefNotificationScheduler,
@@ -34,6 +60,7 @@ final class DailyLoopBackgroundScheduler {
     ) {
         self.modelContainer = modelContainer
         self.healthSyncCoordinator = healthSyncCoordinator
+        self.historicalMetricsRecomputer = historicalMetricsRecomputer
         self.healthIntelligenceService = healthIntelligenceService
         self.dailyLoopSnapshotService = dailyLoopSnapshotService
         self.notificationScheduler = notificationScheduler
@@ -82,7 +109,14 @@ final class DailyLoopBackgroundScheduler {
             lastError = nil
         } catch {
             nextRefreshEarliestAt = nil
-            lastError = String(String(describing: error).prefix(240))
+            let fallback = SharedErrorDescriptor(
+                code: .projectionFailed,
+                userMessage: "每日健康回顾暂时无法安排。",
+                subsystem: .projection,
+                reason: .unsupportedCapability,
+                numericCode: (error as NSError).code
+            )
+            lastError = SharedErrorDescriptor.mapped(from: error, fallback: fallback).diagnosticSafeDetail
         }
     }
 
@@ -110,6 +144,20 @@ final class DailyLoopBackgroundScheduler {
                 }
                 let repository = HealthRepository(modelContext: self.modelContainer.mainContext)
                 let syncResult = try await self.healthSyncCoordinator.syncAvailableData(using: repository)
+                guard !Task.isCancelled, !taskBox.isExpired else {
+                    taskBox.complete(success: false)
+                    return
+                }
+                let recomputeResult = try await self.historicalMetricsRecomputer.recomputePendingMetrics(
+                    now: Date(),
+                    batchSize: Self.historicalRecomputeBatchSize,
+                    shouldStop: { Task.isCancelled || taskBox.isExpired }
+                )
+                if recomputeResult.hasMoreEligibleWork {
+                    self.scheduleNextRefresh(
+                        earliestBeginInterval: Self.historicalRecomputeRetryInterval
+                    )
+                }
                 guard !Task.isCancelled, !taskBox.isExpired else {
                     taskBox.complete(success: false)
                     return
@@ -144,7 +192,10 @@ final class DailyLoopBackgroundScheduler {
                     taskBox.complete(success: false)
                     return
                 }
-                self.lastError = String(String(describing: error).prefix(240))
+                self.lastError = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: Self.projectionFailureFallback
+                ).diagnosticSafeDetail
                 taskBox.complete(success: false)
             }
         }

@@ -42,13 +42,37 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
                 "HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
                 "HealthKitSyncCoordinatorTests.testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
+                "HealthKitSyncCoordinatorTests.testOneFailedStreamDoesNotBlockOtherHealthMetrics",
+                "HealthSyncOutboxWorkerTests.testRetryReusesStableSyncIdentifierAndVersion",
+                "HealthSyncOutboxWorkerTests.testInterruptedSendingEntryIsRecoveredAndRetried",
+                "HealthSyncOutboxWorkerTests.testInterruptedOutboxRecoveryAndProcessingPagePastBoundedBatch",
+                "BriefNotificationSchedulerTests.testNotificationErrorsExposeSharedSafeDescriptors",
                 "HealthRepositoryTests.testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches",
                 "HealthRepositoryTests.testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable",
                 "HealthRepositoryTests.testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown",
                 "HealthRepositoryTests.testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays",
                 "HealthRepositoryTests.testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner",
                 "ConfirmationCoordinatorTests.testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision",
+                "ConfirmationCoordinatorTests.testHistoricalConfirmationKeepsPendingMetricsWhenProfileAndWeightAreMissing",
+                "SharedErrorDescriptorTests",
+                "HistoricalMetricsRecomputeServiceTests.testRecomputesOnlyExistingEligiblePendingMetricsWithinBatch",
+                "HistoricalMetricsRecomputeServiceTests.testMissingDOBDoesNotLetObservedEnergyClearRecomputeFlag",
+                "HistoricalMetricsRecomputeServiceTests.testOrdinaryHistoricalReprojectKeepsPendingFlagWhenDOBMissingWithObservedEnergy",
+                "HistoricalMetricsRecomputeServiceTests.testCurrentDayReprojectRetainsObservedEnergyBehaviorWithoutProfileOrWeight",
+                "HistoricalMetricsRecomputeServiceTests.testMissingWeightDoesNotLetObservedEnergyClearRecomputeFlag",
+                "HistoricalMetricsRecomputeServiceTests.testCancellationStopsAfterSavedRowAndReportsRetryableWork",
+                "most recent 90 local days",
+                "complete HealthKit basal/active values cannot bypass",
+                "each completed row before continuing",
+                "Remaining eligible days request an",
+                "Ordinary reproject callers use the same gate",
+                "Both projection entry points share the same fingerprint comparison",
+                "daily-brief cache versions",
                 "CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
+                "DailyMetricsProjectionFingerprintTests.testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected",
+                "DailyMetricsProjectionFingerprintTests.testSourceCursorProfileAndGoalRevisionsChangeProjectionFingerprint",
+                "DailyMetricsProjectionFingerprintTests.testWorkoutEnergyAndProvenanceChangesProjectionFingerprint",
+                "DailyLoopSnapshotTests.testMainPRAlgorithmVersionsAreCentralizedAndInvalidateDailyBriefCache",
                 "HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
                 "HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches",
                 "HealthProjectionActorTests",
@@ -85,7 +109,86 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "Packages/DensosoDomain/Tests/DensosoDomainTests/DailyLoopSnapshotTests.swift",
-            ("testSnapshotSupportsUnavailableOptionalSummaries",),
+            (
+                "testSnapshotSupportsUnavailableOptionalSummaries",
+                "testMainPRAlgorithmVersionsAreCentralizedAndInvalidateDailyBriefCache",
+            ),
+            errors,
+        )
+        require(
+            "Packages/DensosoDomain/Sources/DensosoDomain/AlgorithmVersions.swift",
+            (
+                'public static let calorieAccounting = "calorie-accounting-v2"',
+                'public static let mealEstimator = "meal-estimator-v2"',
+                'public static let portionEstimator = "portion-estimator-v2"',
+                'public static let healthIntelligence = "health-intelligence-v2"',
+                'public static let recommendationPolicy = "recommendation-policy-v1"',
+                'public static let dailyLoop = "daily-loop-v1"',
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/DailyMetricsProjectionFingerprint.swift",
+            (
+                "struct DailyMetricsProjectionFingerprintContext",
+                "healthKitCursorRevisions",
+                "$0.profileKey == profileKey && $0.effectiveFrom <= day",
+                "cursor.lastSuccessfulAt",
+                "cursor.lookbackStart",
+                "SHA256",
+                "static func isCurrent(",
+                "!requiresRecompute",
+                "AlgorithmVersions.calorieAccounting",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/DailyMetricsProjectionFingerprintTests.swift",
+            (
+                "testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected",
+                "testSourceCursorProfileAndGoalRevisionsChangeProjectionFingerprint",
+                "testWorkoutEnergyAndProvenanceChangesProjectionFingerprint",
+                "DailyMetricsProjector.reproject(on: day, in: context)",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/CaloricEngine.swift",
+            (
+                "estimated:\\($0.estimatedCaloriesBurned)",
+                "intensity:\\($0.intensity)",
+                "origin:\\($0.workoutOrigin)",
+                "energy-source:\\($0.energySource ?? \"none\")",
+                "projectionVersion: fingerprintContext.algorithmVersion",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/DailyMetricsProjectionFingerprint.swift",
+            (
+                "target-weight:\\($0.targetWeightKilograms ?? -1)",
+                "daily-deficit:\\($0.dailyDeficitKcal ?? -1)",
+                "daily-protein:\\($0.dailyProteinGrams ?? -1)",
+            ),
+            errors,
+        )
+        require(
+            "Packages/DensosoDomain/Tests/DensosoDomainTests/SharedErrorDescriptorTests.swift",
+            (
+                "testStandardErrorCodesMatchMainPR109Contract",
+                "testHealthKitDescriptorUsesGenericUserMessageAndHidesRawDetail",
+                "testWatchDescriptorHidesCollidingMessageIdentifier",
+            ),
+            errors,
+        )
+        require(
+            "Packages/DensosoDomain/Sources/DensosoDomain/SharedErrorDescriptor.swift",
+            (
+                "public enum SharedErrorCode: String, Codable, CaseIterable, Sendable",
+                'case workoutKitUnauthorized = "WorkoutKitUnauthorized"',
+                "public var diagnosticSafeDetail: String",
+                "public protocol SharedErrorDescribing: LocalizedError",
+            ),
             errors,
         )
         require(
@@ -100,6 +203,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "isLoading: isLoadingDailyLoopSnapshot",
                 "dailyLoopSnapshotReadError = nil",
                 "读取今日概览失败：",
+                "SharedErrorDescriptor.mapped(",
+                "fallback: .projectionFailedFallback",
             ),
             errors,
         )
@@ -149,6 +254,27 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "HealthNarrativePolicy.decode",
                 "exposeTextDeltas: !useStructuredHealthNarrative",
                 "HealthNarrativePolicy.deterministicFallback",
+                "encodedToolError(descriptor: descriptor)",
+                "fallback: .providerUnavailableFallback",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Agent/ToolRegistry.swift",
+            (
+                "enum ToolError: Equatable, Sendable, SharedErrorDescribing",
+                "code: .toolArgumentsInvalid",
+                "reason: .invalidToolArguments",
+                "sharedErrorDescriptor.userMessage",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Infrastructure/WatchConnectivity/PhoneWatchConnectivityCoordinator.swift",
+            (
+                "private func safeWatchErrorMessage(_ error: Error) -> String",
+                "SharedErrorDescriptor.mapped(from: error, fallback: .watchUnavailableFallback)",
+                "error.map(safeWatchErrorMessage)",
             ),
             errors,
         )
@@ -182,6 +308,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "func refresh(asOf date: Date = Date()) async throws -> DailyHealthBrief?",
                 "try await projectionActor.refresh(asOf: date)",
                 "if snapshot.updatesWeeklyBrief",
+                "fallback: .projectionFailedFallback",
+                "lastError = \"无法更新健康摘要：\\(errorMessage)\"",
             ),
             errors,
         )
@@ -194,6 +322,14 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "guard taskBox.canCancelActiveRefresh else { return }",
                 "refreshOperation.cancel()",
                 "activeRefreshTask = refreshOperation",
+                "HistoricalMetricsRecomputing",
+                "historicalMetricsRecomputer.recomputePendingMetrics(",
+                "if recomputeResult.hasMoreEligibleWork",
+                "earliestBeginInterval: Self.historicalRecomputeRetryInterval",
+                "private static let projectionFailureFallback = SharedErrorDescriptor(",
+                "self.lastError = SharedErrorDescriptor.mapped(",
+                "fallback: Self.projectionFailureFallback",
+                ".diagnosticSafeDetail",
                 "guard !Task.isCancelled, !taskBox.isExpired else {",
                 "await self.notificationScheduler.updateSnapshot(snapshot)",
                 "self.watchConnectivityCoordinator.refreshApplicationContext()",
@@ -216,13 +352,15 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors.append("Background refresh must recheck cancellation before work and after each awaited stage")
         for await_step in (
             "let syncResult = try await self.healthSyncCoordinator.syncAvailableData(using: repository)",
+            "let recomputeResult = try await self.historicalMetricsRecomputer.recomputePendingMetrics(",
             "_ = try await self.healthIntelligenceService.refresh()",
             "let snapshot = try await self.dailyLoopSnapshotService.snapshot()",
             "await self.notificationScheduler.updateSnapshot(snapshot)",
         ):
             step_start = background_scheduler.find(await_step)
             check_start = background_scheduler.find(cancellation_guard, step_start + len(await_step))
-            if step_start < 0 or check_start < 0 or check_start - step_start > 320:
+            maximum_cancellation_gap = 700 if "recomputePendingMetrics" in await_step else 320
+            if step_start < 0 or check_start < 0 or check_start - step_start > maximum_cancellation_gap:
                 errors.append(f"Background refresh must check cancellation after {await_step}")
         expiration_handler = background_scheduler.split("backgroundTask.expirationHandler = {", 1)[-1]
         if "taskBox.expire {" not in expiration_handler or "refreshOperation.cancel()" not in expiration_handler:
@@ -430,13 +568,63 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown",
                 "testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays",
                 "testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/ConfirmationCoordinatorTests.swift",
+            (
                 "testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision",
+                "testHistoricalConfirmationKeepsPendingMetricsWhenProfileAndWeightAreMissing",
             ),
             errors,
         )
         require(
             "DensosoTests/HealthKitSyncCoordinatorTests.swift",
-            ("testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",),
+            (
+                "testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
+                "testOneFailedStreamDoesNotBlockOtherHealthMetrics",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/HealthSyncOutboxWorkerTests.swift",
+            (
+                "testRetryReusesStableSyncIdentifierAndVersion",
+                "testInterruptedSendingEntryIsRecoveredAndRetried",
+                "testInterruptedOutboxRecoveryAndProcessingPagePastBoundedBatch",
+                "diagnosticSafeDetail",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/BriefNotificationSchedulerTests.swift",
+            ("testNotificationErrorsExposeSharedSafeDescriptors",),
+            errors,
+        )
+        health_sync_outbox = require(
+            "Densoso/Services/HealthSyncOutboxWorker.swift",
+            ("diagnosticSafeDetail",),
+            errors,
+        )
+        if "String(describing: error)" in health_sync_outbox:
+            errors.append("HealthSyncOutboxWorker must not persist raw error descriptions")
+        persistence_bootstrap = require(
+            "Densoso/Infrastructure/Persistence/PersistenceBootstrap.swift",
+            ("diagnosticSafeDetail(for: error)", "SharedErrorDescriptor.mapped(from: error"),
+            errors,
+        )
+        if "localizedDescription" in persistence_bootstrap:
+            errors.append("PersistenceBootstrap diagnostics must not expose raw localized descriptions")
+        require(
+            "Densoso/Application/Health/HealthKitSyncCoordinator.swift",
+            (
+                "struct HealthSyncFailure: Equatable, Sendable",
+                "HealthKitSyncError stream=\\(stream.rawValue)",
+                "descriptor.diagnosticSafeDetail",
+                "requestID=\\(requestID.uuidString.lowercased())",
+                "fallback: .healthKitUnavailableFallback",
+            ),
             errors,
         )
         require(
@@ -447,6 +635,75 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "$0.dayKey <= lastDayKey",
                 "$0.dayKey == targetDayKey",
                 "descriptor.fetchLimit = 1",
+                "DailyMetricsProjectionFingerprint.context(",
+                "CaloricEngine.projectionFingerprint(",
+                "DailyMetricsProjectionFingerprint.isCurrent(",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/DailyMetricsProjector.swift",
+            (
+                "static func hasValidHistoricalRecomputeInputs(on date: Date, in modelContext: ModelContext) throws -> Bool",
+                "static func reprojectHistoricalIfInputsAvailable(on date: Date, in modelContext: ModelContext) throws -> Bool",
+                "HistoricalMetricsEligibilityPolicy.hasValidInputs(",
+                "existing.requiresRecompute",
+                "day < calendar.startOfDay(for: Date())",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/HistoricalMetricsEligibilityPolicy.swift",
+            (
+                "enum HistoricalMetricsEligibilityPolicy",
+                "static func hasValidInputs(",
+                "profile.dateOfBirth.timeIntervalSince1970.isFinite",
+                "profile.age(in: calendar)",
+                "weight.measuredAt <= day",
+                "weight.kilograms.isFinite, weight.kilograms > 0",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Application/DailyLoop/HistoricalMetricsRecomputeService.swift",
+            (
+                "final class HistoricalMetricsRecomputeService: HistoricalMetricsRecomputing",
+                "static let lookbackDayCount = 90",
+                "static let maximumBatchSize = 10",
+                "descriptor.fetchLimit = Self.lookbackDayCount",
+                "DailyMetricsProjector.hasValidHistoricalRecomputeInputs(on: day, in: queryContext)",
+                "DailyMetricsProjector.reprojectHistoricalIfInputsAvailable(on: day, in: queryContext)",
+                "try queryContext.save()",
+                "await Task.yield()",
+                "shouldStop()",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Infrastructure/Persistence/SwiftDataConfirmationRepository.swift",
+            (
+                "private func reprojectDaily(on date: Date) throws",
+                "existingMetrics.requiresRecompute",
+                "day < calendar.startOfDay(for: Date())",
+                "HistoricalMetricsEligibilityPolicy.hasValidInputs(",
+                "DailyMetricsProjectionFingerprint.context(",
+                "CaloricEngine.projectionFingerprint(",
+                "DailyMetricsProjectionFingerprint.isCurrent(",
+                "fingerprintContext: fingerprintContext",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/HistoricalMetricsRecomputeServiceTests.swift",
+            (
+                "testRecomputesOnlyExistingEligiblePendingMetricsWithinBatch",
+                "testMissingDOBDoesNotLetObservedEnergyClearRecomputeFlag",
+                "testOrdinaryHistoricalReprojectKeepsPendingFlagWhenDOBMissingWithObservedEnergy",
+                "testCurrentDayReprojectRetainsObservedEnergyBehaviorWithoutProfileOrWeight",
+                "testMissingWeightDoesNotLetObservedEnergyClearRecomputeFlag",
+                "testCancellationStopsAfterSavedRowAndReportsRetryableWork",
+                "DensosoSchemaV6.self",
+                "XCTAssertTrue(metric.requiresRecompute)",
             ),
             errors,
         )
@@ -486,6 +743,12 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "matched barcode or usable local",
                 "photo is not included in a model request",
                 "must separately consent to DeepSeek meal-image upload",
+                "Vision capability is scoped to the exact `deepseek-flash` model and the official",
+                "https://api-docs.deepseek.com/guides/vision/",
+                "https://api-docs.deepseek.com/guides/responses_api/",
+                "Image parts are allowed only in user messages",
+                "Production launch does not seed a profile",
+                "Qwen open-photo quality remains closed by",
                 "OCR/evidence text is not persisted",
                 "ephemeral provider message for the current round",
                 "require the regular health-text consent",
@@ -496,6 +759,33 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "textAndImage",
                 "The envelope stores no image bytes",
                 "a text-only or Qwen provider is rejected without fallback",
+                "DiagnosticsExportPrivacyTests.testProviderErrorsExportOnlyAllowlistedCodes",
+                "Agent, Narrative, Meal, and Vision prompt builders expose centralized version",
+                "New conversations persist `toolSchemaVersion=2`",
+                "migrated from V1–V6 are lazily marked as schema v1",
+                "AgentRequestResumeTests.testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn",
+                "AgentCoordinatorTests.testTypedEventStreamPreservesOrderAndRealCounts",
+                "DensosoMigrationTests.testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1",
+                "DensosoMigrationTests.testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation",
+                "DensosoMigrationTests.testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox",
+                "DensosoMigrationTests.testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords",
+                "PromptVersioningTests.testPromptAndToolSchemaVersionsMatchMainPR111And112",
+                "DensosoMigrationTests.testPersistenceBootstrapErrorsUseSafeReadOnlyDescriptor",
+                "ConfirmationCoordinatorTests.testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox",
+                "MealRecordAuditPresentationTests.testMealRecordPresentationShowsSanitizedSourcesAndAlgorithmVersion",
+                "AgentUIStateMachineTests.testAgentEventsMoveThroughThinkingToolDraftConfirmationCommitAndFailureStates",
+                "AgentUIStateMachineTests.testVoiceUIStateMapsExistingSpeechCaptureStatesAndFailureKinds",
+                "MealImageCaptureStateMachineTests.testOpenPhotoRequiresConsentBeforeUploadAndMovesThroughVisionResolution",
+                "MealImageCaptureStateMachineTests.testLocalResolutionAndCancellationNeverBecomeUploadable",
+                "IntelligenceRoutingPolicyTests.testDefaultModeIsCloudDeepSeek",
+                "IntelligenceRoutingPolicyTests.testCloudRequiresExplicitCloudMode",
+                "MealCaptureApplicationServiceTests.testLocalOnlyBarcodeScanNeverCallsPackagedFoodProvider",
+                "SpeechCaptureStateMachineTests.testLocalOnlyModeNeverUsesQwenFallbackEvenWhenFallbackAndConsentAreEnabled",
+                "sanitized request remains local until its explicit DeepSeek",
+                "Image state events carry no image or OCR content",
+                "Cloud DeepSeek is the default mode",
+                "without silent fallback to another provider",
+                "Local Only keeps model",
             ),
             errors,
         )
@@ -543,6 +833,47 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             ),
             errors,
         )
+        require(
+            "Densoso/Application/Meal/MealCaptureApplicationService.swift",
+            (
+                "enum MealCaptureApplicationError: Equatable, SharedErrorDescribing",
+                "var sharedErrorDescriptor: SharedErrorDescriptor",
+                "var errorDescription: String? { sharedErrorDescriptor.userMessage }",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Views/SettingsScreen.swift",
+            (
+                "private enum GoalInputError: SharedErrorDescribing",
+                "var sharedErrorDescriptor: SharedErrorDescriptor",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Views/MealCaptureSheet.swift",
+            (
+                "private enum CameraImagePickerError: SharedErrorDescribing",
+                "var sharedErrorDescriptor: SharedErrorDescriptor",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/MealCaptureApplicationServiceTests.swift",
+            ("testMealCaptureErrorsExposeSharedSafeDescriptors",),
+            errors,
+        )
+        for error_surface in (
+            "Densoso/Views/ChatScreen.swift",
+            "Densoso/Views/DashboardScreen.swift",
+            "Densoso/Views/OnboardingView.swift",
+            "Densoso/Views/MealCaptureSheet.swift",
+            "Densoso/Views/SettingsScreen.swift",
+            "Densoso/Views/HistoryScreen.swift",
+        ):
+            error_surface_source = require(error_surface, ("SharedErrorDescriptor.mapped(",), errors)
+            if "error.localizedDescription" in error_surface_source:
+                errors.append(f"{error_surface} must not display raw error.localizedDescription")
         session = require(
             "Densoso/Agent/AgentSession.swift",
             (
@@ -564,6 +895,291 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "inputEnvelope: message.inputEnvelope",
                 "multimodalRequest.inputEnvelope.isWellFormed",
                 "case invalidInputEnvelope",
+            ),
+            errors,
+        )
+        session_stream_contract = require(
+            "Densoso/Agent/AgentSession.swift",
+            (
+                "func sendEvents(multimodalRequest: MultimodalModelRequest",
+                "func sendEvents(\n        userText: String,\n        inputEnvelope: InputEnvelope",
+                "emit(.committing(actionID: id))",
+            ),
+            errors,
+        )
+        image_consent_offset = session.find("dataClass: .mealImage")
+        image_upload_offset = session.find("emit(.imageUploading)")
+        if image_consent_offset < 0 or image_upload_offset < image_consent_offset:
+            errors.append("AgentSession must verify meal-image consent before the image-upload state event")
+        chat = require(
+            "Densoso/Views/ChatScreen.swift",
+            (
+                "@State private var agentUIState: AgentUIState = .idle",
+                "@State private var voiceUIState: VoiceCaptureUIState = .idle",
+                "dependencies.agentSession.sendEvents(",
+                "transitionAgentUI(using: event)",
+                "AgentUIStateMachine.voiceState(",
+                "agentUIState.isBusy",
+                "agentUIState.canCancel",
+            ),
+            errors,
+        )
+        if "@State private var isProcessing = false" in chat:
+            errors.append("ChatScreen must use explicit AgentUIState instead of a single processing boolean")
+        require(
+            "Densoso/Application/Agent/AgentUIStateMachine.swift",
+            (
+                "enum AgentUIState: Equatable",
+                "case listening",
+                "case transcribing",
+                "case thinking",
+                "case toolExecuting(name: String)",
+                "case draftReady",
+                "case awaitingConfirmation",
+                "case committing",
+                "case completed",
+                "case failed",
+                "event: AgentEvent",
+                "from state: SpeechCaptureState",
+                "case .pendingAction(_):\n            .draftReady",
+                "case .awaitingConfirmation:\n            .awaitingConfirmation",
+                "case .committing(_):\n            .committing",
+                "hasDraftInCurrentTurn: Bool = false",
+                "current == .draftReady || hasDraftInCurrentTurn ? .awaitingConfirmation : .idle",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/AgentUIStateMachineTests.swift",
+            (
+                "testAgentEventsMoveThroughThinkingToolDraftConfirmationCommitAndFailureStates",
+                "testVoiceUIStateMapsExistingSpeechCaptureStatesAndFailureKinds",
+                "hasDraftInCurrentTurn: true",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Application/Meal/MealImageCaptureState.swift",
+            (
+                "case selected",
+                "case sanitizing",
+                "case localScanning",
+                "case localResolved",
+                "case deepseekRequired",
+                "case consent",
+                "case uploading",
+                "case vision",
+                "case resolved",
+                "case cancelled",
+                "func canSend(preparedRequestExists: Bool, consentGranted: Bool) -> Bool",
+                "case .uploadStarted where current.canSend(",
+            ),
+            errors,
+        )
+        meal_capture_sheet = require(
+            "Densoso/Views/MealCaptureSheet.swift",
+            (
+                "onImageStateChange: (MealImageCaptureState) -> Void",
+                "guard canSendPhotoToAgent else { return }",
+                "onSendToAgent(preparedRequest)",
+                "imageCaptureState.canSend(",
+                "granted: true",
+                "imageCaptureState == .uploading || imageCaptureState == .vision",
+                "activePreparationID == preparationID",
+                "policyVersion: \"deepseek-sanitized-meal-image-v1\"",
+                "不会自动更换提供方或上传照片",
+                "授权会保存到设置中，可随时撤回",
+            ),
+            errors,
+        )
+        consent_guard_offset = meal_capture_sheet.find("guard canSendPhotoToAgent else { return }")
+        upload_call_offset = meal_capture_sheet.find("onSendToAgent(preparedRequest)")
+        if consent_guard_offset < 0 or upload_call_offset < consent_guard_offset:
+            errors.append("MealCaptureSheet must check explicit consent before handing an image to AgentSession")
+        require(
+            "Densoso/Application/Meal/MealCaptureApplicationService.swift",
+            (
+                "onImageStateChange: (@MainActor (MealImageCaptureState) -> Void)? = nil",
+                "onImageStateChange?(.sanitizing)",
+                "onImageStateChange?(.localScanning)",
+                "try Task.checkCancellation()",
+                "onImageStateChange?(.deepseekRequired)",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/MealImageCaptureStateMachineTests.swift",
+            (
+                "testOpenPhotoRequiresConsentBeforeUploadAndMovesThroughVisionResolution",
+                "testLocalResolutionAndCancellationNeverBecomeUploadable",
+                "canSend(preparedRequestExists: true, consentGranted: false)",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/IntelligenceRouting.swift",
+            (
+                "static let defaultMode = IntelligenceMode.cloudDeepSeek",
+                "case .cloudDeepSeek:\n            return DeepSeekProvider(",
+                "case .cloudQwen:\n            return QwenProvider(",
+                "case .localOnly:\n            throw ProviderError.unsupportedCapability(.text)",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/App/AppLaunchConfiguration.swift",
+            (
+                'usesSeededProfile: isUITesting && arguments.contains("-ui-testing-seeded")',
+                'let isUITesting = arguments.contains("-ui-testing")',
+            ),
+            errors,
+        )
+        require(
+            "Densoso/App/DensosoApp.swift",
+            (
+                "if launchConfiguration.isUITesting",
+                "guard launchConfiguration.usesSeededProfile else",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Views/OnboardingView.swift",
+            (
+                "@State private var dateOfBirth: Date?",
+                "@State private var hasEditedDateOfBirth = false",
+                "dateOfBirth = dateOfBirthDraft",
+                ".disabled(!hasEditedDateOfBirth)",
+                "let birthDate = dateOfBirth",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/AppLaunchConfigurationTests.swift",
+            (
+                "testSeededProfileRequiresUITestMode",
+                "testUITestArgumentsEnableDeterministicSeed",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Infrastructure/LLM/ProviderConfiguration.swift",
+            (
+                'static let deepSeekFlashModel = "deepseek-flash"',
+                'static let deepSeekResponsesEndpoint = URL(string: "https://api.deepseek.com/responses")!',
+                "static func deepSeekCapabilities(for model: String, endpoint: URL)",
+                "endpoint == deepSeekResponsesEndpoint",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Infrastructure/LLM/DeepSeekProvider.swift",
+            (
+                "model: String = ProviderCapabilityCatalog.deepSeekFlashModel",
+                "endpoint: URL = ProviderCapabilityCatalog.deepSeekResponsesEndpoint",
+                "capabilities: ProviderCapabilityCatalog.deepSeekCapabilities(for: model, endpoint: endpoint)",
+                "input_image",
+                "imageMessages.allSatisfy({ $0.role == .user })",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/App/Dependencies.swift",
+            (
+                "let mode = intelligencePreferences.mode",
+                "let localOnly = mode == .localOnly",
+                "let explicitlySelectedQwen = mode == .cloudQwen",
+                "packagedFoodProvider: localOnly ? nil : packagedFoodProvider",
+                "allowsRemotePackagedFoodLookup: !localOnly",
+                "visionProvider: visionProvider",
+                "allowsQwenMealVision: explicitlySelectedQwen",
+                "cloudFallbackModeIsAllowed: { intelligencePreferences.mode != .localOnly }",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Application/Meal/MealCaptureApplicationService.swift",
+            (
+                "allowsQwenMealVision: Bool = false",
+                "allowsQwenMealVision,",
+                "Optional Qwen review path",
+                "qualityGate: MealVisionQualityGate = .unavailable",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Views/OnboardingView.swift",
+            ("@State private var intelligenceMode: IntelligenceMode = .cloudDeepSeek",),
+            errors,
+        )
+        require(
+            "Densoso/Services/SpeechService.swift",
+            (
+                "cloudFallbackModeIsAllowed: @escaping @MainActor () -> Bool = { true }",
+                "guard cloudFallbackModeIsAllowed(),",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/IntelligenceRoutingPolicyTests.swift",
+            (
+                "testDefaultModeIsCloudDeepSeek",
+                "testCloudRequiresExplicitCloudMode",
+                "testDeepSeekVisionCapabilityIsScopedToDocumentedModelAndEndpoint",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Views/MealCaptureSheet.swift",
+            (
+                "开放照片默认通过 DeepSeek Agent 处理",
+                "当前 Qwen 模式暂未启用开放照片输入",
+                "当前为 Local Only，照片仍留在本机",
+                "不会自动切换提供方或上传照片",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Views/HistoryScreen.swift",
+            ("MealRecordAuditPresentation.summary(",),
+            errors,
+        )
+        require(
+            "Densoso/Views/MealRecordAuditPresentation.swift",
+            (
+                "static func summary(evidenceData: Data?, algorithmVersion: String)",
+                "sourceID.hasPrefix(\"agent-image:\")",
+                "return \"来源：\\(source) · 算法：\\(displayVersion)\"",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/MealRecordAuditPresentationTests.swift",
+            (
+                "testMealRecordPresentationShowsSanitizedSourcesAndAlgorithmVersion",
+                "PRIVATE OCR CONTENT MUST NOT BE SHOWN",
+                "XCTAssertFalse(summary.contains(\"PRIVATE\"))",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/MealCaptureApplicationServiceTests.swift",
+            ("testLocalOnlyBarcodeScanNeverCallsPackagedFoodProvider", "allowsRemotePackagedFoodLookup: false"),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/SpeechCaptureStateMachineTests.swift",
+            ("testLocalOnlyModeNeverUsesQwenFallbackEvenWhenFallbackAndConsentAreEnabled",),
+            errors,
+        )
+        require(
+            "Densoso/Application/Agent/AgentEvents.swift",
+            (
+                "case failed(SharedErrorDescriptor)",
+                "case awaitingConfirmation",
+                "case committing(actionID: UUID)",
+                "case imageUploading",
+                "case imageVision",
+                "case imageResolved",
             ),
             errors,
         )
@@ -662,6 +1278,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "testRealRoundAndToolCountsAndPendingAction",
                 "testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages",
+                "testTypedEventStreamPreservesOrderAndRealCounts",
                 "testProviderReasoningContinuesInMemoryButIsNeverPersisted",
                 "testCloudProviderRequiresExplicitConsent",
                 "testNinthToolCallStopsRequest",
@@ -670,12 +1287,78 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "DensosoTests/Application/AgentRequestResumeTests.swift",
-            ("testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage",),
+            (
+                "testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage",
+                "testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/DensosoMigrationTests.swift",
+            (
+                "testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1",
+                "testPersistenceBootstrapErrorsUseSafeReadOnlyDescriptor",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/PromptVersioningTests.swift",
+            ("testPromptAndToolSchemaVersionsMatchMainPR111And112",),
+            errors,
+        )
+        require(
+            "Densoso/Application/Agent/PromptVersions.swift",
+            (
+                'static let current = "agent-v2"',
+                'static let current = "health-narrative-v1"',
+                'static let current = "meal-v2"',
+                'static let current = "meal-vision-v2"',
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Application/Agent/ToolSchemaVersion.swift",
+            (
+                "static let legacy = 1",
+                "static let current = 2",
+                "static func supportsRestore(_ version: Int) -> Bool",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Persistence/Schemas/DensosoSchemaV7.swift",
+            (
+                "enum DensosoSchemaV7: VersionedSchema",
+                "DensosoSchemaV6.models + [ConversationToolSchemaVersionRecord.self]",
+                "var toolSchemaVersion: Int",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Persistence/DensosoMigrationPlan.swift",
+            (
+                "DensosoSchemaV7.self",
+                ".lightweight(fromVersion: DensosoSchemaV6.self, toVersion: DensosoSchemaV7.self)",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Infrastructure/Persistence/SwiftDataAgentRepository.swift",
+            (
+                "func toolSchemaVersion(conversationID: UUID) throws -> Int",
+                "ToolSchemaVersion.legacy",
+                "ToolSchemaVersion.current",
+                "version.toolSchemaVersion = ToolSchemaVersion.current",
+            ),
             errors,
         )
         require(
             "DensosoTests/Infrastructure/LLM/DeepSeekProviderContractTests.swift",
-            ("testResponsesAPIRequestAndStreamingToolContract", "testImageStructuredOutputAndStatelessToolHistoryEncoding"),
+            (
+                "testResponsesAPIRequestAndStreamingToolContract",
+                "testImageStructuredOutputAndStatelessToolHistoryEncoding",
+                "testImageMustBeInUserMessageAndFailsBeforeNetwork",
+            ),
             errors,
         )
         require(
@@ -689,6 +1372,20 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "DensosoTests/Privacy/DiagnosticsExportPrivacyTests.swift",
+            ("testProviderErrorsExportOnlyAllowlistedCodes",),
+            errors,
+        )
+        require(
+            "Densoso/Infrastructure/LLM/ProviderLogRedactor.swift",
+            (
+                "SharedErrorCode(rawValue: candidate)",
+                "SharedErrorCode.providerUnavailable.rawValue",
+                "error.sharedErrorDescriptor.code.rawValue",
+            ),
+            errors,
+        )
+        require(
             "DensosoTests/Application/SpeechCaptureStateMachineTests.swift",
             ("testLocalFailureWithCapturedAudioUsesQwenOnceAndDeletesTemporaryAudio",),
             errors,
@@ -696,7 +1393,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "DensosoTests/Application/MealCaptureApplicationServiceTests.swift",
             (
-                "testOpenPhotoRequiresSeparateImageConsent",
+                "testOptionalQwenOpenPhotoRequiresSeparateQwenConsent",
+                "testDeepSeekPhotoModeNeverFallsThroughToOptionalQwenVision",
+                "testDefaultClosedQualityGateRequiresManualFallbackWithoutStaging",
                 "testPrepareForAgentRoutesResolvedBarcodeLocallyAndStagesPendingAction",
                 "testPrepareForAgentKeepsCompleteLabelLocalAndAsksOnceForMissingPortion",
                 "testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto",
@@ -777,6 +1476,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Missing or pending sequences stop the watermark",
             "in-memory sequence cache from paged inbox records",
             "App restarts rebuild the cache from durable records",
+            "Local confirmation and WorkoutKit scheduling remain separate states",
+            "its local intent remains retryable",
+            "WorkoutPlanCompilerTests.testWorkoutKitErrorsUseSharedCodesAndSafeMessages",
             "TrainingPlanDraftTests",
             "goal, location, intensity, and reason details",
             "After local midnight, an older snapshot is",
@@ -1035,6 +1737,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "recordNewPendingReceipt(sequence: sequence)",
             "recordReceiptStateChange(",
             "private func forEachInboxMessage(_ body: (MessageRecord) throws -> Void) throws",
+            "let sortBy = [SortDescriptor(\\MessageRecord.ordinal), SortDescriptor(\\MessageRecord.id)]",
             "func causalSequenceStates(for envelopes: [WatchMessageEnvelope]) throws",
             "sequences.contains(sequence)",
             "duplicateSequences.insert(sequence)",
@@ -1119,7 +1822,17 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     )
     require(
         "DensosoTests/WorkoutPlanSchedulingServiceTests.swift",
-        ("testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries",),
+        (
+            "testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries",
+            "testTransientWorkoutKitFailureLeavesAUserRetryableScheduleIntent",
+            "XCTAssertEqual(firstState, .retryable)",
+            "XCTAssertEqual(finalState, .scheduled)",
+        ),
+        errors,
+    )
+    require(
+        "DensosoTests/WorkoutPlanCompilerTests.swift",
+        ("testWorkoutKitErrorsUseSharedCodesAndSafeMessages",),
         errors,
     )
     require(
@@ -1205,6 +1918,7 @@ def main() -> int:
                 "--filter HealthStateTests",
                 "--filter DailyLoopSnapshotTests",
                 "--filter HealthNarrativeTests",
+                "--filter SharedErrorDescriptorTests",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
@@ -1216,11 +1930,21 @@ def main() -> int:
                 "-only-testing:DensosoTests/HealthRepositoryTests/testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner",
                 "-only-testing:DensosoTests/ConfirmationCoordinatorTests/testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision",
+                "-only-testing:DensosoTests/ConfirmationCoordinatorTests/testHistoricalConfirmationKeepsPendingMetricsWhenProfileAndWeightAreMissing",
                 "-only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
+                "-only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testOneFailedStreamDoesNotBlockOtherHealthMetrics",
+                "-only-testing:DensosoTests/HealthSyncOutboxWorkerTests/testRetryReusesStableSyncIdentifierAndVersion",
+                "-only-testing:DensosoTests/HealthSyncOutboxWorkerTests/testInterruptedSendingEntryIsRecoveredAndRetried",
+                "-only-testing:DensosoTests/HealthSyncOutboxWorkerTests/testInterruptedOutboxRecoveryAndProcessingPagePastBoundedBatch",
+                "-only-testing:DensosoTests/BriefNotificationSchedulerTests/testNotificationErrorsExposeSharedSafeDescriptors",
                 "-only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
+                "-only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected",
+                "-only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testSourceCursorProfileAndGoalRevisionsChangeProjectionFingerprint",
+                "-only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testWorkoutEnergyAndProvenanceChangesProjectionFingerprint",
                 "-only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
                 "-only-testing:DensosoTests/HealthProjectionActorTests",
                 "-only-testing:DensosoTests/DailyLoopBackgroundSchedulerTests",
+                "-only-testing:DensosoTests/HistoricalMetricsRecomputeServiceTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
                 "-only-testing:DensosoTests/HealthNarrativePolicyTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary",
@@ -1234,6 +1958,7 @@ def main() -> int:
                 "--filter InputEnvelopeTests",
                 "-only-testing:DensosoTests/MultimodalAgentImageTests/testImageInputUsesAgentSessionAndStagesMealWithoutDirectCommitOrRawMediaPersistence",
                 "-only-testing:DensosoTests/AgentCoordinatorTests/testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages",
+                "-only-testing:DensosoTests/AgentCoordinatorTests/testTypedEventStreamPreservesOrderAndRealCounts",
                 "-only-testing:DensosoTests/MultimodalAgentImageTests/testInterruptedImageRequestFailsClosedUntilImageIsReattachedAndKeepsBudget",
                 "-only-testing:DensosoTests/MultimodalAgentImageTests/testEvidenceOnlyRequestUsesEphemeralProviderMessageWithoutImageConsentOrPersistence",
                 "-only-testing:DensosoTests/MultimodalAgentImageTests/testInterruptedEvidenceOnlyRequestRequiresNewRequestToReprovideEvidence",
@@ -1243,10 +1968,36 @@ def main() -> int:
                 "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentKeepsCompleteLabelLocalAndAsksOnceForMissingPortion",
                 "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto",
                 "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testLocalMealPortionAnswerSupportsCountsAndRejectsPackageSpecsAsConsumedAmount",
+                "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testMealCaptureErrorsExposeSharedSafeDescriptors",
+                "-only-testing:DensosoTests/AgentUIStateMachineTests/testAgentEventsMoveThroughThinkingToolDraftConfirmationCommitAndFailureStates",
+                "-only-testing:DensosoTests/AgentUIStateMachineTests/testVoiceUIStateMapsExistingSpeechCaptureStatesAndFailureKinds",
+                "-only-testing:DensosoTests/MealImageCaptureStateMachineTests/testOpenPhotoRequiresConsentBeforeUploadAndMovesThroughVisionResolution",
+                "-only-testing:DensosoTests/MealImageCaptureStateMachineTests/testLocalResolutionAndCancellationNeverBecomeUploadable",
+                "-only-testing:DensosoTests/IntelligenceRoutingPolicyTests/testDefaultModeIsCloudDeepSeek",
+                "-only-testing:DensosoTests/IntelligenceRoutingPolicyTests/testDeepSeekVisionCapabilityIsScopedToDocumentedModelAndEndpoint",
+                "-only-testing:DensosoTests/IntelligenceRoutingPolicyTests/testCloudRequiresExplicitCloudMode",
+                "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testLocalOnlyBarcodeScanNeverCallsPackagedFoodProvider",
+                "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testOptionalQwenOpenPhotoRequiresSeparateQwenConsent",
+                "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testDeepSeekPhotoModeNeverFallsThroughToOptionalQwenVision",
+                "-only-testing:DensosoTests/MealCaptureApplicationServiceTests/testDefaultClosedQualityGateRequiresManualFallbackWithoutStaging",
+                "-only-testing:DensosoTests/SpeechCaptureStateMachineTests/testLocalOnlyModeNeverUsesQwenFallbackEvenWhenFallbackAndConsentAreEnabled",
                 "-only-testing:DensosoTests/DeepSeekProviderContractTests/testImageStructuredOutputAndStatelessToolHistoryEncoding",
+                "-only-testing:DensosoTests/DeepSeekProviderContractTests/testImageMustBeInUserMessageAndFailsBeforeNetwork",
+                "-only-testing:DensosoTests/AppLaunchConfigurationTests/testSeededProfileRequiresUITestMode",
+                "-only-testing:DensosoTests/AppLaunchConfigurationTests/testUITestArgumentsEnableDeterministicSeed",
                 "-only-testing:DensosoTests/QwenASRProviderContractTests/testOpenAICompatibleAudioRequestAndResponseContract",
                 "-only-testing:DensosoTests/QwenMealVisionProviderContractTests/testPinnedQwen37SnapshotUsesImageAndStructuredObservationContract",
+                "-only-testing:DensosoTests/DiagnosticsExportPrivacyTests/testProviderErrorsExportOnlyAllowlistedCodes",
                 "-only-testing:DensosoTests/AgentRequestResumeTests/testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage",
+                "-only-testing:DensosoTests/AgentRequestResumeTests/testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn",
+                "-only-testing:DensosoTests/DensosoMigrationTests/testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1",
+                "-only-testing:DensosoTests/DensosoMigrationTests/testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation",
+                "-only-testing:DensosoTests/DensosoMigrationTests/testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox",
+                "-only-testing:DensosoTests/DensosoMigrationTests/testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords",
+                "-only-testing:DensosoTests/DensosoMigrationTests/testPersistenceBootstrapErrorsUseSafeReadOnlyDescriptor",
+                "-only-testing:DensosoTests/ConfirmationCoordinatorTests/testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox",
+                "-only-testing:DensosoTests/MealRecordAuditPresentationTests/testMealRecordPresentationShowsSanitizedSourcesAndAlgorithmVersion",
+                "-only-testing:DensosoTests/PromptVersioningTests/testPromptAndToolSchemaVersionsMatchMainPR111And112",
             ),
         ),
         13: (
@@ -1271,7 +2022,9 @@ def main() -> int:
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testUpcomingTrainingSessionsAreBoundedAndOrderedAcrossPages",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanPagesKeepAllRowsAcrossTiedTenRowBoundaries",
                 "-only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testConfirmedScheduleIsIdempotentAcrossRetries",
+                "-only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testTransientWorkoutKitFailureLeavesAUserRetryableScheduleIntent",
                 "-only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries",
+                "-only-testing:DensosoTests/WorkoutPlanCompilerTests/testWorkoutKitErrorsUseSharedCodesAndSafeMessages",
                 "-only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions",

@@ -231,7 +231,7 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
     }
 }
 
-public enum WatchMessageError: Error, Equatable, Sendable {
+public enum WatchMessageError: Equatable, Sendable, SharedErrorDescribing {
     case unsupportedSchemaVersion(Int)
     case emptyTranscript
     case transcriptTooLong
@@ -239,6 +239,41 @@ public enum WatchMessageError: Error, Equatable, Sendable {
     case invalidCausalSequence
     case invalidCausalDependency
     case causalSequenceExhausted
+
+    public var sharedErrorDescriptor: SharedErrorDescriptor {
+        let reason: SharedErrorReason
+        let numericCode: Int?
+        switch self {
+        case .unsupportedSchemaVersion(let version):
+            reason = .watchUnsupportedSchema
+            numericCode = version
+        case .emptyTranscript:
+            reason = .watchEmptyTranscript
+            numericCode = nil
+        case .transcriptTooLong:
+            reason = .watchTranscriptTooLong
+            numericCode = nil
+        case .messageIDCollision:
+            reason = .watchMessageIDCollision
+            numericCode = nil
+        case .invalidCausalSequence:
+            reason = .watchInvalidCausalSequence
+            numericCode = nil
+        case .invalidCausalDependency:
+            reason = .watchInvalidCausalDependency
+            numericCode = nil
+        case .causalSequenceExhausted:
+            reason = .watchCausalSequenceExhausted
+            numericCode = nil
+        }
+        return SharedErrorDescriptor(
+            code: .watchUnavailable,
+            userMessage: "暂时无法同步 Apple Watch 数据。",
+            subsystem: .watch,
+            reason: reason,
+            numericCode: numericCode
+        )
+    }
 }
 
 public struct WatchMessageOutbox: Codable, Equatable, Sendable {

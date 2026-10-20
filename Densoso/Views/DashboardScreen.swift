@@ -226,7 +226,10 @@ struct DashboardScreen: View {
                 in: modelContext
             )
         } catch {
-            loadError = "无法更新数据看板：\(error.localizedDescription)"
+            loadError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
         }
     }
 

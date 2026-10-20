@@ -993,9 +993,28 @@ final class HealthRepository: HealthSyncRepository {
     }
 }
 
-enum HealthRepositoryError: Error, Equatable {
+enum HealthRepositoryError: Equatable, SharedErrorDescribing {
     case missingHealthKitAnchor
     case refuseHealthKitEcho
+
+    var sharedErrorDescriptor: SharedErrorDescriptor {
+        switch self {
+        case .missingHealthKitAnchor:
+            SharedErrorDescriptor(
+                code: .healthKitUnavailable,
+                userMessage: "暂时没能更新今天的状态。",
+                subsystem: .healthKit,
+                reason: .missingHealthKitAnchor
+            )
+        case .refuseHealthKitEcho:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "该健康数据操作暂时无法完成。",
+                subsystem: .healthKit,
+                reason: .refusedHealthKitEcho
+            )
+        }
+    }
 }
 
 struct HealthKitCursorSnapshot: Sendable {

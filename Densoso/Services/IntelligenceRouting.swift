@@ -106,12 +106,13 @@ final class ProviderRegistry: ProviderSelecting {
 @Observable
 final class IntelligencePreferences {
     private static let modeKey = "intelligenceMode"
+    static let defaultMode = IntelligenceMode.cloudDeepSeek
 
     var mode: IntelligenceMode {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey) }
     }
 
     init() {
-        mode = IntelligenceMode(rawValue: UserDefaults.standard.string(forKey: Self.modeKey) ?? "") ?? .localOnly
+        mode = IntelligenceMode(rawValue: UserDefaults.standard.string(forKey: Self.modeKey) ?? "") ?? Self.defaultMode
     }
 }

@@ -142,7 +142,11 @@ final class AgentCoordinatorTests: XCTestCase {
             source: .qwenASR
         ).asInputEnvelope()
 
-        _ = try await harness.session.send(userText: transcript, inputEnvelope: envelope)
+        var response: AgentResponse?
+        for try await event in harness.session.sendEvents(userText: transcript, inputEnvelope: envelope) {
+            if case .completed(let completed) = event { response = completed }
+        }
+        XCTAssertEqual(response?.text, "我会按这段转写继续处理。")
 
         let providerMessage = try XCTUnwrap(provider.recordedRequests().first?.messages.first(where: { $0.role == .user }))
         XCTAssertNil(providerMessage.inputEnvelope)
@@ -277,7 +281,7 @@ final class AgentCoordinatorTests: XCTestCase {
     }
 
     func testCloudProviderRequiresExplicitConsent() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -331,7 +335,7 @@ final class AgentCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(
             labels,
-            ["accepted", "round:1", "tool:1", "pending", "round:2", "delta", "completed:1:2"]
+            ["accepted", "round:1", "tool:1", "pending", "round:2", "delta", "awaiting-confirmation", "completed:1:2"]
         )
     }
 
@@ -438,6 +442,11 @@ final class AgentCoordinatorTests: XCTestCase {
         case .assistantDelta: "delta"
         case .toolCallStarted(_, let index): "tool:\(index)"
         case .pendingAction: "pending"
+        case .awaitingConfirmation: "awaiting-confirmation"
+        case .committing(let actionID): "committing:\(actionID.uuidString.lowercased())"
+        case .imageUploading: "image-uploading"
+        case .imageVision: "image-vision"
+        case .imageResolved: "image-resolved"
         case .usage: "usage"
         case .budgetWarning: "budget"
         case .completed(let response): "completed:\(response.toolCallsCount):\(response.providerRoundsCount)"
@@ -482,7 +491,7 @@ private struct Harness {
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
         healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil
     ) async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: modelContainer)

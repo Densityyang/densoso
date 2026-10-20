@@ -4,6 +4,7 @@ import SwiftData
 struct DailyMetricsProjectionInputs {
     let meals: [MealRecord]
     let workouts: [WorkoutRecord]
+    let sourceRecordRevisions: [String]
 }
 
 /// Loads complete daily projection inputs without allowing a day's record count
@@ -15,9 +16,12 @@ enum DailyMetricsProjectionInputReader {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: date)
         let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+        let meals = try meals(from: day, before: nextDay, in: modelContext)
+        let workouts = try workouts(from: day, before: nextDay, in: modelContext)
         return DailyMetricsProjectionInputs(
-            meals: try meals(from: day, before: nextDay, in: modelContext),
-            workouts: try workouts(from: day, before: nextDay, in: modelContext)
+            meals: meals,
+            workouts: workouts,
+            sourceRecordRevisions: sourceRecordRevisions(meals: meals, workouts: workouts)
         )
     }
 
@@ -26,6 +30,16 @@ enum DailyMetricsProjectionInputReader {
         let day = calendar.startOfDay(for: date)
         let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
         return try meals(from: day, before: nextDay, in: modelContext)
+    }
+
+    private static func sourceRecordRevisions(meals: [MealRecord], workouts: [WorkoutRecord]) -> [String] {
+        let mealRevisions = meals.map {
+            "meal:\($0.id.uuidString.lowercased()):created:\($0.createdAt.timeIntervalSince1970)"
+        }
+        let workoutRevisions = workouts.map {
+            "workout:\($0.id.uuidString.lowercased()):created:\($0.createdAt.timeIntervalSince1970):updated:\($0.updatedAt.timeIntervalSince1970)"
+        }
+        return (mealRevisions + workoutRevisions).sorted()
     }
 
     private static func meals(from day: Date, before nextDay: Date, in modelContext: ModelContext) throws -> [MealRecord] {

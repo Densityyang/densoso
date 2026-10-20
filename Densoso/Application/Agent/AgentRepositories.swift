@@ -232,5 +232,6 @@ protocol ConversationRepository: Sendable {
     func resumeHistory(conversationID: UUID, requestID: UUID) async throws -> [Data]
     func containsRequestID(_ requestID: UUID, conversationID: UUID) async throws -> Bool
     func containsCompletedResponse(requestID: UUID, conversationID: UUID) async throws -> Bool
+    func toolSchemaVersion(conversationID: UUID) async throws -> Int
     func reset(conversationID: UUID) async throws
 }

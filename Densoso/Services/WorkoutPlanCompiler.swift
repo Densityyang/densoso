@@ -5,7 +5,7 @@ import SwiftData
 import WorkoutKit
 import DensosoDomain
 
-enum WorkoutPlanCompileError: LocalizedError, Equatable {
+enum WorkoutPlanCompileError: Equatable, SharedErrorDescribing {
     case emptyName
     case invalidTimeGoal
     case invalidDistanceGoal
@@ -17,20 +17,41 @@ enum WorkoutPlanCompileError: LocalizedError, Equatable {
     case schedulingUnavailable
     case confirmedPlanNotFound
 
-    var errorDescription: String? {
+    var sharedErrorDescriptor: SharedErrorDescriptor {
         switch self {
-        case .emptyName: "请为训练计划填写名称。"
-        case .invalidTimeGoal: "训练时长需在 1 到 720 分钟之间。"
-        case .invalidDistanceGoal: "距离目标需在 100 到 100,000 米之间。"
-        case .invalidLegacyStrengthData: "此计划含旧版组次数据，请重新生成不含动作组次的简化计划。"
-        case .unsupportedActivity: "此设备的 Workout App 不支持该训练类型。"
-        case .unsupportedGoal: "该训练类型不支持所选目标。"
-        case .scheduleDateRequired: "请先选择训练开始时间，再同步到 Apple Watch。"
-        case .scheduleAuthorizationDenied: "未获得将训练计划同步到 Apple Watch 的授权。"
-        case .schedulingUnavailable: "此设备当前不支持训练计划同步。"
-        case .confirmedPlanNotFound: "找不到已经确认的训练计划；未调用 WorkoutKit。"
+        case .scheduleAuthorizationDenied:
+            SharedErrorDescriptor(
+                code: .workoutKitUnauthorized,
+                userMessage: "未获得将训练计划同步到 Apple Watch 的授权。",
+                subsystem: .workoutKit,
+                reason: .workoutKitAuthorizationDenied
+            )
+        case .schedulingUnavailable:
+            SharedErrorDescriptor(
+                code: .watchUnavailable,
+                userMessage: "Apple Watch 暂不支持训练计划同步。",
+                subsystem: .workoutKit,
+                reason: .workoutKitUnavailable
+            )
+        case .confirmedPlanNotFound:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "找不到已确认的训练计划，请重新检查。",
+                subsystem: .workoutKit,
+                reason: .workoutPlanConflict
+            )
+        case .emptyName, .invalidTimeGoal, .invalidDistanceGoal, .invalidLegacyStrengthData,
+             .unsupportedActivity, .unsupportedGoal, .scheduleDateRequired:
+            SharedErrorDescriptor(
+                code: .toolArgumentsInvalid,
+                userMessage: "训练计划暂时无法安排，请检查计划内容后重试。",
+                subsystem: .workoutKit,
+                reason: .invalidWorkoutPlan
+            )
         }
     }
+
+    var errorDescription: String? { sharedErrorDescriptor.userMessage }
 }
 
 @concurrent
@@ -193,7 +214,10 @@ final class WorkoutPlanSchedulingService {
                 try await multiDayService.scheduleConfirmedPlan(actionID: actionID)
                 lastError = nil
             } catch {
-                lastError = error.localizedDescription
+                lastError = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .workoutKitUnavailableFallback
+                ).userMessage
                 throw error
             }
             return
@@ -208,10 +232,16 @@ final class WorkoutPlanSchedulingService {
             try WorkoutPlanCompiler().validate(entry.draft)
         } catch {
             entry.state = .terminal
-            entry.lastError = error.localizedDescription
+            entry.lastError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .workoutKitUnavailableFallback
+            ).userMessage
             event.notes = try entry.encodedNotes()
             try context.save()
-            lastError = error.localizedDescription
+            lastError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .workoutKitUnavailableFallback
+            ).userMessage
             throw error
         }
 
@@ -224,10 +254,16 @@ final class WorkoutPlanSchedulingService {
             lastError = nil
         } catch {
             entry.state = .retryable
-            entry.lastError = error.localizedDescription
+            entry.lastError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .workoutKitUnavailableFallback
+            ).userMessage
             event.notes = try entry.encodedNotes()
             try context.save()
-            lastError = error.localizedDescription
+            lastError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .workoutKitUnavailableFallback
+            ).userMessage
             throw error
         }
     }

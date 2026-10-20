@@ -227,7 +227,7 @@ struct SettingsScreen: View {
                             )
                         }
                     }
-                Text("开放式照片在真实照片质量门禁完成前保持关闭；本地条码、营养标签、语音和文字不受影响。")
+                Text("Qwen 开放照片在真实照片质量门禁完成前保持关闭；开放照片默认走 DeepSeek，且需单独授权，不会自动切到 Qwen。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 LabeledContent("本月用量", value: qwenUsage)
@@ -374,7 +374,7 @@ struct SettingsScreen: View {
             goalDailyDeficit = goal.dailyDeficitKcal.map(String.init) ?? ""
             goalDailyProtein = goal.dailyProteinGrams.map { String($0) } ?? ""
         } catch {
-            healthAuthorizationError = "无法加载健康目标：\(error.localizedDescription)"
+            healthAuthorizationError = "无法加载健康目标：\(safeErrorMessage(error))"
         }
     }
 
@@ -395,7 +395,7 @@ struct SettingsScreen: View {
                 statusMessage = "健康目标已确认并保存。"
                 healthAuthorizationError = nil
             } catch {
-                healthAuthorizationError = "未保存健康目标：\(error.localizedDescription)"
+                healthAuthorizationError = "未保存健康目标：\(safeErrorMessage(error))"
             }
         }
     }
@@ -419,7 +419,7 @@ struct SettingsScreen: View {
                 try await dependencies.briefNotificationScheduler.setMorningEnabled(enabled)
                 notificationError = nil
             } catch {
-                notificationError = error.localizedDescription
+                notificationError = safeErrorMessage(error)
             }
         }
     }
@@ -430,7 +430,7 @@ struct SettingsScreen: View {
                 try await dependencies.briefNotificationScheduler.setEveningEnabled(enabled)
                 notificationError = nil
             } catch {
-                notificationError = error.localizedDescription
+                notificationError = safeErrorMessage(error)
             }
         }
     }
@@ -441,7 +441,7 @@ struct SettingsScreen: View {
                 try await dependencies.briefNotificationScheduler.setMorningTime(hour: hour, minute: minute)
                 notificationError = nil
             } catch {
-                notificationError = error.localizedDescription
+                notificationError = safeErrorMessage(error)
             }
         }
     }
@@ -452,7 +452,7 @@ struct SettingsScreen: View {
                 try await dependencies.briefNotificationScheduler.setEveningTime(hour: hour, minute: minute)
                 notificationError = nil
             } catch {
-                notificationError = error.localizedDescription
+                notificationError = safeErrorMessage(error)
             }
         }
     }
@@ -463,7 +463,7 @@ struct SettingsScreen: View {
                 try await dependencies.briefNotificationScheduler.setWeeklyEnabled(enabled)
                 notificationError = nil
             } catch {
-                notificationError = error.localizedDescription
+                notificationError = safeErrorMessage(error)
             }
         }
     }
@@ -590,7 +590,7 @@ struct SettingsScreen: View {
             statusMessage = "API Key 已保存到 Keychain。"
         } catch {
             statusMessage = nil
-            healthAuthorizationError = "无法保存 API Key：\(error.localizedDescription)"
+            healthAuthorizationError = "无法保存 API Key：\(safeErrorMessage(error))"
         }
     }
 
@@ -603,7 +603,7 @@ struct SettingsScreen: View {
             statusMessage = "Model Studio Key 已保存到 Keychain。"
         } catch {
             statusMessage = nil
-            healthAuthorizationError = "无法保存 Model Studio Key：\(error.localizedDescription)"
+            healthAuthorizationError = "无法保存 Model Studio Key：\(safeErrorMessage(error))"
         }
     }
 
@@ -627,7 +627,7 @@ struct SettingsScreen: View {
                 policyVersion: policyVersion
             )
         } catch {
-            healthAuthorizationError = "无法保存云端同意状态：\(error.localizedDescription)"
+            healthAuthorizationError = "无法保存云端同意状态：\(safeErrorMessage(error))"
         }
     }
 
@@ -676,7 +676,7 @@ struct SettingsScreen: View {
             exportURL = url
             showShareSheet = true
         } catch {
-            dependencies.exportService.lastError = error.localizedDescription
+            dependencies.exportService.lastError = safeErrorMessage(error)
         }
     }
 
@@ -685,7 +685,7 @@ struct SettingsScreen: View {
             exportURL = try await dependencies.speechService.exportDiagnostics()
             showShareSheet = true
         } catch {
-            healthAuthorizationError = "无法导出语音诊断：\(error.localizedDescription)"
+            healthAuthorizationError = "无法导出语音诊断：\(safeErrorMessage(error))"
         }
     }
 
@@ -746,20 +746,39 @@ struct SettingsScreen: View {
             }
             await refreshDiagnostics()
         } catch {
-            healthAuthorizationError = "Apple Health 授权失败：\(error.localizedDescription)"
+            let errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .healthKitUnavailableFallback
+            ).userMessage
+            healthAuthorizationError = "Apple Health 授权失败：\(errorMessage)"
             await refreshDiagnostics()
         }
     }
 }
 
-private enum GoalInputError: LocalizedError {
+private func safeErrorMessage(
+    _ error: Error,
+    fallback: SharedErrorDescriptor = .actionConflictFallback
+) -> String {
+    SharedErrorDescriptor.mapped(from: error, fallback: fallback).userMessage
+}
+
+private enum GoalInputError: SharedErrorDescribing {
     case invalid(String)
 
-    var errorDescription: String? {
+    var sharedErrorDescriptor: SharedErrorDescriptor {
         switch self {
-        case .invalid(let field): "\(field)格式无效或超出允许范围。"
+        case .invalid(let field):
+            SharedErrorDescriptor(
+                code: .toolArgumentsInvalid,
+                userMessage: "\(field)格式无效或超出允许范围。",
+                subsystem: .confirmation,
+                reason: .invalidToolArguments
+            )
         }
     }
+
+    var errorDescription: String? { sharedErrorDescriptor.userMessage }
 }
 
 private struct CapabilityRow: View {
@@ -1001,9 +1020,10 @@ private struct ProfileEditorSheet: View {
             }
             dismiss()
         } catch {
-            validationError = "保存失败：\(error.localizedDescription)"
+            validationError = "保存失败：\(safeErrorMessage(error))"
         }
     }
+
 }
 
 struct ShareSheet: UIViewControllerRepresentable {

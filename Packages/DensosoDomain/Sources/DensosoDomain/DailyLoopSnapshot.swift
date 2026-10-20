@@ -33,6 +33,8 @@ public struct DailyStateSummary: Codable, Equatable, Sendable {
 /// `dayStart` is the caller's local-calendar day anchor; this value does not infer dates,
 /// phases, guidance, or health state.
 public struct DailyLoopSnapshot: Codable, Equatable, Sendable {
+    public static let currentAlgorithmVersion = AlgorithmVersions.dailyLoop
+
     public let dayStart: Date
     public let generatedAt: Date
     public let phase: DailyLoopPhase

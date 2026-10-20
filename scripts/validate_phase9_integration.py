@@ -528,7 +528,7 @@ def main() -> int:
             "testPrepareForAgentKeepsCompleteLabelLocalAndAsksOnceForMissingPortion",
             "testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto",
             "testLocalMealPortionAnswerSupportsCountsAndRejectsPackageSpecsAsConsumedAmount",
-            "testOpenPhotoRequiresSeparateImageConsent",
+            "testOptionalQwenOpenPhotoRequiresSeparateQwenConsent",
             "testPortionClarificationMustBeAnsweredAndIsPersistedAsUserEvidence",
         ),
         errors,

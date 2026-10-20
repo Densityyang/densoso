@@ -500,7 +500,11 @@ public struct HealthIntelligenceResult: Codable, Equatable, Sendable {
 }
 
 public struct HealthIntelligenceEngine: Sendable {
-    public static let algorithmVersion = "health-intelligence-v2"
+    public static let algorithmVersion = AlgorithmVersions.healthIntelligence
+    public static let dailyBriefCacheAlgorithmVersion = [
+        AlgorithmVersions.healthIntelligence,
+        RecommendationEngine.algorithmVersion,
+    ].joined(separator: "+")
     private let calendar: Calendar
 
     public init(calendar: Calendar = .current) {
@@ -836,7 +840,7 @@ public struct HealthIntelligenceEngine: Sendable {
             vitalTrends: vitalTrends,
             trainingLoad: load,
             contextSummary: context,
-            algorithmVersion: Self.algorithmVersion,
+            algorithmVersion: Self.dailyBriefCacheAlgorithmVersion,
             healthState: healthState
         )
         let weightTrend = weightTrendKilograms(in: days)
@@ -1142,6 +1146,8 @@ public struct HealthIntelligenceEngine: Sendable {
 }
 
 public struct RecommendationEngine: Sendable {
+    public static let algorithmVersion = AlgorithmVersions.recommendationPolicy
+
     public init() {}
 
     public func recommend(

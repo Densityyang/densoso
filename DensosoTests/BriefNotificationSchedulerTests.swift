@@ -6,6 +6,16 @@ import XCTest
 final class BriefNotificationSchedulerTests: XCTestCase {
     private let suiteName = "BriefNotificationSchedulerTests.\(UUID().uuidString)"
 
+    func testNotificationErrorsExposeSharedSafeDescriptors() {
+        let denied = BriefNotificationError.authorizationDenied
+        let invalidTime = BriefNotificationError.invalidTime
+
+        XCTAssertEqual(denied.sharedErrorDescriptor.code, .actionConflict)
+        XCTAssertEqual(denied.localizedDescription, denied.sharedErrorDescriptor.userMessage)
+        XCTAssertEqual(invalidTime.sharedErrorDescriptor.code, .toolArgumentsInvalid)
+        XCTAssertEqual(invalidTime.localizedDescription, invalidTime.sharedErrorDescriptor.userMessage)
+    }
+
     func testNotificationsAreOffByDefaultAndRestoreDoesNotRequestPermission() async {
         let defaults = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }

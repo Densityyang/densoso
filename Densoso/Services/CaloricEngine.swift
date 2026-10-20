@@ -100,7 +100,8 @@ enum CaloricEngine {
         healthKitActiveEnergyKcal: Double? = nil,
         healthKitRestingEnergyKcal: Double? = nil,
         healthKitSteps: Double? = nil,
-        healthKitExerciseMinutes: Double? = nil
+        healthKitExerciseMinutes: Double? = nil,
+        fingerprintContext: DailyMetricsProjectionFingerprintContext = .init()
     ) -> DailyMetrics {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
@@ -166,7 +167,7 @@ enum CaloricEngine {
             stepsObserved: validEnergy(healthKitSteps) != nil,
             exerciseObserved: validEnergy(healthKitExerciseMinutes) != nil
         )
-        let fingerprint = sourceFingerprint(
+        let fingerprint = projectionFingerprint(
             day: startOfDay,
             meals: dayMeals,
             workouts: dayWorkouts,
@@ -175,7 +176,8 @@ enum CaloricEngine {
             activeEnergy: healthKitActiveEnergyKcal,
             basalEnergy: healthKitRestingEnergyKcal,
             steps: healthKitSteps,
-            exerciseMinutes: healthKitExerciseMinutes
+            exerciseMinutes: healthKitExerciseMinutes,
+            context: fingerprintContext
         )
 
         return DailyMetrics(
@@ -206,9 +208,35 @@ enum CaloricEngine {
             weightKg: effectiveWeight?.kilograms,
             energyQuality: energyQuality,
             dataCoverageJSON: coverageJSON,
-            projectionVersion: "energy-accounting-v2",
+            projectionVersion: fingerprintContext.algorithmVersion,
             sourceFingerprint: fingerprint,
             requiresRecompute: false
+        )
+    }
+
+    static func projectionFingerprint(
+        day: Date,
+        meals: [MealRecord],
+        workouts: [WorkoutRecord],
+        profile: EffectiveProfile?,
+        weight: EffectiveWeight?,
+        activeEnergy: Double? = nil,
+        basalEnergy: Double? = nil,
+        steps: Double? = nil,
+        exerciseMinutes: Double? = nil,
+        context: DailyMetricsProjectionFingerprintContext = .init()
+    ) -> String {
+        sourceFingerprint(
+            day: day,
+            meals: meals,
+            workouts: workouts,
+            profile: profile,
+            weight: weight,
+            activeEnergy: activeEnergy,
+            basalEnergy: basalEnergy,
+            steps: steps,
+            exerciseMinutes: exerciseMinutes,
+            context: context
         )
     }
 
@@ -256,13 +284,14 @@ enum CaloricEngine {
         activeEnergy: Double?,
         basalEnergy: Double?,
         steps: Double?,
-        exerciseMinutes: Double?
+        exerciseMinutes: Double?,
+        context: DailyMetricsProjectionFingerprintContext
     ) -> String {
         let mealKeys = meals.map {
-            "meal:\($0.id.uuidString.lowercased()):\($0.energyLowKcal):\($0.energyLikelyKcal):\($0.energyHighKcal):\($0.proteinG):\($0.fatG):\($0.carbsG)"
+            "meal:\($0.id.uuidString.lowercased()):calories:\($0.totalCaloriesKcal):energy:\($0.energyLowKcal):\($0.energyLikelyKcal):\($0.energyHighKcal):protein:\($0.proteinG):fat:\($0.fatG):carbs:\($0.carbsG)"
         }.sorted()
         let workoutKeys = workouts.map {
-            "workout:\($0.id.uuidString.lowercased()):\($0.type):\($0.durationMinutes)"
+            "workout:\($0.id.uuidString.lowercased()):date:\($0.date.timeIntervalSince1970):type:\($0.type):duration:\($0.durationMinutes):estimated:\($0.estimatedCaloriesBurned):intensity:\($0.intensity):origin:\($0.workoutOrigin):energy-source:\($0.energySource ?? "none")"
         }.sorted()
         let material = ([
             "day:\(day.timeIntervalSince1970)",
@@ -276,7 +305,7 @@ enum CaloricEngine {
             "basal:\(basalEnergy ?? -1)",
             "steps:\(steps ?? -1)",
             "exercise:\(exerciseMinutes ?? -1)",
-        ] + mealKeys + workoutKeys).joined(separator: "\n")
+        ] + mealKeys + workoutKeys + context.canonicalComponents).joined(separator: "\n")
         let digest = SHA256.hash(data: Data(material.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }

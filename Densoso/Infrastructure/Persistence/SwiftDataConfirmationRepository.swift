@@ -588,6 +588,22 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             profileWeightKg: effectiveRevision?.weightKg,
             profileEffectiveFrom: effectiveRevision?.effectiveFrom
         )
+        let metricsPredicate = #Predicate<DailyMetrics> { $0.date == day }
+        var metricsDescriptor = FetchDescriptor<DailyMetrics>(predicate: metricsPredicate)
+        metricsDescriptor.fetchLimit = 1
+        let existingMetrics = try modelContext.fetch(metricsDescriptor).first
+        if let existingMetrics,
+           existingMetrics.requiresRecompute,
+           day < calendar.startOfDay(for: Date()),
+           !HistoricalMetricsEligibilityPolicy.hasValidInputs(
+               profile: effectiveProfile,
+               weight: effectiveWeight,
+               on: day,
+               calendar: calendar
+           ) {
+            return
+        }
+
         let targetDayKey = dayKey(for: day)
         let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == targetDayKey }
         var snapshotDescriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: snapshotPredicate)
@@ -596,6 +612,35 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let healthSnapshot = try snapshotRecord.map { try decoder.decode(DailyHealthSnapshot.self, from: $0.payloadData) }
+        let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
+            on: day,
+            inputs: projectionInputs,
+            profileRevision: effectiveRevision,
+            weightObservations: weightObservations,
+            in: modelContext
+        )
+        let expectedFingerprint = CaloricEngine.projectionFingerprint(
+            day: day,
+            meals: projectionInputs.meals,
+            workouts: projectionInputs.workouts,
+            profile: effectiveProfile,
+            weight: effectiveWeight,
+            activeEnergy: healthSnapshot?.activeEnergyForProjection,
+            basalEnergy: healthSnapshot?.restingEnergyForProjection,
+            steps: healthSnapshot?.stepCountForProjection,
+            exerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
+            context: fingerprintContext
+        )
+        if let existingMetrics,
+           DailyMetricsProjectionFingerprint.isCurrent(
+               storedFingerprint: existingMetrics.sourceFingerprint,
+               storedAlgorithmVersion: existingMetrics.projectionVersion,
+               requiresRecompute: existingMetrics.requiresRecompute,
+               expectedFingerprint: expectedFingerprint,
+               expectedAlgorithmVersion: fingerprintContext.algorithmVersion
+           ) {
+            return
+        }
         let projected = CaloricEngine.computeDailyMetrics(
             date: day,
             meals: projectionInputs.meals,
@@ -605,13 +650,11 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
             healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection,
             healthKitSteps: healthSnapshot?.stepCountForProjection,
-            healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection
+            healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
+            fingerprintContext: fingerprintContext
         )
-        let metricsPredicate = #Predicate<DailyMetrics> { $0.date == day }
-        var metricsDescriptor = FetchDescriptor<DailyMetrics>(predicate: metricsPredicate)
-        metricsDescriptor.fetchLimit = 1
-        if let existing = try modelContext.fetch(metricsDescriptor).first {
-            copyProjectedMetrics(projected, to: existing)
+        if let existingMetrics {
+            copyProjectedMetrics(projected, to: existingMetrics)
         } else {
             modelContext.insert(projected)
         }

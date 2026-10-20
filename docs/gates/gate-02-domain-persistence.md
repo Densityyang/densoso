@@ -38,14 +38,14 @@ does not authorize Phase 3 without explicit user approval.
 ## Cumulative schema extension
 
 The original Gate 2 acceptance remains the historical V1/V2-to-V3 migration
-record. The current cumulative main-PR branch extends the schema through V6;
+record. The current cumulative main-PR branch extends the schema through V7;
 V5-to-V6 adds a HealthKit sample-ID/day index with pending projection-day and
 deletion state, and rewrites legacy daily snapshot payloads to compact
 summaries. The migration groups workouts by local day and uses a single
 wake-day overlap index for missing sleep snapshots, preserving cross-midnight
 and adjacent-window coverage without rescanning every sample per day.
-V1–V5 schema identities remain intact. Gate 2 CI includes the V5-to-V6 disk
-migration fixtures.
+V1–V6 schema identities remain intact. Gate 2 CI includes the V1/V2 disk
+fixtures migrated and reopened at V7, plus the V5-to-V6 and V6-to-V7 fixtures.
 
 ## Non-goals
 
@@ -80,8 +80,11 @@ to domain/persistence behavior and have a dedicated evidence artifact.
 6. a crash after commit returns the existing receipt without duplication;
 7. interrupted outbox sends become retryable while retaining attempt state;
 8. conversation and pending-action state survive repository recreation;
-9. V1 and V2 disk stores migrate to V3 while preserving IDs, relationships,
-   values, cursors, and historical algorithm versions; and
+9. V1 and V2 disk stores migrate through the current V7 schema and reopen while
+   preserving IDs, relationships, values, cursors, outbox state, and historical
+   algorithm versions, covered by
+   `DensosoMigrationTests.testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation`
+   and `DensosoMigrationTests.testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox`; and
 10. an injected migration failure restores the store, leaves store/WAL/SHM
     unchanged, and causes the write gate and ConfirmationCoordinator to reject
     writes in recovery mode; and
@@ -104,6 +107,10 @@ to domain/persistence behavior and have a dedicated evidence artifact.
     overlapping wake day, preserving summaries across midnight-adjacent
     windows, covered by
     `DensosoMigrationTests.testV5MigrationIndexesSleepSamplesAcrossMidnightAndAdjacentWindows`.
+16. a confirmed meal action remains traceable from the pending action through
+    its receipt, local record and HealthKit outbox by action ID and idempotency
+    key, covered by
+    `ConfirmationCoordinatorTests.testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox`.
 
 The restore routine verifies store/WAL/SHM checksums, stages replacement files,
 and rolls back ordinary file-operation errors. The immutable migration backup is
