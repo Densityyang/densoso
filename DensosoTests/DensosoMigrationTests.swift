@@ -321,6 +321,7 @@ final class DensosoMigrationTests: XCTestCase {
         let legacySnapshot = LegacyDailyHealthSnapshot(
             dayStart: day,
             timezoneIdentifier: calendar.timeZone.identifier,
+            weightKilograms: nil,
             healthKitSamples: samples,
             algorithmVersion: "v5-sleep-window-fixture"
         )

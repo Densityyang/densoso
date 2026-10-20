@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import DensosoDomain
 @testable import Densoso
 
 @MainActor
