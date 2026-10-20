@@ -73,6 +73,7 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `AgentCoordinatorTests.testHealthContextLoadsOnlyForRelevantHealthQuestions`,
   `AgentCoordinatorTests.testHealthContextReadFailureDoesNotClaimDataIsMissing`,
   `DailyBriefRefreshPolicyTests.testActivationRefreshWaitsForInitialRefreshAndOnlyRefreshesStaleLocalDay`,
+  `GetTodayHealthStateToolTests.testProviderReadFailurePropagatesInsteadOfReturningUnavailable`,
   `GetTodayHealthStateToolTests.testUnavailableTrainingLoadEncodesMissingRecentLoadAsNull`,
   `GetHealthHistoryToolTests.testResponseCoalescesDuplicateLocalDaysAndDomainStatuses`,
   `GetHealthHistoryToolTests.testResponseTieBreaksEqualTimestampPointsIndependentOfInputOrder`,

@@ -41,6 +41,21 @@ final class GetTodayHealthStateToolTests: XCTestCase {
         XCTAssertNotNil(object["message"] as? String)
     }
 
+    func testProviderReadFailurePropagatesInsteadOfReturningUnavailable() async {
+        let tool = GetTodayHealthStateTool(stateProvider: { _ in
+            throw HealthStateReadTestError.failed
+        })
+
+        do {
+            _ = try await tool.response(asOf: Date(timeIntervalSince1970: 1_800_000_000))
+            XCTFail("Provider read failures must propagate instead of becoming an unavailable response")
+        } catch let error as HealthStateReadTestError {
+            XCTAssertEqual(error, .failed)
+        } catch {
+            XCTFail("Unexpected provider error: \(error)")
+        }
+    }
+
     func testUnavailableTrainingLoadEncodesMissingRecentLoadAsNull() throws {
         let unavailableLoad = TrainingLoadSummary(
             recentSevenDayLoad: 0,
@@ -149,4 +164,8 @@ final class GetTodayHealthStateToolTests: XCTestCase {
             tomorrowGuidance: nil
         )
     }
+}
+
+private enum HealthStateReadTestError: Error, Equatable {
+    case failed
 }

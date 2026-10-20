@@ -331,7 +331,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "DensosoTests/Application/GetTodayHealthStateToolTests.swift",
-            ("testUnavailableTrainingLoadEncodesMissingRecentLoadAsNull",),
+            (
+                "testProviderReadFailurePropagatesInsteadOfReturningUnavailable",
+                "testUnavailableTrainingLoadEncodesMissingRecentLoadAsNull",
+            ),
             errors,
         )
         require(
