@@ -97,7 +97,9 @@ struct MainTabView: View {
             if let destination = AppIntentInbox.consumeDestination() {
                 appState.pendingSystemIntent = destination
             }
-            AppIntentInbox.receivePendingDrafts()
+            AppIntentInbox.receivePendingDrafts(
+                receiveWorkoutPlan: !isPresentingWorkoutPlanDraft
+            )
             consumeSystemIntent()
         }
     }
@@ -107,11 +109,14 @@ struct MainTabView: View {
             AppIntentInbox.clearMealText()
             selectedTab = 0
         }
+        guard !isPresentingWorkoutPlanDraft else { return }
         if let pendingDraft = appState.pendingWorkoutPlan {
             presentWorkoutPlanDraft(pendingDraft)
         } else if let queuedDraft = AppIntentInbox.nextQueuedWorkoutPlan() {
             queuedWorkoutPlanDraftBeingPresented = queuedDraft
             appState.pendingWorkoutPlan = queuedDraft
+        } else if let inboxDraft = AppIntentInbox.consumeWorkoutPlan() {
+            appState.pendingWorkoutPlan = inboxDraft
         }
     }
 

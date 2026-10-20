@@ -115,8 +115,13 @@ enum AppIntentInbox {
     }
 
     @MainActor
-    static func receivePendingDrafts(defaults: UserDefaults = .standard) {
-        if let workoutPlan = consumeWorkoutPlan(defaults: defaults) {
+    static func receivePendingDrafts(
+        receiveWorkoutPlan: Bool = true,
+        defaults: UserDefaults = .standard
+    ) {
+        if receiveWorkoutPlan,
+           AppState.shared.pendingWorkoutPlan == nil,
+           let workoutPlan = consumeWorkoutPlan(defaults: defaults) {
             AppState.shared.pendingWorkoutPlan = workoutPlan
         }
         if let mealText = consumeMealText(defaults: defaults) {

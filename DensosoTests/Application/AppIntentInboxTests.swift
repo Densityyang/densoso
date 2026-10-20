@@ -111,6 +111,55 @@ final class AppIntentInboxTests: XCTestCase {
         XCTAssertNil(AppIntentInbox.consumeWorkoutPlan(defaults: defaults))
     }
 
+    func testSceneReceiveCanKeepWorkoutPlanInInboxWhileReceivingMeal() throws {
+        let suiteName = "AppIntentInboxDeferredWorkoutTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let previousMealText = AppState.shared.pendingMealText
+        let previousWorkoutPlan = AppState.shared.pendingWorkoutPlan
+        let mealText = "午餐：鸡蛋和蔬菜"
+        let workoutPlan = WorkoutPlanDraft(name: "待编辑训练", activity: .running)
+        AppState.shared.pendingMealText = nil
+        AppState.shared.pendingWorkoutPlan = nil
+        AppIntentInbox.store(mealText: mealText, defaults: defaults)
+        AppIntentInbox.store(workoutPlan: workoutPlan, defaults: defaults)
+        defer {
+            AppState.shared.pendingMealText = previousMealText
+            AppState.shared.pendingWorkoutPlan = previousWorkoutPlan
+        }
+
+        AppIntentInbox.receivePendingDrafts(receiveWorkoutPlan: false, defaults: defaults)
+
+        XCTAssertEqual(AppState.shared.pendingMealText, mealText)
+        XCTAssertNil(AppState.shared.pendingWorkoutPlan)
+        XCTAssertNil(AppIntentInbox.consumeMealText(defaults: defaults))
+        XCTAssertEqual(AppIntentInbox.consumeWorkoutPlan(defaults: defaults), workoutPlan)
+    }
+
+    func testReceiveDoesNotReplaceAnAlreadyPendingWorkoutDraft() throws {
+        let suiteName = "AppIntentInboxExistingWorkoutTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let previousMealText = AppState.shared.pendingMealText
+        let previousWorkoutPlan = AppState.shared.pendingWorkoutPlan
+        let pendingDraft = WorkoutPlanDraft(name: "当前待编辑计划", activity: .walking)
+        let inboxDraft = WorkoutPlanDraft(name: "后续计划", activity: .cycling)
+        AppState.shared.pendingMealText = nil
+        AppState.shared.pendingWorkoutPlan = pendingDraft
+        AppIntentInbox.store(mealText: "晚餐：鱼和蔬菜", defaults: defaults)
+        AppIntentInbox.store(workoutPlan: inboxDraft, defaults: defaults)
+        defer {
+            AppState.shared.pendingMealText = previousMealText
+            AppState.shared.pendingWorkoutPlan = previousWorkoutPlan
+        }
+
+        AppIntentInbox.receivePendingDrafts(defaults: defaults)
+
+        XCTAssertEqual(AppState.shared.pendingWorkoutPlan, pendingDraft)
+        XCTAssertEqual(AppState.shared.pendingMealText, "晚餐：鱼和蔬菜")
+        XCTAssertEqual(AppIntentInbox.consumeWorkoutPlan(defaults: defaults), inboxDraft)
+    }
+
     func testMealTextHandoffPreservesExistingComposerText() {
         XCTAssertEqual(
             AppIntentInbox.mergedMealText(existing: "已有未发送内容", incoming: "系统转写草稿"),

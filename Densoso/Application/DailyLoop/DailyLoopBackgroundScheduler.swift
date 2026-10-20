@@ -55,7 +55,7 @@ final class DailyLoopBackgroundScheduler {
             let taskBox = BackgroundRefreshTaskBox(refreshTask)
             Task { @MainActor [weak self, taskBox] in
                 guard let self else {
-                    taskBox.task.setTaskCompleted(success: false)
+                    taskBox.complete(success: false)
                     return
                 }
                 self.handle(taskBox)
@@ -89,41 +89,67 @@ final class DailyLoopBackgroundScheduler {
     private func handle(_ taskBox: BackgroundRefreshTaskBox) {
         scheduleNextRefresh()
         guard isHealthAuthorized() else {
-            taskBox.task.setTaskCompleted(success: false)
+            taskBox.complete(success: false)
             return
         }
         taskBox.task.expirationHandler = { [weak self] in
+            guard taskBox.markExpired() else { return }
             Task { @MainActor [weak self] in
+                guard taskBox.canCancelActiveRefresh else { return }
                 self?.activeRefreshTask?.cancel()
             }
         }
 
         activeRefreshTask = Task { @MainActor [weak self] in
             guard let self else {
-                taskBox.task.setTaskCompleted(success: false)
+                taskBox.complete(success: false)
                 return
             }
             defer { self.activeRefreshTask = nil }
 
             do {
+                guard !Task.isCancelled, !taskBox.isExpired else {
+                    taskBox.complete(success: false)
+                    return
+                }
                 let repository = HealthRepository(modelContext: self.modelContainer.mainContext)
                 let syncResult = try await self.healthSyncCoordinator.syncAvailableData(using: repository)
-                guard !Task.isCancelled else {
-                    taskBox.task.setTaskCompleted(success: false)
+                guard !Task.isCancelled, !taskBox.isExpired else {
+                    taskBox.complete(success: false)
                     return
                 }
                 _ = try await self.healthIntelligenceService.refresh()
+                guard !Task.isCancelled, !taskBox.isExpired else {
+                    taskBox.complete(success: false)
+                    return
+                }
                 let snapshot = try await self.dailyLoopSnapshotService.snapshot()
+                guard !Task.isCancelled, !taskBox.isExpired else {
+                    taskBox.complete(success: false)
+                    return
+                }
                 await self.notificationScheduler.updateSnapshot(snapshot)
+                guard !Task.isCancelled, !taskBox.isExpired else {
+                    taskBox.complete(success: false)
+                    return
+                }
                 self.watchConnectivityCoordinator.refreshApplicationContext()
+                guard !Task.isCancelled, !taskBox.isExpired else {
+                    taskBox.complete(success: false)
+                    return
+                }
                 let succeeded = !syncResult.hasFailures
                 self.lastError = syncResult.failedStreams.isEmpty
                     ? nil
                     : "部分 HealthKit 数据将在后续刷新时重试。"
-                taskBox.task.setTaskCompleted(success: succeeded)
+                taskBox.complete(success: succeeded)
             } catch {
+                guard !Task.isCancelled, !taskBox.isExpired else {
+                    taskBox.complete(success: false)
+                    return
+                }
                 self.lastError = String(String(describing: error).prefix(240))
-                taskBox.task.setTaskCompleted(success: false)
+                taskBox.complete(success: false)
             }
         }
     }
@@ -132,8 +158,46 @@ final class DailyLoopBackgroundScheduler {
 /// Carries the Objective-C BackgroundTasks handle across the launch queue hop.
 private final class BackgroundRefreshTaskBox: @unchecked Sendable {
     let task: BGAppRefreshTask
+    private let lock = NSLock()
+    private var expired = false
+    private var completed = false
+
+    var isExpired: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return expired
+    }
+
+    var canCancelActiveRefresh: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return expired && !completed
+    }
 
     init(_ task: BGAppRefreshTask) {
         self.task = task
+    }
+
+    func markExpired() -> Bool {
+        lock.lock()
+        guard !completed, !expired else {
+            lock.unlock()
+            return false
+        }
+        expired = true
+        lock.unlock()
+        return true
+    }
+
+    func complete(success: Bool) {
+        lock.lock()
+        guard !completed else {
+            lock.unlock()
+            return
+        }
+        completed = true
+        let finalSuccess = success && !expired
+        lock.unlock()
+        task.setTaskCompleted(success: finalSuccess)
     }
 }

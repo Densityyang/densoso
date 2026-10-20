@@ -244,7 +244,8 @@ def main() -> int:
             "static func consumeMealText(defaults: UserDefaults = .standard)",
             "static func deliver(workoutPlan: WorkoutPlanDraft, defaults: UserDefaults = .standard)",
             "static func deliver(mealText: String, defaults: UserDefaults = .standard)",
-            "static func receivePendingDrafts(defaults: UserDefaults = .standard)",
+            "static func receivePendingDrafts(",
+            "receiveWorkoutPlan: Bool = true",
             "static func enqueueWorkoutPlan(_ draft: WorkoutPlanDraft, defaults: UserDefaults = .standard)",
             "static func nextQueuedWorkoutPlan(defaults: UserDefaults = .standard)",
             "static func acknowledgeQueuedWorkoutPlan(",
@@ -257,6 +258,15 @@ def main() -> int:
     )
     if "ModelContext" in intent_source or "HKHealthStore" in intent_source:
         errors.append("App Intents must hand off a request without writing SwiftData or HealthKit")
+    inbox_receiver = intent_source.split("static func receivePendingDrafts(", 1)[-1].split(
+        "private static func queuedWorkoutPlans", 1
+    )[0]
+    if (
+        "receiveWorkoutPlan" not in inbox_receiver
+        or "AppState.shared.pendingWorkoutPlan == nil" not in inbox_receiver
+        or "let workoutPlan = consumeWorkoutPlan(defaults: defaults)" not in inbox_receiver
+    ):
+        errors.append("The inbox must preserve workout plans when the UI is deferring or already holding one")
     require_text(
         "Densoso/App/AppState.swift",
         ("pendingSystemIntent", "shouldFocusComposer", "shouldScrollToDailyLoop"),
@@ -267,13 +277,14 @@ def main() -> int:
         (
             "AppIntentInbox.consumeDestination()",
             "AppIntentInbox.receivePendingDrafts()",
+            "AppIntentInbox.receivePendingDrafts(receiveWorkoutPlan: false)",
             "AppIntentInbox.clearQueuedWorkoutPlans()",
             "appState.pendingSystemIntent",
         ),
         errors,
     )
-    if app_root.count("AppIntentInbox.receivePendingDrafts()") < 2:
-        errors.append("App Intent drafts must be restored on startup and when the scene becomes active")
+    if app_root.count("AppIntentInbox.receivePendingDrafts(") < 2:
+        errors.append("App Intent drafts must be restored on startup and scene-active meal delivery")
     app_intent_content = require_text(
         "Densoso/Views/ContentView.swift",
         (
@@ -293,6 +304,9 @@ def main() -> int:
             "AppIntentInbox.clearWorkoutPlan()",
             "AppIntentInbox.clearQueuedWorkoutPlans()",
             "AppIntentInbox.clearMealText()",
+            "guard !isPresentingWorkoutPlanDraft else { return }",
+            "else if let inboxDraft = AppIntentInbox.consumeWorkoutPlan()",
+            "AppIntentInbox.receivePendingDrafts(\n                receiveWorkoutPlan: !isPresentingWorkoutPlanDraft\n            )",
         ),
         errors,
     )
@@ -304,6 +318,14 @@ def main() -> int:
     )[0]
     if "AppIntentInbox.enqueueWorkoutPlan(draft)" not in queued_plan_branch or "return" not in queued_plan_branch:
         errors.append("A workout draft arriving during editing must queue without replacing the open draft")
+    pending_draft_receiver = app_intent_content.split("private func presentPendingAppIntentDrafts()", 1)[-1].split(
+        "private func presentWorkoutPlanDraft(", 1
+    )[0]
+    if (
+        "guard !isPresentingWorkoutPlanDraft else { return }" not in pending_draft_receiver
+        or "AppIntentInbox.consumeWorkoutPlan()" not in pending_draft_receiver
+    ):
+        errors.append("MainTab must defer inbox consumption while editing and recover it when the editor is available")
     require_text(
         "Densoso/Views/ChatScreen.swift",
         (
@@ -325,6 +347,8 @@ def main() -> int:
             "testMealTextIntentDeliveryUpdatesRunningAppState",
             "testWorkoutPlanIntentDeliveryUpdatesRunningAppState",
             "testPendingDraftInboxRestoresMealAndWorkoutOnceForColdOrActiveScene",
+            "testSceneReceiveCanKeepWorkoutPlanInInboxWhileReceivingMeal",
+            "testReceiveDoesNotReplaceAnAlreadyPendingWorkoutDraft",
             "testMealTextHandoffPreservesExistingComposerText",
             "testQueuedWorkoutPlansPersistInOrderUntilAcknowledged",
             "testWorkoutPlanQueueHasBoundedCapacity",

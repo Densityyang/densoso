@@ -156,6 +156,49 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             ),
             errors,
         )
+        background_scheduler = require(
+            "Densoso/Application/DailyLoop/DailyLoopBackgroundScheduler.swift",
+            (
+                "taskBox.task.expirationHandler = { [weak self] in",
+                "guard taskBox.markExpired() else { return }",
+                "guard taskBox.canCancelActiveRefresh else { return }",
+                "self?.activeRefreshTask?.cancel()",
+                "guard !Task.isCancelled, !taskBox.isExpired else {",
+                "await self.notificationScheduler.updateSnapshot(snapshot)",
+                "self.watchConnectivityCoordinator.refreshApplicationContext()",
+                "taskBox.complete(success: succeeded)",
+                "private var expired = false",
+                "private var completed = false",
+                "let finalSuccess = success && !expired",
+                "func markExpired() -> Bool",
+                "return expired && !completed",
+            ),
+            errors,
+        )
+        cancellation_guard = "guard !Task.isCancelled, !taskBox.isExpired else {"
+        if background_scheduler.count(cancellation_guard) < 6:
+            errors.append("Background refresh must recheck cancellation before work and after each awaited stage")
+        for await_step in (
+            "let syncResult = try await self.healthSyncCoordinator.syncAvailableData(using: repository)",
+            "_ = try await self.healthIntelligenceService.refresh()",
+            "let snapshot = try await self.dailyLoopSnapshotService.snapshot()",
+            "await self.notificationScheduler.updateSnapshot(snapshot)",
+        ):
+            step_start = background_scheduler.find(await_step)
+            check_start = background_scheduler.find(cancellation_guard, step_start + len(await_step))
+            if step_start < 0 or check_start < 0 or check_start - step_start > 320:
+                errors.append(f"Background refresh must check cancellation after {await_step}")
+        expiration_handler = background_scheduler.split("taskBox.task.expirationHandler = {", 1)[-1].split(
+            "activeRefreshTask = Task", 1
+        )[0]
+        if expiration_handler.find("taskBox.markExpired()") > expiration_handler.find("Task { @MainActor"):
+            errors.append("Background refresh expiration must mark the task expired before scheduling cancellation")
+        watch_refresh = background_scheduler.find("self.watchConnectivityCoordinator.refreshApplicationContext()")
+        completion_report = background_scheduler.find("taskBox.complete(success: succeeded)")
+        if watch_refresh < 0 or completion_report < watch_refresh or cancellation_guard not in background_scheduler[
+            watch_refresh + len("self.watchConnectivityCoordinator.refreshApplicationContext()"):completion_report
+        ]:
+            errors.append("Background refresh must report completion only after the Watch update and cancellation check")
         require(
             "Densoso/Services/HealthIntelligenceReadModel.swift",
             (

@@ -13,8 +13,11 @@ acceptance.
   capture, and an explicit editable-text entry. Quick actions and transcripts
   fill editable text and never submit by themselves.
 - System App Intents hand meal text and workout plans to a one-shot draft inbox
-  in `UserDefaults` and notify the running app directly. Cold startup and a
-  scene returning to active both drain pending drafts into the editable flow.
+  in `UserDefaults` and notify the running app directly. Cold startup drains
+  both draft types. On scene activation, meal text is always received, while
+  the main tab consumes workout plans only when its editor is closed; an
+  unconsumed plan remains in the inbox while the editor is open, another plan
+  is pending, or the main tab is not yet available.
   Meal text is appended to existing unsent composer text; workout plans open
   their editor automatically and wait behind an editor that is already open.
   At most 16 plans are queued; when full, the incoming draft stays in the
@@ -64,7 +67,7 @@ acceptance.
    photo, HealthKit and Watch paths; no model output writes directly. AppIntent
    meal text and workout-plan handoffs arrive on cold launch and scene
    activation as one-shot editable drafts that preserve unsent text and require
-   in-app confirmation.
+   in-app confirmation; an open workout editor defers consuming another plan.
 3. HealthKit changes flow into local daily summaries and Trends; Watch messages
    route to the same phone-side confirmation draft.
 4. Backup V2/V3/V4 compatibility and V5 round-trip are tested, including that

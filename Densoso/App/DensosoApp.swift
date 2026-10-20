@@ -79,7 +79,7 @@ struct AppRoot: View {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
-                        AppIntentInbox.receivePendingDrafts()
+                        AppIntentInbox.receivePendingDrafts(receiveWorkoutPlan: false)
                     }
                 }
         } else {
