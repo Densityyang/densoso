@@ -62,7 +62,7 @@ def main() -> int:
             "0.95", "1.05", "minimumHalfWidth = 0.30",
             "minimumHalfWidth = 0.50", "minimumHalfWidth = 0.65",
             "isMeasured: false", "userCorrection", "case modelEstimate", "1.65",
-            'algorithmVersion = "portion-estimator-v2"',
+            "AlgorithmVersions.portionEstimator",
         ],
         errors,
     )
@@ -71,7 +71,7 @@ def main() -> int:
         [
             "isCookedComposite", "hasExplicitOil", "oilIngredient",
             "return nil", "foodID = selectedCandidate?.entry.localFoodID",
-            'algorithmVersion = "meal-estimator-v2"',
+            "AlgorithmVersions.mealEstimator",
         ],
         errors,
     )
@@ -101,13 +101,22 @@ def main() -> int:
         ROOT / "Packages/DensosoDomain/Sources/DensosoDomain/CaloriePresentationPolicy.swift",
         [
             "relativeWidth <= 0.35", "relativeWidth <= 0.65", "needsClarification",
-            'algorithmVersion = "calorie-accounting-v2"',
+            "AlgorithmVersions.calorieAccounting",
         ],
         errors,
     )
     require_text(
         ROOT / "Packages/DensosoDomain/Sources/DensosoDomain/HealthDomainDrafts.swift",
         ["var caloriePresentation: CaloriePresentation?", "totalNutrients?.energyKcal"],
+        errors,
+    )
+    require_text(
+        ROOT / "Packages/DensosoDomain/Sources/DensosoDomain/AlgorithmVersions.swift",
+        [
+            'public static let calorieAccounting = "calorie-accounting-v2"',
+            'public static let mealEstimator = "meal-estimator-v2"',
+            'public static let portionEstimator = "portion-estimator-v2"',
+        ],
         errors,
     )
     require_text(
