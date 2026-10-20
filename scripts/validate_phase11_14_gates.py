@@ -311,6 +311,15 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            ".github/workflows/build.yml",
+            (
+                "focused-pr-tests",
+                "testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages",
+                "needs.final-acceptance.result == 'success'",
+            ),
+            errors,
+        )
+        require(
             "Densoso/Agent/Tools/GetTodayHealthStateTool.swift",
             (
                 "@Sendable (Date) async throws -> HealthStateV2?",
@@ -411,6 +420,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs",
                 "testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData",
                 "testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
+                "testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages",
                 "testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
                 "testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches",
                 "testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable",
@@ -1094,6 +1104,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
+                "-only-testing:DensosoTests/HealthRepositoryTests/testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages",
                 "-only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable",

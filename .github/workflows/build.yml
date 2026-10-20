@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      run_scope:
+        description: Select the standard chain or this PR's focused test gates.
+        required: true
+        type: choice
+        options:
+          - full
+          - focused-pr-tests
+        default: full
 
 concurrency:
   group: v3-gates-${{ github.workflow }}-${{ github.ref }}
@@ -17,6 +26,7 @@ jobs:
   # meal-capture -> healthkit -> health-intelligence -> watch -> integration.
   foundation:
     name: gate-01-foundation
+    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 35
     steps:
@@ -178,6 +188,7 @@ jobs:
   domain-persistence:
     name: gate-02-domain-persistence
     needs: foundation
+    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -265,6 +276,7 @@ jobs:
   agent-provider:
     name: gate-03-agent-provider
     needs: domain-persistence
+    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -366,6 +378,7 @@ jobs:
   speech:
     name: gate-04-speech
     needs: agent-provider
+    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -450,6 +463,7 @@ jobs:
   meal-capture:
     name: gate-05-meal-capture
     needs: speech
+    if: ${{ always() && (needs.speech.result == 'success' || inputs.run_scope == 'focused-pr-tests') }}
     runs-on: macos-latest
     timeout-minutes: 35
     steps:
@@ -540,6 +554,7 @@ jobs:
   healthkit:
     name: gate-06-healthkit
     needs: meal-capture
+    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -621,6 +636,7 @@ jobs:
   health-intelligence:
     name: gate-07-health-intelligence
     needs: healthkit
+    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -700,6 +716,7 @@ jobs:
   watch:
     name: gate-08-watch
     needs: health-intelligence
+    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 50
     steps:
@@ -797,6 +814,7 @@ jobs:
   integration:
     name: gate-09-integration
     needs: watch
+    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
@@ -900,6 +918,7 @@ jobs:
   final-acceptance:
     name: gate-10-final-acceptance
     needs: integration
+    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -949,6 +968,7 @@ jobs:
   gate-11-ai-native-health-loop:
     name: gate-11-ai-native-health-loop
     needs: final-acceptance
+    if: ${{ always() && (needs.final-acceptance.result == 'success' || inputs.run_scope == 'focused-pr-tests') }}
     runs-on: macos-latest
     timeout-minutes: 40
     steps:
@@ -993,6 +1013,7 @@ jobs:
             -only-testing:DensosoTests/HealthRepositoryTests/testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs \
             -only-testing:DensosoTests/HealthRepositoryTests/testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData \
             -only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion \
+            -only-testing:DensosoTests/HealthRepositoryTests/testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages \
             -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor \
             -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder \
             -only-testing:DensosoTests/HealthRepositoryTests/testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches \
