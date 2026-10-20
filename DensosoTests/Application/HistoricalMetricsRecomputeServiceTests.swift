@@ -90,7 +90,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
             activityLevel: "moderate",
             source: "userEdited"
         ))
-        insertObservedEnergySnapshot(on: day, in: context)
+        try insertObservedEnergySnapshot(on: day, in: context)
         context.insert(unavailablePendingMetric(on: day))
         try context.save()
 
@@ -116,7 +116,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
             activityLevel: "moderate",
             source: "userEdited"
         ))
-        insertObservedEnergySnapshot(on: day, in: context)
+        try insertObservedEnergySnapshot(on: day, in: context)
         context.insert(unavailablePendingMetric(on: day))
         try context.save()
 
@@ -130,7 +130,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         let context = ModelContext(container)
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: Date())
-        insertObservedEnergySnapshot(on: day, in: context)
+        try insertObservedEnergySnapshot(on: day, in: context)
         context.insert(unavailablePendingMetric(on: day))
         try context.save()
 
@@ -160,7 +160,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
             activityLevel: "moderate",
             source: "userEdited"
         ))
-        insertObservedEnergySnapshot(on: day, in: context)
+        try insertObservedEnergySnapshot(on: day, in: context)
         context.insert(unavailablePendingMetric(on: day))
         try context.save()
 
