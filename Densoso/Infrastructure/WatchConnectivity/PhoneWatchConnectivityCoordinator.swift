@@ -168,7 +168,8 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                     lastError: $0.lastError
                 )
             }
-        let multiDaySessionPlans = try workoutPlanSchedulingService.confirmedTrainingPlans().flatMap { entry in
+        let multiDaySessionPlans = try workoutPlanSchedulingService.confirmedTrainingPlans().flatMap {
+            entry -> [WatchWorkoutPlanSummary] in
             guard entry.state != .terminal else { return [] }
             return entry.draft.sessions.compactMap { session -> WatchWorkoutPlanSummary? in
                 guard session.date >= today,
