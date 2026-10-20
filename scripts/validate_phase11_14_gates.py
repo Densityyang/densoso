@@ -294,8 +294,14 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Agent/AgentSession.swift",
             (
                 "(@Sendable () async -> HealthNarrativeContext?)?",
-                "let narrativeContext = await healthNarrativeContextProvider?()",
+                "narrativeContext = await healthNarrativeContextProvider?()",
+                "if HealthContextPromptBuilder.shouldIncludeSummary(for: promptUserText)",
             ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/AgentCoordinatorTests.swift",
+            ("testHealthContextLoadsOnlyForRelevantHealthQuestions",),
             errors,
         )
         require(
@@ -360,6 +366,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testStructuredNarrativeAcceptsOnlyKnownEvidenceKeysAndNarrativeText",
                 "testNarrativeRejectsNumericMetricClaimsUnknownKeysAndExtraFields",
                 "testPromptUsesStructuredContractOnlyForPersonalHealthQuestions",
+                "testRecoveryWordAloneDoesNotAttachHealthSummaryToCloudPrompt",
                 "testStateWithoutAggregateSummaryDoesNotProduceHealthConclusion",
             ),
             errors,

@@ -1007,6 +1007,7 @@ jobs:
             -only-testing:DensosoTests/HealthProjectionActorTests \
             -only-testing:DensosoTests/GetTodayHealthStateToolTests \
             -only-testing:DensosoTests/GetHealthHistoryToolTests \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testHealthContextLoadsOnlyForRelevantHealthQuestions \
             -only-testing:DensosoTests/DailyLoopBackgroundSchedulerTests \
             -only-testing:DensosoTests/HealthNarrativePolicyTests \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerUsesMatchingExistingBriefAndPreservesOptionalState \

@@ -426,7 +426,12 @@ final class AgentSession {
             let promptUserText = conversationHistory.last(where: { $0.role == .user })
                 .flatMap { Self.visibleMessage($0)?.text }
                 ?? userText
-            let narrativeContext = await healthNarrativeContextProvider?()
+            let narrativeContext: HealthNarrativeContext?
+            if HealthContextPromptBuilder.shouldIncludeSummary(for: promptUserText) {
+                narrativeContext = await healthNarrativeContextProvider?()
+            } else {
+                narrativeContext = nil
+            }
             let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(for: promptUserText)
             let healthSummary = narrativeContext?.aggregateSummary
             let allowedEvidenceKeys = Set(narrativeContext?.allowedEvidenceKeys ?? [])

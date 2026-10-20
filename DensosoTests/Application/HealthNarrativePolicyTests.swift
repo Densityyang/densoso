@@ -65,6 +65,36 @@ final class HealthNarrativePolicyTests: XCTestCase {
         XCTAssertFalse(capturePrompt.contains("健康解读结构（强制）"))
     }
 
+    func testRecoveryWordAloneDoesNotAttachHealthSummaryToCloudPrompt() {
+        let context = makeContext()
+        let ordinaryRequest = "恢复预算请求"
+        XCTAssertFalse(HealthContextPromptBuilder.shouldIncludeSummary(for: ordinaryRequest))
+
+        let ordinaryPrompt = HealthContextPromptBuilder.prompt(
+            basePrompt: "base",
+            userText: ordinaryRequest,
+            summary: context.aggregateSummary,
+            narrativeContext: context,
+            structuredNarrative: true
+        )
+        XCTAssertEqual(ordinaryPrompt, "base")
+        XCTAssertFalse(ordinaryPrompt.contains("sleep.consistency"))
+
+        let recoveryQuestion = "我的恢复状态如何"
+        XCTAssertTrue(HealthContextPromptBuilder.shouldIncludeSummary(for: recoveryQuestion))
+        XCTAssertTrue(HealthContextPromptBuilder.requiresNarrative(for: recoveryQuestion))
+        let recoveryPrompt = HealthContextPromptBuilder.prompt(
+            basePrompt: "base",
+            userText: recoveryQuestion,
+            summary: context.aggregateSummary,
+            narrativeContext: context,
+            structuredNarrative: true
+        )
+        XCTAssertTrue(recoveryPrompt.contains("本地健康汇总"))
+        XCTAssertTrue(recoveryPrompt.contains("健康解读结构（强制）"))
+        XCTAssertTrue(recoveryPrompt.contains("sleep.consistency"))
+    }
+
     func testSystemPromptRoutesHealthAdviceThroughLocalStateAndConfirmedPlanReads() {
         let prompt = AgentSystemPrompt().text
 

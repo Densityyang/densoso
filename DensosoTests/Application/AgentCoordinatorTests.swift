@@ -68,6 +68,30 @@ final class AgentCoordinatorTests: XCTestCase {
         XCTAssertFalse(persistedText.contains("same-process-private-reasoning"))
     }
 
+    func testHealthContextLoadsOnlyForRelevantHealthQuestions() async throws {
+        let provider = ScriptedTextProvider(scripts: [
+            [.textDelta("给你讲个笑话。"), .completed(.completed)],
+        ])
+        let readCounter = HealthContextReadCounter()
+        let harness = try await Harness(
+            provider: provider,
+            healthNarrativeContextProvider: {
+                await readCounter.recordRead()
+                return nil
+            }
+        )
+
+        _ = try await harness.session.send(userText: "给我讲一个笑话")
+        let unrelatedReadCount = await readCounter.value()
+        XCTAssertEqual(unrelatedReadCount, 0)
+
+        let healthResponse = try await harness.session.send(userText: "我的睡眠状态如何？")
+        let relevantReadCount = await readCounter.value()
+        XCTAssertEqual(relevantReadCount, 1)
+        XCTAssertTrue(healthResponse.text.contains("没有可用的本地健康数据"))
+        XCTAssertEqual(provider.recordedRequests().count, 1)
+    }
+
     func testReplayedWatchRequestIDDoesNotStartAnotherProviderRound() async throws {
         let provider = ScriptedTextProvider(
             scripts: [[.textDelta("已生成可检查的草稿。"), .completed(.completed)]]
@@ -434,7 +458,8 @@ private struct Harness {
     init(
         provider: any TextModelProvider,
         conversationRepository: (any ConversationRepository)? = nil,
-        budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() }
+        budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
+        healthNarrativeContextProvider: (@Sendable () async -> HealthNarrativeContext?)? = nil
     ) async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV5.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
@@ -457,10 +482,21 @@ private struct Harness {
             ),
             readRepository: agentRepository,
             conversationRepository: conversationRepository ?? agentRepository,
-            budgetFactory: budgetFactory
+            budgetFactory: budgetFactory,
+            healthNarrativeContextProvider: healthNarrativeContextProvider
         )
         self.container = modelContainer
         self.governance = governance
         self.session = session
     }
+}
+
+private actor HealthContextReadCounter {
+    private var readCount = 0
+
+    func recordRead() {
+        readCount += 1
+    }
+
+    func value() -> Int { readCount }
 }
