@@ -100,6 +100,7 @@ history remains readable before new turns use the current v2 tool definitions.
 - `DeepSeekProviderContractTests.testResponsesAPIRequestAndStreamingToolContract`
 - `DeepSeekProviderContractTests.testImageStructuredOutputAndStatelessToolHistoryEncoding`
 - `DeepSeekProviderContractTests.testImageMustBeInUserMessageAndFailsBeforeNetwork`
+- `DeepSeekProviderContractTests.testRetiredDeepSeekVisionCompatibilityAliasIsNotVisionCapable`
 - `QwenASRProviderContractTests.testOpenAICompatibleAudioRequestAndResponseContract`
 - `QwenMealVisionProviderContractTests.testPinnedQwen37SnapshotUsesImageAndStructuredObservationContract`
 - `DiagnosticsExportPrivacyTests.testProviderErrorsExportOnlyAllowlistedCodes`

@@ -1137,6 +1137,7 @@ jobs:
             -only-testing:DensosoTests/DeepSeekProviderContractTests/testResponsesAPIRequestAndStreamingToolContract \
             -only-testing:DensosoTests/DeepSeekProviderContractTests/testImageStructuredOutputAndStatelessToolHistoryEncoding \
             -only-testing:DensosoTests/DeepSeekProviderContractTests/testImageMustBeInUserMessageAndFailsBeforeNetwork \
+            -only-testing:DensosoTests/DeepSeekProviderContractTests/testRetiredDeepSeekVisionCompatibilityAliasIsNotVisionCapable \
             -only-testing:DensosoTests/AppLaunchConfigurationTests/testSeededProfileRequiresUITestMode \
             -only-testing:DensosoTests/AppLaunchConfigurationTests/testUITestArgumentsEnableDeterministicSeed \
             -only-testing:DensosoTests/QwenASRProviderContractTests/testOpenAICompatibleAudioRequestAndResponseContract \
