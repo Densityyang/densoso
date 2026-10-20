@@ -145,8 +145,8 @@ actor HealthProjectionActor {
         let workoutPlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix
         let trainingPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
         let predicate = #Predicate<ScheduleEvent> {
-            ($0.notes ?? "").contains(workoutPlanPrefix)
-                || ($0.notes ?? "").contains(trainingPlanPrefix)
+            $0.notes?.contains(workoutPlanPrefix) == true
+                || $0.notes?.contains(trainingPlanPrefix) == true
         }
 
         let planWindow: Range<Date>? = {

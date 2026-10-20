@@ -846,7 +846,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     }
 
     private func scheduleEvents(containingNotesPrefix prefix: String) throws -> [ScheduleEvent] {
-        let predicate = #Predicate<ScheduleEvent> { ($0.notes ?? "").contains(prefix) }
+        let predicate = #Predicate<ScheduleEvent> { $0.notes?.contains(prefix) == true }
         return try modelContext.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
     }
 

@@ -238,6 +238,10 @@ def main() -> int:
             "store(destination:",
             "store(workoutPlan:",
             "store(mealText:",
+            "static func store(workoutPlan: WorkoutPlanDraft, defaults: UserDefaults = .standard)",
+            "static func consumeWorkoutPlan(defaults: UserDefaults = .standard)",
+            "static func store(mealText: String, defaults: UserDefaults = .standard)",
+            "static func consumeMealText(defaults: UserDefaults = .standard)",
             "consumeDestination",
         ),
         errors,
@@ -272,7 +276,12 @@ def main() -> int:
     )
     require_text(
         "DensosoTests/Application/AppIntentInboxTests.swift",
-        ("testSystemDestinationsRoundTripAndAreConsumedOnce", "startRecording"),
+        (
+            "testSystemDestinationsRoundTripAndAreConsumedOnce",
+            "testMealTextDraftIsConsumedOnceFromInjectedDefaults",
+            "testWorkoutPlanDraftIsConsumedOnceFromInjectedDefaults",
+            "startRecording",
+        ),
         errors,
     )
     diagnostics_service = require_text(
@@ -389,7 +398,13 @@ def main() -> int:
     )
     require_text(
         "DensosoTests/Application/AppIntentInboxTests.swift",
-        ("testSystemDestinationsRoundTripAndAreConsumedOnce", "todayGuidance", "startRecording"),
+        (
+            "testSystemDestinationsRoundTripAndAreConsumedOnce",
+            "testMealTextDraftIsConsumedOnceFromInjectedDefaults",
+            "testWorkoutPlanDraftIsConsumedOnceFromInjectedDefaults",
+            "todayGuidance",
+            "startRecording",
+        ),
         errors,
     )
     require_text(
@@ -466,6 +481,7 @@ def main() -> int:
             "DiagnosticsExportPrivacyTests",
             "Export reads every collection in ordered 64-row SwiftData pages",
             "Restore likewise pages request/message history in batches",
+            "AppIntent meal text and workout-plan handoffs remain one-shot editable drafts",
             "Records history queries only the selected record kind and optional day",
             "while preserving the current page, it shows a \"记录已更新，刷新列表\" action",
             "after model-context saves and supports pull-to-refresh",

@@ -96,7 +96,7 @@ final class TrainingPlanSchedulingService {
 
     private func fetchConfirmedPlanEvents(in context: ModelContext) throws -> [ScheduleEvent] {
         let prefix = ConfirmedTrainingPlanEntry.notesPrefix
-        let predicate = #Predicate<ScheduleEvent> { ($0.notes ?? "").contains(prefix) }
+        let predicate = #Predicate<ScheduleEvent> { $0.notes?.contains(prefix) == true }
         let sortDescriptors: [SortDescriptor<ScheduleEvent>] = [
             SortDescriptor(\ScheduleEvent.date),
             SortDescriptor(\ScheduleEvent.startTime),

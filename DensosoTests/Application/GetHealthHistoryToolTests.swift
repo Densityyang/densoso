@@ -48,6 +48,35 @@ final class GetHealthHistoryToolTests: XCTestCase {
         XCTAssertFalse(response.contains("healthKitSamples"))
     }
 
+    func testResponseFiltersAndFormatsTimestampedPointsByLocalDayIncludingEndDate() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let start = try localDate(2026, 3, 7, 18, 0, calendar: calendar)
+        let end = try localDate(2026, 3, 8, 12, 0, calendar: calendar)
+        let beforeStart = try localDate(2026, 3, 6, 23, 59, calendar: calendar)
+        let firstDayLatePoint = try localDate(2026, 3, 7, 23, 45, calendar: calendar)
+        let endDayLatePoint = try localDate(2026, 3, 8, 23, 59, calendar: calendar)
+        let afterEnd = try localDate(2026, 3, 9, 0, 0, calendar: calendar)
+        let tool = GetHealthHistoryTool(calendar: calendar)
+
+        let response = try tool.response(
+            from: start,
+            through: end,
+            points: [
+                HealthStateHistoryPoint(date: afterEnd, state: makeState()),
+                HealthStateHistoryPoint(date: endDayLatePoint, state: makeState()),
+                HealthStateHistoryPoint(date: beforeStart, state: makeState()),
+                HealthStateHistoryPoint(date: firstDayLatePoint, state: makeState()),
+            ]
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let days = try XCTUnwrap(object["days"] as? [[String: Any]])
+
+        XCTAssertEqual(object["startDate"] as? String, "2026-03-07")
+        XCTAssertEqual(object["endDate"] as? String, "2026-03-08")
+        XCTAssertEqual(days.compactMap { $0["date"] as? String }, ["2026-03-07", "2026-03-08"])
+    }
+
     func testNoHistoryReportsMissingDataInsteadOfZero() throws {
         let start = Date(timeIntervalSince1970: 1_780_000_000)
         let tool = GetHealthHistoryTool()
@@ -108,5 +137,22 @@ final class GetHealthHistoryToolTests: XCTestCase {
             trainingLoad: load,
             tomorrowGuidance: nil
         )
+    }
+
+    private func localDate(
+        _ year: Int,
+        _ month: Int,
+        _ day: Int,
+        _ hour: Int,
+        _ minute: Int,
+        calendar: Calendar
+    ) throws -> Date {
+        try XCTUnwrap(calendar.date(from: DateComponents(
+            year: year,
+            month: month,
+            day: day,
+            hour: hour,
+            minute: minute
+        )))
     }
 }

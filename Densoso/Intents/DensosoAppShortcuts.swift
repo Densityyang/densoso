@@ -16,23 +16,23 @@ enum AppIntentInbox {
     private static let mealTextKey = "appIntent.mealTextDraft"
     private static let destinationKey = "appIntent.destination"
 
-    static func store(workoutPlan: WorkoutPlanDraft) {
-        UserDefaults.standard.set(try? JSONEncoder().encode(workoutPlan), forKey: workoutPlanKey)
+    static func store(workoutPlan: WorkoutPlanDraft, defaults: UserDefaults = .standard) {
+        defaults.set(try? JSONEncoder().encode(workoutPlan), forKey: workoutPlanKey)
     }
 
-    static func consumeWorkoutPlan() -> WorkoutPlanDraft? {
-        defer { UserDefaults.standard.removeObject(forKey: workoutPlanKey) }
-        guard let data = UserDefaults.standard.data(forKey: workoutPlanKey) else { return nil }
+    static func consumeWorkoutPlan(defaults: UserDefaults = .standard) -> WorkoutPlanDraft? {
+        defer { defaults.removeObject(forKey: workoutPlanKey) }
+        guard let data = defaults.data(forKey: workoutPlanKey) else { return nil }
         return try? JSONDecoder().decode(WorkoutPlanDraft.self, from: data)
     }
 
-    static func store(mealText: String) {
-        UserDefaults.standard.set(mealText, forKey: mealTextKey)
+    static func store(mealText: String, defaults: UserDefaults = .standard) {
+        defaults.set(mealText, forKey: mealTextKey)
     }
 
-    static func consumeMealText() -> String? {
-        defer { UserDefaults.standard.removeObject(forKey: mealTextKey) }
-        return UserDefaults.standard.string(forKey: mealTextKey)
+    static func consumeMealText(defaults: UserDefaults = .standard) -> String? {
+        defer { defaults.removeObject(forKey: mealTextKey) }
+        return defaults.string(forKey: mealTextKey)
     }
 
     static func store(destination: DensosoAppIntentDestination, defaults: UserDefaults = .standard) {

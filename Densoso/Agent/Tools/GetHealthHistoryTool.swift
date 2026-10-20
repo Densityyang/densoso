@@ -69,9 +69,17 @@ struct GetHealthHistoryTool: AgentTool {
         formatter.dateFormat = "yyyy-MM-dd"
 
         let dailySummaries = points
-            .filter { $0.date >= startDay && $0.date <= endDay }
-            .sorted { $0.date < $1.date }
+            .filter {
+                let pointDay = calendar.startOfDay(for: $0.date)
+                return pointDay >= startDay && pointDay <= endDay
+            }
+            .sorted {
+                let leftDay = calendar.startOfDay(for: $0.date)
+                let rightDay = calendar.startOfDay(for: $1.date)
+                return leftDay == rightDay ? $0.date < $1.date : leftDay < rightDay
+            }
             .map { point in
+                let pointDay = calendar.startOfDay(for: point.date)
                 let domainStatuses = Dictionary(uniqueKeysWithValues: point.state.domains.map {
                     ($0.domain.rawValue, $0.status.rawValue)
                 })
@@ -86,7 +94,7 @@ struct GetHealthHistoryTool: AgentTool {
                     observations["trainingLoad.ratio"] = ratio
                 }
                 return HealthHistoryDayOutput(
-                    date: formatter.string(from: point.date),
+                    date: formatter.string(from: pointDay),
                     domainStatuses: domainStatuses,
                     observations: observations,
                     recoveryStatus: point.state.recovery.status.rawValue,

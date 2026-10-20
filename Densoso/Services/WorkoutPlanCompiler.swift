@@ -246,7 +246,7 @@ final class WorkoutPlanSchedulingService {
     func confirmedPlans() throws -> [ConfirmedWorkoutPlanEntry] {
         let context = ModelContext(modelContainer)
         let prefix = ConfirmedWorkoutPlanEntry.notesPrefix
-        let predicate = #Predicate<ScheduleEvent> { ($0.notes ?? "").contains(prefix) }
+        let predicate = #Predicate<ScheduleEvent> { $0.notes?.contains(prefix) == true }
         return try fetchConfirmedPlanEvents(in: context, predicate: predicate)
             .compactMap { ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) }
             .sorted { ($0.draft.scheduledAt ?? .distantPast) > ($1.draft.scheduledAt ?? .distantPast) }
@@ -260,8 +260,8 @@ final class WorkoutPlanSchedulingService {
         let singlePlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix
         let multiPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
         let predicate = #Predicate<ScheduleEvent> {
-            ($0.notes ?? "").contains(singlePlanPrefix)
-                || ($0.notes ?? "").contains(multiPlanPrefix)
+            $0.notes?.contains(singlePlanPrefix) == true
+                || $0.notes?.contains(multiPlanPrefix) == true
         }
         let sortDescriptors: [SortDescriptor<ScheduleEvent>] = [
             SortDescriptor(\ScheduleEvent.date),

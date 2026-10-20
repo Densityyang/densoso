@@ -647,8 +647,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     require(
         "Densoso/Services/HealthProjectionActor.swift",
         (
-            "($0.notes ?? \"\").contains(workoutPlanPrefix)",
-            "($0.notes ?? \"\").contains(trainingPlanPrefix)",
+            "$0.notes?.contains(workoutPlanPrefix) == true",
+            "$0.notes?.contains(trainingPlanPrefix) == true",
             "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
         ),
         errors,
@@ -657,7 +657,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         "Densoso/Application/Workout/TrainingPlanSchedulingService.swift",
         (
             "let prefix = ConfirmedTrainingPlanEntry.notesPrefix",
-            "($0.notes ?? \"\").contains(prefix)",
+            "$0.notes?.contains(prefix) == true",
             "private static let confirmedPlanFetchBatchSize = 64",
             "private func fetchConfirmedPlanEvents(in context: ModelContext) throws -> [ScheduleEvent]",
             "descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize",
@@ -671,8 +671,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "let singlePlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix",
             "let multiPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix",
-            "($0.notes ?? \"\").contains(singlePlanPrefix)",
-            "($0.notes ?? \"\").contains(multiPlanPrefix)",
+            "$0.notes?.contains(singlePlanPrefix) == true",
+            "$0.notes?.contains(multiPlanPrefix) == true",
             "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
         ),
         errors,
