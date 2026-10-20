@@ -192,6 +192,44 @@ final class WatchMessageInboxStoreTests: XCTestCase {
         XCTAssertEqual(try store.highestContiguousTerminalCausalSequence(), 5)
     }
 
+    func testTerminalCausalWatermarkCacheTracksChangesAndRebuildsAfterStoreRestart() throws {
+        let container = try makeContainer()
+        let store = WatchMessageInboxStore(modelContainer: container)
+        func command(_ sequence: Int) -> WatchMessageEnvelope {
+            WatchMessageEnvelope(
+                causalSequence: sequence,
+                payload: .confirm(actionID: UUID())
+            )
+        }
+
+        XCTAssertNil(try store.highestContiguousTerminalCausalSequence())
+        let first = command(1)
+        let second = command(2)
+        XCTAssertEqual(try store.ingest(first), .accepted)
+        XCTAssertEqual(try store.ingest(second), .accepted)
+        XCTAssertEqual(try store.ingest(first), .duplicatePending)
+        try store.setState(WatchReceiptState.processed, for: first.messageID)
+        try store.setState(WatchReceiptState.rejected, for: second.messageID)
+        XCTAssertEqual(try store.highestContiguousTerminalCausalSequence(), 2)
+
+        let duplicateSequenceFirst = command(3)
+        let duplicateSequenceSecond = command(3)
+        XCTAssertEqual(try store.ingest(duplicateSequenceFirst), .accepted)
+        XCTAssertEqual(try store.ingest(duplicateSequenceSecond), .accepted)
+        try store.setState(WatchReceiptState.processed, for: duplicateSequenceFirst.messageID)
+        XCTAssertEqual(try store.highestContiguousTerminalCausalSequence(), 2)
+        try store.setState(WatchReceiptState.rejected, for: duplicateSequenceSecond.messageID)
+        XCTAssertEqual(try store.highestContiguousTerminalCausalSequence(), 3)
+
+        let fourth = command(4)
+        XCTAssertEqual(try store.ingest(fourth), .accepted)
+        try store.setState(WatchReceiptState.processed, for: fourth.messageID)
+        XCTAssertEqual(try store.highestContiguousTerminalCausalSequence(), 4)
+
+        let restartedStore = WatchMessageInboxStore(modelContainer: container)
+        XCTAssertEqual(try restartedStore.highestContiguousTerminalCausalSequence(), 4)
+    }
+
     func testCausalTranscriptWaitsForPredecessorAndStaysPendingUntilConsumed() throws {
         let store = try makeStore()
         let transcript = WatchMessageEnvelope(
@@ -415,9 +453,12 @@ final class WatchMessageInboxStoreTests: XCTestCase {
     }
 
     private func makeStore() throws -> WatchMessageInboxStore {
+        WatchMessageInboxStore(modelContainer: try makeContainer())
+    }
+
+    private func makeContainer() throws -> ModelContainer {
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-        let container = try ModelContainer(for: schema, configurations: [configuration])
-        return WatchMessageInboxStore(modelContainer: container)
+        return try ModelContainer(for: schema, configurations: [configuration])
     }
 }

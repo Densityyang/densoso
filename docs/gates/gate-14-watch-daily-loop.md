@@ -42,6 +42,7 @@ window, skips terminal plans and rest days, and retains only the ten earliest
 sessions with stable tie ordering before building summaries. Pending draft
 summaries are also capped at ten, ordered by earliest expiry and action ID.
 The recent receipt-ID list is capped at 100. An optional terminal causal sequence watermark covers the contiguous prefix whose receipts are all processed or rejected, allowing the Watch to discard older sequenced outbox entries even when their IDs have fallen out of that list. Missing or pending sequences stop the watermark; legacy unsequenced entries still require their individual receipt IDs.
+The phone builds an in-memory sequence cache from paged inbox records on the first watermark request, then updates it as commands arrive or receipts change. App restarts rebuild the cache from durable records; no SwiftData field or migration is needed.
 The Watch snapshot carries optional next-day guidance only from a brief for the
 current local day. Its health payload contains domain/status pairs and a compact
 recovery summary; numeric estimates, baselines, and evidence keys stay on
@@ -81,6 +82,7 @@ health refreshes reach the companion without waiting for another activation.
   `WatchMessageInboxStoreTests.testCausalReplayWaitsForMissingAndPendingPredecessorThenOrdersBySequence`,
   `WatchMessageInboxStoreTests.testRejectedAndConflictingPredecessorsRejectCausalSuccessors`,
   `WatchMessageInboxStoreTests.testTerminalCausalWatermarkStopsAtMissingAndPendingSequences`,
+  `WatchMessageInboxStoreTests.testTerminalCausalWatermarkCacheTracksChangesAndRebuildsAfterStoreRestart`,
   `WatchMessageInboxStoreTests.testCausalTranscriptWaitsForPredecessorAndStaysPendingUntilConsumed`,
   `WatchMessageInboxStoreTests.testLegacyPendingCommandAndTranscriptBlockNewerCommandUntilCompleted`,
   `WatchMessageInboxStoreTests.testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder`,

@@ -16,6 +16,59 @@ enum WatchReceiptState {
     static let rejected = "rejected"
 }
 
+fileprivate struct CausalSequenceReceiptCounts {
+    var receiptCount = 0
+    var terminalReceiptCount = 0
+
+    var isFullyTerminal: Bool {
+        receiptCount > 0 && receiptCount == terminalReceiptCount
+    }
+}
+
+@MainActor
+fileprivate final class TerminalCausalSequenceWatermarkCache {
+    private var receiptCountsBySequence: [Int: CausalSequenceReceiptCounts]
+
+    init(receiptCountsBySequence: [Int: CausalSequenceReceiptCounts]) {
+        self.receiptCountsBySequence = receiptCountsBySequence
+    }
+
+    func recordNewPendingReceipt(sequence: Int) {
+        var counts = receiptCountsBySequence[sequence] ?? CausalSequenceReceiptCounts()
+        counts.receiptCount += 1
+        receiptCountsBySequence[sequence] = counts
+    }
+
+    func recordReceiptStateChange(sequence: Int, from oldState: String, to newState: String) {
+        let wasTerminal = Self.isTerminal(oldState)
+        let isTerminal = Self.isTerminal(newState)
+        guard wasTerminal != isTerminal else { return }
+
+        var counts = receiptCountsBySequence[sequence] ?? CausalSequenceReceiptCounts()
+        if isTerminal {
+            counts.terminalReceiptCount += 1
+        } else {
+            counts.terminalReceiptCount = max(counts.terminalReceiptCount - 1, 0)
+        }
+        receiptCountsBySequence[sequence] = counts
+    }
+
+    var highestContiguousTerminalSequence: Int? {
+        var highestTerminalSequence: Int?
+        var sequence = 1
+        while receiptCountsBySequence[sequence]?.isFullyTerminal == true {
+            highestTerminalSequence = sequence
+            guard sequence < Int.max else { break }
+            sequence += 1
+        }
+        return highestTerminalSequence
+    }
+
+    private static func isTerminal(_ state: String) -> Bool {
+        state == WatchReceiptState.processed || state == WatchReceiptState.rejected
+    }
+}
+
 @MainActor
 final class WatchMessageInboxStore {
     private struct InboxMessageCursor {
@@ -27,6 +80,7 @@ final class WatchMessageInboxStore {
     private static let pendingReceiptFetchBatchSize = 64
 
     private let modelContainer: ModelContainer
+    private var terminalCausalSequenceWatermarkCache: TerminalCausalSequenceWatermarkCache?
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -84,6 +138,11 @@ final class WatchMessageInboxStore {
                 schemaVersion: envelope.schemaVersion,
                 payloadHash: payloadHash
             ))
+        }
+        if result == .accepted,
+           let sequence = envelope.causalSequence,
+           let terminalCausalSequenceWatermarkCache {
+            terminalCausalSequenceWatermarkCache.recordNewPendingReceipt(sequence: sequence)
         }
         return result
     }
@@ -272,6 +331,7 @@ final class WatchMessageInboxStore {
         var descriptor = FetchDescriptor<WatchMessageReceiptRecord>(predicate: predicate)
         descriptor.fetchLimit = 1
         guard let receipt = try context.fetch(descriptor).first else { return nil }
+        let oldState = receipt.state
         let inboxID = Self.conversationID
         let role = "watch-envelope"
         let messagePredicate = #Predicate<MessageRecord> { message in
@@ -284,6 +344,14 @@ final class WatchMessageInboxStore {
         receipt.state = state
         receipt.processedAt = Date()
         try context.save()
+        if let causalSequence,
+           let terminalCausalSequenceWatermarkCache {
+            terminalCausalSequenceWatermarkCache.recordReceiptStateChange(
+                sequence: causalSequence,
+                from: oldState,
+                to: state
+            )
+        }
         return causalSequence
     }
 
@@ -307,7 +375,18 @@ final class WatchMessageInboxStore {
     }
 
     func highestContiguousTerminalCausalSequence() throws -> Int? {
-        var terminalBySequence: [Int: Bool] = [:]
+        if let terminalCausalSequenceWatermarkCache {
+            return terminalCausalSequenceWatermarkCache.highestContiguousTerminalSequence
+        }
+
+        let receiptCountsBySequence = try scanCausalSequenceReceiptCounts()
+        let cache = TerminalCausalSequenceWatermarkCache(receiptCountsBySequence: receiptCountsBySequence)
+        terminalCausalSequenceWatermarkCache = cache
+        return cache.highestContiguousTerminalSequence
+    }
+
+    private func scanCausalSequenceReceiptCounts() throws -> [Int: CausalSequenceReceiptCounts] {
+        var receiptCountsBySequence: [Int: CausalSequenceReceiptCounts] = [:]
         var receiptBatch: [(sequence: Int, messageID: String)] = []
         let receiptContext = ModelContext(modelContainer)
 
@@ -330,11 +409,10 @@ final class WatchMessageInboxStore {
 
             for entry in entries {
                 let isTerminal = terminalByMessageID[entry.messageID] ?? false
-                if let priorState = terminalBySequence[entry.sequence] {
-                    terminalBySequence[entry.sequence] = priorState && isTerminal
-                } else {
-                    terminalBySequence[entry.sequence] = isTerminal
-                }
+                var counts = receiptCountsBySequence[entry.sequence] ?? CausalSequenceReceiptCounts()
+                counts.receiptCount += 1
+                if isTerminal { counts.terminalReceiptCount += 1 }
+                receiptCountsBySequence[entry.sequence] = counts
             }
         }
 
@@ -349,15 +427,7 @@ final class WatchMessageInboxStore {
             }
         }
         if !receiptBatch.isEmpty { try consumeReceiptBatch(receiptBatch) }
-
-        var highestTerminalSequence: Int?
-        var sequence = 1
-        while terminalBySequence[sequence] == true {
-            highestTerminalSequence = sequence
-            guard sequence < Int.max else { break }
-            sequence += 1
-        }
-        return highestTerminalSequence
+        return receiptCountsBySequence
     }
 
     func recentReceivedMessageIDs(limit: Int = 100) throws -> [UUID] {
