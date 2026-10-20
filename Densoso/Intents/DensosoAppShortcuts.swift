@@ -80,7 +80,21 @@ enum AppIntentInbox {
         guard !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return incoming
         }
+        guard !incoming.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return existing
+        }
         return existing + "\n\n" + incoming
+    }
+
+    static func reconciledMealText(existing: String, incoming: String) -> String {
+        if incoming == existing { return existing }
+        guard !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return incoming
+        }
+        if incoming.hasPrefix(existing + "\n\n") {
+            return incoming
+        }
+        return mergedMealText(existing: existing, incoming: incoming)
     }
 
     static func store(destination: DensosoAppIntentDestination, defaults: UserDefaults = .standard) {
@@ -110,8 +124,12 @@ enum AppIntentInbox {
 
     @MainActor
     static func deliver(mealText: String, defaults: UserDefaults = .standard) {
-        store(mealText: mealText, defaults: defaults)
-        AppState.shared.pendingMealText = mealText
+        let pendingText = AppState.shared.pendingMealText ?? ""
+        let storedText = defaults.string(forKey: mealTextKey) ?? ""
+        let existingText = reconciledMealText(existing: pendingText, incoming: storedText)
+        let combinedText = mergedMealText(existing: existingText, incoming: mealText)
+        store(mealText: combinedText, defaults: defaults)
+        AppState.shared.pendingMealText = combinedText
     }
 
     @MainActor
@@ -125,7 +143,10 @@ enum AppIntentInbox {
             AppState.shared.pendingWorkoutPlan = workoutPlan
         }
         if let mealText = consumeMealText(defaults: defaults) {
-            AppState.shared.pendingMealText = mealText
+            AppState.shared.pendingMealText = reconciledMealText(
+                existing: AppState.shared.pendingMealText ?? "",
+                incoming: mealText
+            )
         }
     }
 

@@ -49,6 +49,47 @@ final class AppIntentInboxTests: XCTestCase {
         XCTAssertNil(AppIntentInbox.consumeMealText(defaults: defaults))
     }
 
+    func testRapidMealIntentsMergeOnceAcrossRunningDeliveryAndSceneRestore() throws {
+        let suiteName = "AppIntentInboxRapidMealTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let previousMealText = AppState.shared.pendingMealText
+        let firstText = "早餐：面包和鸡蛋"
+        let secondText = "午餐：米饭和青菜"
+        let combinedText = firstText + "\n\n" + secondText
+        AppState.shared.pendingMealText = nil
+        defer { AppState.shared.pendingMealText = previousMealText }
+
+        AppIntentInbox.deliver(mealText: firstText, defaults: defaults)
+        AppIntentInbox.deliver(mealText: secondText, defaults: defaults)
+        XCTAssertEqual(AppState.shared.pendingMealText, combinedText)
+
+        AppIntentInbox.receivePendingDrafts(receiveWorkoutPlan: false, defaults: defaults)
+
+        XCTAssertEqual(AppState.shared.pendingMealText, combinedText)
+        XCTAssertNil(AppIntentInbox.consumeMealText(defaults: defaults))
+    }
+
+    func testIdenticalRapidMealIntentsRemainDistinctAcrossSceneRestore() throws {
+        let suiteName = "AppIntentInboxRepeatedMealTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let previousMealText = AppState.shared.pendingMealText
+        let mealText = "晚餐：米饭和鸡蛋"
+        let combinedText = mealText + "\n\n" + mealText
+        AppState.shared.pendingMealText = nil
+        defer { AppState.shared.pendingMealText = previousMealText }
+
+        AppIntentInbox.deliver(mealText: mealText, defaults: defaults)
+        AppIntentInbox.deliver(mealText: mealText, defaults: defaults)
+        XCTAssertEqual(AppState.shared.pendingMealText, combinedText)
+
+        AppIntentInbox.receivePendingDrafts(receiveWorkoutPlan: false, defaults: defaults)
+
+        XCTAssertEqual(AppState.shared.pendingMealText, combinedText)
+        XCTAssertNil(AppIntentInbox.consumeMealText(defaults: defaults))
+    }
+
     func testWorkoutPlanDraftIsConsumedOnceFromInjectedDefaults() throws {
         let suiteName = "AppIntentInboxWorkoutTests.\(UUID().uuidString)"
         let emptySuiteName = "AppIntentInboxEmptyWorkoutTests.\(UUID().uuidString)"
@@ -168,6 +209,14 @@ final class AppIntentInboxTests: XCTestCase {
         XCTAssertEqual(
             AppIntentInbox.mergedMealText(existing: " \n ", incoming: "系统转写草稿"),
             "系统转写草稿"
+        )
+        XCTAssertEqual(
+            AppIntentInbox.mergedMealText(existing: "重复内容", incoming: "重复内容"),
+            "重复内容\n\n重复内容"
+        )
+        XCTAssertEqual(
+            AppIntentInbox.reconciledMealText(existing: "重复内容", incoming: "重复内容"),
+            "重复内容"
         )
     }
 

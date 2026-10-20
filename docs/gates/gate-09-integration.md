@@ -20,6 +20,9 @@ acceptance.
   is pending, or the main tab is not yet available.
   Meal text is appended to existing unsent composer text; workout plans open
   their editor automatically and wait behind an editor that is already open.
+  Rapid meal-text intents accumulate as editable paragraphs, including when two
+  intents contain identical text. Scene-active restoration reconciles a
+  mirrored state/inbox aggregate without appending that same draft again.
   At most 16 plans are queued; when full, the incoming draft stays in the
   one-shot inbox until the open editor closes. Meal records and WorkoutKit
   scheduling still require the existing in-app confirmation steps.

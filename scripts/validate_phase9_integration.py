@@ -244,6 +244,11 @@ def main() -> int:
             "static func consumeMealText(defaults: UserDefaults = .standard)",
             "static func deliver(workoutPlan: WorkoutPlanDraft, defaults: UserDefaults = .standard)",
             "static func deliver(mealText: String, defaults: UserDefaults = .standard)",
+            "let pendingText = AppState.shared.pendingMealText ?? \"\"",
+            "let storedText = defaults.string(forKey: mealTextKey) ?? \"\"",
+            "reconciledMealText(existing: pendingText, incoming: storedText)",
+            "static func mergedMealText(existing: String, incoming: String)",
+            "static func reconciledMealText(existing: String, incoming: String)",
             "static func receivePendingDrafts(",
             "receiveWorkoutPlan: Bool = true",
             "static func enqueueWorkoutPlan(_ draft: WorkoutPlanDraft, defaults: UserDefaults = .standard)",
@@ -265,8 +270,18 @@ def main() -> int:
         "receiveWorkoutPlan" not in inbox_receiver
         or "AppState.shared.pendingWorkoutPlan == nil" not in inbox_receiver
         or "let workoutPlan = consumeWorkoutPlan(defaults: defaults)" not in inbox_receiver
+        or "reconciledMealText(" not in inbox_receiver
     ):
         errors.append("The inbox must preserve workout plans when the UI is deferring or already holding one")
+    meal_merge = intent_source.split("static func reconciledMealText(", 1)[-1].split(
+        "static func store(destination:", 1
+    )[0]
+    if (
+        "if incoming == existing" not in meal_merge
+        or "incoming.hasPrefix(existing + \"\\n\\n\")" not in meal_merge
+        or "return mergedMealText(existing: existing, incoming: incoming)" not in meal_merge
+    ):
+        errors.append("Meal draft restoration must reconcile a mirrored aggregate without deduplicating new intents")
     require_text(
         "Densoso/App/AppState.swift",
         ("pendingSystemIntent", "shouldFocusComposer", "shouldScrollToDailyLoop"),
@@ -345,6 +360,8 @@ def main() -> int:
             "testMealTextDraftIsConsumedOnceFromInjectedDefaults",
             "testWorkoutPlanDraftIsConsumedOnceFromInjectedDefaults",
             "testMealTextIntentDeliveryUpdatesRunningAppState",
+            "testRapidMealIntentsMergeOnceAcrossRunningDeliveryAndSceneRestore",
+            "testIdenticalRapidMealIntentsRemainDistinctAcrossSceneRestore",
             "testWorkoutPlanIntentDeliveryUpdatesRunningAppState",
             "testPendingDraftInboxRestoresMealAndWorkoutOnceForColdOrActiveScene",
             "testSceneReceiveCanKeepWorkoutPlanInInboxWhileReceivingMeal",
