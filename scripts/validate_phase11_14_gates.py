@@ -159,19 +159,26 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         background_scheduler = require(
             "Densoso/Application/DailyLoop/DailyLoopBackgroundScheduler.swift",
             (
-                "taskBox.task.expirationHandler = { [weak self] in",
-                "guard taskBox.markExpired() else { return }",
+                "guard let backgroundTask = taskBox.task else {",
+                "backgroundTask.expirationHandler = { [taskBox, refreshOperation] in",
+                "taskBox.expire {",
                 "guard taskBox.canCancelActiveRefresh else { return }",
-                "self?.activeRefreshTask?.cancel()",
+                "refreshOperation.cancel()",
+                "activeRefreshTask = refreshOperation",
                 "guard !Task.isCancelled, !taskBox.isExpired else {",
                 "await self.notificationScheduler.updateSnapshot(snapshot)",
                 "self.watchConnectivityCoordinator.refreshApplicationContext()",
                 "taskBox.complete(success: succeeded)",
                 "private var expired = false",
                 "private var completed = false",
+                "let task: BGAppRefreshTask?",
+                "private let completion: (Bool) -> Void",
                 "let finalSuccess = success && !expired",
                 "func markExpired() -> Bool",
                 "return expired && !completed",
+                "func expire(scheduleCancellation: () -> Void)",
+                "guard markExpired() else { return }",
+                "init(completion: @escaping (Bool) -> Void)",
             ),
             errors,
         )
@@ -188,17 +195,34 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             check_start = background_scheduler.find(cancellation_guard, step_start + len(await_step))
             if step_start < 0 or check_start < 0 or check_start - step_start > 320:
                 errors.append(f"Background refresh must check cancellation after {await_step}")
-        expiration_handler = background_scheduler.split("taskBox.task.expirationHandler = {", 1)[-1].split(
-            "activeRefreshTask = Task", 1
-        )[0]
-        if expiration_handler.find("taskBox.markExpired()") > expiration_handler.find("Task { @MainActor"):
-            errors.append("Background refresh expiration must mark the task expired before scheduling cancellation")
+        expiration_handler = background_scheduler.split("backgroundTask.expirationHandler = {", 1)[-1]
+        if "taskBox.expire {" not in expiration_handler or "refreshOperation.cancel()" not in expiration_handler:
+            errors.append("Background refresh expiration must pass through the idempotent seam and cancel its own task")
+        if "activeRefreshTask?.cancel()" in background_scheduler:
+            errors.append("A stale expiration callback must not cancel whichever refresh is currently active")
+        if background_scheduler.find("activeRefreshTask = refreshOperation") > background_scheduler.find(
+            "backgroundTask.expirationHandler ="
+        ):
+            errors.append("The expiration handler must capture the exact refresh operation before it can expire")
         watch_refresh = background_scheduler.find("self.watchConnectivityCoordinator.refreshApplicationContext()")
         completion_report = background_scheduler.find("taskBox.complete(success: succeeded)")
         if watch_refresh < 0 or completion_report < watch_refresh or cancellation_guard not in background_scheduler[
             watch_refresh + len("self.watchConnectivityCoordinator.refreshApplicationContext()"):completion_report
         ]:
             errors.append("Background refresh must report completion only after the Watch update and cancellation check")
+        require(
+            "DensosoTests/Application/DailyLoopBackgroundSchedulerTests.swift",
+            (
+                "testExpirationAndCompletionAreIdempotentAndLateExpirationDoesNotCancelNextWork",
+                "taskBox.expire",
+                "taskBox.complete(success: true)",
+                "XCTAssertEqual(reportedResults, [false])",
+                "XCTAssertEqual(scheduledCancellations, 1)",
+                "XCTAssertEqual(completedFirstResults, [true])",
+                "XCTAssertEqual(lateCancellations, 0)",
+            ),
+            errors,
+        )
         require(
             "Densoso/Services/HealthIntelligenceReadModel.swift",
             (
@@ -844,6 +868,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
                 "-only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
                 "-only-testing:DensosoTests/HealthProjectionActorTests",
+                "-only-testing:DensosoTests/DailyLoopBackgroundSchedulerTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
                 "-only-testing:DensosoTests/HealthNarrativePolicyTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary",

@@ -33,6 +33,9 @@ markers and returns on the first non-terminal plan.
 Historical HealthKit weight lookup walks the V6 bodyMass index in bounded,
 newest-first batches, fetches each batch's daily snapshots together, and skips
 deleted or unknown summaries.
+BGAppRefreshTask expiration stops later refresh stages, and its completion box
+reports completion once while preventing a late expiration from cancelling
+subsequent work.
 
 ## Focused tests
 
@@ -62,6 +65,7 @@ deleted or unknown summaries.
   `HealthProjectionActorTests.testActorHistoryRetainsExistingRangeValidation`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions`,
+  `DailyLoopBackgroundSchedulerTests.testExpirationAndCompletionAreIdempotentAndLateExpirationDoesNotCancelNextWork`,
   `HealthNarrativePolicyTests`,
   `DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState`,
   and `DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays`.

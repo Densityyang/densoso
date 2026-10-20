@@ -92,15 +92,11 @@ final class DailyLoopBackgroundScheduler {
             taskBox.complete(success: false)
             return
         }
-        taskBox.task.expirationHandler = { [weak self] in
-            guard taskBox.markExpired() else { return }
-            Task { @MainActor [weak self] in
-                guard taskBox.canCancelActiveRefresh else { return }
-                self?.activeRefreshTask?.cancel()
-            }
+        guard let backgroundTask = taskBox.task else {
+            taskBox.complete(success: false)
+            return
         }
-
-        activeRefreshTask = Task { @MainActor [weak self] in
+        let refreshOperation = Task { @MainActor [weak self] in
             guard let self else {
                 taskBox.complete(success: false)
                 return
@@ -152,12 +148,20 @@ final class DailyLoopBackgroundScheduler {
                 taskBox.complete(success: false)
             }
         }
+        activeRefreshTask = refreshOperation
+        backgroundTask.expirationHandler = { [taskBox, refreshOperation] in
+            taskBox.expire {
+                guard taskBox.canCancelActiveRefresh else { return }
+                refreshOperation.cancel()
+            }
+        }
     }
 }
 
-/// Carries the Objective-C BackgroundTasks handle across the launch queue hop.
-private final class BackgroundRefreshTaskBox: @unchecked Sendable {
-    let task: BGAppRefreshTask
+/// Carries the Objective-C BackgroundTasks handle and completion state across a launch queue hop.
+final class BackgroundRefreshTaskBox: @unchecked Sendable {
+    let task: BGAppRefreshTask?
+    private let completion: (Bool) -> Void
     private let lock = NSLock()
     private var expired = false
     private var completed = false
@@ -176,6 +180,17 @@ private final class BackgroundRefreshTaskBox: @unchecked Sendable {
 
     init(_ task: BGAppRefreshTask) {
         self.task = task
+        self.completion = { task.setTaskCompleted(success: $0) }
+    }
+
+    init(completion: @escaping (Bool) -> Void) {
+        self.task = nil
+        self.completion = completion
+    }
+
+    func expire(scheduleCancellation: () -> Void) {
+        guard markExpired() else { return }
+        scheduleCancellation()
     }
 
     func markExpired() -> Bool {
@@ -198,6 +213,6 @@ private final class BackgroundRefreshTaskBox: @unchecked Sendable {
         completed = true
         let finalSuccess = success && !expired
         lock.unlock()
-        task.setTaskCompleted(success: finalSuccess)
+        completion(finalSuccess)
     }
 }
