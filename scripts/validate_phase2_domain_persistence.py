@@ -64,9 +64,22 @@ def main() -> int:
             "legacy-outbox-",
             "legacyPointEstimate",
             "DensosoSchemaV6.self",
+            "var sleepSamplesByWakeDay: [Date: [HealthSampleSnapshot]] = [:]",
+            "sleepSamplesByWakeDay[wakeDay, default: []].append(sample)",
+            "for wakeDay in sleepSamplesByWakeDay.keys.sorted()",
+            "let wakeSamples = (sleepSamplesByWakeDay[wakeDay] ?? []).sorted(",
+            "let workoutsByDay = Dictionary(grouping: workouts)",
+            "let dayWorkouts = workoutsByDay[day] ?? []",
         ],
         errors,
     )
+    migration_text = (ROOT / "Densoso" / "Persistence" / "DensosoMigrationPlan.swift").read_text(
+        encoding="utf-8"
+    )
+    if "allUniqueSamples.filter" in migration_text:
+        errors.append("V5-to-V6 wake-day migration must use its prebuilt sleep window index")
+    if "workouts.filter { calendar.isDate($0.date, inSameDayAs: day) }" in migration_text:
+        errors.append("V5-to-V6 snapshot migration must use its prebuilt workout-day index")
     require_text(
         schemas / "DensosoSchemaV3.swift",
         [
@@ -207,6 +220,15 @@ def main() -> int:
     ):
         if not (ROOT / "DensosoTests" / test_name).is_file():
             errors.append(f"missing DensosoTests/{test_name}")
+    require_text(
+        ROOT / "DensosoTests/DensosoMigrationTests.swift",
+        [
+            "testV5MigrationMovesRawSamplesIntoIndexAndDailySummary",
+            "testV5MigrationIndexesSleepSamplesAcrossMidnightAndAdjacentWindows",
+            "existingDaySnapshot.healthKitSampleSummary?.workoutEffort.first?.score",
+        ],
+        errors,
+    )
     require_text(
         ROOT / "DensosoTests/ConfirmationCoordinatorTests.swift",
         (

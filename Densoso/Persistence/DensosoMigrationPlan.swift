@@ -226,6 +226,9 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                     }
                     var existingDayKeys = Set(records.map(\.dayKey))
                     let calendar = Calendar.current
+                    let workoutsByDay = Dictionary(grouping: workouts) {
+                        calendar.startOfDay(for: $0.date)
+                    }
                     var samplesByStartDay: [Date: [UUID: HealthSampleSnapshot]] = [:]
                     let legacySamples = HealthSampleSnapshot.deduplicated(
                         decodedSnapshots.flatMap { $0.1.healthKitSamples ?? [] }
@@ -249,7 +252,7 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                         let samples = (samplesByStartDay[day] ?? [:]).values.sorted(
                             by: HealthSampleSnapshot.stableDeduplicationOrder
                         )
-                        let dayWorkouts = workouts.filter { calendar.isDate($0.date, inSameDayAs: day) }
+                        let dayWorkouts = workoutsByDay[day] ?? []
                         let previousDay = calendar.date(byAdding: .day, value: -1, to: day)
                         let previousSleepSamples = previousDay.flatMap { previous in
                             samplesByStartDay[previous].map { Array($0.values) }
@@ -279,43 +282,40 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                     }
 
                     let allUniqueSamples = samplesByStartDay.values.flatMap { $0.values }
+                    var sleepSamplesByWakeDay: [Date: [HealthSampleSnapshot]] = [:]
                     for sample in allUniqueSamples where sample.metric == .sleepAnalysis {
                         for wakeDay in Self.sleepWakeDays(startDate: sample.startDate, endDate: sample.endDate) {
-                            let wakeDayKey = Self.dayKey(for: wakeDay)
-                            guard existingDayKeys.insert(wakeDayKey).inserted else { continue }
-                            guard let previousDay = calendar.date(byAdding: .day, value: -1, to: wakeDay),
-                                  let windowStart = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: previousDay),
-                                  let windowEnd = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: wakeDay) else {
-                                continue
-                            }
-                            let wakeSamples = allUniqueSamples.filter {
-                                $0.metric == .sleepAnalysis
-                                    && $0.endDate > windowStart
-                                    && $0.startDate < windowEnd
-                            }
-                            let summary = DailyHealthSampleSummary(
-                                samples: [],
-                                dayStart: wakeDay,
-                                sleepSamples: wakeSamples
-                            )
-                            let cacheOnlySnapshot = DailyHealthSnapshot(
-                                dayStart: wakeDay,
-                                timezoneIdentifier: calendar.timeZone.identifier,
-                                healthKitSampleSummary: summary,
-                                healthReadStates: [HealthMetricID.sleepAnalysis.rawValue: .available],
-                                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
-                            )
-                            let payloadData = try encoder.encode(cacheOnlySnapshot)
-                            context.insert(DensosoSchemaV4.DailyHealthSnapshotRecord(
-                                dayKey: wakeDayKey,
-                                timezoneID: cacheOnlySnapshot.timezoneIdentifier,
-                                payloadData: payloadData,
-                                snapshotHash: SHA256.hash(data: payloadData)
-                                    .map { String(format: "%02x", $0) }
-                                    .joined(),
-                                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
-                            ))
+                            sleepSamplesByWakeDay[wakeDay, default: []].append(sample)
                         }
+                    }
+                    for wakeDay in sleepSamplesByWakeDay.keys.sorted() {
+                        let wakeDayKey = Self.dayKey(for: wakeDay)
+                        guard existingDayKeys.insert(wakeDayKey).inserted else { continue }
+                        let wakeSamples = (sleepSamplesByWakeDay[wakeDay] ?? []).sorted(
+                            by: HealthSampleSnapshot.stableDeduplicationOrder
+                        )
+                        let summary = DailyHealthSampleSummary(
+                            samples: [],
+                            dayStart: wakeDay,
+                            sleepSamples: wakeSamples
+                        )
+                        let cacheOnlySnapshot = DailyHealthSnapshot(
+                            dayStart: wakeDay,
+                            timezoneIdentifier: calendar.timeZone.identifier,
+                            healthKitSampleSummary: summary,
+                            healthReadStates: [HealthMetricID.sleepAnalysis.rawValue: .available],
+                            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+                        )
+                        let payloadData = try encoder.encode(cacheOnlySnapshot)
+                        context.insert(DensosoSchemaV4.DailyHealthSnapshotRecord(
+                            dayKey: wakeDayKey,
+                            timezoneID: cacheOnlySnapshot.timezoneIdentifier,
+                            payloadData: payloadData,
+                            snapshotHash: SHA256.hash(data: payloadData)
+                                .map { String(format: "%02x", $0) }
+                                .joined(),
+                            algorithmVersion: cacheOnlySnapshot.algorithmVersion
+                        ))
                     }
 
                     for (sampleID, location) in locationsBySampleID.sorted(by: {

@@ -277,6 +277,107 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "6.0.0")
     }
 
+    func testV5MigrationIndexesSleepSamplesAcrossMidnightAndAdjacentWindows() throws {
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        var container: ModelContainer? = try makeContainer(version: DensosoSchemaV5.self, url: location.storeURL)
+        var context: ModelContext? = ModelContext(container!)
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let wakeDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: day))
+        let nextWakeDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: wakeDay))
+        let firstStart = try XCTUnwrap(calendar.date(bySettingHour: 17, minute: 50, second: 0, of: day))
+        let firstEnd = try XCTUnwrap(calendar.date(bySettingHour: 0, minute: 10, second: 0, of: wakeDay))
+        let secondStart = try XCTUnwrap(calendar.date(bySettingHour: 17, minute: 50, second: 0, of: wakeDay))
+        let secondEnd = try XCTUnwrap(calendar.date(bySettingHour: 0, minute: 10, second: 0, of: nextWakeDay))
+        let workoutTime = try XCTUnwrap(calendar.date(bySettingHour: 12, minute: 0, second: 0, of: day))
+        let samples: [HealthSampleSnapshot] = [
+            HealthSampleSnapshot(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000811")!,
+                metric: .sleepAnalysis,
+                startDate: firstStart,
+                endDate: firstEnd,
+                categoryValue: "asleepCore",
+                sourceBundleIdentifier: "com.example.health",
+                deviceModel: "Watch6,1"
+            ),
+            HealthSampleSnapshot(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000812")!,
+                metric: .sleepAnalysis,
+                startDate: secondStart,
+                endDate: secondEnd,
+                categoryValue: "asleepCore",
+                sourceBundleIdentifier: "com.example.health",
+                deviceModel: "Watch6,1"
+            ),
+            HealthSampleSnapshot(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000813")!,
+                metric: .workoutEffort,
+                startDate: workoutTime,
+                endDate: workoutTime.addingTimeInterval(10 * 60),
+                value: 8
+            ),
+        ]
+        let legacySnapshot = LegacyDailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            healthKitSamples: samples,
+            algorithmVersion: "v5-sleep-window-fixture"
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context!.insert(DailyHealthSnapshotRecord(
+            dayKey: Self.dayKey(day),
+            timezoneID: legacySnapshot.timezoneIdentifier,
+            payloadData: try encoder.encode(legacySnapshot),
+            snapshotHash: "v5-sleep-window-fixture",
+            algorithmVersion: legacySnapshot.algorithmVersion
+        ))
+        context!.insert(DensosoSchemaV4.WorkoutRecord(
+            date: workoutTime,
+            type: "running",
+            durationMinutes: 30,
+            estimatedCaloriesBurned: 200
+        ))
+        try context!.save()
+        context = nil
+        container = nil
+
+        let migrated = try openV6Store(at: location.storeURL)
+        let migratedContext = ModelContext(migrated)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+
+        func snapshot(on date: Date) throws -> DailyHealthSnapshot {
+            let dayKey = Self.dayKey(date)
+            let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == dayKey }
+            let record = try XCTUnwrap(migratedContext.fetch(
+                FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate)
+            ).first)
+            return try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+        }
+
+        let existingDaySnapshot = try snapshot(on: day)
+        XCTAssertEqual(
+            try XCTUnwrap(existingDaySnapshot.healthKitSampleSummary?.sleep?.totalAsleepMinutes),
+            10,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(existingDaySnapshot.healthKitSampleSummary?.workoutEffort.first?.score, 8)
+        XCTAssertEqual(
+            try XCTUnwrap(snapshot(on: wakeDay).healthKitSampleSummary?.sleep?.totalAsleepMinutes),
+            380,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(snapshot(on: nextWakeDay).healthKitSampleSummary?.sleep?.totalAsleepMinutes),
+            370,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(try migratedContext.fetchCount(FetchDescriptor<HealthKitSampleIndexRecord>()), 3)
+        XCTAssertEqual(try migratedContext.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 3)
+    }
+
     func testFaultingMigrationRestoresOriginalAndEntersReadOnlyRecovery() async throws {
         let seed = try Gate02FixtureLoader.load("v2-seed", as: Gate02Seed.self)
         let location = try TemporaryStoreLocation()

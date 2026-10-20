@@ -41,8 +41,11 @@ The original Gate 2 acceptance remains the historical V1/V2-to-V3 migration
 record. The current cumulative main-PR branch extends the schema through V6;
 V5-to-V6 adds a HealthKit sample-ID/day index with pending projection-day and
 deletion state, and rewrites legacy daily snapshot payloads to compact
-summaries. V1–V5 schema identities remain intact.
-Gate 2 CI now includes the V5-to-V6 disk migration fixture.
+summaries. The migration groups workouts by local day and uses a single
+wake-day overlap index for missing sleep snapshots, preserving cross-midnight
+and adjacent-window coverage without rescanning every sample per day.
+V1–V5 schema identities remain intact. Gate 2 CI includes the V5-to-V6 disk
+migration fixtures.
 
 ## Non-goals
 
@@ -97,6 +100,10 @@ to domain/persistence behavior and have a dedicated evidence artifact.
     stable 64-row pages and recognizes an idempotency match beyond page one,
     covered by
     `ConfirmationCoordinatorTests.testRecoveryFindsInterruptedWorkoutPlanAfterFirstScheduleEventPage`.
+15. V5-to-V6 migration indexes workouts by day and sleep samples once by
+    overlapping wake day, preserving summaries across midnight-adjacent
+    windows, covered by
+    `DensosoMigrationTests.testV5MigrationIndexesSleepSamplesAcrossMidnightAndAdjacentWindows`.
 
 The restore routine verifies store/WAL/SHM checksums, stages replacement files,
 and rolls back ordinary file-operation errors. The immutable migration backup is
