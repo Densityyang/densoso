@@ -20,14 +20,22 @@ The phone snapshot resolves today's DailyMetrics row with a bounded date query
 and one-row fetch limit. Its single-session plan query starts at today, reads
 note-prefix candidates in stable 64-row pages, skips terminal entries, and
 stops after the next ten plans; ordinary calendar events remain isolated. The
-multi-day scheduling service reads complete confirmed-plan history in 64-row
-pages before applying its existing decode and ordering rules; the phone
-snapshot filters terminal and past sessions before building summaries, then
-uses plan IDs to break equal-time ties deterministically.
-The phone plan editor shows a retryable read error instead of reporting an
-empty history when either confirmed-plan query fails. It renders at most ten
-single-session and ten multi-day plans initially, then reveals up to ten more
-of each per request while keeping the current visible limit across refreshes.
+iPhone plan editor keeps its complete confirmed-plan history query. The Watch
+snapshot uses a separate 64-row paged query for the current two-day window,
+skips terminal plans and rest days, and retains only the ten earliest sessions
+with stable tie ordering before building summaries. Pending draft summaries are
+also capped at ten, ordered by earliest expiry and action ID.
+The Watch snapshot carries optional next-day guidance only from a brief for the
+current local day. Its domain payload contains only domain/status pairs, so
+numeric estimates, baselines, and evidence keys stay on iPhone; the Watch shows
+available nutrition, sleep, activity, and body status labels plus the recovery
+status/action. It shows the guidance's conditional note and action when present,
+and newer payloads remain decodable from snapshots sent by older app versions.
+The phone plan editor fetches ten single-session and ten multi-day plans per
+page instead of loading the complete history up front. “Load more” appends the
+next page for each plan type; a failed page read preserves loaded rows and can
+be retried. An initial read failure shows a retryable error instead of an empty
+history.
 Watch outbox and phone inbox tests cover replay semantics; the phone
 coordinator's activation path restores pending commands.
 
@@ -43,9 +51,12 @@ coordinator's activation path restores pending commands.
   `WatchMessageInboxStoreTests.testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages`,
   `WatchMessageInboxStoreTests.testOutOfOrderMessagesAreReturnedInDurableArrivalOrder`,
   `WatchMessageInboxStoreTests.testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder`,
+  `WatchMessageOutboxTests.testTodaySnapshotRoundTripsTomorrowGuidanceAndDecodesLegacyPayload`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry`,
   `TrainingPlanSchedulingServiceTests.testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanHistoryPagesAcrossThe64EventBoundary`,
+  `TrainingPlanSchedulingServiceTests.testUpcomingTrainingSessionsAreBoundedAndOrderedAcrossPages`,
+  `TrainingPlanSchedulingServiceTests.testConfirmedPlanPagesKeepAllRowsAcrossTiedTenRowBoundaries`,
   `WorkoutPlanSchedulingServiceTests.testConfirmedScheduleIsIdempotentAcrossRetries`,
   `WorkoutPlanSchedulingServiceTests.testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries`,
   `TrainingPlanScheduleQueryTests.testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay`,

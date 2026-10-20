@@ -116,7 +116,7 @@ struct LogMealTool: ConfirmationRequiredTool {
         let packageServingParser = PackageServingGramsParser()
         let userText = context.currentMealUserText()
         let agentImageEvidence = context.currentMealImageEvidence()
-        let hasPhotoPortionEstimate = arguments.dishes
+        let hasPhotoPortionEstimate = context.currentMealHasImage() && arguments.dishes
             .flatMap(\.ingredients)
             .contains { $0.quantityEvidence.kind == .photoEstimate }
         let packageLabelTexts = agentImageEvidence
@@ -177,10 +177,29 @@ struct LogMealTool: ConfirmationRequiredTool {
                     in: userText,
                     matching: ingredientTerms
                 )
+                let quantityEvidence: MealQuantityEvidence
+                if ingredient.quantityEvidence.kind == .photoEstimate,
+                   !context.currentMealHasImage(),
+                   userReportedGrams == nil {
+                    guard context.currentMealClarificationWasAnswered() else {
+                        throw DraftError.clarificationRequired(
+                            field: "quantityEvidence",
+                            question: "当前请求没有附带照片；请告诉我“\(ingredient.name)”大约有多少份量？",
+                            subject: ingredient.name
+                        )
+                    }
+                    quantityEvidence = MealQuantityEvidence(
+                        kind: .unknown,
+                        value: ingredient.quantityEvidence.value,
+                        unit: ingredient.quantityEvidence.unit
+                    )
+                } else {
+                    quantityEvidence = ingredient.quantityEvidence
+                }
                 let portionEvidence: PortionEvidence
                 do {
                     portionEvidence = try quantityResolver.resolve(
-                        ingredient.quantityEvidence,
+                        quantityEvidence,
                         validatedUserReportedGrams: userReportedGrams,
                         validatedPackageGramsPerServing: validatedPackageServingGrams,
                         allowLowConfidenceModelEstimate: context.currentMealClarificationWasAnswered()

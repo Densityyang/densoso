@@ -11,8 +11,6 @@ private enum WorkoutPlanGoalKind: String, CaseIterable, Identifiable {
 
 /// Plans remain local, editable drafts until ConfirmationCoordinator commits them.
 struct WorkoutPlanScreen: View {
-    private static let confirmedPlanPageSize = 10
-
     @Environment(AppState.self) private var appState
     @Environment(Dependencies.self) private var dependencies
 
@@ -29,7 +27,10 @@ struct WorkoutPlanScreen: View {
     @State private var confirmedPlans: [ConfirmedWorkoutPlanEntry] = []
     @State private var confirmedTrainingPlans: [ConfirmedTrainingPlanEntry] = []
     @State private var confirmedPlansReadError: String?
-    @State private var visibleConfirmedPlanLimit = 10
+    @State private var confirmedPlansNextOffset: Int?
+    @State private var confirmedTrainingPlansNextOffset: Int?
+    @State private var isLoadingMoreConfirmedPlans = false
+    @State private var shouldRetryLoadingMoreConfirmedPlans = false
 
     var body: some View {
         NavigationStack {
@@ -100,74 +101,81 @@ struct WorkoutPlanScreen: View {
                             .font(.footnote)
                             .foregroundStyle(OrbitPalette.coral)
                         Button("重试") {
-                            refreshConfirmedPlans()
+                            if shouldRetryLoadingMoreConfirmedPlans {
+                                loadMoreConfirmedPlans()
+                            } else {
+                                refreshConfirmedPlans()
+                            }
                         }
-                    } else if confirmedPlans.isEmpty && confirmedTrainingPlans.isEmpty {
+                    }
+                    if confirmedPlansReadError == nil
+                        && confirmedPlans.isEmpty
+                        && confirmedTrainingPlans.isEmpty {
                         Text("确认后的计划会显示在这里。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(confirmedPlans.prefix(visibleConfirmedPlanLimit), id: \.actionID) { entry in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(entry.draft.name).font(.subheadline.weight(.semibold))
-                                Text(entry.draft.scheduledAt ?? Date(), format: .dateTime.month().day().hour().minute())
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Label(queueStatus(entry), systemImage: entry.state == .scheduled ? "checkmark.circle.fill" : "clock")
-                                    .font(.caption)
-                                    .foregroundStyle(entry.state == .scheduled ? OrbitPalette.green : OrbitPalette.gold)
-                                if let lastError = entry.lastError {
-                                    Text(lastError)
-                                        .font(.caption2)
-                                        .foregroundStyle(OrbitPalette.coral)
-                                }
-                                if entry.state == .queued || entry.state == .retryable {
-                                    Button("继续同步到 WorkoutKit") {
-                                        Task { await schedule(actionID: entry.actionID) }
-                                    }
-                                    .disabled(isScheduling)
-                                }
-                            }
-                            .padding(.vertical, 4)
-                        }
-                        ForEach(confirmedTrainingPlans.prefix(visibleConfirmedPlanLimit), id: \.actionID) { entry in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(entry.draft.name).font(.subheadline.weight(.semibold))
-                                Text(trainingPlanSummary(entry.draft))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                ForEach(entry.draft.sessions) { session in
-                                    Text(confirmedSessionSummary(session))
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                Label(
-                                    queueStatus(entry),
-                                    systemImage: entry.state == .scheduled ? "checkmark.circle.fill" : "clock"
-                                )
+                    }
+                    ForEach(confirmedPlans, id: \.actionID) { entry in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(entry.draft.name).font(.subheadline.weight(.semibold))
+                            Text(entry.draft.scheduledAt ?? Date(), format: .dateTime.month().day().hour().minute())
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Label(queueStatus(entry), systemImage: entry.state == .scheduled ? "checkmark.circle.fill" : "clock")
                                 .font(.caption)
                                 .foregroundStyle(entry.state == .scheduled ? OrbitPalette.green : OrbitPalette.gold)
-                                if let lastError = entry.lastError {
-                                    Text(lastError)
-                                        .font(.caption2)
-                                        .foregroundStyle(OrbitPalette.coral)
-                                }
-                                if entry.state == .queued || entry.state == .retryable {
-                                    Button("继续同步训练日到 WorkoutKit") {
-                                        Task { await schedule(actionID: entry.actionID) }
-                                    }
-                                    .disabled(isScheduling)
-                                }
+                            if let lastError = entry.lastError {
+                                Text(lastError)
+                                    .font(.caption2)
+                                    .foregroundStyle(OrbitPalette.coral)
                             }
-                            .padding(.vertical, 4)
-                        }
-                        if confirmedPlans.count > visibleConfirmedPlanLimit
-                            || confirmedTrainingPlans.count > visibleConfirmedPlanLimit {
-                            Button("加载更多已确认计划") {
-                                visibleConfirmedPlanLimit += Self.confirmedPlanPageSize
+                            if entry.state == .queued || entry.state == .retryable {
+                                Button("继续同步到 WorkoutKit") {
+                                    Task { await schedule(actionID: entry.actionID) }
+                                }
+                                .disabled(isScheduling)
                             }
                         }
+                        .padding(.vertical, 4)
+                    }
+                    ForEach(confirmedTrainingPlans, id: \.actionID) { entry in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(entry.draft.name).font(.subheadline.weight(.semibold))
+                            Text(trainingPlanSummary(entry.draft))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(entry.draft.sessions) { session in
+                                Text(confirmedSessionSummary(session))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Label(
+                                queueStatus(entry),
+                                systemImage: entry.state == .scheduled ? "checkmark.circle.fill" : "clock"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(entry.state == .scheduled ? OrbitPalette.green : OrbitPalette.gold)
+                            if let lastError = entry.lastError {
+                                Text(lastError)
+                                    .font(.caption2)
+                                    .foregroundStyle(OrbitPalette.coral)
+                            }
+                            if entry.state == .queued || entry.state == .retryable {
+                                Button("继续同步训练日到 WorkoutKit") {
+                                    Task { await schedule(actionID: entry.actionID) }
+                                }
+                                .disabled(isScheduling)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    if confirmedPlansReadError == nil,
+                       confirmedPlansNextOffset != nil || confirmedTrainingPlansNextOffset != nil {
+                        Button(isLoadingMoreConfirmedPlans ? "正在加载…" : "加载更多已确认计划") {
+                            loadMoreConfirmedPlans()
+                        }
+                        .disabled(isLoadingMoreConfirmedPlans)
                     }
                 }
 
@@ -264,17 +272,67 @@ struct WorkoutPlanScreen: View {
     }
 
     private func refreshConfirmedPlans() {
+        shouldRetryLoadingMoreConfirmedPlans = false
         do {
-            let plans = try dependencies.workoutPlanSchedulingService.confirmedPlans()
-            let trainingPlans = try dependencies.workoutPlanSchedulingService.confirmedTrainingPlans()
-            confirmedPlans = plans
-            confirmedTrainingPlans = trainingPlans
+            let plans = try dependencies.workoutPlanSchedulingService.confirmedPlansPage(offset: 0)
+            let trainingPlans = try dependencies.workoutPlanSchedulingService.confirmedTrainingPlansPage(offset: 0)
+            confirmedPlans = uniqueWorkoutPlans(plans.entries)
+            confirmedTrainingPlans = uniqueTrainingPlans(trainingPlans.entries)
+            confirmedPlansNextOffset = plans.nextOffset
+            confirmedTrainingPlansNextOffset = trainingPlans.nextOffset
             confirmedPlansReadError = nil
         } catch {
             confirmedPlans = []
             confirmedTrainingPlans = []
+            confirmedPlansNextOffset = nil
+            confirmedTrainingPlansNextOffset = nil
             confirmedPlansReadError = "读取已确认的计划失败：\(error.localizedDescription)"
         }
+    }
+
+    private func loadMoreConfirmedPlans() {
+        guard !isLoadingMoreConfirmedPlans,
+              confirmedPlansNextOffset != nil || confirmedTrainingPlansNextOffset != nil else { return }
+        isLoadingMoreConfirmedPlans = true
+        defer { isLoadingMoreConfirmedPlans = false }
+
+        do {
+            let plans: ConfirmedPlanPage<ConfirmedWorkoutPlanEntry>
+            if let confirmedPlansNextOffset {
+                plans = try dependencies.workoutPlanSchedulingService.confirmedPlansPage(
+                    offset: confirmedPlansNextOffset
+                )
+            } else {
+                plans = ConfirmedPlanPage(entries: [], nextOffset: nil)
+            }
+            let trainingPlans: ConfirmedPlanPage<ConfirmedTrainingPlanEntry>
+            if let confirmedTrainingPlansNextOffset {
+                trainingPlans = try dependencies.workoutPlanSchedulingService.confirmedTrainingPlansPage(
+                    offset: confirmedTrainingPlansNextOffset
+                )
+            } else {
+                trainingPlans = ConfirmedPlanPage(entries: [], nextOffset: nil)
+            }
+            confirmedPlans = uniqueWorkoutPlans(confirmedPlans + plans.entries)
+            confirmedTrainingPlans = uniqueTrainingPlans(confirmedTrainingPlans + trainingPlans.entries)
+            confirmedPlansNextOffset = plans.nextOffset
+            confirmedTrainingPlansNextOffset = trainingPlans.nextOffset
+            confirmedPlansReadError = nil
+            shouldRetryLoadingMoreConfirmedPlans = false
+        } catch {
+            confirmedPlansReadError = "读取更多已确认的计划失败：\(error.localizedDescription)"
+            shouldRetryLoadingMoreConfirmedPlans = true
+        }
+    }
+
+    private func uniqueWorkoutPlans(_ entries: [ConfirmedWorkoutPlanEntry]) -> [ConfirmedWorkoutPlanEntry] {
+        var seenActionIDs = Set<UUID>()
+        return entries.filter { seenActionIDs.insert($0.actionID).inserted }
+    }
+
+    private func uniqueTrainingPlans(_ entries: [ConfirmedTrainingPlanEntry]) -> [ConfirmedTrainingPlanEntry] {
+        var seenActionIDs = Set<UUID>()
+        return entries.filter { seenActionIDs.insert($0.actionID).inserted }
     }
 
     private func trainingPlanSummary(_ plan: TrainingPlanDraft) -> String {

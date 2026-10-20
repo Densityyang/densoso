@@ -65,6 +65,9 @@ final class InputEnvelopeTests: XCTestCase {
         XCTAssertEqual(voice.asInputEnvelope(imageAttachments: [image]).source, .voiceAndImage)
         XCTAssertEqual(typed.asInputEnvelope(imageAttachments: [image]).source, .textAndImage)
         XCTAssertEqual(voice.asInputEnvelope().locale, voice.localeIdentifier)
+        XCTAssertEqual(voice.asInputEnvelope().voiceSource, .iPhoneSpeechAnalyzer)
+        XCTAssertEqual(voice.asInputEnvelope(imageAttachments: [image]).voiceSource, .iPhoneSpeechAnalyzer)
+        XCTAssertNil(typed.asInputEnvelope(imageAttachments: [image]).voiceSource)
     }
 
     func testImageAttachmentListIsBounded() {

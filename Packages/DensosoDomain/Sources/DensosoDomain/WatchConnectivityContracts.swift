@@ -95,6 +95,34 @@ public struct WatchWorkoutPlanSummary: Codable, Equatable, Identifiable, Sendabl
     }
 }
 
+public struct WatchRecoverySummary: Codable, Equatable, Sendable {
+    public let status: RecoveryStatus
+    public let confidence: EstimateConfidence
+    public let recommendedAction: RecommendationAction
+
+    public init(
+        status: RecoveryStatus,
+        confidence: EstimateConfidence,
+        recommendedAction: RecommendationAction
+    ) {
+        self.status = status
+        self.confidence = confidence
+        self.recommendedAction = recommendedAction
+    }
+}
+
+/// A compact Watch projection that exposes a domain's state without sending
+/// its numeric estimate, baseline, or evidence keys to the companion device.
+public struct WatchHealthDomainStatus: Codable, Equatable, Sendable {
+    public let domain: HealthDomain
+    public let status: HealthDomainStatus
+
+    public init(domain: HealthDomain, status: HealthDomainStatus) {
+        self.domain = domain
+        self.status = status
+    }
+}
+
 /// A deliberately small, current-state-only snapshot for the Watch companion.
 /// It never carries sample arrays, conversation history, or provider prompts.
 public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
@@ -103,7 +131,11 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
     public let energyIntakeKcal: Int?
     public let totalExpenditureKcal: Int?
     public let deficitKcal: Int?
-    public let domains: [HealthDomainResult]
+    /// Optional to keep snapshots encoded by older iPhone versions decodable.
+    public let recoverySummary: WatchRecoverySummary?
+    /// Optional to keep snapshots encoded by older iPhone versions decodable.
+    public let tomorrowGuidance: NextDayGuidance?
+    public let domains: [WatchHealthDomainStatus]
     public let pendingActions: [WatchPendingActionSummary]
     public let workoutPlans: [WatchWorkoutPlanSummary]
     /// Message IDs whose envelopes are durably stored on iPhone; their work may still be pending.
@@ -115,16 +147,20 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
         energyIntakeKcal: Int?,
         totalExpenditureKcal: Int?,
         deficitKcal: Int?,
-        domains: [HealthDomainResult],
+        domains: [WatchHealthDomainStatus],
         pendingActions: [WatchPendingActionSummary],
         workoutPlans: [WatchWorkoutPlanSummary] = [],
-        acknowledgedMessageIDs: [UUID]
+        acknowledgedMessageIDs: [UUID],
+        tomorrowGuidance: NextDayGuidance? = nil,
+        recoverySummary: WatchRecoverySummary? = nil
     ) {
         self.generatedAt = generatedAt
         self.summary = String(summary.prefix(500))
         self.energyIntakeKcal = energyIntakeKcal.flatMap { $0 >= 0 ? $0 : nil }
         self.totalExpenditureKcal = totalExpenditureKcal.flatMap { $0 >= 0 ? $0 : nil }
         self.deficitKcal = deficitKcal
+        self.recoverySummary = recoverySummary
+        self.tomorrowGuidance = tomorrowGuidance
         self.domains = domains
         self.pendingActions = Array(pendingActions.prefix(10))
         self.workoutPlans = Array(workoutPlans.prefix(10))

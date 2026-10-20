@@ -77,6 +77,55 @@ final class GetHealthHistoryToolTests: XCTestCase {
         XCTAssertEqual(days.compactMap { $0["date"] as? String }, ["2026-03-07", "2026-03-08"])
     }
 
+    func testResponseCoalescesDuplicateLocalDaysAndDomainStatuses() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let start = try localDate(2026, 3, 7, 0, 0, calendar: calendar)
+        let earlier = try localDate(2026, 3, 7, 8, 15, calendar: calendar)
+        let latest = try localDate(2026, 3, 7, 22, 45, calendar: calendar)
+        let tool = GetHealthHistoryTool(calendar: calendar)
+
+        let response = try tool.response(
+            from: start,
+            through: start,
+            points: [
+                HealthStateHistoryPoint(
+                    date: latest,
+                    state: makeState(sleepMinutes: 390, duplicateSleepDomain: true)
+                ),
+                HealthStateHistoryPoint(date: earlier, state: makeState(sleepMinutes: 240)),
+            ]
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let days = try XCTUnwrap(object["days"] as? [[String: Any]])
+        let day = try XCTUnwrap(days.first)
+        let observations = try XCTUnwrap(day["observations"] as? [String: Double])
+        let statuses = try XCTUnwrap(day["domainStatuses"] as? [String: String])
+
+        XCTAssertEqual(days.count, 1)
+        XCTAssertEqual(day["date"] as? String, "2026-03-07")
+        XCTAssertEqual(observations["sleep.mainSleep.minutes"], 390)
+        XCTAssertEqual(statuses, ["sleep": HealthDomainStatus.attention.rawValue])
+    }
+
+    func testResponseTieBreaksEqualTimestampPointsIndependentOfInputOrder() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let pointDate = try localDate(2026, 3, 7, 12, 30, calendar: calendar)
+        let first = HealthStateHistoryPoint(date: pointDate, state: makeState(sleepMinutes: 240))
+        let second = HealthStateHistoryPoint(date: pointDate, state: makeState(sleepMinutes: 390))
+        let tool = GetHealthHistoryTool(calendar: calendar)
+
+        let forward = try tool.response(from: pointDate, through: pointDate, points: [first, second])
+        let reversed = try tool.response(from: pointDate, through: pointDate, points: [second, first])
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(forward.utf8)) as? [String: Any])
+        let days = try XCTUnwrap(object["days"] as? [[String: Any]])
+
+        XCTAssertEqual(forward, reversed)
+        XCTAssertEqual(days.count, 1)
+        XCTAssertEqual(days.first?["date"] as? String, "2026-03-07")
+    }
+
     func testNoHistoryReportsMissingDataInsteadOfZero() throws {
         let start = Date(timeIntervalSince1970: 1_780_000_000)
         let tool = GetHealthHistoryTool()
@@ -100,7 +149,10 @@ final class GetHealthHistoryToolTests: XCTestCase {
         XCTAssertThrowsError(try tool.response(from: future, through: future, points: []))
     }
 
-    private func makeState() -> HealthStateV2 {
+    private func makeState(
+        sleepMinutes: Double = 300,
+        duplicateSleepDomain: Bool = false
+    ) -> HealthStateV2 {
         let baseline = HealthBaseline(
             readiness: .mature,
             validDays: 28,
@@ -112,7 +164,7 @@ final class GetHealthHistoryToolTests: XCTestCase {
         let sleep = HealthDomainResult(
             domain: .sleep,
             status: .attention,
-            currentValue: 300,
+            currentValue: sleepMinutes,
             baseline: baseline,
             evidenceKeys: ["sleep.mainSleep.minutes"]
         )
@@ -132,7 +184,7 @@ final class GetHealthHistoryToolTests: XCTestCase {
             unavailableEffortCount: 1
         )
         return HealthStateV2(
-            domains: [sleep],
+            domains: duplicateSleepDomain ? [sleep, sleep] : [sleep],
             recovery: recovery,
             trainingLoad: load,
             tomorrowGuidance: nil

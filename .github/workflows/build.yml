@@ -1005,6 +1005,8 @@ jobs:
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \
             -only-testing:DensosoTests/HealthProjectionActorTests \
+            -only-testing:DensosoTests/GetTodayHealthStateToolTests \
+            -only-testing:DensosoTests/GetHealthHistoryToolTests \
             -only-testing:DensosoTests/DailyLoopBackgroundSchedulerTests \
             -only-testing:DensosoTests/HealthNarrativePolicyTests \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerUsesMatchingExistingBriefAndPreservesOptionalState \
@@ -1237,6 +1239,8 @@ jobs:
             -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry \
             -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays \
             -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanHistoryPagesAcrossThe64EventBoundary \
+            -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testUpcomingTrainingSessionsAreBoundedAndOrderedAcrossPages \
+            -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanPagesKeepAllRowsAcrossTiedTenRowBoundaries \
             -only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testConfirmedScheduleIsIdempotentAcrossRetries \
             -only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries \
             -only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay \

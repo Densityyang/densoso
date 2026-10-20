@@ -10,6 +10,7 @@ struct WatchCompanionView: View {
             VStack(alignment: .leading, spacing: 12) {
                 header
                 todaySection
+                tomorrowGuidanceSection
                 transcriptSection
                 pendingActionsSection
                 workoutPlansSection
@@ -45,6 +46,30 @@ struct WatchCompanionView: View {
                 Text(snapshot.summary)
                     .font(.caption2)
                     .fixedSize(horizontal: false, vertical: true)
+                if !snapshot.domains.isEmpty {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("今日状态")
+                            .font(.caption.weight(.semibold))
+                        ForEach(HealthDomain.allCases, id: \.self) { domain in
+                            if let result = snapshot.domains.first(where: { $0.domain == domain }) {
+                                HStack {
+                                    Text(domainName(domain))
+                                    Spacer(minLength: 6)
+                                    Text(domainStatusName(result.status))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .font(.caption2)
+                            }
+                        }
+                    }
+                }
+                if let recovery = snapshot.recoverySummary {
+                    LabeledContent("恢复", value: recoveryStatusName(recovery.status))
+                        .font(.caption2)
+                    LabeledContent("建议动作", value: recommendedActionName(recovery.recommendedAction))
+                        .font(.caption2)
+                }
                 if let intake = snapshot.energyIntakeKcal {
                     LabeledContent("摄入", value: "\(intake) kcal")
                         .font(.caption2)
@@ -65,6 +90,23 @@ struct WatchCompanionView: View {
         } else {
             ContentUnavailableView("等待 iPhone 摘要", systemImage: "iphone")
                 .font(.caption2)
+        }
+    }
+
+    @ViewBuilder
+    private var tomorrowGuidanceSection: some View {
+        if let guidance = connectivity.todaySnapshot?.tomorrowGuidance {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("明日建议")
+                    .font(.subheadline.weight(.semibold))
+                Text(guidance.conditionalNote)
+                    .font(.caption2)
+                    .fixedSize(horizontal: false, vertical: true)
+                LabeledContent("推荐动作", value: recommendedActionName(guidance.recommendedAction))
+                    .font(.caption2)
+            }
+            .padding(8)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         }
     }
 
@@ -150,6 +192,42 @@ struct WatchCompanionView: View {
         case "retryable": "可在 iPhone 重试"
         case "terminal": "需要重新创建"
         default: "状态未知"
+        }
+    }
+
+    private func recommendedActionName(_ action: RecommendationAction) -> String {
+        switch action {
+        case .continueAsPlanned: "按计划进行"
+        case .reduceIntensity: "降低训练强度"
+        case .rest: "优先休息"
+        case .collectData: "继续收集信息"
+        }
+    }
+
+    private func recoveryStatusName(_ status: RecoveryStatus) -> String {
+        switch status {
+        case .insufficientEvidence: "证据不足"
+        case .withinTypicalRange: "常见范围"
+        case .attention: "需要关注"
+        }
+    }
+
+    private func domainName(_ domain: HealthDomain) -> String {
+        switch domain {
+        case .nutrition: "营养"
+        case .sleep: "睡眠"
+        case .activity: "活动"
+        case .body: "身体"
+        }
+    }
+
+    private func domainStatusName(_ status: HealthDomainStatus) -> String {
+        switch status {
+        case .noData: "暂无数据"
+        case .learning: "学习中"
+        case .withinTypicalRange: "常见范围"
+        case .changed: "有所变化"
+        case .attention: "需要关注"
         }
     }
 }

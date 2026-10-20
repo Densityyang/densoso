@@ -49,6 +49,23 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 0)
     }
 
+    func testPhotoEstimateWithoutCurrentImageRequestsPortionEvidence() async throws {
+        let provider = provider(calls: [mealCall(
+            ingredientName: "米饭",
+            quantity: quantity("photoEstimate", value: 180, unit: "g")
+        )])
+        let harness = try makeHarness(provider: provider)
+
+        _ = try await harness.session.send(userText: "我吃了一些米饭")
+
+        XCTAssertTrue(harness.session.pendingActions.isEmpty)
+        let toolResults = toolResultContents(in: provider.recordedRequests().last)
+        XCTAssertTrue(toolResults.contains {
+            $0.contains("clarification_required") && $0.contains("quantityEvidence")
+        })
+        XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 0)
+    }
+
     func testAnswerAfterOneClarificationStagesWideEstimateWithoutAskingAgain() async throws {
         let provider = ScriptedTextProvider(scripts: [
             [

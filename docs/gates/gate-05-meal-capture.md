@@ -45,6 +45,9 @@ meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
   Household/count/photo estimates remain ranges, package serving mass must be
   verified by user text or local label evidence, and unknown identity or portion
   produces a single clarification instead of a calorie draft.
+  An agent `photoEstimate` is accepted only when this turn contains a transient
+  photo; without one, the tool asks for user-reported portion evidence instead
+  of treating a model claim as visual observation.
 - Broad energy ranges retain their likely point estimate with a weak evidence
   grade. The app asks at most one high-value question for each meal capture.
 - V2 estimates record `meal-estimator-v2`, `portion-estimator-v2`, and

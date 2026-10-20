@@ -19,6 +19,8 @@ final class GetTodayHealthStateToolTests: XCTestCase {
         let state = try XCTUnwrap(object["healthState"] as? [String: Any])
         let recovery = try XCTUnwrap(state["recovery"] as? [String: Any])
         XCTAssertEqual(recovery["status"] as? String, "attention")
+        let trainingLoad = try XCTUnwrap(state["trainingLoad"] as? [String: Any])
+        XCTAssertEqual(trainingLoad["recentSevenDayLoad"] as? Double, 120)
 
         let references = try XCTUnwrap(object["evidenceReferences"] as? [[String: Any]])
         XCTAssertEqual(references.filter { $0["key"] as? String == "sleep.mainSleep.minutes" }.count, 1)
@@ -37,6 +39,33 @@ final class GetTodayHealthStateToolTests: XCTestCase {
         XCTAssertNil(object["healthState"])
         XCTAssertEqual((object["evidenceReferences"] as? [[String: Any]])?.count, 0)
         XCTAssertNotNil(object["message"] as? String)
+    }
+
+    func testUnavailableTrainingLoadEncodesMissingRecentLoadAsNull() throws {
+        let unavailableLoad = TrainingLoadSummary(
+            recentSevenDayLoad: 0,
+            priorTwentyEightDayAverage: nil,
+            ratio: nil,
+            readiness: .noData,
+            band: .unavailable,
+            estimatedWorkoutCount: 0,
+            unavailableEffortCount: 0
+        )
+        let state = makeState(trainingLoad: unavailableLoad, noData: true)
+        let response = try GetTodayHealthStateTool().response(
+            asOf: Date(timeIntervalSince1970: 1_800_000_000),
+            state: state
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let healthState = try XCTUnwrap(object["healthState"] as? [String: Any])
+        let trainingLoad = try XCTUnwrap(healthState["trainingLoad"] as? [String: Any])
+
+        XCTAssertEqual(object["status"] as? String, "noData")
+        XCTAssertTrue(
+            trainingLoad["recentSevenDayLoad"] == nil
+                || trainingLoad["recentSevenDayLoad"] is NSNull
+        )
+        XCTAssertEqual(trainingLoad["band"] as? String, TrainingLoadBand.unavailable.rawValue)
     }
 
     func testRegistryExposesStrictReadOnlyTool() throws {
@@ -76,32 +105,35 @@ final class GetTodayHealthStateToolTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyBriefRecord>()), 0)
     }
 
-    private func makeState() -> HealthStateV2 {
+    private func makeState(
+        trainingLoad: TrainingLoadSummary? = nil,
+        noData: Bool = false
+    ) -> HealthStateV2 {
         let baseline = HealthBaseline(
-            readiness: .mature,
-            validDays: 28,
-            median: 420,
-            p10: 360,
-            p90: 480,
-            mad: 30
+            readiness: noData ? .noData : .mature,
+            validDays: noData ? 0 : 28,
+            median: noData ? nil : 420,
+            p10: noData ? nil : 360,
+            p90: noData ? nil : 480,
+            mad: noData ? nil : 30
         )
         let sleep = HealthDomainResult(
             domain: .sleep,
-            status: .attention,
-            currentValue: 300,
+            status: noData ? .noData : .attention,
+            currentValue: noData ? nil : 300,
             baseline: baseline,
-            evidenceKeys: ["sleep.mainSleep.minutes"]
+            evidenceKeys: noData ? [] : ["sleep.mainSleep.minutes"]
         )
         let recovery = RecoveryAssessment(
-            status: .attention,
-            confidence: .medium,
-            evidence: [
+            status: noData ? .insufficientEvidence : .attention,
+            confidence: noData ? .low : .medium,
+            evidence: noData ? [] : [
                 EvidenceReference(key: "sleep.mainSleep.minutes", source: "sleep"),
                 EvidenceReference(key: "trainingLoad.ratio", source: "trainingLoad"),
             ],
-            recommendedAction: .reduceIntensity
+            recommendedAction: noData ? .collectData : .reduceIntensity
         )
-        let load = TrainingLoadSummary(
+        let load = trainingLoad ?? TrainingLoadSummary(
             recentSevenDayLoad: 120,
             priorTwentyEightDayAverage: 100,
             ratio: 1.2,

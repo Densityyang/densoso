@@ -300,12 +300,35 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "Densoso/Agent/Tools/GetTodayHealthStateTool.swift",
-            ("@Sendable (Date) async throws -> HealthStateV2?", "let state = try await stateProvider(date)"),
+            (
+                "@Sendable (Date) async throws -> HealthStateV2?",
+                "let state = try await stateProvider(date)",
+                "TodayTrainingLoadPayload(summary: state.trainingLoad)",
+                "summary.readiness == .noData ? nil : summary.recentSevenDayLoad",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/GetTodayHealthStateToolTests.swift",
+            ("testUnavailableTrainingLoadEncodesMissingRecentLoadAsNull",),
             errors,
         )
         require(
             "Densoso/Agent/Tools/GetHealthHistoryTool.swift",
-            ("@Sendable (Date, Date) async throws -> [HealthStateHistoryPoint]", "let points = try await historyProvider(startDay, endDay)"),
+            (
+                "@Sendable (Date, Date) async throws -> [HealthStateHistoryPoint]",
+                "let points = try await historyProvider(startDay, endDay)",
+                "latestSummaryByDay[pointDay]",
+                "domainOrderKey",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/GetHealthHistoryToolTests.swift",
+            (
+                "testResponseCoalescesDuplicateLocalDaysAndDomainStatuses",
+                "testResponseTieBreaksEqualTimestampPointsIndependentOfInputOrder",
+            ),
             errors,
         )
         require(
@@ -479,6 +502,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "case .reasoning, .image: return false",
                 "withoutTransientImages",
                 "func currentMealImageEvidence()",
+                "func currentMealHasImage() -> Bool",
+                "transientMealHasImage = multimodalRequest.image != nil",
                 "transientMealImageEvidence = multimodalRequest.mealEvidence",
                 "providerMessagesIncludingTransientMealEvidence()",
                 "transientMealEvidenceMessage",
@@ -496,6 +521,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "case voiceAndImage",
                 "imageAttachments: [ImageAttachment]",
                 "public let locale: String",
+                "public let voiceSource: VoiceCommandEnvelope.Source?",
                 "asInputEnvelope(",
             ),
             errors,
@@ -506,6 +532,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testVoiceTextImageAndCombinedEnvelopeRoundTripOnlySafeMetadata",
                 "testEnvelopeRejectsSourceAndPayloadMismatches",
                 "testVoiceCommandOriginMapsToCoarseEnvelopeSourceWithoutLosingLocale",
+                "voice.asInputEnvelope().voiceSource, .iPhoneSpeechAnalyzer",
+                "typed.asInputEnvelope(imageAttachments: [image]).voiceSource",
                 "source: .textAndImage",
             ),
             errors,
@@ -560,6 +588,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Agent/Tools/LogMealTool.swift",
             (
                 "context.currentMealImageEvidence()",
+                "context.currentMealHasImage()",
+                "ingredient.quantityEvidence.kind == .photoEstimate",
+                "currentMealClarificationWasAnswered()",
                 "本机图像线索已附加，提取文本未保存",
             ),
             errors,
@@ -696,9 +727,14 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     workout_plan_screen = require(
         "Densoso/Views/WorkoutPlanScreen.swift",
         (
-            "private static let confirmedPlanPageSize = 10",
-            "private var visibleConfirmedPlanLimit = 10",
             "private func refreshConfirmedPlans()",
+            "private func loadMoreConfirmedPlans()",
+            "confirmedPlansPage(offset: 0)",
+            "confirmedTrainingPlansPage(offset: 0)",
+            "confirmedPlansNextOffset",
+            "confirmedTrainingPlansNextOffset",
+            "isLoadingMoreConfirmedPlans",
+            "shouldRetryLoadingMoreConfirmedPlans",
             "private var confirmedPlansReadError: String?",
             "if let confirmedPlansReadError",
             'Button("重试")',
@@ -706,19 +742,16 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "confirmedTrainingPlans = []",
             "读取已确认的计划失败：",
             "confirmedPlansReadError = nil",
-            "confirmedPlans.prefix(visibleConfirmedPlanLimit)",
-            "confirmedTrainingPlans.prefix(visibleConfirmedPlanLimit)",
-            "confirmedPlans.count > visibleConfirmedPlanLimit",
-            "confirmedTrainingPlans.count > visibleConfirmedPlanLimit",
-            'Button("加载更多已确认计划")',
-            "visibleConfirmedPlanLimit += Self.confirmedPlanPageSize",
+            'isLoadingMoreConfirmedPlans ? "正在加载…" : "加载更多已确认计划"',
+            "uniqueWorkoutPlans(confirmedPlans + plans.entries)",
+            "uniqueTrainingPlans(confirmedTrainingPlans + trainingPlans.entries)",
         ),
         errors,
     )
     refresh_method = workout_plan_screen.split("private func refreshConfirmedPlans()", 1)[-1]
     refresh_method = refresh_method.split("\n    private func ", 1)[0]
-    if "visibleConfirmedPlanLimit" in refresh_method:
-        errors.append("Refreshing confirmed workout plans must preserve the visible row limit")
+    if "confirmedPlansPage(offset: 0)" not in refresh_method or "confirmedTrainingPlansPage(offset: 0)" not in refresh_method:
+        errors.append("Refreshing confirmed workout plans must restart both bounded pages at zero")
     require(
         "Packages/DensosoDomain/Tests/DensosoDomainTests/DailyLoopSnapshotTests.swift",
         ("testSnapshotRoundTripsStateGuidanceAndActionSummaries",),
@@ -734,6 +767,35 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "testHundredOfflineMessagesRemainOrderedAndDuplicateReplaysDoNotAddRows",
             "testAcceptedAcknowledgementRemovesMessageAfterPhonePersistsItsReceipt",
+            "testTodaySnapshotRoundTripsTomorrowGuidanceAndDecodesLegacyPayload",
+            'XCTAssertEqual(Set(try XCTUnwrap(encodedDomains.first).keys), ["domain", "status"])',
+            "XCTAssertEqual(roundTripped.recoverySummary, recoverySummary)",
+        ),
+        errors,
+    )
+    require(
+        "Packages/DensosoDomain/Sources/DensosoDomain/WatchConnectivityContracts.swift",
+        (
+            "public struct WatchRecoverySummary: Codable, Equatable, Sendable",
+            "public struct WatchHealthDomainStatus: Codable, Equatable, Sendable",
+            "public let domains: [WatchHealthDomainStatus]",
+            "public let recoverySummary: WatchRecoverySummary?",
+            "public let tomorrowGuidance: NextDayGuidance?",
+            "tomorrowGuidance: NextDayGuidance? = nil",
+            "recoverySummary: WatchRecoverySummary? = nil",
+        ),
+        errors,
+    )
+    require(
+        "DensosoWatchExtension/WatchCompanionView.swift",
+        (
+            "todaySnapshot?.tomorrowGuidance",
+            "Text(guidance.conditionalNote)",
+            "recommendedActionName(guidance.recommendedAction)",
+            "snapshot.recoverySummary",
+            'LabeledContent("恢复", value: recoveryStatusName(recovery.status))',
+            "ForEach(HealthDomain.allCases, id: \\.self)",
+            "domainStatusName(result.status)",
         ),
         errors,
     )
@@ -762,6 +824,28 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         ),
         errors,
     )
+    require(
+        "Densoso/Application/Workout/TrainingPlanSchedulingService.swift",
+        (
+            "func upcomingConfirmedSessions(",
+            "let boundedLimit = max(limit, 0)",
+            "descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize",
+            "dateRange.contains(session.date)",
+            "entry.state != .terminal",
+            "summaries.count > boundedLimit",
+        ),
+        errors,
+    )
+    require(
+        "Densoso/Services/WorkoutPlanCompiler.swift",
+        ("func upcomingConfirmedTrainingSessions(",),
+        errors,
+    )
+    require(
+        "DensosoTests/TrainingPlanSchedulingServiceTests.swift",
+        ("testUpcomingTrainingSessionsAreBoundedAndOrderedAcrossPages",),
+        errors,
+    )
     inbox_store = require(
         "Densoso/Infrastructure/WatchConnectivity/WatchMessageInboxStore.swift",
         (
@@ -787,9 +871,16 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "let metricsPredicate = #Predicate<DailyMetrics> { $0.date >= today && $0.date < tomorrow }",
             "metricsDescriptor.fetchLimit = 1",
             "let metrics = try context.fetch(metricsDescriptor).first",
-            "upcomingConfirmedPlans(from: today, limit: 10)",
-            "guard entry.state != .terminal else { return [] }",
-            "guard session.date >= today,",
+            "calendar.isDate(brief.dayStart, inSameDayAs: today) ? brief : nil",
+            "upcomingConfirmedPlans(from: today, limit: Self.watchSnapshotEntryLimit)",
+            "upcomingConfirmedTrainingSessions(in: today..<dayAfterTomorrow, limit: 10)",
+            "tomorrowGuidance: todayBrief?.healthState?.tomorrowGuidance",
+            "recoverySummary: todayBrief?.healthState.map",
+            "WatchHealthDomainStatus(domain: $0.domain, status: $0.status)",
+            "private static let watchSnapshotEntryLimit = 10",
+            "lhs.expiresAt < rhs.expiresAt",
+            "lhs.id.uuidString < rhs.id.uuidString",
+            ".prefix(Self.watchSnapshotEntryLimit)",
             "return lhs.actionID.uuidString < rhs.actionID.uuidString",
         ),
         errors,
@@ -806,12 +897,15 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     require(
         "Densoso/Application/Workout/TrainingPlanSchedulingService.swift",
         (
+            "static let pageSize = 10",
+            "func confirmedPlansPage(offset: Int) throws -> ConfirmedPlanPage<ConfirmedTrainingPlanEntry>",
             "let prefix = ConfirmedTrainingPlanEntry.notesPrefix",
             "$0.notes?.contains(prefix) == true",
             "private static let confirmedPlanFetchBatchSize = 64",
             "private func fetchConfirmedPlanEvents(in context: ModelContext) throws -> [ScheduleEvent]",
             "descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize",
             "descriptor.fetchOffset = offset",
+            "descriptor.fetchLimit = ConfirmedPlanPageSizing.pageSize + 1",
             "FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)",
         ),
         errors,
@@ -819,6 +913,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     require(
         "Densoso/Services/WorkoutPlanCompiler.swift",
         (
+            "func confirmedPlansPage(offset: Int) throws -> ConfirmedPlanPage<ConfirmedWorkoutPlanEntry>",
             "let singlePlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix",
             "let multiPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix",
             "func upcomingConfirmedPlans(from startDate: Date, limit: Int)",
@@ -827,6 +922,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "$0.notes?.contains(singlePlanPrefix) == true",
             "$0.notes?.contains(multiPlanPrefix) == true",
             "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
+            "func confirmedTrainingPlansPage(offset: Int) throws -> ConfirmedPlanPage<ConfirmedTrainingPlanEntry>",
         ),
         errors,
     )
@@ -849,6 +945,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry",
             "testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays",
             "testConfirmedPlanHistoryPagesAcrossThe64EventBoundary",
+            "testUpcomingTrainingSessionsAreBoundedAndOrderedAcrossPages",
+            "testConfirmedPlanPagesKeepAllRowsAcrossTiedTenRowBoundaries",
         ),
         errors,
     )
@@ -1002,6 +1100,8 @@ def main() -> int:
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanHistoryPagesAcrossThe64EventBoundary",
+                "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testUpcomingTrainingSessionsAreBoundedAndOrderedAcrossPages",
+                "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanPagesKeepAllRowsAcrossTiedTenRowBoundaries",
                 "-only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testConfirmedScheduleIsIdempotentAcrossRetries",
                 "-only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries",
                 "-only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay",

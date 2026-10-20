@@ -40,6 +40,7 @@ private final class WatchSessionReplyHandler: @unchecked Sendable {
 @Observable
 final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     private static let payloadKey = "densoso.watch.payload"
+    private static let watchSnapshotEntryLimit = 10
 
     @ObservationIgnored private let session: WCSession
     @ObservationIgnored private let modelContainer: ModelContainer
@@ -130,6 +131,11 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     func pendingActionSummaries() -> [WatchPendingActionSummary] {
         agentSession.pendingActions
             .filter { $0.state == .pending }
+            .sorted { lhs, rhs in
+                if lhs.expiresAt != rhs.expiresAt { return lhs.expiresAt < rhs.expiresAt }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+            .prefix(Self.watchSnapshotEntryLimit)
             .map { action in
                 let requiresPhoneReview: Bool
                 if case .trainingPlan = action.payload {
@@ -152,13 +158,17 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+        let dayAfterTomorrow = calendar.date(byAdding: .day, value: 2, to: today)!
+        let todayBrief = healthIntelligenceService.dailyBrief.flatMap { brief in
+            calendar.isDate(brief.dayStart, inSameDayAs: today) ? brief : nil
+        }
         let metricsPredicate = #Predicate<DailyMetrics> { $0.date >= today && $0.date < tomorrow }
         var metricsDescriptor = FetchDescriptor<DailyMetrics>(predicate: metricsPredicate)
         metricsDescriptor.fetchLimit = 1
         let metrics = try context.fetch(metricsDescriptor).first
         let received = try inboxStore.recentReceivedMessageIDs()
         let singleSessionPlans = try workoutPlanSchedulingService
-            .upcomingConfirmedPlans(from: today, limit: 10)
+            .upcomingConfirmedPlans(from: today, limit: Self.watchSnapshotEntryLimit)
             .map {
                 WatchWorkoutPlanSummary(
                     actionID: $0.actionID,
@@ -168,21 +178,17 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                     lastError: $0.lastError
                 )
             }
-        let multiDaySessionPlans = try workoutPlanSchedulingService.confirmedTrainingPlans().flatMap {
-            entry -> [WatchWorkoutPlanSummary] in
-            guard entry.state != .terminal else { return [] }
-            return entry.draft.sessions.compactMap { session -> WatchWorkoutPlanSummary? in
-                guard session.date >= today,
-                      let activity = session.activity else { return nil }
-                return WatchWorkoutPlanSummary(
-                    actionID: session.id,
-                    title: "\(entry.draft.name) · \(activity.displayName)",
-                    scheduledAt: session.date,
-                    state: entry.state.rawValue,
-                    lastError: entry.lastError
+        let multiDaySessionPlans = try workoutPlanSchedulingService
+            .upcomingConfirmedTrainingSessions(in: today..<dayAfterTomorrow, limit: Self.watchSnapshotEntryLimit)
+            .map {
+                WatchWorkoutPlanSummary(
+                    actionID: $0.sessionID,
+                    title: "\($0.planName) · \($0.activity.displayName)",
+                    scheduledAt: $0.scheduledAt,
+                    state: $0.state.rawValue,
+                    lastError: $0.lastError
                 )
             }
-        }
         let scheduledPlans = Array((singleSessionPlans + multiDaySessionPlans)
             .sorted { lhs, rhs in
                 let leftDate = lhs.scheduledAt ?? .distantFuture
@@ -190,17 +196,27 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 if leftDate != rightDate { return leftDate < rightDate }
                 return lhs.actionID.uuidString < rhs.actionID.uuidString
             }
-            .prefix(10))
+            .prefix(Self.watchSnapshotEntryLimit))
         return WatchTodaySnapshot(
             generatedAt: Date(),
-            summary: healthIntelligenceService.dailyBrief?.summary ?? "暂无本地健康摘要",
+            summary: todayBrief?.summary ?? "暂无本地健康摘要",
             energyIntakeKcal: metrics?.totalIntakeKcal,
             totalExpenditureKcal: metrics?.totalExpenditureKcal,
             deficitKcal: metrics?.deficitKcal,
-            domains: healthIntelligenceService.dailyBrief?.domains ?? [],
+            domains: todayBrief?.domains.map {
+                WatchHealthDomainStatus(domain: $0.domain, status: $0.status)
+            } ?? [],
             pendingActions: pendingActionSummaries(),
             workoutPlans: scheduledPlans,
-            acknowledgedMessageIDs: received
+            acknowledgedMessageIDs: received,
+            tomorrowGuidance: todayBrief?.healthState?.tomorrowGuidance,
+            recoverySummary: todayBrief?.healthState.map { healthState in
+                WatchRecoverySummary(
+                    status: healthState.recovery.status,
+                    confidence: healthState.recovery.confidence,
+                    recommendedAction: healthState.recovery.recommendedAction
+                )
+            }
         )
     }
 

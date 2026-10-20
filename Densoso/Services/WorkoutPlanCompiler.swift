@@ -252,6 +252,32 @@ final class WorkoutPlanSchedulingService {
             .sorted { ($0.draft.scheduledAt ?? .distantPast) > ($1.draft.scheduledAt ?? .distantPast) }
     }
 
+    func confirmedPlansPage(offset: Int) throws -> ConfirmedPlanPage<ConfirmedWorkoutPlanEntry> {
+        let pageOffset = max(offset, 0)
+        let context = ModelContext(modelContainer)
+        let prefix = ConfirmedWorkoutPlanEntry.notesPrefix
+        let predicate = #Predicate<ScheduleEvent> { $0.notes?.contains(prefix) == true }
+        let sortDescriptors: [SortDescriptor<ScheduleEvent>] = [
+            SortDescriptor(\ScheduleEvent.date, order: .reverse),
+            SortDescriptor(\ScheduleEvent.startTime, order: .reverse),
+            SortDescriptor(\ScheduleEvent.createdAt, order: .reverse),
+            SortDescriptor(\ScheduleEvent.title),
+            SortDescriptor(\ScheduleEvent.notes),
+        ]
+        var descriptor = FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)
+        descriptor.fetchOffset = pageOffset
+        descriptor.fetchLimit = ConfirmedPlanPageSizing.pageSize + 1
+        let events = try context.fetch(descriptor)
+        let pageEvents = Array(events.prefix(ConfirmedPlanPageSizing.pageSize))
+        let nextOffset = events.count > ConfirmedPlanPageSizing.pageSize
+            ? pageOffset + ConfirmedPlanPageSizing.pageSize
+            : nil
+        return ConfirmedPlanPage(
+            entries: pageEvents.compactMap { ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) },
+            nextOffset: nextOffset
+        )
+    }
+
     func upcomingConfirmedPlans(from startDate: Date, limit: Int) throws -> [ConfirmedWorkoutPlanEntry] {
         let boundedLimit = max(limit, 0)
         guard boundedLimit > 0 else { return [] }
@@ -310,6 +336,17 @@ final class WorkoutPlanSchedulingService {
 
     func confirmedTrainingPlans() throws -> [ConfirmedTrainingPlanEntry] {
         try multiDayService.confirmedPlans()
+    }
+
+    func confirmedTrainingPlansPage(offset: Int) throws -> ConfirmedPlanPage<ConfirmedTrainingPlanEntry> {
+        try multiDayService.confirmedPlansPage(offset: offset)
+    }
+
+    func upcomingConfirmedTrainingSessions(
+        in dateRange: Range<Date>,
+        limit: Int
+    ) throws -> [ConfirmedTrainingPlanSessionSummary] {
+        try multiDayService.upcomingConfirmedSessions(in: dateRange, limit: limit)
     }
 
     private func confirmedPlanEventDescriptor() -> FetchDescriptor<ScheduleEvent> {

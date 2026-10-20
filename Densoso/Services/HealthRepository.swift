@@ -659,29 +659,20 @@ final class HealthRepository: HealthSyncRepository {
         _ body: ([HealthKitSampleIndexRecord]) throws -> Void
     ) throws {
         let sortBy = [SortDescriptor(\HealthKitSampleIndexRecord.sampleID)]
-        var cursorSampleID: UUID?
+        var offset = 0
         while true {
-            let predicate: Predicate<HealthKitSampleIndexRecord>
-            if let cursorSampleID {
-                let lastSampleID = cursorSampleID
-                predicate = #Predicate<HealthKitSampleIndexRecord> { record in
-                    record.stream == stream
-                        && record.needsRequery
-                        && record.sampleID > lastSampleID
-                }
-            } else {
-                predicate = #Predicate<HealthKitSampleIndexRecord> {
-                    $0.stream == stream && $0.needsRequery
-                }
+            let predicate = #Predicate<HealthKitSampleIndexRecord> {
+                $0.stream == stream && $0.needsRequery
             }
             var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate, sortBy: sortBy)
             descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize
+            descriptor.fetchOffset = offset
             let records = try modelContext.fetch(descriptor)
-            guard let lastRecord = records.last else { return }
-            // The callback may clear the predicate or delete this page, so offset paging can skip rows.
+            guard !records.isEmpty else { return }
+            // Callers collect work here and mutate indexed rows only after traversal completes.
             try body(records)
-            cursorSampleID = lastRecord.sampleID
             if records.count < Self.healthKitSampleIndexBatchSize { return }
+            offset += records.count
         }
     }
 
@@ -745,21 +736,17 @@ final class HealthRepository: HealthSyncRepository {
 
     private func markHealthKitSampleIndexesForRequery(sampleIDs: Set<UUID>, stream: String) throws {
         let orderedIDs = sampleIDs.sorted { $0.uuidString < $1.uuidString }
-        var offset = 0
-        while offset < orderedIDs.count {
-            let batchEnd = min(offset + Self.healthKitSampleIndexBatchSize, orderedIDs.count)
-            let batchIDs = Array(orderedIDs[offset..<batchEnd])
+        for sampleID in orderedIDs {
             let predicate = #Predicate<HealthKitSampleIndexRecord> {
-                $0.stream == stream && batchIDs.contains($0.sampleID)
+                $0.stream == stream && $0.sampleID == sampleID
             }
-            let records = try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate))
-            for record in records {
-                let pendingDayKeys = Self.pendingDayKeys(for: record)
-                    .union(Self.projectionDayKeys(for: record, stream: stream))
-                record.isDeleted = true
-                Self.setPendingDayKeys(pendingDayKeys, on: record)
-            }
-            offset = batchEnd
+            var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate)
+            descriptor.fetchLimit = 1
+            guard let record = try modelContext.fetch(descriptor).first else { continue }
+            let pendingDayKeys = Self.pendingDayKeys(for: record)
+                .union(Self.projectionDayKeys(for: record, stream: stream))
+            record.isDeleted = true
+            Self.setPendingDayKeys(pendingDayKeys, on: record)
         }
     }
 

@@ -122,7 +122,7 @@ final class MultimodalAgentImageTests: XCTestCase {
         )
         let harness = try makeHarness(provider: provider, grantMealImage: false)
         let request = MultimodalModelRequest(
-            userText: "请根据本机扫描线索整理待确认餐食。",
+            userText: "请根据本机扫描线索整理待确认餐食，熟米饭150克。",
             mealEvidence: [
                 MealEvidence(
                     kind: .nutritionLabel,

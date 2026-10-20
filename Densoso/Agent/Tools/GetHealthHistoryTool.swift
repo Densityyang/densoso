@@ -68,39 +68,51 @@ struct GetHealthHistoryTool: AgentTool {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
 
-        let dailySummaries = points
-            .filter {
-                let pointDay = calendar.startOfDay(for: $0.date)
-                return pointDay >= startDay && pointDay <= endDay
+        let stableEncoder = JSONEncoder()
+        stableEncoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var latestSummaryByDay: [Date: (timestamp: Date, summary: HealthHistoryDayOutput, tieBreakKey: String)] = [:]
+        for point in points {
+            let pointDay = calendar.startOfDay(for: point.date)
+            guard pointDay >= startDay && pointDay <= endDay else { continue }
+
+            let orderedDomains = point.state.domains.sorted {
+                Self.domainOrderKey($0) < Self.domainOrderKey($1)
             }
-            .sorted {
-                let leftDay = calendar.startOfDay(for: $0.date)
-                let rightDay = calendar.startOfDay(for: $1.date)
-                return leftDay == rightDay ? $0.date < $1.date : leftDay < rightDay
+            var domainStatuses: [String: String] = [:]
+            var observations: [String: Double] = [:]
+            for domain in orderedDomains {
+                let domainKey = domain.domain.rawValue
+                guard domainStatuses[domainKey] == nil else { continue }
+                domainStatuses[domainKey] = domain.status.rawValue
+                guard let value = domain.currentValue,
+                      let evidenceKey = domain.evidenceKeys.first,
+                      value.isFinite,
+                      observations[evidenceKey] == nil else { continue }
+                observations[evidenceKey] = value
             }
-            .map { point in
-                let pointDay = calendar.startOfDay(for: point.date)
-                let domainStatuses = Dictionary(uniqueKeysWithValues: point.state.domains.map {
-                    ($0.domain.rawValue, $0.status.rawValue)
-                })
-                var observations: [String: Double] = [:]
-                for domain in point.state.domains {
-                    guard let value = domain.currentValue,
-                          let key = domain.evidenceKeys.first,
-                          value.isFinite else { continue }
-                    observations[key] = value
+            if let ratio = point.state.trainingLoad.ratio, ratio.isFinite {
+                observations["trainingLoad.ratio"] = ratio
+            }
+            let summary = HealthHistoryDayOutput(
+                date: formatter.string(from: pointDay),
+                domainStatuses: domainStatuses,
+                observations: observations,
+                recoveryStatus: point.state.recovery.status.rawValue,
+                trainingLoadBand: point.state.trainingLoad.band.rawValue
+            )
+            let tieBreakKey = String(decoding: try stableEncoder.encode(summary), as: UTF8.self)
+            if let current = latestSummaryByDay[pointDay] {
+                if point.date > current.timestamp
+                    || (point.date == current.timestamp && tieBreakKey < current.tieBreakKey) {
+                    latestSummaryByDay[pointDay] = (point.date, summary, tieBreakKey)
                 }
-                if let ratio = point.state.trainingLoad.ratio, ratio.isFinite {
-                    observations["trainingLoad.ratio"] = ratio
-                }
-                return HealthHistoryDayOutput(
-                    date: formatter.string(from: pointDay),
-                    domainStatuses: domainStatuses,
-                    observations: observations,
-                    recoveryStatus: point.state.recovery.status.rawValue,
-                    trainingLoadBand: point.state.trainingLoad.band.rawValue
-                )
+            } else {
+                latestSummaryByDay[pointDay] = (point.date, summary, tieBreakKey)
             }
+        }
+        let dailySummaries = latestSummaryByDay.keys.sorted().compactMap {
+            latestSummaryByDay[$0]?.summary
+        }
 
         let hasObservations = dailySummaries.contains { !$0.observations.isEmpty }
         let hasGaps = dailySummaries.contains { summary in
@@ -135,6 +147,15 @@ struct GetHealthHistoryTool: AgentTool {
         guard (0..<HealthHistoryQueryError.maximumDays).contains(dayCount) else {
             throw HealthHistoryQueryError.rangeTooLarge
         }
+    }
+
+    private static func domainOrderKey(_ result: HealthDomainResult) -> String {
+        let evidenceKeys = result.evidenceKeys
+            .map { "\($0.utf8.count):\($0)" }
+            .joined(separator: "|")
+        let currentValue = result.currentValue.map { String($0.bitPattern, radix: 16) } ?? "nil"
+        return [result.domain.rawValue, result.status.rawValue, evidenceKeys, currentValue]
+            .joined(separator: "\u{1f}")
     }
 
     private static func parseDate(_ value: String) -> Date? {

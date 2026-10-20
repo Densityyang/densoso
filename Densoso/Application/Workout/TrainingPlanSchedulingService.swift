@@ -4,6 +4,25 @@ import Observation
 import SwiftData
 import WorkoutKit
 
+enum ConfirmedPlanPageSizing {
+    static let pageSize = 10
+}
+
+struct ConfirmedPlanPage<Entry: Sendable>: Sendable {
+    let entries: [Entry]
+    let nextOffset: Int?
+}
+
+struct ConfirmedTrainingPlanSessionSummary: Equatable, Sendable {
+    let planActionID: UUID
+    let sessionID: UUID
+    let planName: String
+    let scheduledAt: Date
+    let activity: WorkoutPlanDraft.Activity
+    let state: ConfirmedTrainingPlanEntry.State
+    let lastError: String?
+}
+
 @MainActor
 protocol MultiDayWorkoutSchedulingClient {
     func authorize() async throws
@@ -92,6 +111,115 @@ final class TrainingPlanSchedulingService {
                 }
                 return lhs.draft.id.uuidString < rhs.draft.id.uuidString
             }
+    }
+
+    func confirmedPlansPage(offset: Int) throws -> ConfirmedPlanPage<ConfirmedTrainingPlanEntry> {
+        let pageOffset = max(offset, 0)
+        let context = ModelContext(modelContainer)
+        let prefix = ConfirmedTrainingPlanEntry.notesPrefix
+        let predicate = #Predicate<ScheduleEvent> { $0.notes?.contains(prefix) == true }
+        let sortDescriptors: [SortDescriptor<ScheduleEvent>] = [
+            SortDescriptor(\ScheduleEvent.createdAt, order: .reverse),
+            SortDescriptor(\ScheduleEvent.date, order: .reverse),
+            SortDescriptor(\ScheduleEvent.startTime, order: .reverse),
+            SortDescriptor(\ScheduleEvent.title),
+            SortDescriptor(\ScheduleEvent.notes),
+        ]
+        var descriptor = FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)
+        descriptor.fetchOffset = pageOffset
+        descriptor.fetchLimit = ConfirmedPlanPageSizing.pageSize + 1
+        let events = try context.fetch(descriptor)
+        let pageEvents = Array(events.prefix(ConfirmedPlanPageSizing.pageSize))
+        let nextOffset = events.count > ConfirmedPlanPageSizing.pageSize
+            ? pageOffset + ConfirmedPlanPageSizing.pageSize
+            : nil
+        return ConfirmedPlanPage(
+            entries: pageEvents.compactMap { ConfirmedTrainingPlanEntry.decode(notes: $0.notes) },
+            nextOffset: nextOffset
+        )
+    }
+
+    func upcomingConfirmedSessions(
+        in dateRange: Range<Date>,
+        limit: Int
+    ) throws -> [ConfirmedTrainingPlanSessionSummary] {
+        let boundedLimit = max(limit, 0)
+        guard boundedLimit > 0, dateRange.lowerBound < dateRange.upperBound else { return [] }
+
+        let context = ModelContext(modelContainer)
+        let prefix = ConfirmedTrainingPlanEntry.notesPrefix
+        let rangeEnd = dateRange.upperBound
+        let sortDescriptors: [SortDescriptor<ScheduleEvent>] = [
+            SortDescriptor(\ScheduleEvent.date),
+            SortDescriptor(\ScheduleEvent.startTime),
+            SortDescriptor(\ScheduleEvent.createdAt),
+            SortDescriptor(\ScheduleEvent.title),
+            SortDescriptor(\ScheduleEvent.notes),
+        ]
+        // The event date is the plan's earliest session, so older plans may still contribute sessions.
+        let predicate = #Predicate<ScheduleEvent> {
+            $0.date < rangeEnd && $0.notes?.contains(prefix) == true
+        }
+        var descriptor = FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)
+        descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize
+
+        var offset = 0
+        var summaries: [ConfirmedTrainingPlanSessionSummary] = []
+        var cutoffDate: Date?
+
+        while true {
+            descriptor.fetchOffset = offset
+            let page = try context.fetch(descriptor)
+            guard !page.isEmpty else { break }
+
+            var passedCutoffDate = false
+            for event in page {
+                // Confirmed plan events are stored at the plan's earliest session date.
+                if let cutoffDate, event.date > cutoffDate {
+                    passedCutoffDate = true
+                    break
+                }
+                guard let entry = ConfirmedTrainingPlanEntry.decode(notes: event.notes),
+                      entry.state != .terminal else { continue }
+                for session in entry.draft.sessions {
+                    guard dateRange.contains(session.date),
+                          let activity = session.activity else { continue }
+                    summaries.append(ConfirmedTrainingPlanSessionSummary(
+                        planActionID: entry.actionID,
+                        sessionID: session.id,
+                        planName: entry.draft.name,
+                        scheduledAt: session.date,
+                        activity: activity,
+                        state: entry.state,
+                        lastError: entry.lastError
+                    ))
+                }
+                summaries.sort(by: Self.confirmedSessionOrder)
+                if summaries.count > boundedLimit {
+                    summaries.removeLast(summaries.count - boundedLimit)
+                }
+                if summaries.count == boundedLimit {
+                    cutoffDate = summaries.last?.scheduledAt
+                }
+            }
+
+            if passedCutoffDate { break }
+            offset += page.count
+            if page.count < Self.confirmedPlanFetchBatchSize { break }
+        }
+
+        return summaries
+    }
+
+    private static func confirmedSessionOrder(
+        _ lhs: ConfirmedTrainingPlanSessionSummary,
+        _ rhs: ConfirmedTrainingPlanSessionSummary
+    ) -> Bool {
+        if lhs.scheduledAt != rhs.scheduledAt { return lhs.scheduledAt < rhs.scheduledAt }
+        if lhs.sessionID != rhs.sessionID {
+            return lhs.sessionID.uuidString < rhs.sessionID.uuidString
+        }
+        return lhs.planActionID.uuidString < rhs.planActionID.uuidString
     }
 
     private func fetchConfirmedPlanEvents(in context: ModelContext) throws -> [ScheduleEvent] {

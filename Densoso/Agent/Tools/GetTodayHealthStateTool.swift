@@ -37,7 +37,7 @@ struct GetTodayHealthStateTool: AgentTool {
         let output = TodayHealthStateToolOutput(
             status: Self.status(for: state),
             asOf: date,
-            healthState: state,
+            healthState: state.map { TodayHealthStatePayload(state: $0) },
             evidenceReferences: Self.evidenceReferences(in: state),
             message: Self.message(for: state)
         )
@@ -93,7 +93,44 @@ private enum TodayHealthStateToolStatus: String, Encodable {
 private struct TodayHealthStateToolOutput: Encodable {
     let status: TodayHealthStateToolStatus
     let asOf: Date
-    let healthState: HealthStateV2?
+    let healthState: TodayHealthStatePayload?
     let evidenceReferences: [EvidenceReference]
     let message: String?
+}
+
+private struct TodayHealthStatePayload: Encodable {
+    let domains: [HealthDomainResult]
+    let recovery: RecoveryAssessment
+    let trainingLoad: TodayTrainingLoadPayload
+    let tomorrowGuidance: NextDayGuidance?
+
+    init(state: HealthStateV2) {
+        domains = state.domains
+        recovery = state.recovery
+        trainingLoad = TodayTrainingLoadPayload(summary: state.trainingLoad)
+        tomorrowGuidance = state.tomorrowGuidance
+    }
+}
+
+private struct TodayTrainingLoadPayload: Encodable {
+    let recentSevenDayLoad: Double?
+    let priorTwentyEightDayAverage: Double?
+    let ratio: Double?
+    let readiness: BaselineReadiness
+    let band: TrainingLoadBand
+    let estimatedWorkoutCount: Int
+    let unavailableEffortCount: Int
+
+    init(summary: TrainingLoadSummary) {
+        // The domain model uses zero as its required placeholder when no load
+        // could be observed. Keep that sentinel from becoming an agent-facing
+        // claim that the user's actual recent load was zero.
+        recentSevenDayLoad = summary.readiness == .noData ? nil : summary.recentSevenDayLoad
+        priorTwentyEightDayAverage = summary.priorTwentyEightDayAverage
+        ratio = summary.ratio
+        readiness = summary.readiness
+        band = summary.band
+        estimatedWorkoutCount = summary.estimatedWorkoutCount
+        unavailableEffortCount = summary.unavailableEffortCount
+    }
 }

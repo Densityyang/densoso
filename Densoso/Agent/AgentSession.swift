@@ -100,6 +100,7 @@ final class AgentSession {
     private(set) var latestEvent: AgentEvent?
     private(set) var streamedText = ""
     private var transientMealImageEvidence: [MealEvidence] = []
+    private var transientMealHasImage = false
     private var transientMealUserText: String?
     private var didIssueMealClarification = false
     private var transientMealClarificationWasAnswered = false
@@ -286,6 +287,7 @@ final class AgentSession {
     private func run(multimodalRequest: MultimodalModelRequest, requestID: UUID) async throws -> AgentResponse {
         let userText = multimodalRequest.userText
         transientMealImageEvidence = multimodalRequest.mealEvidence
+        transientMealHasImage = multimodalRequest.image != nil
         transientMealUserText = userText
         didIssueMealClarification = false
         let priorClarification = priorMealClarification(
@@ -295,6 +297,7 @@ final class AgentSession {
         transientMealClarificationWasAnswered = priorClarification.answered
         defer {
             transientMealImageEvidence = []
+            transientMealHasImage = false
             transientMealUserText = nil
             didIssueMealClarification = false
             transientMealClarificationWasAnswered = false
@@ -822,6 +825,10 @@ final class AgentSession {
 
     func currentMealImageEvidence() -> [MealEvidence] {
         transientMealImageEvidence
+    }
+
+    func currentMealHasImage() -> Bool {
+        transientMealHasImage
     }
 
     private func providerMessagesIncludingTransientMealEvidence() -> [ModelMessage] {

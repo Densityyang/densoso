@@ -41,6 +41,7 @@ final class HealthNarrativePolicyTests: XCTestCase {
         XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: "帮我记录体重 70kg"))
         XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: "帮我安排下周训练计划"))
         XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: "记一下我今天跑步了"))
+        XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: "恢复预算请求"))
         XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: "Please book a running class"))
 
         let prompt = HealthContextPromptBuilder.prompt(

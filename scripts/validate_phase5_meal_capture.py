@@ -132,7 +132,10 @@ def main() -> int:
 
     log_meal = require_text(
         ROOT / "Densoso/Agent/Tools/LogMealTool.swift",
-        ["FoodResolver", "PortionEstimator", "MealEstimator", "ambiguousFood"],
+        [
+            "FoodResolver", "PortionEstimator", "MealEstimator", "ambiguousFood",
+            "context.currentMealHasImage()", "ingredient.quantityEvidence.kind == .photoEstimate",
+        ],
         errors,
     )
     if "rankedSearch" in log_meal or "CookingCoefficientTable" in log_meal:
@@ -146,6 +149,7 @@ def main() -> int:
         [
             "testExactGramsUsesCurrentUserTextInsteadOfModelClaim",
             "testUnverifiedModelGramClaimRequestsClarificationWithoutStaging",
+            "testPhotoEstimateWithoutCurrentImageRequestsPortionEvidence",
             "testAnswerAfterOneClarificationStagesWideEstimateWithoutAskingAgain",
             "testUserStillUncertainAfterClarificationStagesLowConfidenceEstimateWithoutSecondQuestion",
             "testNewUnrelatedFoodDoesNotInheritPreviousMealClarification",
