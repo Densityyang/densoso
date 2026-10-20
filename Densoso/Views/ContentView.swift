@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import DensosoDomain
 
 struct ContentView: View {
     @Environment(AppState.self) private var appState
