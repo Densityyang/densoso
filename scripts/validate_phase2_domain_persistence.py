@@ -218,6 +218,7 @@ def main() -> int:
             "testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts",
             "testConfirmationDailySnapshotPagesMealsAndReadsLatestWeightOnly",
             "testRecoveryPagesCommittingActionsAndSendingOutboxAcrossBoundaries",
+            "testRecoveryFindsInterruptedWorkoutPlanAfterFirstScheduleEventPage",
         ),
         errors,
     )
@@ -251,6 +252,10 @@ def main() -> int:
             "DailyMetricsProjectionInputReader.meals(on: day, in: modelContext)",
             "weightDescriptor.fetchLimit = 1",
             "SortDescriptor(\\WeightRecord.id, order: .reverse)",
+            "static let scheduleEventFetchBatchSize = 64",
+            "private func scheduleEventExists(",
+            "descriptor.fetchLimit = Self.scheduleEventFetchBatchSize",
+            "descriptor.fetchOffset = offset",
         ),
         errors,
     )

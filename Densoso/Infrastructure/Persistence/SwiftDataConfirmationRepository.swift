@@ -20,6 +20,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     static let expiredActionBatchSize = 64
     static let activeActionBatchSize = 64
     static let recoveryBatchSize = 64
+    static let scheduleEventFetchBatchSize = 64
 
     private var faultPoint: ConfirmationFaultPoint?
 
@@ -682,7 +683,11 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             $0.date >= interval.start && $0.date < interval.end
         }
         let metrics = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricsPredicate))
-        let profile = try modelContext.fetch(FetchDescriptor<UserProfile>()).first
+        let primaryProfileKey = "primary"
+        let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
+        var profileDescriptor = FetchDescriptor<UserProfile>(predicate: profilePredicate)
+        profileDescriptor.fetchLimit = 1
+        let profile = try modelContext.fetch(profileDescriptor).first
         let target = max(profile?.dailyDeficitTarget ?? 500, 0)
         let reportPredicate = #Predicate<WeeklyReport> { $0.weekStartDate == weekStart }
         var reportDescriptor = FetchDescriptor<WeeklyReport>(predicate: reportPredicate)
@@ -823,11 +828,15 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             descriptor.fetchLimit = 1
             return try !modelContext.fetch(descriptor).isEmpty
         case .workoutPlan:
-            return try scheduleEvents(containingNotesPrefix: ConfirmedWorkoutPlanEntry.notesPrefix).contains { event in
+            return try scheduleEventExists(
+                containingNotesPrefix: ConfirmedWorkoutPlanEntry.notesPrefix
+            ) { event in
                 ConfirmedWorkoutPlanEntry.decode(notes: event.notes)?.idempotencyKey == idempotencyKey
             }
         case .trainingPlan:
-            return try scheduleEvents(containingNotesPrefix: ConfirmedTrainingPlanEntry.notesPrefix).contains { event in
+            return try scheduleEventExists(
+                containingNotesPrefix: ConfirmedTrainingPlanEntry.notesPrefix
+            ) { event in
                 ConfirmedTrainingPlanEntry.decode(notes: event.notes)?.idempotencyKey == idempotencyKey
             }
         case .dailyCheckIn:
@@ -845,9 +854,32 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         }
     }
 
-    private func scheduleEvents(containingNotesPrefix prefix: String) throws -> [ScheduleEvent] {
-        let predicate = #Predicate<ScheduleEvent> { $0.notes?.contains(prefix) == true }
-        return try modelContext.fetch(FetchDescriptor<ScheduleEvent>(predicate: predicate))
+    private func scheduleEventExists(
+        containingNotesPrefix prefix: String,
+        matching matches: (ScheduleEvent) -> Bool
+    ) throws -> Bool {
+        let notesPredicate = #Predicate<ScheduleEvent> { $0.notes?.contains(prefix) == true }
+        let sortDescriptors: [SortDescriptor<ScheduleEvent>] = [
+            SortDescriptor(\ScheduleEvent.date),
+            SortDescriptor(\ScheduleEvent.startTime),
+            SortDescriptor(\ScheduleEvent.createdAt),
+            SortDescriptor(\ScheduleEvent.title),
+            SortDescriptor(\ScheduleEvent.notes),
+        ]
+        var offset = 0
+        while true {
+            var descriptor = FetchDescriptor<ScheduleEvent>(
+                predicate: notesPredicate,
+                sortBy: sortDescriptors
+            )
+            descriptor.fetchLimit = Self.scheduleEventFetchBatchSize
+            descriptor.fetchOffset = offset
+            let page = try modelContext.fetch(descriptor)
+            guard !page.isEmpty else { return false }
+            if page.contains(where: matches) { return true }
+            offset += page.count
+            if page.count < Self.scheduleEventFetchBatchSize { return false }
+        }
     }
 
     private func decodePayload(_ data: Data) throws -> ActionPayload {

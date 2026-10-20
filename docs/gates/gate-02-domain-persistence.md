@@ -93,6 +93,10 @@ to domain/persistence behavior and have a dedicated evidence artifact.
 13. crash recovery pages committing actions and sending outbox rows in stable
     64-row keyset batches, then saves all recovered states once, covered by
     `ConfirmationCoordinatorTests.testRecoveryPagesCommittingActionsAndSendingOutboxAcrossBoundaries`.
+14. interrupted workout-plan recovery searches confirmed schedule events in
+    stable 64-row pages and recognizes an idempotency match beyond page one,
+    covered by
+    `ConfirmationCoordinatorTests.testRecoveryFindsInterruptedWorkoutPlanAfterFirstScheduleEventPage`.
 
 The restore routine verifies store/WAL/SHM checksums, stages replacement files,
 and rolls back ordinary file-operation errors. The immutable migration backup is

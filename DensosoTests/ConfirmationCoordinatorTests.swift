@@ -414,6 +414,74 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(entry.state, .queued)
     }
 
+    func testRecoveryFindsInterruptedWorkoutPlanAfterFirstScheduleEventPage() async throws {
+        let harness = try Harness()
+        let targetDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let targetDraft = WorkoutPlanDraft(
+            name: "跨页步行计划",
+            activity: .walking,
+            location: .outdoor,
+            goal: .distanceMeters(2_000),
+            scheduledAt: targetDate
+        )
+        let action = try await harness.coordinator.stage(
+            payload: .workoutPlan(targetDraft),
+            clientRequestID: UUID()
+        )
+        let context = ModelContext(harness.container)
+        let actionID = action.id
+        let actionPredicate = #Predicate<PendingActionRecord> { $0.id == actionID }
+        let actionRecord = try XCTUnwrap(context.fetch(
+            FetchDescriptor<PendingActionRecord>(predicate: actionPredicate)
+        ).first)
+        actionRecord.stateRaw = PendingActionState.committing.rawValue
+
+        for index in 0..<SwiftDataConfirmationRepository.scheduleEventFetchBatchSize {
+            let date = Date(timeIntervalSince1970: 1_600_000_000 + TimeInterval(index))
+            let draft = WorkoutPlanDraft(
+                name: "历史计划 \(index)",
+                activity: .walking,
+                location: .outdoor,
+                goal: .distanceMeters(1_000),
+                scheduledAt: date
+            )
+            let entry = ConfirmedWorkoutPlanEntry(
+                actionID: UUID(),
+                idempotencyKey: "unrelated-plan-\(index)",
+                draft: draft
+            )
+            context.insert(ScheduleEvent(
+                date: date,
+                title: draft.name,
+                notes: try entry.encodedNotes(),
+                startTime: date
+            ))
+        }
+        let targetEntry = ConfirmedWorkoutPlanEntry(
+            actionID: action.id,
+            idempotencyKey: action.idempotencyKey,
+            draft: targetDraft
+        )
+        context.insert(ScheduleEvent(
+            date: targetDate,
+            title: targetDraft.name,
+            notes: try targetEntry.encodedNotes(),
+            startTime: targetDate
+        ))
+        try context.save()
+
+        try await harness.repository.recoverInterruptedCommits(
+            now: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let verificationContext = ModelContext(harness.container)
+        let recoveredAction = try XCTUnwrap(verificationContext.fetch(
+            FetchDescriptor<PendingActionRecord>(predicate: actionPredicate)
+        ).first)
+        XCTAssertEqual(recoveredAction.stateRaw, PendingActionState.failed.rawValue)
+        XCTAssertEqual(recoveredAction.failureCode, "record_without_receipt")
+    }
+
     func testRejectAndExpiryNeverWriteHealthRecords() async throws {
         let rejectedHarness = try Harness()
         let rejected = try await rejectedHarness.coordinator.stage(
