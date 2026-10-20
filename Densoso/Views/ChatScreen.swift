@@ -50,6 +50,9 @@ struct ChatScreen: View {
             .onChange(of: appState.shouldFocusComposer) { _, shouldFocus in
                 if shouldFocus { focusComposer() }
             }
+            .onChange(of: appState.pendingMealText) { _, pendingMealText in
+                receivePendingMealText(pendingMealText)
+            }
             .onChange(of: dependencies.agentSession.restoredVisibleMessages.count) { _, _ in
                 hydratePersistedMessagesIfNeeded()
             }
@@ -343,14 +346,18 @@ struct ChatScreen: View {
         if messages.isEmpty {
             addMessage(text: "你好，我是 densoso。使用语音或文字告诉我你吃了什么、练了什么。", isUser: false)
         }
-        if let pendingMealText = appState.pendingMealText {
-            inputText = pendingMealText
-            inputSource = .appIntent
-            showTextEditor = true
-            appState.pendingMealText = nil
-            addMessage(text: "已收到系统语音转写草稿，请检查后再发送；尚未保存任何餐食记录。", isUser: false)
-        }
+        receivePendingMealText(appState.pendingMealText)
         Task { await dependencies.speechService.refreshRuntime() }
+    }
+
+    private func receivePendingMealText(_ pendingMealText: String?) {
+        guard let pendingMealText,
+              appState.pendingMealText == pendingMealText else { return }
+        appState.pendingMealText = nil
+        inputText = AppIntentInbox.mergedMealText(existing: inputText, incoming: pendingMealText)
+        inputSource = .appIntent
+        showTextEditor = true
+        addMessage(text: "已收到系统语音转写草稿并加入文字输入框，请检查编辑；尚未保存任何餐食记录。", isUser: false)
     }
 
     private func hydratePersistedMessagesIfNeeded() {

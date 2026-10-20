@@ -13,8 +13,10 @@ enum DensosoAppIntentDestination: String, CaseIterable, Equatable, Sendable {
 /// The data is always a draft; no HealthKit or SwiftData write occurs here.
 enum AppIntentInbox {
     private static let workoutPlanKey = "appIntent.workoutPlanDraft"
+    private static let queuedWorkoutPlansKey = "appIntent.queuedWorkoutPlanDrafts"
     private static let mealTextKey = "appIntent.mealTextDraft"
     private static let destinationKey = "appIntent.destination"
+    private static let maximumQueuedWorkoutPlans = 16
 
     static func store(workoutPlan: WorkoutPlanDraft, defaults: UserDefaults = .standard) {
         defaults.set(try? JSONEncoder().encode(workoutPlan), forKey: workoutPlanKey)
@@ -35,6 +37,52 @@ enum AppIntentInbox {
         return defaults.string(forKey: mealTextKey)
     }
 
+    static func clearWorkoutPlan(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: workoutPlanKey)
+    }
+
+    static func enqueueWorkoutPlan(_ draft: WorkoutPlanDraft, defaults: UserDefaults = .standard) -> Bool {
+        let queued = queuedWorkoutPlans(defaults: defaults)
+        guard queued.count < maximumQueuedWorkoutPlans,
+              let data = try? JSONEncoder().encode(queued + [draft]) else { return false }
+        defaults.set(data, forKey: queuedWorkoutPlansKey)
+        return true
+    }
+
+    static func nextQueuedWorkoutPlan(defaults: UserDefaults = .standard) -> WorkoutPlanDraft? {
+        queuedWorkoutPlans(defaults: defaults).first
+    }
+
+    static func acknowledgeQueuedWorkoutPlan(
+        _ draft: WorkoutPlanDraft,
+        defaults: UserDefaults = .standard
+    ) {
+        var queued = queuedWorkoutPlans(defaults: defaults)
+        guard queued.first == draft else { return }
+        queued.removeFirst()
+        guard !queued.isEmpty else {
+            defaults.removeObject(forKey: queuedWorkoutPlansKey)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(queued) else { return }
+        defaults.set(data, forKey: queuedWorkoutPlansKey)
+    }
+
+    static func clearQueuedWorkoutPlans(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: queuedWorkoutPlansKey)
+    }
+
+    static func clearMealText(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: mealTextKey)
+    }
+
+    static func mergedMealText(existing: String, incoming: String) -> String {
+        guard !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return incoming
+        }
+        return existing + "\n\n" + incoming
+    }
+
     static func store(destination: DensosoAppIntentDestination, defaults: UserDefaults = .standard) {
         defaults.set(destination.rawValue, forKey: destinationKey)
     }
@@ -52,6 +100,33 @@ enum AppIntentInbox {
     @MainActor
     static func deliver(destination: DensosoAppIntentDestination) {
         AppState.shared.pendingSystemIntent = destination
+    }
+
+    @MainActor
+    static func deliver(workoutPlan: WorkoutPlanDraft, defaults: UserDefaults = .standard) {
+        store(workoutPlan: workoutPlan, defaults: defaults)
+        AppState.shared.pendingWorkoutPlan = workoutPlan
+    }
+
+    @MainActor
+    static func deliver(mealText: String, defaults: UserDefaults = .standard) {
+        store(mealText: mealText, defaults: defaults)
+        AppState.shared.pendingMealText = mealText
+    }
+
+    @MainActor
+    static func receivePendingDrafts(defaults: UserDefaults = .standard) {
+        if let workoutPlan = consumeWorkoutPlan(defaults: defaults) {
+            AppState.shared.pendingWorkoutPlan = workoutPlan
+        }
+        if let mealText = consumeMealText(defaults: defaults) {
+            AppState.shared.pendingMealText = mealText
+        }
+    }
+
+    private static func queuedWorkoutPlans(defaults: UserDefaults) -> [WorkoutPlanDraft] {
+        guard let data = defaults.data(forKey: queuedWorkoutPlansKey) else { return [] }
+        return (try? JSONDecoder().decode([WorkoutPlanDraft].self, from: data)) ?? []
     }
 }
 
@@ -109,7 +184,7 @@ struct StartWorkoutIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        AppIntentInbox.store(workoutPlan: .defaultDraft)
+        await AppIntentInbox.deliver(workoutPlan: .defaultDraft)
         return .result(dialog: "已打开 densoso。请确认训练草稿后再同步到 Apple Watch。")
     }
 }
@@ -123,7 +198,8 @@ struct CreateWorkoutPlanIntent: AppIntent {
     var name: String
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        AppIntentInbox.store(workoutPlan: WorkoutPlanDraft(name: name, activity: .walking, goal: .timeMinutes(30)))
+        let draft = WorkoutPlanDraft(name: name, activity: .walking, goal: .timeMinutes(30))
+        await AppIntentInbox.deliver(workoutPlan: draft)
         return .result(dialog: "已创建训练计划草稿。请在 densoso 中确认后再同步。")
     }
 }
@@ -137,7 +213,7 @@ struct LogMealByVoiceIntent: AppIntent {
     var text: String
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        AppIntentInbox.store(mealText: text)
+        await AppIntentInbox.deliver(mealText: text)
         return .result(dialog: "已创建餐食草稿。请在 densoso 中检查并确认。")
     }
 }

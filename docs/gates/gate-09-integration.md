@@ -13,8 +13,13 @@ acceptance.
   capture, and an explicit editable-text entry. Quick actions and transcripts
   fill editable text and never submit by themselves.
 - System App Intents hand meal text and workout plans to a one-shot draft inbox
-  in `UserDefaults`. The app opens each draft in its editable flow; meal records
-  and WorkoutKit scheduling still require the existing confirmation steps.
+  in `UserDefaults` and notify the running app directly. Cold startup and a
+  scene returning to active both drain pending drafts into the editable flow.
+  Meal text is appended to existing unsent composer text; workout plans open
+  their editor automatically and wait behind an editor that is already open.
+  At most 16 plans are queued; when full, the incoming draft stays in the
+  one-shot inbox until the open editor closes. Meal records and WorkoutKit
+  scheduling still require the existing in-app confirmation steps.
 - Trends presents the four health domains, evidence-linked briefs and
   individual vitals without a global score. Records covers meals, workouts,
   weights and sync state. Settings covers permissions, provider consent,
@@ -57,8 +62,9 @@ acceptance.
    accessibility labels remain reachable.
 2. Consent and confirmation boundaries are preserved across text, voice,
    photo, HealthKit and Watch paths; no model output writes directly. AppIntent
-   meal text and workout-plan handoffs remain one-shot editable drafts that
-   require in-app confirmation.
+   meal text and workout-plan handoffs arrive on cold launch and scene
+   activation as one-shot editable drafts that preserve unsent text and require
+   in-app confirmation.
 3. HealthKit changes flow into local daily summaries and Trends; Watch messages
    route to the same phone-side confirmation draft.
 4. Backup V2/V3/V4 compatibility and V5 round-trip are tested, including that

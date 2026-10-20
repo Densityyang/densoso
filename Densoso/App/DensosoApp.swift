@@ -67,8 +67,7 @@ struct AppRoot: View {
                     let dailyLoopSnapshot = try? await dependencies.dailyLoopSnapshotService.snapshot()
                     await dependencies.briefNotificationScheduler.restoreSchedules(snapshot: dailyLoopSnapshot)
                     dependencies.watchConnectivityCoordinator.refreshApplicationContext()
-                    appState.pendingWorkoutPlan = AppIntentInbox.consumeWorkoutPlan()
-                    appState.pendingMealText = AppIntentInbox.consumeMealText()
+                    AppIntentInbox.receivePendingDrafts()
                     if let pendingSystemIntent = AppIntentInbox.consumeDestination() {
                         appState.pendingSystemIntent = pendingSystemIntent
                     }
@@ -80,6 +79,7 @@ struct AppRoot: View {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
+                        AppIntentInbox.receivePendingDrafts()
                     }
                 }
         } else {
@@ -106,6 +106,9 @@ struct AppRoot: View {
         appState.pendingWorkoutPlan = nil
         appState.pendingMealText = nil
         AppIntentInbox.clearDestination()
+        AppIntentInbox.clearWorkoutPlan()
+        AppIntentInbox.clearQueuedWorkoutPlans()
+        AppIntentInbox.clearMealText()
 
         guard launchConfiguration.usesSeededProfile else {
             appState.isOnboarded = false

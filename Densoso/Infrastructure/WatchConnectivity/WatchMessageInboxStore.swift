@@ -24,7 +24,6 @@ final class WatchMessageInboxStore {
     }
 
     static let conversationID = UUID(uuidString: "A7A81264-1866-4A0A-AF4A-78B920D5CB01")!
-    private static let missingRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
     private static let pendingReceiptFetchBatchSize = 64
 
     private let modelContainer: ModelContainer
@@ -207,7 +206,6 @@ final class WatchMessageInboxStore {
         guard !messageIDs.isEmpty else { return [] }
         let inboxID = Self.conversationID
         let role = "watch-envelope"
-        let missingRequestID = Self.missingRequestID
         let sortBy = [SortDescriptor(\MessageRecord.ordinal), SortDescriptor(\MessageRecord.id)]
         var cursor: InboxMessageCursor?
         var messages: [MessageRecord] = []
@@ -219,7 +217,8 @@ final class WatchMessageInboxStore {
                 predicate = #Predicate<MessageRecord> { message in
                     message.conversationID == inboxID
                         && message.roleRaw == role
-                        && messageIDs.contains(message.requestID ?? missingRequestID)
+                        && message.requestID != nil
+                        && messageIDs.contains(message.requestID!)
                         && (message.ordinal > cursorOrdinal
                             || (message.ordinal == cursorOrdinal && message.id > cursorID))
                 }
@@ -227,7 +226,8 @@ final class WatchMessageInboxStore {
                 predicate = #Predicate<MessageRecord> { message in
                     message.conversationID == inboxID
                         && message.roleRaw == role
-                        && messageIDs.contains(message.requestID ?? missingRequestID)
+                        && message.requestID != nil
+                        && messageIDs.contains(message.requestID!)
                 }
             }
             var descriptor = FetchDescriptor<MessageRecord>(predicate: predicate, sortBy: sortBy)

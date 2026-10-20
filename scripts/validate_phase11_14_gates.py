@@ -633,7 +633,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         "Densoso/Infrastructure/WatchConnectivity/WatchMessageInboxStore.swift",
         (
             "let pendingIDs = try pendingMessageIDs(in: context)",
-            "messageIDs.contains($0.requestID ?? missingRequestID)",
+            "message.requestID != nil",
+            "messageIDs.contains(message.requestID!)",
             "descriptor.fetchLimit = boundedLimit",
             "SortDescriptor(\\.ordinal, order: .reverse)",
         ),

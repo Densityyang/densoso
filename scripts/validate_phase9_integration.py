@@ -242,6 +242,15 @@ def main() -> int:
             "static func consumeWorkoutPlan(defaults: UserDefaults = .standard)",
             "static func store(mealText: String, defaults: UserDefaults = .standard)",
             "static func consumeMealText(defaults: UserDefaults = .standard)",
+            "static func deliver(workoutPlan: WorkoutPlanDraft, defaults: UserDefaults = .standard)",
+            "static func deliver(mealText: String, defaults: UserDefaults = .standard)",
+            "static func receivePendingDrafts(defaults: UserDefaults = .standard)",
+            "static func enqueueWorkoutPlan(_ draft: WorkoutPlanDraft, defaults: UserDefaults = .standard)",
+            "static func nextQueuedWorkoutPlan(defaults: UserDefaults = .standard)",
+            "static func acknowledgeQueuedWorkoutPlan(",
+            "static func clearQueuedWorkoutPlans(defaults: UserDefaults = .standard)",
+            "queued.count < maximumQueuedWorkoutPlans",
+            "private static let maximumQueuedWorkoutPlans = 16",
             "consumeDestination",
         ),
         errors,
@@ -253,12 +262,19 @@ def main() -> int:
         ("pendingSystemIntent", "shouldFocusComposer", "shouldScrollToDailyLoop"),
         errors,
     )
-    require_text(
+    app_root = require_text(
         "Densoso/App/DensosoApp.swift",
-        ("AppIntentInbox.consumeDestination()", "appState.pendingSystemIntent"),
+        (
+            "AppIntentInbox.consumeDestination()",
+            "AppIntentInbox.receivePendingDrafts()",
+            "AppIntentInbox.clearQueuedWorkoutPlans()",
+            "appState.pendingSystemIntent",
+        ),
         errors,
     )
-    require_text(
+    if app_root.count("AppIntentInbox.receivePendingDrafts()") < 2:
+        errors.append("App Intent drafts must be restored on startup and when the scene becomes active")
+    app_intent_content = require_text(
         "Densoso/Views/ContentView.swift",
         (
             "selectedTab = 0",
@@ -266,12 +282,38 @@ def main() -> int:
             "AppIntentInbox.consumeDestination()",
             "case .startRecording",
             "shouldFocusComposer = true",
+            "WorkoutPlanScreen()",
+            "isPresentingWorkoutPlanDraft",
+            "AppIntentInbox.enqueueWorkoutPlan(draft)",
+            "AppIntentInbox.nextQueuedWorkoutPlan()",
+            "AppIntentInbox.acknowledgeQueuedWorkoutPlan(queuedDraft)",
+            "presentNextQueuedWorkoutPlanDraft",
+            "workoutPlanDraftBeingPresented",
+            "workoutPlanEditorAppliedDraft",
+            "AppIntentInbox.clearWorkoutPlan()",
+            "AppIntentInbox.clearQueuedWorkoutPlans()",
+            "AppIntentInbox.clearMealText()",
         ),
         errors,
     )
+    plan_draft_handoff = app_intent_content.split("private func presentWorkoutPlanDraft(", 1)[-1].split(
+        "private func presentNextQueuedWorkoutPlanDraft", 1
+    )[0]
+    queued_plan_branch = plan_draft_handoff.split("if isPresentingWorkoutPlanDraft", 1)[-1].split(
+        "workoutPlanScreenIdentity = UUID()", 1
+    )[0]
+    if "AppIntentInbox.enqueueWorkoutPlan(draft)" not in queued_plan_branch or "return" not in queued_plan_branch:
+        errors.append("A workout draft arriving during editing must queue without replacing the open draft")
     require_text(
         "Densoso/Views/ChatScreen.swift",
-        (".focused($composerFocused)", "appState.shouldFocusComposer", "scrollTo(\"daily-loop-snapshot-anchor\""),
+        (
+            ".focused($composerFocused)",
+            "appState.shouldFocusComposer",
+            ".onChange(of: appState.pendingMealText)",
+            "AppIntentInbox.mergedMealText(existing: inputText, incoming: pendingMealText)",
+            "inputSource = .appIntent",
+            "scrollTo(\"daily-loop-snapshot-anchor\"",
+        ),
         errors,
     )
     require_text(
@@ -280,6 +322,12 @@ def main() -> int:
             "testSystemDestinationsRoundTripAndAreConsumedOnce",
             "testMealTextDraftIsConsumedOnceFromInjectedDefaults",
             "testWorkoutPlanDraftIsConsumedOnceFromInjectedDefaults",
+            "testMealTextIntentDeliveryUpdatesRunningAppState",
+            "testWorkoutPlanIntentDeliveryUpdatesRunningAppState",
+            "testPendingDraftInboxRestoresMealAndWorkoutOnceForColdOrActiveScene",
+            "testMealTextHandoffPreservesExistingComposerText",
+            "testQueuedWorkoutPlansPersistInOrderUntilAcknowledged",
+            "testWorkoutPlanQueueHasBoundedCapacity",
             "startRecording",
         ),
         errors,
@@ -481,7 +529,7 @@ def main() -> int:
             "DiagnosticsExportPrivacyTests",
             "Export reads every collection in ordered 64-row SwiftData pages",
             "Restore likewise pages request/message history in batches",
-            "AppIntent meal text and workout-plan handoffs remain one-shot editable drafts",
+            "meal text and workout-plan handoffs arrive on cold launch and scene",
             "Records history queries only the selected record kind and optional day",
             "while preserving the current page, it shows a \"记录已更新，刷新列表\" action",
             "after model-context saves and supports pull-to-refresh",
