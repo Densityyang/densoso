@@ -665,6 +665,19 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         errors,
     )
     require(
+        "Densoso/Views/WorkoutPlanScreen.swift",
+        (
+            "private var confirmedPlansReadError: String?",
+            "if let confirmedPlansReadError",
+            'Button("重试")',
+            "confirmedPlans = []",
+            "confirmedTrainingPlans = []",
+            "读取已确认的计划失败：",
+            "confirmedPlansReadError = nil",
+        ),
+        errors,
+    )
+    require(
         "Packages/DensosoDomain/Tests/DensosoDomainTests/DailyLoopSnapshotTests.swift",
         ("testSnapshotRoundTripsStateGuidanceAndActionSummaries",),
         errors,

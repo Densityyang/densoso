@@ -20,6 +20,8 @@ note-prefix candidates in stable 64-row pages, skips terminal entries, and
 stops after the next ten plans; ordinary calendar events remain isolated. The
 multi-day scheduling service reads complete confirmed-plan history in 64-row
 pages before applying its existing decode and ordering rules.
+The phone plan editor shows a retryable read error instead of reporting an
+empty history when either confirmed-plan query fails.
 Watch outbox and phone inbox tests cover replay semantics; the phone
 coordinator's activation path restores pending commands.
 

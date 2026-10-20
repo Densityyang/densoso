@@ -26,6 +26,7 @@ struct WorkoutPlanScreen: View {
     @State private var resultMessage: String?
     @State private var confirmedPlans: [ConfirmedWorkoutPlanEntry] = []
     @State private var confirmedTrainingPlans: [ConfirmedTrainingPlanEntry] = []
+    @State private var confirmedPlansReadError: String?
 
     var body: some View {
         NavigationStack {
@@ -91,7 +92,14 @@ struct WorkoutPlanScreen: View {
                 }
 
                 Section("已确认的计划") {
-                    if confirmedPlans.isEmpty && confirmedTrainingPlans.isEmpty {
+                    if let confirmedPlansReadError {
+                        Label(confirmedPlansReadError, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(OrbitPalette.coral)
+                        Button("重试") {
+                            refreshConfirmedPlans()
+                        }
+                    } else if confirmedPlans.isEmpty && confirmedTrainingPlans.isEmpty {
                         Text("确认后的计划会显示在这里。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -247,8 +255,17 @@ struct WorkoutPlanScreen: View {
     }
 
     private func refreshConfirmedPlans() {
-        confirmedPlans = (try? dependencies.workoutPlanSchedulingService.confirmedPlans()) ?? []
-        confirmedTrainingPlans = (try? dependencies.workoutPlanSchedulingService.confirmedTrainingPlans()) ?? []
+        do {
+            let plans = try dependencies.workoutPlanSchedulingService.confirmedPlans()
+            let trainingPlans = try dependencies.workoutPlanSchedulingService.confirmedTrainingPlans()
+            confirmedPlans = plans
+            confirmedTrainingPlans = trainingPlans
+            confirmedPlansReadError = nil
+        } catch {
+            confirmedPlans = []
+            confirmedTrainingPlans = []
+            confirmedPlansReadError = "读取已确认的计划失败：\(error.localizedDescription)"
+        }
     }
 
     private func trainingPlanSummary(_ plan: TrainingPlanDraft) -> String {
