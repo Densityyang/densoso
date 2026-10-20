@@ -358,6 +358,33 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "Densoso/Application/DailyLoop/DailyBriefRefreshPolicy.swift",
+            (
+                "static func shouldRefreshAfterActivation(",
+                "initialRefreshCompleted: Bool",
+                "lastSuccessfulRefreshDay: Date?",
+                "calendar.isDate(cachedBriefDayStart, inSameDayAs: date)",
+                "calendar.isDate(lastSuccessfulRefreshDay, inSameDayAs: date)",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/App/DensosoApp.swift",
+            (
+                "hasCompletedInitialDailyBriefRefresh = true",
+                "await refreshStaleDailyBriefAfterActivation()",
+                "lastSuccessfulRefreshDay: lastSuccessfulHealthRefreshDay",
+                "lastSuccessfulHealthRefreshDay = Calendar.autoupdatingCurrent.startOfDay(for: now)",
+                "dependencies.watchConnectivityCoordinator.refreshApplicationContext()",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/DailyBriefRefreshPolicyTests.swift",
+            ("testActivationRefreshWaitsForInitialRefreshAndOnlyRefreshesStaleLocalDay",),
+            errors,
+        )
+        require(
             "Densoso/Services/HealthProjectionActor.swift",
             (
                 "$0.notes?.contains(workoutPlanPrefix) == true",

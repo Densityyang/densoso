@@ -1009,6 +1009,7 @@ jobs:
             -only-testing:DensosoTests/GetHealthHistoryToolTests \
             -only-testing:DensosoTests/AgentCoordinatorTests/testHealthContextLoadsOnlyForRelevantHealthQuestions \
             -only-testing:DensosoTests/AgentCoordinatorTests/testHealthContextReadFailureDoesNotClaimDataIsMissing \
+            -only-testing:DensosoTests/DailyBriefRefreshPolicyTests/testActivationRefreshWaitsForInitialRefreshAndOnlyRefreshesStaleLocalDay \
             -only-testing:DensosoTests/DailyLoopBackgroundSchedulerTests \
             -only-testing:DensosoTests/HealthNarrativePolicyTests \
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerUsesMatchingExistingBriefAndPreservesOptionalState \

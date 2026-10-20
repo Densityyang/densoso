@@ -44,6 +44,9 @@ remains consistent.
 Agent context reads run only for health questions that need a narrative; plain
 capture requests skip the history read. A failed local read is reported as a
 read failure rather than presented as missing health data.
+On foreground activation after local midnight, the app refreshes only when both
+the cached brief and last successful refresh are from an older day, then updates
+the Watch snapshot; failures keep the last successful cache for a later retry.
 
 ## Focused tests
 
@@ -68,6 +71,7 @@ read failure rather than presented as missing health data.
   `HealthProjectionActorTests.testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites`,
   `AgentCoordinatorTests.testHealthContextLoadsOnlyForRelevantHealthQuestions`,
   `AgentCoordinatorTests.testHealthContextReadFailureDoesNotClaimDataIsMissing`,
+  `DailyBriefRefreshPolicyTests.testActivationRefreshWaitsForInitialRefreshAndOnlyRefreshesStaleLocalDay`,
   `GetTodayHealthStateToolTests.testUnavailableTrainingLoadEncodesMissingRecentLoadAsNull`,
   `GetHealthHistoryToolTests.testResponseCoalescesDuplicateLocalDaysAndDomainStatuses`,
   `GetHealthHistoryToolTests.testResponseTieBreaksEqualTimestampPointsIndependentOfInputOrder`,

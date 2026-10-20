@@ -41,6 +41,9 @@ struct AppRoot: View {
     @Environment(AppState.self) private var appState
     @Environment(Dependencies.self) private var dependencies
     @Environment(\.scenePhase) private var scenePhase
+    @State private var hasCompletedInitialDailyBriefRefresh = false
+    @State private var isRefreshingStaleDailyBrief = false
+    @State private var lastSuccessfulHealthRefreshDay: Date?
 
     @ViewBuilder
     var body: some View {
@@ -51,7 +54,14 @@ struct AppRoot: View {
                     await dependencies.restorePersistenceState()
                     if launchConfiguration.isUITesting {
                         prepareUITestState()
-                        _ = try? await dependencies.healthIntelligenceService.refresh()
+                        let testRefreshDate = Date()
+                        do {
+                            _ = try await dependencies.healthIntelligenceService.refresh(asOf: testRefreshDate)
+                            lastSuccessfulHealthRefreshDay = Calendar.autoupdatingCurrent.startOfDay(for: testRefreshDate)
+                        } catch {
+                            // Keep the UI-test seed; refresh policy is not exercised in this launch mode.
+                        }
+                        hasCompletedInitialDailyBriefRefresh = true
                         return
                     }
                     dependencies.watchConnectivityCoordinator.activate()
@@ -63,7 +73,13 @@ struct AppRoot: View {
                     dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
                     await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
                     await dependencies.healthIntelligenceService.loadCachedBriefs()
-                    _ = try? await dependencies.healthIntelligenceService.refresh()
+                    let initialRefreshDate = Date()
+                    do {
+                        _ = try await dependencies.healthIntelligenceService.refresh(asOf: initialRefreshDate)
+                        lastSuccessfulHealthRefreshDay = Calendar.autoupdatingCurrent.startOfDay(for: initialRefreshDate)
+                    } catch {
+                        // A stale cache can be retried when initial setup completes or on later activation.
+                    }
                     let dailyLoopSnapshot = try? await dependencies.dailyLoopSnapshotService.snapshot()
                     await dependencies.briefNotificationScheduler.restoreSchedules(snapshot: dailyLoopSnapshot)
                     dependencies.watchConnectivityCoordinator.refreshApplicationContext()
@@ -72,6 +88,8 @@ struct AppRoot: View {
                         appState.pendingSystemIntent = pendingSystemIntent
                     }
                     checkOnboarding()
+                    hasCompletedInitialDailyBriefRefresh = true
+                    await refreshStaleDailyBriefAfterActivation()
                 }
                 .onChange(of: dependencies.healthIntelligenceService.dailyBrief) { _, _ in
                     Task { await refreshNotificationSnapshot() }
@@ -80,6 +98,7 @@ struct AppRoot: View {
                     if phase == .active {
                         dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
                         AppIntentInbox.receivePendingDrafts(receiveWorkoutPlan: false)
+                        Task { await refreshStaleDailyBriefAfterActivation() }
                     }
                 }
         } else {
@@ -96,6 +115,30 @@ struct AppRoot: View {
     private func refreshNotificationSnapshot() async {
         let snapshot = try? await dependencies.dailyLoopSnapshotService.snapshot()
         await dependencies.briefNotificationScheduler.updateSnapshot(snapshot)
+    }
+
+    private func refreshStaleDailyBriefAfterActivation() async {
+        guard !launchConfiguration.isUITesting else { return }
+        let now = Date()
+        let healthIntelligenceService = dependencies.healthIntelligenceService
+        guard !isRefreshingStaleDailyBrief,
+              DailyBriefRefreshPolicy.shouldRefreshAfterActivation(
+                initialRefreshCompleted: hasCompletedInitialDailyBriefRefresh,
+                cachedBriefDayStart: healthIntelligenceService.dailyBrief?.dayStart,
+                lastSuccessfulRefreshDay: lastSuccessfulHealthRefreshDay,
+                asOf: now,
+                calendar: .autoupdatingCurrent
+              ) else { return }
+
+        isRefreshingStaleDailyBrief = true
+        defer { isRefreshingStaleDailyBrief = false }
+        do {
+            _ = try await healthIntelligenceService.refresh(asOf: now)
+            lastSuccessfulHealthRefreshDay = Calendar.autoupdatingCurrent.startOfDay(for: now)
+            dependencies.watchConnectivityCoordinator.refreshApplicationContext()
+        } catch {
+            // Keep the last successful brief; a later foreground activation can retry.
+        }
     }
 
     private func prepareUITestState() {
