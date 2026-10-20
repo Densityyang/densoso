@@ -89,6 +89,27 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "Densoso/Views/ChatScreen.swift",
+            (
+                "private var dailyLoopSnapshotReadError: String?",
+                "errorMessage: dailyLoopSnapshotReadError",
+                "dailyLoopSnapshotReadError = nil",
+                "读取今日概览失败：",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Views/Components/DailyLoopSnapshotCard.swift",
+            (
+                "let errorMessage: String?",
+                "let onRetry: () -> Void",
+                "今日概览读取失败",
+                'Button("重试", action: onRetry)',
+                "今日状态暂不可用",
+            ),
+            errors,
+        )
+        require(
             "Packages/DensosoDomain/Sources/DensosoDomain/Health/HealthNarrative.swift",
             ("struct HealthNarrative:", "struct HealthNarrativeContext:", "let allowedEvidenceKeys:"),
             errors,
@@ -736,6 +757,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "metricsDescriptor.fetchLimit = 1",
             "let metrics = try context.fetch(metricsDescriptor).first",
             "upcomingConfirmedPlans(from: today, limit: 10)",
+            "guard entry.state != .terminal else { return [] }",
+            "guard session.date >= today,",
+            "return lhs.actionID.uuidString < rhs.actionID.uuidString",
         ),
         errors,
     )

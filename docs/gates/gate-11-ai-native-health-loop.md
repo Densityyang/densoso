@@ -36,6 +36,8 @@ deleted or unknown summaries.
 BGAppRefreshTask expiration stops later refresh stages, and its completion box
 reports completion once while preventing a late expiration from cancelling
 subsequent work.
+The Today card distinguishes a snapshot read failure from optional health state
+that has no available data; read failures show their error and a retry action.
 
 ## Focused tests
 

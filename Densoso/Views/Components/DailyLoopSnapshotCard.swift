@@ -3,10 +3,24 @@ import SwiftUI
 
 struct DailyLoopSnapshotCard: View {
     let snapshot: DailyLoopSnapshot?
+    let errorMessage: String?
+    let onRetry: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let snapshot {
+            if let errorMessage {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("今日概览读取失败", systemImage: "exclamationmark.triangle.fill")
+                        .font(.headline)
+                        .foregroundStyle(OrbitPalette.coral)
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button("重试", action: onRetry)
+                        .buttonStyle(.bordered)
+                }
+                .accessibilityIdentifier("daily-loop-snapshot-error")
+            } else if let snapshot {
                 HStack(alignment: .firstTextBaseline) {
                     Label("今日节奏", systemImage: "sun.max.fill")
                         .font(.headline)

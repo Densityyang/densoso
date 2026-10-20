@@ -19,7 +19,9 @@ and one-row fetch limit. Its single-session plan query starts at today, reads
 note-prefix candidates in stable 64-row pages, skips terminal entries, and
 stops after the next ten plans; ordinary calendar events remain isolated. The
 multi-day scheduling service reads complete confirmed-plan history in 64-row
-pages before applying its existing decode and ordering rules.
+pages before applying its existing decode and ordering rules; the phone
+snapshot filters terminal and past sessions before building summaries, then
+uses plan IDs to break equal-time ties deterministically.
 The phone plan editor shows a retryable read error instead of reporting an
 empty history when either confirmed-plan query fails.
 Watch outbox and phone inbox tests cover replay semantics; the phone

@@ -169,8 +169,10 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 )
             }
         let multiDaySessionPlans = try workoutPlanSchedulingService.confirmedTrainingPlans().flatMap { entry in
-            entry.draft.sessions.compactMap { session -> WatchWorkoutPlanSummary? in
-                guard let activity = session.activity else { return nil }
+            guard entry.state != .terminal else { return [] }
+            return entry.draft.sessions.compactMap { session -> WatchWorkoutPlanSummary? in
+                guard session.date >= today,
+                      let activity = session.activity else { return nil }
                 return WatchWorkoutPlanSummary(
                     actionID: session.id,
                     title: "\(entry.draft.name) · \(activity.displayName)",
@@ -181,8 +183,12 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
             }
         }
         let scheduledPlans = Array((singleSessionPlans + multiDaySessionPlans)
-            .filter { ($0.scheduledAt ?? .distantPast) >= today && $0.state != "terminal" }
-            .sorted { ($0.scheduledAt ?? .distantFuture) < ($1.scheduledAt ?? .distantFuture) }
+            .sorted { lhs, rhs in
+                let leftDate = lhs.scheduledAt ?? .distantFuture
+                let rightDate = rhs.scheduledAt ?? .distantFuture
+                if leftDate != rightDate { return leftDate < rightDate }
+                return lhs.actionID.uuidString < rhs.actionID.uuidString
+            }
             .prefix(10))
         return WatchTodaySnapshot(
             generatedAt: Date(),

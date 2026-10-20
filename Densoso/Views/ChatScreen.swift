@@ -21,6 +21,7 @@ struct ChatScreen: View {
     @State private var pendingWatchAttemptText: String?
     @State private var pendingWatchAttemptRequestID: UUID?
     @State private var dailyLoopSnapshot: DailyLoopSnapshot?
+    @State private var dailyLoopSnapshotReadError: String?
 
     var body: some View {
         NavigationStack {
@@ -78,8 +79,13 @@ struct ChatScreen: View {
                     )
                     .padding(.bottom, 4)
 
-                    DailyLoopSnapshotCard(snapshot: dailyLoopSnapshot)
-                        .id("daily-loop-snapshot-anchor")
+                    DailyLoopSnapshotCard(
+                        snapshot: dailyLoopSnapshot,
+                        errorMessage: dailyLoopSnapshotReadError
+                    ) {
+                        Task { await refreshDailyLoopSnapshot() }
+                    }
+                    .id("daily-loop-snapshot-anchor")
 
                     DailyHealthBriefCard(brief: dependencies.healthIntelligenceService.dailyBrief)
 
@@ -374,8 +380,10 @@ struct ChatScreen: View {
     private func refreshDailyLoopSnapshot() async {
         do {
             dailyLoopSnapshot = try await dependencies.dailyLoopSnapshotService.snapshot()
+            dailyLoopSnapshotReadError = nil
         } catch {
             dailyLoopSnapshot = nil
+            dailyLoopSnapshotReadError = "读取今日概览失败：\(error.localizedDescription)"
         }
     }
 
