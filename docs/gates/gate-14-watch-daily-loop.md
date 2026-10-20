@@ -9,6 +9,9 @@ Checks daily snapshot summaries, pending-action confirmation boundaries,
 durable quick-record envelopes, offline replay deduplication, arrival ordering,
 and retry/resume behavior. Inbox reads push state, identity, sort order, and
 recent-item limits into SwiftData while preserving durable arrival ordering.
+The pending-command query matches a zero UUID receipt without admitting an
+envelope whose optional request ID is nil; recent receipt IDs also skip that
+envelope while preserving durable inbox arrival order.
 The phone snapshot resolves today's DailyMetrics row with a bounded date query
 and one-row fetch limit. Confirmed plan reads filter note-prefix candidates
 before decoding in 64-row pages, then retain only active sessions through
@@ -26,6 +29,7 @@ coordinator's activation path restores pending commands.
   `DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays`,
   `DailyLoopSnapshotCompositionTests.testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary`,
   `WatchMessageInboxStoreTests.testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder`,
+  `WatchMessageInboxStoreTests.testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder`,
   `WatchMessageInboxStoreTests.testOutOfOrderMessagesAreReturnedInDurableArrivalOrder`,
   `WatchMessageInboxStoreTests.testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry`,

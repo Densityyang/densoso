@@ -691,6 +691,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         "DensosoTests/WatchMessageInboxStoreTests.swift",
         (
             "testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",
+            "testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder",
+            "00000000-0000-0000-0000-000000000000",
+            "requestID: nil",
+            "store.recentReceivedMessageIDs(), [firstID, zeroID]",
             "testOutOfOrderMessagesAreReturnedInDurableArrivalOrder",
             "testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder",
         ),
@@ -920,6 +924,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions",
+                "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder",
                 "-only-testing:DensosoTests/AgentCoordinatorTests/testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce",

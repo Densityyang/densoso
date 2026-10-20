@@ -80,6 +80,48 @@ final class WatchMessageInboxStoreTests: XCTestCase {
         XCTAssertEqual(try store.pendingTranscripts().map(\.messageID), [transcript.messageID])
     }
 
+    func testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder() throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let store = WatchMessageInboxStore(modelContainer: container)
+        let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let zeroID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let nilRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let firstEnvelope = WatchMessageEnvelope(
+            messageID: firstID,
+            payload: .confirm(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000011")!)
+        )
+        let nilRequestEnvelope = WatchMessageEnvelope(
+            messageID: nilRequestID,
+            payload: .reject(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000012")!)
+        )
+        let zeroEnvelope = WatchMessageEnvelope(
+            messageID: zeroID,
+            payload: .confirm(actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000013")!)
+        )
+
+        XCTAssertEqual(try store.ingest(firstEnvelope), .accepted)
+        let context = ModelContext(container)
+        context.insert(MessageRecord(
+            conversationID: WatchMessageInboxStore.conversationID,
+            roleRaw: "watch-envelope",
+            contentData: try WatchMessageCodec.encode(nilRequestEnvelope),
+            ordinal: 1,
+            requestID: nil
+        ))
+        try context.save()
+        XCTAssertEqual(try store.ingest(zeroEnvelope), .accepted)
+
+        let pendingCommands = try store.pendingCommandEnvelopes()
+        XCTAssertEqual(pendingCommands.map(\.messageID), [firstID, zeroID])
+        XCTAssertEqual(
+            pendingCommands.map(\.payload),
+            [firstEnvelope.payload, zeroEnvelope.payload]
+        )
+        XCTAssertEqual(try store.recentReceivedMessageIDs(), [firstID, zeroID])
+    }
+
     func testPendingInboxPagesMoreThan64ReceiptsInArrivalOrder() throws {
         let store = try makeStore()
         var expectedTranscriptIDs: [UUID] = []
