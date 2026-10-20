@@ -722,6 +722,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "let metricsPredicate = #Predicate<DailyMetrics> { $0.date >= today && $0.date < tomorrow }",
             "metricsDescriptor.fetchLimit = 1",
             "let metrics = try context.fetch(metricsDescriptor).first",
+            "upcomingConfirmedPlans(from: today, limit: 10)",
         ),
         errors,
     )
@@ -752,6 +753,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "let singlePlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix",
             "let multiPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix",
+            "func upcomingConfirmedPlans(from startDate: Date, limit: Int)",
+            "$0.date >= startDate && $0.notes?.contains(prefix) == true",
+            "descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize",
             "$0.notes?.contains(singlePlanPrefix) == true",
             "$0.notes?.contains(multiPlanPrefix) == true",
             "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
@@ -778,6 +782,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays",
             "testConfirmedPlanHistoryPagesAcrossThe64EventBoundary",
         ),
+        errors,
+    )
+    require(
+        "DensosoTests/WorkoutPlanSchedulingServiceTests.swift",
+        ("testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries",),
         errors,
     )
     require(
@@ -926,6 +935,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanHistoryPagesAcrossThe64EventBoundary",
                 "-only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testConfirmedScheduleIsIdempotentAcrossRetries",
+                "-only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries",
                 "-only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions",

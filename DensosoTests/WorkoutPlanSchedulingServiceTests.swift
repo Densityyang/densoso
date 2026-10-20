@@ -78,6 +78,120 @@ final class WorkoutPlanSchedulingServiceTests: XCTestCase {
         XCTAssertEqual(client.scheduledActionIDs, [targetActionID])
     }
 
+    func testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries() throws {
+        let (container, service, _) = try makeService()
+        let context = ModelContext(container)
+        let startDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let historicalDate = startDate.addingTimeInterval(-3_600)
+        let earlyDate = startDate.addingTimeInterval(60)
+        let tieDate = startDate.addingTimeInterval(120)
+        let laterDate = startDate.addingTimeInterval(180)
+
+        func actionID(_ value: Int) -> UUID {
+            UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", value))!
+        }
+
+        func insertPlan(
+            actionID: UUID,
+            scheduledAt: Date,
+            createdAt: Date,
+            state: ConfirmedWorkoutPlanEntry.State = .queued
+        ) throws {
+            let draft = WorkoutPlanDraft(
+                id: actionID,
+                name: "计划 \(actionID.uuidString)",
+                activity: .walking,
+                location: .outdoor,
+                goal: .timeMinutes(30),
+                scheduledAt: scheduledAt
+            )
+            let entry = ConfirmedWorkoutPlanEntry(
+                actionID: actionID,
+                idempotencyKey: "upcoming-\(actionID.uuidString.lowercased())",
+                draft: draft,
+                state: state
+            )
+            let event = ScheduleEvent(
+                date: scheduledAt,
+                title: draft.name,
+                notes: try entry.encodedNotes(),
+                startTime: scheduledAt
+            )
+            event.createdAt = createdAt
+            context.insert(event)
+        }
+
+        for index in 0..<65 {
+            try insertPlan(
+                actionID: actionID(1_000 + index),
+                scheduledAt: historicalDate.addingTimeInterval(TimeInterval(index)),
+                createdAt: Date(timeIntervalSince1970: TimeInterval(1_000 + index))
+            )
+        }
+        let firstTerminalID = actionID(2_000)
+        let secondTerminalID = actionID(2_001)
+        try insertPlan(
+            actionID: firstTerminalID,
+            scheduledAt: earlyDate,
+            createdAt: Date(timeIntervalSince1970: 2_000),
+            state: .terminal
+        )
+        try insertPlan(
+            actionID: secondTerminalID,
+            scheduledAt: earlyDate,
+            createdAt: Date(timeIntervalSince1970: 2_001),
+            state: .terminal
+        )
+        let earlyActionIDs = (0..<60).map { actionID(2_100 + $0) }
+        for (index, id) in earlyActionIDs.enumerated() {
+            try insertPlan(
+                actionID: id,
+                scheduledAt: earlyDate,
+                createdAt: Date(timeIntervalSince1970: TimeInterval(2_100 + index))
+            )
+        }
+
+        let tieHighID = UUID(uuidString: "ffffffff-ffff-ffff-ffff-ffffffffffff")!
+        let tieMiddleID = UUID(uuidString: "55555555-5555-5555-5555-555555555555")!
+        let tieLowID = UUID(uuidString: "00000000-0000-0000-0000-000000000100")!
+        try insertPlan(
+            actionID: tieHighID,
+            scheduledAt: tieDate,
+            createdAt: Date(timeIntervalSince1970: 3_000)
+        )
+        try insertPlan(
+            actionID: tieMiddleID,
+            scheduledAt: tieDate,
+            createdAt: Date(timeIntervalSince1970: 3_001)
+        )
+        try insertPlan(
+            actionID: tieLowID,
+            scheduledAt: tieDate,
+            createdAt: Date(timeIntervalSince1970: 3_002)
+        )
+        let afterCutoffID = actionID(4_000)
+        try insertPlan(
+            actionID: afterCutoffID,
+            scheduledAt: laterDate,
+            createdAt: Date(timeIntervalSince1970: 4_000)
+        )
+        try context.save()
+
+        let allConfirmedPlans = try service.confirmedPlans()
+        XCTAssertEqual(allConfirmedPlans.count, 131)
+        XCTAssertTrue(allConfirmedPlans.contains { $0.actionID == firstTerminalID })
+        XCTAssertTrue(allConfirmedPlans.contains { $0.actionID == secondTerminalID })
+
+        let upcoming = try service.upcomingConfirmedPlans(from: startDate, limit: 61)
+
+        XCTAssertEqual(upcoming.count, 61)
+        XCTAssertEqual(Array(upcoming.prefix(60).map(\.actionID)), earlyActionIDs)
+        XCTAssertEqual(upcoming.last?.actionID, tieLowID)
+        XCTAssertFalse(upcoming.contains { $0.state == .terminal })
+        XCTAssertFalse(upcoming.contains { $0.actionID == afterCutoffID })
+        XCTAssertTrue(upcoming.allSatisfy { ($0.draft.scheduledAt ?? .distantPast) >= startDate })
+    }
+
     func testConfirmedMultiDayPlanKeepsPriorityForSharedActionID() async throws {
         let (container, service, client) = try makeService()
         let actionID = UUID()

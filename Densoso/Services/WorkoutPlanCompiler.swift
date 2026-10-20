@@ -252,6 +252,62 @@ final class WorkoutPlanSchedulingService {
             .sorted { ($0.draft.scheduledAt ?? .distantPast) > ($1.draft.scheduledAt ?? .distantPast) }
     }
 
+    func upcomingConfirmedPlans(from startDate: Date, limit: Int) throws -> [ConfirmedWorkoutPlanEntry] {
+        let boundedLimit = max(limit, 0)
+        guard boundedLimit > 0 else { return [] }
+
+        let context = ModelContext(modelContainer)
+        let prefix = ConfirmedWorkoutPlanEntry.notesPrefix
+        let predicate = #Predicate<ScheduleEvent> {
+            $0.date >= startDate && $0.notes?.contains(prefix) == true
+        }
+        let sortDescriptors: [SortDescriptor<ScheduleEvent>] = [
+            SortDescriptor(\ScheduleEvent.date),
+            SortDescriptor(\ScheduleEvent.startTime),
+            SortDescriptor(\ScheduleEvent.createdAt),
+            SortDescriptor(\ScheduleEvent.title),
+            SortDescriptor(\ScheduleEvent.notes),
+        ]
+        var descriptor = FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)
+        descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize
+
+        var offset = 0
+        var cutoffDate: Date?
+        var entries: [ConfirmedWorkoutPlanEntry] = []
+        while true {
+            descriptor.fetchOffset = offset
+            let page = try context.fetch(descriptor)
+            guard !page.isEmpty else { break }
+            var passedCutoffDate = false
+            for event in page {
+                if let cutoffDate, event.date > cutoffDate {
+                    passedCutoffDate = true
+                    break
+                }
+                guard let entry = ConfirmedWorkoutPlanEntry.decode(notes: event.notes),
+                      entry.state != .terminal,
+                      let scheduledAt = entry.draft.scheduledAt,
+                      scheduledAt >= startDate else { continue }
+                entries.append(entry)
+                if entries.count == boundedLimit, cutoffDate == nil {
+                    cutoffDate = event.date
+                }
+            }
+            if passedCutoffDate { break }
+            offset += page.count
+            if page.count < Self.confirmedPlanFetchBatchSize { break }
+        }
+
+        let ordered = entries.sorted { lhs, rhs in
+            let leftDate = lhs.draft.scheduledAt ?? .distantPast
+            let rightDate = rhs.draft.scheduledAt ?? .distantPast
+            return leftDate == rightDate
+                ? lhs.actionID.uuidString < rhs.actionID.uuidString
+                : leftDate < rightDate
+        }
+        return Array(ordered.prefix(boundedLimit))
+    }
+
     func confirmedTrainingPlans() throws -> [ConfirmedTrainingPlanEntry] {
         try multiDayService.confirmedPlans()
     }

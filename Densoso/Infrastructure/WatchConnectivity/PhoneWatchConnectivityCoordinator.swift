@@ -157,15 +157,17 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         metricsDescriptor.fetchLimit = 1
         let metrics = try context.fetch(metricsDescriptor).first
         let received = try inboxStore.recentReceivedMessageIDs()
-        let singleSessionPlans = try workoutPlanSchedulingService.confirmedPlans().map {
-            WatchWorkoutPlanSummary(
-                actionID: $0.actionID,
-                title: $0.draft.name,
-                scheduledAt: $0.draft.scheduledAt,
-                state: $0.state.rawValue,
-                lastError: $0.lastError
-            )
-        }
+        let singleSessionPlans = try workoutPlanSchedulingService
+            .upcomingConfirmedPlans(from: today, limit: 10)
+            .map {
+                WatchWorkoutPlanSummary(
+                    actionID: $0.actionID,
+                    title: $0.draft.name,
+                    scheduledAt: $0.draft.scheduledAt,
+                    state: $0.state.rawValue,
+                    lastError: $0.lastError
+                )
+            }
         let multiDaySessionPlans = try workoutPlanSchedulingService.confirmedTrainingPlans().flatMap { entry in
             entry.draft.sessions.compactMap { session -> WatchWorkoutPlanSummary? in
                 guard let activity = session.activity else { return nil }

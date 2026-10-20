@@ -15,11 +15,11 @@ The pending-command query matches a zero UUID receipt without admitting an
 envelope whose optional request ID is nil; recent receipt IDs also skip that
 envelope while preserving durable inbox arrival order.
 The phone snapshot resolves today's DailyMetrics row with a bounded date query
-and one-row fetch limit. Confirmed plan reads filter note-prefix candidates
-before decoding in 64-row pages, then retain only active sessions through
-tomorrow; ordinary calendar events remain isolated. The multi-day scheduling
-service also reads complete confirmed-plan history in 64-row pages before
-applying its existing decode and ordering rules.
+and one-row fetch limit. Its single-session plan query starts at today, reads
+note-prefix candidates in stable 64-row pages, skips terminal entries, and
+stops after the next ten plans; ordinary calendar events remain isolated. The
+multi-day scheduling service reads complete confirmed-plan history in 64-row
+pages before applying its existing decode and ordering rules.
 Watch outbox and phone inbox tests cover replay semantics; the phone
 coordinator's activation path restores pending commands.
 
@@ -39,6 +39,7 @@ coordinator's activation path restores pending commands.
   `TrainingPlanSchedulingServiceTests.testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanHistoryPagesAcrossThe64EventBoundary`,
   `WorkoutPlanSchedulingServiceTests.testConfirmedScheduleIsIdempotentAcrossRetries`,
+  `WorkoutPlanSchedulingServiceTests.testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries`,
   `TrainingPlanScheduleQueryTests.testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions`,
