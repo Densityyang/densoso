@@ -70,6 +70,7 @@ def main() -> int:
             "let wakeSamples = (sleepSamplesByWakeDay[wakeDay] ?? []).sorted(",
             "let workoutsByDay = Dictionary(grouping: workouts)",
             "let dayWorkouts = workoutsByDay[day] ?? []",
+            "for (sampleID, location) in locationsBySampleID {",
         ],
         errors,
     )
@@ -80,6 +81,8 @@ def main() -> int:
         errors.append("V5-to-V6 wake-day migration must use its prebuilt sleep window index")
     if "workouts.filter { calendar.isDate($0.date, inSameDayAs: day) }" in migration_text:
         errors.append("V5-to-V6 snapshot migration must use its prebuilt workout-day index")
+    if "locationsBySampleID.sorted(" in migration_text:
+        errors.append("V5-to-V6 sample-index insertion must not materialize an insertion-order sort")
     require_text(
         schemas / "DensosoSchemaV3.swift",
         [

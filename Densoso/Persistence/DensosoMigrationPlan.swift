@@ -318,9 +318,7 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                         ))
                     }
 
-                    for (sampleID, location) in locationsBySampleID.sorted(by: {
-                        $0.key.uuidString < $1.key.uuidString
-                    }) {
+                    for (sampleID, location) in locationsBySampleID {
                         context.insert(DensosoSchemaV6.HealthKitSampleIndexRecord(
                             sampleID: sampleID,
                             stream: location.stream,
