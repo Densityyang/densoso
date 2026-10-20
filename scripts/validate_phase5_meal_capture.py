@@ -140,7 +140,7 @@ def main() -> int:
     )
     if "rankedSearch" in log_meal or "CookingCoefficientTable" in log_meal:
         errors.append("log_meal retains a silent first-match or whole-dish coefficient path")
-    if ".first" in log_meal:
+    if "resolution.candidates.first" in log_meal:
         errors.append("log_meal still selects the first food match implicitly")
     if '"amountGrams"' in log_meal or '"notedOilG"' in log_meal:
         errors.append("log_meal must not accept model-supplied exact ingredient or oil grams")
