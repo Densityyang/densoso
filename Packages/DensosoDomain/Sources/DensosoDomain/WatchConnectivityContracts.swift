@@ -164,7 +164,7 @@ public struct WatchTomorrowGuidanceSummary: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(expectedState, forKey: .expectedState)
         try container.encode(confidence, forKey: .confidence)
-        try container.encode([], forKey: .reasons)
+        try container.encode([EvidenceReference](), forKey: .reasons)
         try container.encode(recommendedAction, forKey: .recommendedAction)
         try container.encode(conditionalNote, forKey: .conditionalNote)
     }
@@ -196,6 +196,9 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
     public let workoutPlans: [WatchWorkoutPlanSummary]
     /// Message IDs whose receipt reached a processed/rejected terminal state.
     public let acknowledgedMessageIDs: [UUID]
+    /// Every causal sequence from 1 through this value has only terminal receipts.
+    /// Optional to preserve decoding for schemaVersion 1 snapshots from older phones.
+    public let terminalCausalSequenceWatermark: Int?
 
     public init(
         generatedAt: Date = Date(),
@@ -204,6 +207,7 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
         pendingActions: [WatchPendingActionSummary],
         workoutPlans: [WatchWorkoutPlanSummary] = [],
         acknowledgedMessageIDs: [UUID],
+        terminalCausalSequenceWatermark: Int? = nil,
         tomorrowGuidance: WatchTomorrowGuidanceSummary? = nil,
         recoverySummary: WatchRecoverySummary? = nil
     ) {
@@ -215,6 +219,7 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
         self.pendingActions = Array(pendingActions.prefix(10))
         self.workoutPlans = Array(workoutPlans.prefix(10))
         self.acknowledgedMessageIDs = Array(acknowledgedMessageIDs.suffix(100))
+        self.terminalCausalSequenceWatermark = terminalCausalSequenceWatermark
     }
 
     public func isCurrentLocalDay(asOf date: Date, calendar: Calendar) -> Bool {
@@ -303,6 +308,20 @@ public struct WatchMessageOutbox: Codable, Equatable, Sendable {
 
     public mutating func acknowledge(messageIDs: [UUID]) {
         for id in messageIDs { pendingByID.removeValue(forKey: id) }
+    }
+
+    /// Removes only sequenced commands whose terminal receipts are covered by
+    /// the phone's contiguous watermark. Legacy commands have no sequence and
+    /// continue to rely on their per-message IDs.
+    @discardableResult
+    public mutating func acknowledge(throughCausalSequence watermark: Int) -> [UUID] {
+        guard watermark > 0 else { return [] }
+        let acknowledgedIDs = pendingByID.values.compactMap { envelope -> UUID? in
+            guard let sequence = envelope.causalSequence, sequence <= watermark else { return nil }
+            return envelope.messageID
+        }
+        for id in acknowledgedIDs { pendingByID.removeValue(forKey: id) }
+        return acknowledgedIDs
     }
 
     public var pending: [WatchMessageEnvelope] {

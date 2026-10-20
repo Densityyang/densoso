@@ -92,6 +92,23 @@ final class WatchMessageOutboxTests: XCTestCase {
         )
     }
 
+    func testTerminalSequenceWatermarkAcknowledgesOnlyCoveredCausalEntries() {
+        let legacy = WatchMessageEnvelope(payload: .transcript("旧版记录"))
+        let first = WatchMessageEnvelope(causalSequence: 1, payload: .confirm(actionID: UUID()))
+        let second = WatchMessageEnvelope(causalSequence: 2, dependsOn: 1, payload: .reject(actionID: UUID()))
+        let third = WatchMessageEnvelope(causalSequence: 3, dependsOn: 2, payload: .transcript("后续记录"))
+        var outbox = WatchMessageOutbox(pending: [legacy, first, second, third])
+
+        XCTAssertEqual(
+            Set(outbox.acknowledge(throughCausalSequence: 2)),
+            Set([first.messageID, second.messageID])
+        )
+        XCTAssertEqual(Set(outbox.pending.map(\.messageID)), Set([legacy.messageID, third.messageID]))
+
+        outbox.acknowledge(messageIDs: [legacy.messageID])
+        XCTAssertEqual(outbox.pending.map(\.messageID), [third.messageID])
+    }
+
     func testTodaySnapshotRoundTripsTomorrowGuidanceAndDecodesLegacyPayload() throws {
         let guidance = NextDayGuidance(
             expectedState: .caution,
@@ -132,6 +149,7 @@ final class WatchMessageOutboxTests: XCTestCase {
             pendingActions: [],
             workoutPlans: [],
             acknowledgedMessageIDs: [],
+            terminalCausalSequenceWatermark: 12,
             tomorrowGuidance: watchGuidance,
             recoverySummary: recoverySummary
         )
@@ -146,12 +164,14 @@ final class WatchMessageOutboxTests: XCTestCase {
         let roundTripped = try JSONDecoder().decode(WatchTodaySnapshot.self, from: encoded)
         XCTAssertEqual(roundTripped.tomorrowGuidance, watchGuidance)
         XCTAssertEqual(roundTripped.recoverySummary, recoverySummary)
+        XCTAssertEqual(roundTripped.terminalCausalSequenceWatermark, 12)
         XCTAssertEqual(roundTripped.domains, [domain])
 
         var legacyPayload = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         legacyPayload["energyIntakeKcal"] = 1_800
         legacyPayload["totalExpenditureKcal"] = 2_100
         legacyPayload["deficitKcal"] = -300
+        legacyPayload.removeValue(forKey: "terminalCausalSequenceWatermark")
         legacyPayload["tomorrowGuidance"] = try XCTUnwrap(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(guidance)) as? [String: Any]
         )
@@ -163,6 +183,7 @@ final class WatchMessageOutboxTests: XCTestCase {
         let decodedLegacyPayload = try JSONDecoder().decode(WatchTodaySnapshot.self, from: legacyData)
         XCTAssertEqual(decodedLegacyPayload.tomorrowGuidance?.reasons, [])
         XCTAssertNil(decodedLegacyPayload.recoverySummary)
+        XCTAssertNil(decodedLegacyPayload.terminalCausalSequenceWatermark)
         XCTAssertEqual(decodedLegacyPayload.domains, [domain])
         let reencodedLegacyPayload = try JSONEncoder().encode(decodedLegacyPayload)
         let reencodedLegacyObject = try XCTUnwrap(

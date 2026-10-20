@@ -157,6 +157,41 @@ final class WatchMessageInboxStoreTests: XCTestCase {
         )
     }
 
+    func testTerminalCausalWatermarkStopsAtMissingAndPendingSequences() throws {
+        let store = try makeStore()
+        func command(_ sequence: Int) -> WatchMessageEnvelope {
+            WatchMessageEnvelope(
+                causalSequence: sequence,
+                payload: .confirm(actionID: UUID())
+            )
+        }
+
+        let second = command(2)
+        XCTAssertEqual(try store.ingest(second), .accepted)
+        try store.setState(WatchReceiptState.rejected, for: second.messageID)
+        XCTAssertNil(try store.highestContiguousTerminalCausalSequence())
+
+        let first = command(1)
+        XCTAssertEqual(try store.ingest(first), .accepted)
+        XCTAssertNil(try store.highestContiguousTerminalCausalSequence())
+        try store.setState(WatchReceiptState.processed, for: first.messageID)
+        XCTAssertEqual(try store.highestContiguousTerminalCausalSequence(), 2)
+
+        let fourth = command(4)
+        let fifth = command(5)
+        XCTAssertEqual(try store.ingest(fourth), .accepted)
+        XCTAssertEqual(try store.ingest(fifth), .accepted)
+        try store.setState(WatchReceiptState.processed, for: fourth.messageID)
+        try store.setState(WatchReceiptState.rejected, for: fifth.messageID)
+        XCTAssertEqual(try store.highestContiguousTerminalCausalSequence(), 2)
+
+        let third = command(3)
+        XCTAssertEqual(try store.ingest(third), .accepted)
+        XCTAssertEqual(try store.highestContiguousTerminalCausalSequence(), 2)
+        try store.setState(WatchReceiptState.rejected, for: third.messageID)
+        XCTAssertEqual(try store.highestContiguousTerminalCausalSequence(), 5)
+    }
+
     func testCausalTranscriptWaitsForPredecessorAndStaysPendingUntilConsumed() throws {
         let store = try makeStore()
         let transcript = WatchMessageEnvelope(

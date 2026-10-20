@@ -1275,6 +1275,7 @@ jobs:
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testCausalReplayWaitsForMissingAndPendingPredecessorThenOrdersBySequence \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testRejectedAndConflictingPredecessorsRejectCausalSuccessors \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testTerminalCausalWatermarkStopsAtMissingAndPendingSequences \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testCausalTranscriptWaitsForPredecessorAndStaysPendingUntilConsumed \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testLegacyPendingCommandAndTranscriptBlockNewerCommandUntilCompleted \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testOutOfOrderMessagesAreReturnedInDurableArrivalOrder \

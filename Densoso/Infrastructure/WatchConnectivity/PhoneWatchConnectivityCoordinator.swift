@@ -227,6 +227,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
             calendar.isDate(brief.dayStart, inSameDayAs: today) ? brief : nil
         }
         let received = try inboxStore.recentProcessedMessageIDs()
+        let terminalCausalSequenceWatermark = try inboxStore.highestContiguousTerminalCausalSequence()
         let singleSessionPlans = try workoutPlanSchedulingService
             .upcomingConfirmedPlans(from: today, limit: Self.watchSnapshotEntryLimit)
             .map {
@@ -266,6 +267,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
             pendingActions: pendingActionSummaries(),
             workoutPlans: scheduledPlans,
             acknowledgedMessageIDs: received,
+            terminalCausalSequenceWatermark: terminalCausalSequenceWatermark,
             tomorrowGuidance: todayBrief?.healthState?.tomorrowGuidance.map { guidance in
                 WatchTomorrowGuidanceSummary(
                     expectedState: guidance.expectedState,

@@ -306,6 +306,60 @@ final class WatchMessageInboxStore {
             .compactMap { UUID(uuidString: $0.messageID) }
     }
 
+    func highestContiguousTerminalCausalSequence() throws -> Int? {
+        var terminalBySequence: [Int: Bool] = [:]
+        var receiptBatch: [(sequence: Int, messageID: String)] = []
+        let receiptContext = ModelContext(modelContainer)
+
+        func consumeReceiptBatch(_ entries: [(sequence: Int, messageID: String)]) throws {
+            let messageIDs = Array(Set(entries.map { $0.messageID })).sorted()
+            var terminalByMessageID: [String: Bool] = [:]
+            var offset = 0
+            while offset < messageIDs.count {
+                let batchEnd = min(offset + Self.pendingReceiptFetchBatchSize, messageIDs.count)
+                let batchIDs = Array(messageIDs[offset..<batchEnd])
+                let predicate = #Predicate<WatchMessageReceiptRecord> {
+                    batchIDs.contains($0.messageID)
+                }
+                for receipt in try receiptContext.fetch(FetchDescriptor<WatchMessageReceiptRecord>(predicate: predicate)) {
+                    terminalByMessageID[receipt.messageID] =
+                        receipt.state == WatchReceiptState.processed || receipt.state == WatchReceiptState.rejected
+                }
+                offset = batchEnd
+            }
+
+            for entry in entries {
+                let isTerminal = terminalByMessageID[entry.messageID] ?? false
+                if let priorState = terminalBySequence[entry.sequence] {
+                    terminalBySequence[entry.sequence] = priorState && isTerminal
+                } else {
+                    terminalBySequence[entry.sequence] = isTerminal
+                }
+            }
+        }
+
+        try forEachInboxMessage { message in
+            guard let messageID = message.requestID,
+                  let envelope = try? WatchMessageCodec.decode(message.contentData),
+                  let sequence = envelope.causalSequence else { return }
+            receiptBatch.append((sequence, messageID.uuidString.lowercased()))
+            if receiptBatch.count == Self.pendingReceiptFetchBatchSize {
+                try consumeReceiptBatch(receiptBatch)
+                receiptBatch.removeAll(keepingCapacity: true)
+            }
+        }
+        if !receiptBatch.isEmpty { try consumeReceiptBatch(receiptBatch) }
+
+        var highestTerminalSequence: Int?
+        var sequence = 1
+        while terminalBySequence[sequence] == true {
+            highestTerminalSequence = sequence
+            guard sequence < Int.max else { break }
+            sequence += 1
+        }
+        return highestTerminalSequence
+    }
+
     func recentReceivedMessageIDs(limit: Int = 100) throws -> [UUID] {
         let boundedLimit = max(limit, 0)
         guard boundedLimit > 0 else { return [] }

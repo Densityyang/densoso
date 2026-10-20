@@ -153,10 +153,14 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
 
     private func apply(_ snapshot: WatchTodaySnapshot) {
         todaySnapshot = snapshot
+        var acknowledgedIDs = Set(snapshot.acknowledgedMessageIDs)
         outbox.acknowledge(messageIDs: snapshot.acknowledgedMessageIDs)
-        dispatchedIDs.subtract(snapshot.acknowledgedMessageIDs)
+        if let watermark = snapshot.terminalCausalSequenceWatermark {
+            acknowledgedIDs.formUnion(outbox.acknowledge(throughCausalSequence: watermark))
+        }
+        dispatchedIDs.subtract(acknowledgedIDs)
         persistOutbox()
-        if snapshot.acknowledgedMessageIDs.isEmpty {
+        if acknowledgedIDs.isEmpty {
             statusMessage = "已更新 Today 摘要。"
         } else {
             statusMessage = "已更新摘要并同步确认状态。"
