@@ -51,7 +51,7 @@ struct PersistenceBootstrap {
             try MigrationBackupManager.createBackupIfPresent(storeURL: $0)
         }
     ) -> PersistenceBootstrap {
-        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
         if inMemory {
             let configuration = ModelConfiguration(
                 "DensosoUITests",

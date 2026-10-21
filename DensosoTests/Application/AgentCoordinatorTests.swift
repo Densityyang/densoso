@@ -281,7 +281,7 @@ final class AgentCoordinatorTests: XCTestCase {
     }
 
     func testCloudProviderRequiresExplicitConsent() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -491,7 +491,7 @@ private struct Harness {
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
         healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil
     ) async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: modelContainer)

@@ -91,6 +91,7 @@ history remains readable before new turns use the current v2 tool definitions.
 - `AgentRequestResumeTests.testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage`
 - `AgentRequestResumeTests.testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn`
 - `DensosoMigrationTests.testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1`
+- `DensosoMigrationTests.testV7ToV8PreservesHealthKitSampleIndexState`
 - `DensosoMigrationTests.testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation`
 - `DensosoMigrationTests.testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox`
 - `DensosoMigrationTests.testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords`

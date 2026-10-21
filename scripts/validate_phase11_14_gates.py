@@ -783,6 +783,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "AgentRequestResumeTests.testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn",
                 "AgentCoordinatorTests.testTypedEventStreamPreservesOrderAndRealCounts",
                 "DensosoMigrationTests.testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1",
+                "DensosoMigrationTests.testV7ToV8PreservesHealthKitSampleIndexState",
                 "DensosoMigrationTests.testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation",
                 "DensosoMigrationTests.testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox",
                 "DensosoMigrationTests.testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords",
@@ -1366,6 +1367,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "DensosoTests/DensosoMigrationTests.swift",
             (
                 "testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1",
+                "testV7ToV8PreservesHealthKitSampleIndexState",
                 "testPersistenceBootstrapErrorsUseSafeReadOnlyDescriptor",
             ),
             errors,
@@ -1404,10 +1406,21 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "Densoso/Persistence/Schemas/DensosoSchemaV8.swift",
+            (
+                "enum DensosoSchemaV8: VersionedSchema",
+                "DensosoSchemaV5.models + [",
+                "@Attribute(originalName: \"isDeleted\") var isTombstoned: Bool",
+            ),
+            errors,
+        )
+        require(
             "Densoso/Persistence/DensosoMigrationPlan.swift",
             (
                 "DensosoSchemaV7.self",
                 ".lightweight(fromVersion: DensosoSchemaV6.self, toVersion: DensosoSchemaV7.self)",
+                "DensosoSchemaV8.self",
+                ".lightweight(fromVersion: DensosoSchemaV7.self, toVersion: DensosoSchemaV8.self)",
             ),
             errors,
         )
@@ -2062,6 +2075,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/AgentRequestResumeTests/testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage",
                 "-only-testing:DensosoTests/AgentRequestResumeTests/testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn",
                 "-only-testing:DensosoTests/DensosoMigrationTests/testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1",
+                "-only-testing:DensosoTests/DensosoMigrationTests/testV7ToV8PreservesHealthKitSampleIndexState",
                 "-only-testing:DensosoTests/DensosoMigrationTests/testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation",
                 "-only-testing:DensosoTests/DensosoMigrationTests/testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox",
                 "-only-testing:DensosoTests/DensosoMigrationTests/testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords",

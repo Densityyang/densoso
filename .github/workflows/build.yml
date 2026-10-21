@@ -1128,6 +1128,7 @@ jobs:
             -only-testing:DensosoTests/AgentRequestResumeTests/testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage \
             -only-testing:DensosoTests/AgentRequestResumeTests/testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn \
             -only-testing:DensosoTests/DensosoMigrationTests/testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1 \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV7ToV8PreservesHealthKitSampleIndexState \
             -only-testing:DensosoTests/DensosoMigrationTests/testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation \
             -only-testing:DensosoTests/DensosoMigrationTests/testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox \
             -only-testing:DensosoTests/DensosoMigrationTests/testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords \

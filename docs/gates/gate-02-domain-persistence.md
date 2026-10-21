@@ -38,14 +38,16 @@ does not authorize Phase 3 without explicit user approval.
 ## Cumulative schema extension
 
 The original Gate 2 acceptance remains the historical V1/V2-to-V3 migration
-record. The current cumulative main-PR branch extends the schema through V7;
+record. The current cumulative main-PR branch extends the schema through V8;
 V5-to-V6 adds a HealthKit sample-ID/day index with pending projection-day and
 deletion state, and rewrites legacy daily snapshot payloads to compact
 summaries. The migration groups workouts by local day and uses a single
 wake-day overlap index for missing sleep snapshots, preserving cross-midnight
 and adjacent-window coverage without rescanning every sample per day.
-V1–V6 schema identities remain intact. Gate 2 CI includes the V1/V2 disk
-fixtures migrated and reopened at V7, plus the V5-to-V6 and V6-to-V7 fixtures.
+V1–V7 schema identities remain intact. V7-to-V8 renames the sample-index
+tombstone flag while preserving its stored column. Gate 2 CI includes the V1/V2
+disk fixtures migrated and reopened at the current schema, plus the V5-to-V6,
+V6-to-V7, and V7-to-V8 fixtures.
 
 ## Non-goals
 
@@ -80,7 +82,7 @@ to domain/persistence behavior and have a dedicated evidence artifact.
 6. a crash after commit returns the existing receipt without duplication;
 7. interrupted outbox sends become retryable while retaining attempt state;
 8. conversation and pending-action state survive repository recreation;
-9. V1 and V2 disk stores migrate through the current V7 schema and reopen while
+9. V1 and V2 disk stores migrate through the current V8 schema and reopen while
    preserving IDs, relationships, values, cursors, outbox state, and historical
    algorithm versions, covered by
    `DensosoMigrationTests.testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation`

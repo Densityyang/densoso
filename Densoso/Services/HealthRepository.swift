@@ -409,7 +409,7 @@ final class HealthRepository: HealthSyncRepository {
                     let pendingDayKeys = Self.pendingDayKeys(for: record)
                     let remainingDayKeys = pendingDayKeys.subtracting(availableDayKeys)
                     guard remainingDayKeys != pendingDayKeys else { continue }
-                    if remainingDayKeys.isEmpty, record.isDeleted {
+                    if remainingDayKeys.isEmpty, record.isTombstoned {
                         deletedTombstones.append(record)
                     } else {
                         pendingIndexUpdates.append((record: record, dayKeys: remainingDayKeys))
@@ -723,7 +723,7 @@ final class HealthRepository: HealthSyncRepository {
                 record.dayKey = dayKey
                 record.startDate = sample.startDate
                 record.endDate = sample.endDate
-                record.isDeleted = false
+                record.isTombstoned = false
                 Self.setPendingDayKeys(unresolvedDayKeys, on: record)
             } else {
                 let unresolvedDayKeys = update.pendingDayKeys.subtracting(availableDayKeys)
@@ -735,7 +735,7 @@ final class HealthRepository: HealthSyncRepository {
                     endDate: sample.endDate,
                     needsRequery: !unresolvedDayKeys.isEmpty,
                     pendingDayKeys: Array(unresolvedDayKeys),
-                    isDeleted: false
+                    isTombstoned: false
                 ))
             }
         }
@@ -757,7 +757,7 @@ final class HealthRepository: HealthSyncRepository {
                 let pendingDayKeys = Self.pendingDayKeys(for: record)
                     .union(Self.projectionDayKeys(for: record, stream: stream))
                 Self.setPendingDayKeys(pendingDayKeys, on: record)
-                record.isDeleted = true
+                record.isTombstoned = true
             }
             offset = batchEnd
         }

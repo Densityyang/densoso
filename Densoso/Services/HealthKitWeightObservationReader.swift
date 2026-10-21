@@ -11,7 +11,7 @@ enum HealthKitWeightObservationReader {
     ) throws -> WeightObservation? {
         let stream = HealthMetricID.bodyMass.rawValue
         let predicate = #Predicate<HealthKitSampleIndexRecord> {
-            $0.stream == stream && $0.isDeleted == false && $0.endDate <= date
+            $0.stream == stream && $0.isTombstoned == false && $0.endDate <= date
         }
         var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(
             predicate: predicate,

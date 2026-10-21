@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class ConversationPersistenceTests: XCTestCase {
     func testMessageQueriesAndResetStayScopedToConversationAndRequest() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -118,7 +118,7 @@ final class ConversationPersistenceTests: XCTestCase {
     }
 
     func testConversationMessagesSurviveRepositoryRecreationInOrdinalOrder() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -150,7 +150,7 @@ final class ConversationPersistenceTests: XCTestCase {
     }
 
     func testMessagePagesPreserveOrdinalAndResumeFilterAcrossPageBoundary() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -221,7 +221,7 @@ final class ConversationPersistenceTests: XCTestCase {
     }
 
     func testResetPagesMessagesAndRequestsAcross64RowBoundaries() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -280,7 +280,7 @@ final class ConversationPersistenceTests: XCTestCase {
     }
 
     func testAgentRestorePublishesUserVisibleConversationMessages() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

@@ -413,7 +413,7 @@ final class HealthRepositoryTests: XCTestCase {
             endDate: deletedSample.endDate,
             needsRequery: true,
             pendingDayKeys: [Self.dayKey(tombstoneDay)],
-            isDeleted: true
+            isTombstoned: true
         ))
         context.insert(HealthKitSampleIndexRecord(
             sampleID: unknownSample.id,
@@ -894,7 +894,7 @@ final class HealthRepositoryTests: XCTestCase {
         let pendingIndex = try XCTUnwrap(context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).first)
         XCTAssertEqual(pendingIndex.sampleID, sampleID)
         XCTAssertTrue(pendingIndex.needsRequery)
-        XCTAssertTrue(pendingIndex.isDeleted)
+        XCTAssertTrue(pendingIndex.isTombstoned)
         XCTAssertEqual(
             try JSONDecoder().decode([String].self, from: Data(pendingIndex.pendingDayKeysJSON.utf8)),
             [Self.dayKey(day)]
@@ -944,7 +944,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(index.sampleID, sampleID)
         XCTAssertEqual(index.dayKey, Self.dayKey(day))
         XCTAssertTrue(index.needsRequery)
-        XCTAssertFalse(index.isDeleted)
+        XCTAssertFalse(index.isTombstoned)
         XCTAssertEqual(
             try JSONDecoder().decode([String].self, from: Data(index.pendingDayKeysJSON.utf8)),
             [Self.dayKey(day)]
@@ -1086,7 +1086,7 @@ final class HealthRepositoryTests: XCTestCase {
                 endDate: day,
                 needsRequery: true,
                 pendingDayKeys: [dayKey],
-                isDeleted: true
+                isTombstoned: true
             ))
         }
         try context.save()
@@ -1258,7 +1258,7 @@ final class HealthRepositoryTests: XCTestCase {
 
         let movedIndex = try XCTUnwrap(context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).first)
         XCTAssertEqual(movedIndex.dayKey, Self.dayKey(secondDay))
-        XCTAssertFalse(movedIndex.isDeleted)
+        XCTAssertFalse(movedIndex.isTombstoned)
         XCTAssertTrue(movedIndex.needsRequery)
         XCTAssertEqual(
             try JSONDecoder().decode([String].self, from: Data(movedIndex.pendingDayKeysJSON.utf8)),
@@ -1304,7 +1304,7 @@ final class HealthRepositoryTests: XCTestCase {
         )
         let resolvedIndex = try XCTUnwrap(context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).first)
         XCTAssertFalse(resolvedIndex.needsRequery)
-        XCTAssertFalse(resolvedIndex.isDeleted)
+        XCTAssertFalse(resolvedIndex.isTombstoned)
         XCTAssertEqual(
             try JSONDecoder().decode([String].self, from: Data(resolvedIndex.pendingDayKeysJSON.utf8)),
             []

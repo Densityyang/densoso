@@ -184,7 +184,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
     }
 
     private func makeContext() throws -> (ModelContainer, ModelContext) {
-        let schema = Schema(versionedSchema: DensosoSchemaV7.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
