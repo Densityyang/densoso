@@ -74,7 +74,7 @@ struct WorkoutPlanScreen: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     case .time:
-                        Stepper("\(durationMinutes) 分钟", value: $durationMinutes, in: 1...720, step: 5)
+                        WorkoutDurationPicker(durationMinutes: $durationMinutes)
                     case .distance:
                         Stepper(
                             "\(Int(distanceMeters.rounded())) 米",
