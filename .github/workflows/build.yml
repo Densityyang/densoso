@@ -1078,6 +1078,7 @@ jobs:
   gate-12-multimodal-agent:
     name: gate-12-multimodal-agent
     needs: gate-11-ai-native-health-loop
+    if: ${{ always() && needs.gate-11-ai-native-health-loop.result == 'success' }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -1194,6 +1195,7 @@ jobs:
   gate-13-energy-accounting:
     name: gate-13-energy-accounting
     needs: gate-12-multimodal-agent
+    if: ${{ always() && needs.gate-12-multimodal-agent.result == 'success' }}
     runs-on: macos-latest
     timeout-minutes: 35
     steps:
@@ -1261,6 +1263,7 @@ jobs:
   gate-14-watch-daily-loop:
     name: gate-14-watch-daily-loop
     needs: gate-13-energy-accounting
+    if: ${{ always() && needs.gate-13-energy-accounting.result == 'success' }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
