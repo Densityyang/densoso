@@ -220,7 +220,8 @@ final class MultimodalAgentImageTests: XCTestCase {
         let resumeHarness = try makeHarness(
             provider: resumeProvider,
             grantMealImage: false,
-            conversationID: conversationID
+            conversationID: conversationID,
+            existingContainer: firstHarness.container
         )
         try await resumeHarness.session.restore()
 
@@ -345,6 +346,7 @@ final class MultimodalAgentImageTests: XCTestCase {
             provider: resumeProvider,
             grantMealImage: true,
             conversationID: conversationID,
+            existingContainer: initialHarness.container,
             budgetFactory: { AgentBudget(maximumProviderRounds: 10, maximumToolCalls: 10, deadline: .distantFuture) }
         )
         try await resumedHarness.session.restore()
@@ -498,13 +500,19 @@ final class MultimodalAgentImageTests: XCTestCase {
         provider: ScriptedTextProvider,
         grantMealImage: Bool,
         conversationID: UUID = UUID(),
+        existingContainer: ModelContainer? = nil,
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() }
     ) throws -> ImageAgentHarness {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
-        let container = try ModelContainer(
-            for: schema,
-            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
-        )
+        let container: ModelContainer
+        if let existingContainer {
+            container = existingContainer
+        } else {
+            let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+            container = try ModelContainer(
+                for: schema,
+                configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+            )
+        }
         let repository = SwiftDataAgentRepository(modelContainer: container)
         let governance = InMemoryProviderGovernanceRepository(
             granted: grantMealImage
