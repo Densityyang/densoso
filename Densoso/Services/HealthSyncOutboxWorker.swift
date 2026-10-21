@@ -118,18 +118,40 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
     ) throws -> [HealthSyncOutboxEntry] {
         let pendingState = "pending"
         let retryableState = "retryable"
-        let dueAt = date
         let sortBy = [
             SortDescriptor(\HealthSyncOutboxEntry.createdAt),
             SortDescriptor(\HealthSyncOutboxEntry.idempotencyKey),
         ]
-        let predicate = #Predicate<HealthSyncOutboxEntry> { entry in
+        // Query nullable retry dates separately; SwiftData can mis-handle a combined OR predicate here.
+        let noRetryDatePredicate = #Predicate<HealthSyncOutboxEntry> { entry in
             (entry.state == pendingState || entry.state == retryableState)
-                && (entry.nextAttemptAt == nil || entry.nextAttemptAt! <= dueAt)
+                && entry.nextAttemptAt == nil
         }
-        var descriptor = FetchDescriptor<HealthSyncOutboxEntry>(predicate: predicate, sortBy: sortBy)
-        descriptor.fetchLimit = Self.outboxBatchSize
-        return try modelContext.fetch(descriptor)
+        var noRetryDateDescriptor = FetchDescriptor<HealthSyncOutboxEntry>(
+            predicate: noRetryDatePredicate,
+            sortBy: sortBy
+        )
+        noRetryDateDescriptor.fetchLimit = Self.outboxBatchSize
+        let withoutRetryDate = try modelContext.fetch(noRetryDateDescriptor)
+
+        let dueRetryDatePredicate = #Predicate<HealthSyncOutboxEntry> { entry in
+            (entry.state == pendingState || entry.state == retryableState)
+                && entry.nextAttemptAt != nil
+                && entry.nextAttemptAt! <= date
+        }
+        var dueRetryDateDescriptor = FetchDescriptor<HealthSyncOutboxEntry>(
+            predicate: dueRetryDatePredicate,
+            sortBy: sortBy
+        )
+        dueRetryDateDescriptor.fetchLimit = Self.outboxBatchSize
+        let withDueRetryDate = try modelContext.fetch(dueRetryDateDescriptor)
+
+        return Array((withoutRetryDate + withDueRetryDate)
+            .sorted { lhs, rhs in
+                if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+                return lhs.idempotencyKey < rhs.idempotencyKey
+            }
+            .prefix(Self.outboxBatchSize))
     }
 
     private func writeCommand(for entry: HealthSyncOutboxEntry, in modelContext: ModelContext) throws -> HealthWriteCommand {
