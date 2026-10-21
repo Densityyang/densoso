@@ -1934,7 +1934,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         errors,
     )
     require(
-        "DensosoTests/TrainingPlanScheduleQueryTests.swift",
+        "DensosoTests/Application/TrainingPlanScheduleQueryTests.swift",
         ("testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay",),
         errors,
     )
