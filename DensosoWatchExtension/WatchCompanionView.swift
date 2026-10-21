@@ -119,18 +119,34 @@ struct WatchCompanionView: View {
     private var transcriptSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("发送语音草稿").font(.subheadline.weight(.semibold))
-            TextField("口述或输入记录", text: $transcript, axis: .vertical)
+            TextField("口述或输入记录", text: transcriptBinding, axis: .vertical)
                 .lineLimit(2...4)
                 .accessibilityLabel("口述或输入记录")
             Button("发送到 iPhone") {
+                let pendingCount = connectivity.pendingMessageCount
                 connectivity.sendTranscript(transcript)
-                transcript = ""
+                // Keep the draft if the durable Watch outbox rejected it (for
+                // example, validation failed); only clear after enqueue succeeds.
+                if connectivity.pendingMessageCount > pendingCount {
+                    transcript = ""
+                }
             }
             .disabled(transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .font(.caption)
+            Text("\(transcript.count)/\(WatchMessageCodec.maximumTranscriptLength)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(8)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var transcriptBinding: Binding<String> {
+        Binding(
+            get: { transcript },
+            set: { transcript = String($0.prefix(WatchMessageCodec.maximumTranscriptLength)) }
+        )
     }
 
     @ViewBuilder

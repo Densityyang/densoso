@@ -401,8 +401,8 @@ final class HealthRepository: HealthSyncRepository {
                 sampleIDs: Set(page.deletedSampleIDs).subtracting(reintroducedSampleIDs),
                 stream: stream
             )
-            var pendingDayKeyUpdates: [UUID: Set<String>] = [:]
-            var deletedTombstoneIDs = Set<UUID>()
+            var pendingIndexUpdates: [(record: HealthKitSampleIndexRecord, dayKeys: Set<String>)] = []
+            var deletedTombstones: [HealthKitSampleIndexRecord] = []
             let availableDayKeys = Self.availableDayKeys(in: replacementsByDay)
             try forEachPendingHealthKitSampleIndex(stream: stream) { records in
                 for record in records {
@@ -410,14 +410,20 @@ final class HealthRepository: HealthSyncRepository {
                     let remainingDayKeys = pendingDayKeys.subtracting(availableDayKeys)
                     guard remainingDayKeys != pendingDayKeys else { continue }
                     if remainingDayKeys.isEmpty, record.isDeleted {
-                        deletedTombstoneIDs.insert(record.sampleID)
+                        deletedTombstones.append(record)
                     } else {
-                        pendingDayKeyUpdates[record.sampleID] = remainingDayKeys
+                        pendingIndexUpdates.append((record: record, dayKeys: remainingDayKeys))
                     }
                 }
             }
-            try updatePendingHealthKitSampleIndexes(pendingDayKeys: pendingDayKeyUpdates, stream: stream)
-            try deleteHealthKitSampleIndexes(sampleIDs: deletedTombstoneIDs, stream: stream)
+            // Finish paging before changing any indexed rows. Mutating a fetched page can shift
+            // later offsets, and re-querying hundreds of UUIDs adds expensive SwiftData predicates.
+            for update in pendingIndexUpdates {
+                Self.setPendingDayKeys(update.dayKeys, on: update.record)
+            }
+            for record in deletedTombstones {
+                modelContext.delete(record)
+            }
             if let cursor = try cursorRecord(stream: stream) {
                 cursor.anchorData = nextAnchorData
                 cursor.lastSuccessfulAt = lastSuccessfulAt
@@ -750,51 +756,11 @@ final class HealthRepository: HealthSyncRepository {
             for record in records {
                 let pendingDayKeys = Self.pendingDayKeys(for: record)
                     .union(Self.projectionDayKeys(for: record, stream: stream))
-                record.isDeleted = true
                 Self.setPendingDayKeys(pendingDayKeys, on: record)
+                record.isDeleted = true
             }
             offset = batchEnd
         }
-    }
-
-    private func updatePendingHealthKitSampleIndexes(
-        pendingDayKeys: [UUID: Set<String>],
-        stream: String
-    ) throws {
-        let orderedIDs = pendingDayKeys.keys.sorted { $0.uuidString < $1.uuidString }
-        var offset = 0
-        while offset < orderedIDs.count {
-            let batchEnd = min(offset + Self.healthKitSampleIndexPredicateBatchSize, orderedIDs.count)
-            let batchIDs = Array(orderedIDs[offset..<batchEnd])
-            let predicate = #Predicate<HealthKitSampleIndexRecord> {
-                $0.stream == stream && batchIDs.contains($0.sampleID)
-            }
-            for record in try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate)) {
-                guard let remainingDayKeys = pendingDayKeys[record.sampleID] else { continue }
-                Self.setPendingDayKeys(remainingDayKeys, on: record)
-            }
-            offset = batchEnd
-        }
-    }
-
-    private func deleteHealthKitSampleIndexes(sampleIDs: Set<UUID>, stream: String) throws {
-        guard !sampleIDs.isEmpty else { return }
-        let orderedIDs = sampleIDs.sorted { $0.uuidString < $1.uuidString }
-        var offset = 0
-        var recordsToDelete: [HealthKitSampleIndexRecord] = []
-        while offset < orderedIDs.count {
-            let batchEnd = min(offset + Self.healthKitSampleIndexPredicateBatchSize, orderedIDs.count)
-            let batchIDs = Array(orderedIDs[offset..<batchEnd])
-            let predicate = #Predicate<HealthKitSampleIndexRecord> {
-                $0.stream == stream && $0.isDeleted && batchIDs.contains($0.sampleID)
-            }
-            recordsToDelete.append(contentsOf: try modelContext.fetch(
-                FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate)
-            ))
-            offset = batchEnd
-        }
-        // Defer mutations until after each bounded target query has finished.
-        for record in recordsToDelete { modelContext.delete(record) }
     }
 
     private func healthSnapshot(for day: Date) throws -> DailyHealthSnapshot? {
