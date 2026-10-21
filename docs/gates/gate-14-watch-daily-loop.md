@@ -100,6 +100,7 @@ health refreshes reach the companion without waiting for another activation.
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanHistoryPagesAcrossThe64EventBoundary`,
   `TrainingPlanSchedulingServiceTests.testUpcomingTrainingSessionsAreBoundedAndOrderedAcrossPages`,
   `TrainingPlanSchedulingServiceTests.testConfirmedPlanPagesKeepAllRowsAcrossTiedTenRowBoundaries`,
+  `HealthProjectionActorTests.testDailyLoopSnapshotRetainsTenEarliestPlanSessionsAcrossPages`,
   `WorkoutPlanSchedulingServiceTests.testConfirmedScheduleIsIdempotentAcrossRetries`,
   `WorkoutPlanSchedulingServiceTests.testTransientWorkoutKitFailureLeavesAUserRetryableScheduleIntent`,
   `WorkoutPlanSchedulingServiceTests.testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries`,

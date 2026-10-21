@@ -8,7 +8,13 @@ import SwiftData
 @ModelActor
 actor HealthProjectionActor {
     private static let confirmedPlanFetchBatchSize = 64
+    private static let watchPlanSummaryLimit = 10
     private var calendar: Calendar = .current
+
+    private enum WatchPlanCandidate {
+        case workout(ConfirmedWorkoutPlanEntry)
+        case training(ConfirmedTrainingPlanEntry, TrainingSessionDraft)
+    }
 
     init(modelContainer: ModelContainer, calendar: Calendar = .current) {
         self.modelContainer = modelContainer
@@ -169,6 +175,7 @@ actor HealthProjectionActor {
         var offset = 0
         var workoutPlans: [ConfirmedWorkoutPlanEntry] = []
         var trainingPlans: [ConfirmedTrainingPlanEntry] = []
+        var watchPlanCandidates: [WatchPlanCandidate] = []
 
         while true {
             descriptor.fetchOffset = offset
@@ -184,7 +191,8 @@ actor HealthProjectionActor {
                     guard entry.state != .terminal,
                           let scheduledAt = entry.draft.scheduledAt,
                           planWindow.contains(scheduledAt) else { continue }
-                    workoutPlans.append(entry)
+                    watchPlanCandidates.append(.workout(entry))
+                    Self.retainEarliestWatchPlanCandidates(&watchPlanCandidates)
                     continue
                 }
 
@@ -200,29 +208,56 @@ actor HealthProjectionActor {
                     !session.isRestDay && planWindow.contains(session.date)
                 }
                 guard !plan.sessions.isEmpty else { continue }
-                let retainedSessionIDs = Set(plan.sessions.map(\.id))
-                trainingPlans.append(ConfirmedTrainingPlanEntry(
-                    actionID: entry.actionID,
-                    idempotencyKey: entry.idempotencyKey,
-                    draft: plan,
-                    scheduledSessionIDs: entry.scheduledSessionIDs.filter { retainedSessionIDs.contains($0) },
-                    state: entry.state,
-                    lastError: entry.lastError
-                ))
+                for session in plan.sessions {
+                    watchPlanCandidates.append(.training(entry, session))
+                    Self.retainEarliestWatchPlanCandidates(&watchPlanCandidates)
+                }
             }
 
             guard page.count == Self.confirmedPlanFetchBatchSize else { break }
             offset += page.count
         }
 
-        let sortedWorkoutPlans = workoutPlans
-            .sorted {
-                let leftDate = $0.draft.scheduledAt ?? .distantPast
-                let rightDate = $1.draft.scheduledAt ?? .distantPast
-                return leftDate == rightDate
-                    ? $0.actionID.uuidString < $1.actionID.uuidString
-                    : leftDate > rightDate
+        if planWindow != nil {
+            workoutPlans = watchPlanCandidates.compactMap { candidate in
+                guard case .workout(let entry) = candidate else { return nil }
+                return entry
             }
+            let trainingSessions = watchPlanCandidates.compactMap { candidate -> (ConfirmedTrainingPlanEntry, TrainingSessionDraft)? in
+                guard case .training(let entry, let session) = candidate else { return nil }
+                return (entry, session)
+            }
+            let sessionsByPlan = Dictionary(grouping: trainingSessions, by: { $0.0.actionID })
+            trainingPlans = sessionsByPlan.values.compactMap { candidates in
+                guard let first = candidates.first else { return nil }
+                let entry = first.0
+                var draft = entry.draft
+                draft.sessions = candidates
+                    .map { $0.1 }
+                    .sorted {
+                        if $0.date != $1.date { return $0.date < $1.date }
+                        return $0.id.uuidString < $1.id.uuidString
+                    }
+                let retainedSessionIDs = Set(draft.sessions.map(\.id))
+                return ConfirmedTrainingPlanEntry(
+                    actionID: entry.actionID,
+                    idempotencyKey: entry.idempotencyKey,
+                    draft: draft,
+                    scheduledSessionIDs: entry.scheduledSessionIDs.filter { retainedSessionIDs.contains($0) },
+                    state: entry.state,
+                    lastError: entry.lastError
+                )
+            }
+        }
+
+        let sortedWorkoutPlans = workoutPlans.sorted { lhs, rhs in
+            let leftDate = lhs.draft.scheduledAt ?? .distantPast
+            let rightDate = rhs.draft.scheduledAt ?? .distantPast
+            if leftDate != rightDate {
+                return planWindow == nil ? leftDate > rightDate : leftDate < rightDate
+            }
+            return lhs.actionID.uuidString < rhs.actionID.uuidString
+        }
         let sortedTrainingPlans = trainingPlans
             .sorted { lhs, rhs in
                 if lhs.draft.createdAt != rhs.draft.createdAt {
@@ -231,6 +266,31 @@ actor HealthProjectionActor {
                 return lhs.draft.id.uuidString < rhs.draft.id.uuidString
             }
         return ConfirmedDailyLoopPlans(workoutPlans: sortedWorkoutPlans, trainingPlans: sortedTrainingPlans)
+    }
+
+    private static func retainEarliestWatchPlanCandidates(_ candidates: inout [WatchPlanCandidate]) {
+        candidates.sort { lhs, rhs in
+            func orderKey(_ candidate: WatchPlanCandidate) -> (date: Date, summaryID: String, planID: String) {
+                switch candidate {
+                case .workout(let entry):
+                    return (
+                        entry.draft.scheduledAt ?? .distantFuture,
+                        entry.actionID.uuidString,
+                        entry.actionID.uuidString
+                    )
+                case .training(let entry, let session):
+                    return (session.date, session.id.uuidString, entry.actionID.uuidString)
+                }
+            }
+            let left = orderKey(lhs)
+            let right = orderKey(rhs)
+            if left.date != right.date { return left.date < right.date }
+            if left.summaryID != right.summaryID { return left.summaryID < right.summaryID }
+            return left.planID < right.planID
+        }
+        if candidates.count > watchPlanSummaryLimit {
+            candidates.removeLast(candidates.count - watchPlanSummaryLimit)
+        }
     }
 
     func dailyLoopSnapshot(

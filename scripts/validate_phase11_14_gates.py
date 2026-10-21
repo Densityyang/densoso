@@ -1944,6 +1944,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
             "testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions",
+            "testDailyLoopSnapshotRetainsTenEarliestPlanSessionsAcrossPages",
         ),
         errors,
     )
@@ -1952,9 +1953,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "func confirmedPlanEntries() throws -> ConfirmedDailyLoopPlans",
             "private static let confirmedPlanFetchBatchSize = 64",
+            "private static let watchPlanSummaryLimit = 10",
             "loadConfirmedPlanEntries(asOf: date)",
             "descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize",
             "descriptor.fetchOffset = offset",
+            "Self.retainEarliestWatchPlanCandidates(&watchPlanCandidates)",
             "ConfirmedWorkoutPlanEntry.decode(notes: event.notes)",
             "ConfirmedTrainingPlanEntry.decode(notes: event.notes)",
             "FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)",
@@ -2127,6 +2130,7 @@ def main() -> int:
                 "-only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
                 "-only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions",
+                "-only-testing:DensosoTests/HealthProjectionActorTests/testDailyLoopSnapshotRetainsTenEarliestPlanSessionsAcrossPages",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages",
                 "-only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder",

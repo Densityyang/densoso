@@ -426,6 +426,102 @@ final class HealthProjectionActorTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ScheduleEvent>()), eventCountBefore)
     }
 
+    func testDailyLoopSnapshotRetainsTenEarliestPlanSessionsAcrossPages() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 16)))
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+
+        for index in 0..<70 {
+            let actionID = try XCTUnwrap(
+                UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", 0xD000 + index))
+            )
+            let scheduledAt = today.addingTimeInterval(11 * 60 * 60 + Double(index) * 60)
+            let entry = ConfirmedWorkoutPlanEntry(
+                actionID: actionID,
+                idempotencyKey: "watch-daily-plan-\(index)",
+                draft: WorkoutPlanDraft(name: "计划 \(index)", activity: .walking, scheduledAt: scheduledAt),
+                state: .scheduled
+            )
+            context.insert(ScheduleEvent(
+                date: scheduledAt,
+                title: entry.draft.name,
+                notes: try entry.encodedNotes(),
+                startTime: scheduledAt
+            ))
+        }
+
+        let trainingActionID = UUID(uuidString: "00000000-0000-0000-0000-00000000B001")!
+        let trainingSessionIDs = (1...4).map {
+            UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", 0xC000 + $0))!
+        }
+        let trainingSessions = trainingSessionIDs.enumerated().map { index, id in
+            TrainingSessionDraft(
+                id: id,
+                date: today.addingTimeInterval(10 * 60 * 60 + Double(index) * 60),
+                activity: .cycling,
+                reason: "多日计划训练 \(index)"
+            )
+        } + [TrainingSessionDraft(
+            date: today.addingTimeInterval(10 * 60 * 60 + 4 * 60),
+            activity: nil,
+            reason: "计划休息"
+        )]
+        let trainingEntry = ConfirmedTrainingPlanEntry(
+            actionID: trainingActionID,
+            idempotencyKey: "watch-daily-training-plan",
+            draft: TrainingPlanDraft(name: "多日计划", createdAt: today, sessions: trainingSessions),
+            state: .scheduled
+        )
+        context.insert(ScheduleEvent(
+            date: today,
+            title: trainingEntry.draft.name,
+            notes: try trainingEntry.encodedNotes(),
+            startTime: today
+        ))
+
+        let terminalActionID = UUID(uuidString: "00000000-0000-0000-0000-00000000B002")!
+        let terminalTime = today.addingTimeInterval(9 * 60 * 60)
+        let terminalEntry = ConfirmedWorkoutPlanEntry(
+            actionID: terminalActionID,
+            idempotencyKey: "watch-daily-terminal-plan",
+            draft: WorkoutPlanDraft(name: "已终止计划", activity: .running, scheduledAt: terminalTime),
+            state: .terminal
+        )
+        context.insert(ScheduleEvent(
+            date: terminalTime,
+            title: terminalEntry.draft.name,
+            notes: try terminalEntry.encodedNotes(),
+            startTime: terminalTime
+        ))
+        context.insert(ScheduleEvent(
+            date: terminalTime,
+            title: "普通日程",
+            notes: "not-a-confirmed-plan",
+            startTime: terminalTime
+        ))
+        try context.save()
+
+        let actor = HealthProjectionActor(modelContainer: container, calendar: calendar)
+        let snapshot = try await actor.dailyLoopSnapshot(
+            asOf: today.addingTimeInterval(8 * 60 * 60),
+            dailyBrief: nil,
+            pendingActions: []
+        )
+        let expectedSinglePlanIDs = (0..<6).map {
+            UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", 0xD000 + $0))!
+        }
+
+        XCTAssertEqual(snapshot.workoutPlans.count, 10)
+        XCTAssertEqual(snapshot.workoutPlans.map(\.actionID), trainingSessionIDs + expectedSinglePlanIDs)
+        XCTAssertFalse(snapshot.workoutPlans.contains { $0.actionID == terminalActionID })
+    }
+
     func testPlannedWorkoutTomorrowPagesTerminalPlansUntilActiveTrainingPlan() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
