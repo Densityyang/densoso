@@ -342,16 +342,22 @@ struct MealCaptureSheet: View {
     }
 
     private var selectedProviderSupportsVision: Bool {
-        IntelligenceRoutingPolicy().path(
+        guard IntelligenceRoutingPolicy().path(
             for: dependencies.intelligencePreferences.mode,
             capabilities: .current
-        ) == .cloudDeepSeek
+        ) == .cloudDeepSeek,
+        let provider = try? dependencies.providerRegistry.provider(for: .cloudDeepSeek) else {
+            return false
+        }
+        return provider.descriptor.capabilities.contains(.vision)
     }
 
     private var imageProviderMessage: String? {
         switch dependencies.intelligencePreferences.mode {
         case .cloudDeepSeek:
-            nil
+            selectedProviderSupportsVision
+                ? nil
+                : "当前配置的 DeepSeek 模型暂不支持图像输入。请更换为支持视觉的 DeepSeek 模型；照片不会自动改发给其他提供方。"
         case .cloudQwen:
             "当前 Qwen 模式暂未启用开放照片输入。请在设置中明确切换到 DeepSeek；不会自动切换提供方或上传照片。"
         case .localOnly:
