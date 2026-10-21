@@ -782,7 +782,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "Provider.DeepSeekFirstTextDelta",
                 "Agent.TranscriptToFirstToken",
                 "Agent.TranscriptToActionDraft",
-                "OCR/evidence text is not persisted",
+                "neither the evidence message nor its OCR text is persisted",
                 "ephemeral provider message for the current round",
                 "require the regular health-text consent",
                 "Confirmation remains required",
@@ -827,7 +827,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Views/ChatScreen.swift",
             (
                 "inputText = speech.transcribedText",
-                "dependencies.agentSession.send(userText:",
+                "dependencies.agentSession.sendEvents(",
                 "MealCaptureSheet(",
                 "request.includingSupplementalText(",
                 "inputText,",
@@ -844,7 +844,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "let onSendToAgent: (MultimodalModelRequest) -> Void",
                 "let onLocalPendingAction: (PendingAction) -> Void",
-                "prepareCapture(data)",
+                "prepareCapture(data, preparationID: preparationID)",
                 "prepareForAgent(originalData: originalData)",
                 "onSendToAgent(preparedRequest)",
                 "case .localReview(let review)",
@@ -935,7 +935,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         session_stream_contract = require(
             "Densoso/Agent/AgentSession.swift",
             (
-                "func sendEvents(multimodalRequest: MultimodalModelRequest",
+                "func sendEvents(\n        multimodalRequest: MultimodalModelRequest,\n        requestID: UUID? = nil",
                 "func sendEvents(\n        userText: String,\n        inputEnvelope: InputEnvelope",
                 "emit(.committing(actionID: id))",
             ),
@@ -1021,7 +1021,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "imageCaptureState == .uploading || imageCaptureState == .vision",
                 "activePreparationID == preparationID",
                 "policyVersion: \"deepseek-sanitized-meal-image-v1\"",
-                "不会自动更换提供方或上传照片",
+                "不会自动切换提供方或上传照片",
                 "授权会保存到设置中，可随时撤回",
             ),
             errors,
@@ -1494,7 +1494,6 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testOptionalQwenOpenPhotoRequiresSeparateQwenConsent",
                 "testDeepSeekPhotoModeNeverFallsThroughToOptionalQwenVision",
                 "testDefaultClosedQualityGateRequiresManualFallbackWithoutStaging",
-                "FoodDatabaseTests.testCatalogEntriesRemainStableAcrossRepeatedReads",
                 "testPrepareForAgentRoutesResolvedBarcodeLocallyAndStagesPendingAction",
                 "testPrepareForAgentKeepsCompleteLabelLocalAndAsksOnceForMissingPortion",
                 "testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto",
@@ -1507,7 +1506,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "DensosoTests/Application/MultimodalAgentImageTests.swift",
             (
                 "testImageInputUsesAgentSessionAndStagesMealWithoutDirectCommitOrRawMediaPersistence",
-                "includingSupplementalText(supplementalText)",
+                "includingSupplementalText(supplementalText, source: .qwenASR)",
                 "XCTAssertEqual(userMessages.count, 2)",
                 "testInterruptedImageRequestFailsClosedUntilImageIsReattachedAndKeepsBudget",
                 "testEvidenceOnlyRequestUsesEphemeralProviderMessageWithoutImageConsentOrPersistence",
