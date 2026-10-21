@@ -11,6 +11,11 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
     private let maximumAttempts = 8
     private var isProcessing = false
 
+    private struct OutboxCursor {
+        let createdAt: Date
+        let idempotencyKey: String
+    }
+
     init(healthStore: any HealthStoreClient, modelContainer: ModelContainer) {
         self.healthStore = healthStore
         self.modelContainer = modelContainer
