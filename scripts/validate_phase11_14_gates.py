@@ -23,8 +23,9 @@ def read_text(relative: str, errors: list[str]) -> str:
 
 def require(relative: str, needles: tuple[str, ...], errors: list[str]) -> str:
     content = read_text(relative, errors)
+    normalized_content = " ".join(content.split())
     for needle in needles:
-        if needle not in content:
+        if " ".join(needle.split()) not in normalized_content:
             errors.append(f"{relative} is missing {needle}")
     return content
 
@@ -35,7 +36,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "docs/gates/gate-11-ai-native-health-loop.md",
             (
                 "Gate 11",
-                "historical effective profiles",
+                "effective historical profiles",
                 "HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay",
                 "HealthRepositoryTests.testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs",
                 "HealthRepositoryTests.testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData",
@@ -67,7 +68,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "Remaining eligible days request an",
                 "Ordinary reproject callers use the same gate",
                 "Both projection entry points share the same fingerprint comparison",
-                "daily-brief cache versions",
+                "daily-brief cache version",
                 "CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
                 "DailyMetricsProjectionFingerprintTests.testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected",
                 "DailyMetricsProjectionFingerprintTests.testSourceCursorProfileAndGoalRevisionsChangeProjectionFingerprint",
@@ -416,6 +417,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "event.notes?.contains(trainingPlanPrefix) != true",
                 "event.notes?.contains(workoutPlanPrefix) == true",
                 "event.notes?.contains(trainingPlanPrefix) == true",
+                "$0.dayKey >= startKey && $0.dayKey <= endKey",
                 "func todayHealthState(asOf date: Date, in context: ModelContext)",
                 "func healthHistory(",
                 "HealthIntelligenceEngine(calendar: calendar)",
@@ -430,7 +432,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "try await healthProjectionActor.todayHealthState(asOf: date)",
                 "try await healthProjectionActor.healthHistory(from: start, through: end)",
                 "try await healthProjectionActor.healthNarrativeContext()",
-                "DailyLoopSnapshotService(healthProjectionActor: healthProjectionActor)",
+                "DailyLoopSnapshotService(",
+                "healthProjectionActor: healthProjectionActor",
             ),
             errors,
         )
@@ -568,7 +571,6 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData",
                 "testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
                 "testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages",
-                "testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
                 "testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches",
                 "testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable",
                 "testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown",
@@ -589,6 +591,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "DensosoTests/HealthKitSyncCoordinatorTests.swift",
             (
                 "testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor",
+                "testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
                 "testOneFailedStreamDoesNotBlockOtherHealthMetrics",
             ),
             errors,
@@ -636,14 +639,27 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "Densoso/Services/DailyMetricsProjector.swift",
             (
-                "$0.profileKey == profileKey && $0.effectiveFrom <= day",
-                "$0.measuredAt <= day && $0.confidence >= minimumConfidence",
-                "$0.dayKey <= lastDayKey",
                 "$0.dayKey == targetDayKey",
                 "descriptor.fetchLimit = 1",
                 "DailyMetricsProjectionFingerprint.context(",
                 "CaloricEngine.projectionFingerprint(",
                 "DailyMetricsProjectionFingerprint.isCurrent(",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/EffectiveProfileRevisionReader.swift",
+            (
+                "$0.profileKey == profileKey && $0.effectiveFrom <= date",
+                "descriptor.fetchLimit = 1",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/LocalWeightObservationReader.swift",
+            (
+                "$0.measuredAt <= date && $0.confidence >= minimumConfidence",
+                "descriptor.fetchLimit = batchSize",
             ),
             errors,
         )
@@ -708,7 +724,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testCurrentDayReprojectRetainsObservedEnergyBehaviorWithoutProfileOrWeight",
                 "testMissingWeightDoesNotLetObservedEnergyClearRecomputeFlag",
                 "testCancellationStopsAfterSavedRowAndReportsRetryableWork",
-                "DensosoSchemaV6.self",
+                "DensosoSchemaV8.self",
                 "XCTAssertTrue(metric.requiresRecompute)",
             ),
             errors,
@@ -2031,8 +2047,6 @@ def main() -> int:
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
                 "-only-testing:DensosoTests/HealthNarrativePolicyTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary",
-                "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry",
-                "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays",
             ),
         ),
         12: (

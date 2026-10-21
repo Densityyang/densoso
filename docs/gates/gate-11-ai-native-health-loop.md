@@ -81,7 +81,8 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `DailyHealthSampleSummaryTests`, `HealthStateTests`, `DailyLoopSnapshotTests`,
   `HealthNarrativeTests`, and `SharedErrorDescriptorTests` (the shared error
   code and safe HealthKit/Watch description contract). `DailyLoopSnapshotTests`
-  also pins all main-PR algorithm versions and the daily-brief cache version.
+  also pins all main-PR algorithm versions and the daily-brief cache version in
+  `DailyLoopSnapshotTests.testMainPRAlgorithmVersionsAreCentralizedAndInvalidateDailyBriefCache`.
 - iOS tests: `HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay`,
   `HealthRepositoryTests.testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs`,
   `HealthRepositoryTests.testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData`,
