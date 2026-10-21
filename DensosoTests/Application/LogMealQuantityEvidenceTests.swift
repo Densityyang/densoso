@@ -302,11 +302,13 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
     }
 
     private func toolResultContents(in requests: [ModelRequest]) -> [String] {
+        var seenToolCallIDs = Set<String>()
         return requests
             .flatMap(\.messages)
             .flatMap(\.content)
             .compactMap { (content: ModelContent) -> String? in
-                guard case .toolResult(_, let result) = content else { return nil }
+                guard case .toolResult(let callID, let result) = content,
+                      seenToolCallIDs.insert(callID).inserted else { return nil }
                 return result
             }
     }
