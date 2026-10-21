@@ -76,12 +76,7 @@ struct WorkoutPlanScreen: View {
                     case .time:
                         WorkoutDurationPicker(durationMinutes: $durationMinutes)
                     case .distance:
-                        Stepper(
-                            "\(Int(distanceMeters.rounded())) 米",
-                            value: $distanceMeters,
-                            in: 100...100_000,
-                            step: 100
-                        )
+                        WorkoutDistancePicker(distanceMeters: $distanceMeters)
                     }
                 }
 
