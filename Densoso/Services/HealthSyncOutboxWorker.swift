@@ -16,6 +16,11 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
         let idempotencyKey: String
     }
 
+    private struct PendingOutboxCursor {
+        let createdAt: Date
+        let id: UUID
+    }
+
     init(healthStore: any HealthStoreClient, modelContainer: ModelContainer) {
         self.healthStore = healthStore
         self.modelContainer = modelContainer
@@ -52,11 +57,15 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
             catch { modelContext.rollback(); return }
         }
         guard await healthStore.isAvailable() else { return }
+        var pendingCursor: PendingOutboxCursor?
         while true {
-            guard let candidates = try? pendingBatch(dueAt: now, in: modelContext) else { return }
+            guard let candidates = try? pendingBatch(after: pendingCursor, in: modelContext) else { return }
             guard !candidates.isEmpty else { break }
 
             for entry in candidates {
+                // Advance for every row, including future retries, so each bounded page is visited once.
+                pendingCursor = PendingOutboxCursor(createdAt: entry.createdAt, id: entry.id)
+                guard entry.nextAttemptAt == nil || entry.nextAttemptAt! <= now else { continue }
                 if let canonicalIdentifier = HealthRepository.canonicalSyncIdentifier(
                     operation: entry.operation,
                     recordID: entry.recordID
@@ -113,45 +122,32 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
     }
 
     private func pendingBatch(
-        dueAt date: Date,
+        after cursor: PendingOutboxCursor?,
         in modelContext: ModelContext
     ) throws -> [HealthSyncOutboxEntry] {
         let pendingState = "pending"
         let retryableState = "retryable"
         let sortBy = [
             SortDescriptor(\HealthSyncOutboxEntry.createdAt),
-            SortDescriptor(\HealthSyncOutboxEntry.idempotencyKey),
+            SortDescriptor(\HealthSyncOutboxEntry.id),
         ]
-        // Query nullable retry dates separately; SwiftData can mis-handle a combined OR predicate here.
-        let noRetryDatePredicate = #Predicate<HealthSyncOutboxEntry> { entry in
-            (entry.state == pendingState || entry.state == retryableState)
-                && entry.nextAttemptAt == nil
-        }
-        var noRetryDateDescriptor = FetchDescriptor<HealthSyncOutboxEntry>(
-            predicate: noRetryDatePredicate,
-            sortBy: sortBy
-        )
-        noRetryDateDescriptor.fetchLimit = Self.outboxBatchSize
-        let withoutRetryDate = try modelContext.fetch(noRetryDateDescriptor)
-
-        let dueRetryDatePredicate = #Predicate<HealthSyncOutboxEntry> { entry in
-            (entry.state == pendingState || entry.state == retryableState)
-                && entry.nextAttemptAt != nil
-                && entry.nextAttemptAt! <= date
-        }
-        var dueRetryDateDescriptor = FetchDescriptor<HealthSyncOutboxEntry>(
-            predicate: dueRetryDatePredicate,
-            sortBy: sortBy
-        )
-        dueRetryDateDescriptor.fetchLimit = Self.outboxBatchSize
-        let withDueRetryDate = try modelContext.fetch(dueRetryDateDescriptor)
-
-        return Array((withoutRetryDate + withDueRetryDate)
-            .sorted { lhs, rhs in
-                if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
-                return lhs.idempotencyKey < rhs.idempotencyKey
+        let predicate: Predicate<HealthSyncOutboxEntry>
+        if let cursor {
+            let cursorCreatedAt = cursor.createdAt
+            let cursorID = cursor.id
+            predicate = #Predicate<HealthSyncOutboxEntry> { entry in
+                (entry.state == pendingState || entry.state == retryableState)
+                    && (entry.createdAt > cursorCreatedAt
+                        || (entry.createdAt == cursorCreatedAt && entry.id > cursorID))
             }
-            .prefix(Self.outboxBatchSize))
+        } else {
+            predicate = #Predicate<HealthSyncOutboxEntry> { entry in
+                entry.state == pendingState || entry.state == retryableState
+            }
+        }
+        var descriptor = FetchDescriptor<HealthSyncOutboxEntry>(predicate: predicate, sortBy: sortBy)
+        descriptor.fetchLimit = Self.outboxBatchSize
+        return try modelContext.fetch(descriptor)
     }
 
     private func writeCommand(for entry: HealthSyncOutboxEntry, in modelContext: ModelContext) throws -> HealthWriteCommand {
