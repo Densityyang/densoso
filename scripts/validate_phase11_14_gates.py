@@ -1858,7 +1858,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "$0.notes?.contains(workoutPlanPrefix) == true",
             "$0.notes?.contains(trainingPlanPrefix) == true",
-            "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
+            "FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)",
         ),
         errors,
     )
@@ -1889,7 +1889,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize",
             "$0.notes?.contains(singlePlanPrefix) == true",
             "$0.notes?.contains(multiPlanPrefix) == true",
-            "FetchDescriptor<ScheduleEvent>(predicate: predicate)",
+            "FetchDescriptor<ScheduleEvent>(predicate: predicate, sortBy: sortDescriptors)",
             "func confirmedTrainingPlansPage(offset: Int) throws -> ConfirmedPlanPage<ConfirmedTrainingPlanEntry>",
         ),
         errors,
