@@ -341,7 +341,18 @@ struct ChatScreen: View {
                 Button {
                     Task { await toggleVoice() }
                 } label: {
-                    Label(voiceUIState.buttonTitle, systemImage: voiceUIState.buttonSystemImage)
+                    Label {
+                        Text(voiceUIState.buttonTitle)
+                    } icon: {
+                        if voiceUIState == .listening {
+                            VoiceActivityOrb(
+                                symbol: voiceUIState.buttonSystemImage,
+                                isActive: true
+                            )
+                        } else {
+                            Image(systemName: voiceUIState.buttonSystemImage)
+                        }
+                    }
                     .fontWeight(.semibold)
                     .padding(.horizontal, 8)
                 }

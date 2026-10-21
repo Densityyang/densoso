@@ -305,9 +305,9 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                 try injectFailure(.afterRecord)
 
                 if let affectedDate {
+                    try reprojectDailyHealthSnapshot(on: affectedDate)
                     try reprojectDaily(on: affectedDate)
                     try reprojectWeek(containing: affectedDate)
-                    try reprojectDailyHealthSnapshot(on: affectedDate)
                 }
                 try injectFailure(.afterProjection)
 

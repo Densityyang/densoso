@@ -138,6 +138,12 @@ meal-image consent is saved and the user presses send; AgentSession checks the
 same consent again before the upload event. Image state events carry no image or
 OCR content, and cancellation clears pending photo data.
 
+The primary voice button uses a small native SwiftUI ambient gradient while
+speech capture is actively listening. It follows the motion style of Rare UI's
+[Fluid Orb](https://www.rareui.com/components/fluidorb) as a design reference,
+pauses under Reduce Motion, and retains the button's visible and accessible
+text label.
+
 Cloud DeepSeek is the default mode, and selected cloud providers are constructed
 directly without silent fallback to another provider. Local Only keeps model,
 speech and meal-image work on device: it suppresses OpenFoodFacts barcode lookup,

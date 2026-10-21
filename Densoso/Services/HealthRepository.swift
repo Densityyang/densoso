@@ -737,24 +737,23 @@ final class HealthRepository: HealthSyncRepository {
 
     private func markHealthKitSampleIndexesForRequery(sampleIDs: Set<UUID>, stream: String) throws {
         guard !sampleIDs.isEmpty else { return }
-        let predicate = #Predicate<HealthKitSampleIndexRecord> { $0.stream == stream }
-        let sortBy = [SortDescriptor(\HealthKitSampleIndexRecord.sampleID)]
         var offset = 0
-        while true {
-            var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate, sortBy: sortBy)
-            descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize
-            descriptor.fetchOffset = offset
-            let records = try modelContext.fetch(descriptor)
-            guard !records.isEmpty else { return }
-            // Keep the query and ordering fields unchanged while marking a deletion batch.
-            for record in records where sampleIDs.contains(record.sampleID) {
+        let orderedIDs = sampleIDs.sorted { $0.uuidString < $1.uuidString }
+        while offset < orderedIDs.count {
+            let batchEnd = min(offset + Self.healthKitSampleIndexPredicateBatchSize, orderedIDs.count)
+            let batchIDs = Array(orderedIDs[offset..<batchEnd])
+            let predicate = #Predicate<HealthKitSampleIndexRecord> {
+                $0.stream == stream && batchIDs.contains($0.sampleID)
+            }
+            let records = try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate))
+            // Keep each UUID predicate bounded and mutate only the exact deletion targets.
+            for record in records {
                 let pendingDayKeys = Self.pendingDayKeys(for: record)
                     .union(Self.projectionDayKeys(for: record, stream: stream))
                 record.isDeleted = true
                 Self.setPendingDayKeys(pendingDayKeys, on: record)
             }
-            if records.count < Self.healthKitSampleIndexBatchSize { return }
-            offset += records.count
+            offset = batchEnd
         }
     }
 
@@ -780,23 +779,21 @@ final class HealthRepository: HealthSyncRepository {
 
     private func deleteHealthKitSampleIndexes(sampleIDs: Set<UUID>, stream: String) throws {
         guard !sampleIDs.isEmpty else { return }
-        let predicate = #Predicate<HealthKitSampleIndexRecord> {
-            $0.stream == stream && $0.isDeleted
-        }
-        let sortBy = [SortDescriptor(\HealthKitSampleIndexRecord.sampleID)]
+        let orderedIDs = sampleIDs.sorted { $0.uuidString < $1.uuidString }
         var offset = 0
         var recordsToDelete: [HealthKitSampleIndexRecord] = []
-        // Collect matches before deleting so the offset-paged result set stays stable.
-        while true {
-            var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate, sortBy: sortBy)
-            descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize
-            descriptor.fetchOffset = offset
-            let records = try modelContext.fetch(descriptor)
-            guard !records.isEmpty else { break }
-            recordsToDelete.append(contentsOf: records.filter { sampleIDs.contains($0.sampleID) })
-            if records.count < Self.healthKitSampleIndexBatchSize { break }
-            offset += records.count
+        while offset < orderedIDs.count {
+            let batchEnd = min(offset + Self.healthKitSampleIndexPredicateBatchSize, orderedIDs.count)
+            let batchIDs = Array(orderedIDs[offset..<batchEnd])
+            let predicate = #Predicate<HealthKitSampleIndexRecord> {
+                $0.stream == stream && $0.isDeleted && batchIDs.contains($0.sampleID)
+            }
+            recordsToDelete.append(contentsOf: try modelContext.fetch(
+                FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate)
+            ))
+            offset = batchEnd
         }
+        // Defer mutations until after each bounded target query has finished.
         for record in recordsToDelete { modelContext.delete(record) }
     }
 
