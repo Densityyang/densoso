@@ -185,7 +185,7 @@ enum DailyCheckInSelfReportField: Equatable {
     }
 }
 
-enum DailyCheckInSelfReportError: LocalizedError, Equatable {
+enum DailyCheckInSelfReportError: Equatable, SharedErrorDescribing {
     case emptyReport
     case reportTooLong
     case otherPerson
@@ -194,6 +194,15 @@ enum DailyCheckInSelfReportError: LocalizedError, Equatable {
     case modelValueNotSupported(DailyCheckInSelfReportField)
     case noteNotReported
     case dateNotSupported
+
+    var sharedErrorDescriptor: SharedErrorDescriptor {
+        SharedErrorDescriptor(
+            code: .toolArgumentsInvalid,
+            userMessage: errorDescription ?? "每日状态自述无法核对，请先向用户澄清。",
+            subsystem: .agent,
+            reason: .invalidToolArguments
+        )
+    }
 
     var errorDescription: String? {
         switch self {

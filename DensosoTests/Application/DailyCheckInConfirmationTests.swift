@@ -280,7 +280,12 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             }
             .first
         let errorText = try XCTUnwrap(toolResult)
-        XCTAssertTrue(errorText.contains("压力"))
+        let toolError = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(errorText.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(toolError["error"] as? String, SharedErrorCode.toolArgumentsInvalid.rawValue)
+        XCTAssertTrue((toolError["message"] as? String)?.contains("压力") == true)
+        XCTAssertEqual(toolError["saved"] as? Bool, false)
 
         let explicitProvider = ScriptedTextProvider(scripts: [
             [
