@@ -261,7 +261,7 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             ],
             [.textDelta("请补充今天的压力感受，我再准备草稿。"), .completed(.completed)],
         ])
-        let inferredContainer = try makeV5Container()
+        let inferredContainer = try makeCurrentContainer()
         let inferredSession = makeAgentSession(provider: inferredProvider, container: inferredContainer)
         _ = try await inferredSession.send(
             userText: "请记录我的每日状态：今天感觉特别累，昨晚睡眠不好。"
@@ -294,7 +294,7 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             ],
             [.textDelta("每日状态草稿已准备，请确认。"), .completed(.completed)],
         ])
-        let explicitContainer = try makeV5Container()
+        let explicitContainer = try makeCurrentContainer()
         let explicitSession = makeAgentSession(provider: explicitProvider, container: explicitContainer)
         _ = try await explicitSession.send(
             userText: "请记录我的每日状态：今天感觉特别累，压力很大，昨晚睡眠不好，备注昨晚醒了几次。"
@@ -335,8 +335,8 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ConversationRecord>()), 1)
     }
 
-    private func makeV5Container() throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
+    private func makeCurrentContainer() throws -> ModelContainer {
+        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
         return try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
