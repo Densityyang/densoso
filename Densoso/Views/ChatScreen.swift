@@ -469,8 +469,12 @@ struct ChatScreen: View {
 
     private func focusComposer() {
         showTextEditor = true
-        composerFocused = true
         appState.shouldFocusComposer = false
+        Task { @MainActor in
+            await Task.yield()
+            guard showTextEditor else { return }
+            composerFocused = true
+        }
     }
 
     private func transitionAgentUI(using event: AgentEvent) {
