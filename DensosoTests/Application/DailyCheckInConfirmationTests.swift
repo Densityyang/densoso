@@ -335,6 +335,14 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<ConversationRecord>()), 1)
     }
 
+    private func makeV5Container() throws -> ModelContainer {
+        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
+        return try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+    }
+
     private func makeCurrentContainer() throws -> ModelContainer {
         let schema = Schema(versionedSchema: DensosoSchemaV8.self)
         return try ModelContainer(
