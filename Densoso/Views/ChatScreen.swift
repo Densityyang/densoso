@@ -197,7 +197,11 @@ struct ChatScreen: View {
                 }
                 .padding()
             }
-            .onChange(of: messages.count) { _, _ in
+            .onChange(of: messages.count) { previousCount, _ in
+                // Keep a fresh conversation at the top so its daily-loop header
+                // and snapshot are visible; restored history and later turns
+                // still follow the newest message.
+                guard previousCount > 0 || didHydratePersistedMessages else { return }
                 scrollToBottom(proxy: proxy)
             }
             .onChange(of: appState.shouldScrollToDailyLoop) { _, shouldScroll in
