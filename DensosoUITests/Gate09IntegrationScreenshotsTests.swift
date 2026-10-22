@@ -1,5 +1,6 @@
 import XCTest
 
+@MainActor
 final class Gate09IntegrationScreenshotsTests: XCTestCase {
     func testTodayQuickActionPrefillsEditableComposerWithoutSubmitting() throws {
         let launchFixture = try Gate01FixtureLoader.load(
@@ -11,20 +12,26 @@ final class Gate09IntegrationScreenshotsTests: XCTestCase {
         app.launchEnvironment = launchFixture.environment
         app.launch()
 
-        XCTAssertTrue(app.tabBars.buttons["今天"].waitForExistence(timeout: 15))
+        let todayTabExists = app.tabBars.buttons["今天"].waitForExistence(timeout: 15)
+        XCTAssertTrue(todayTabExists)
         let conversation = app.scrollViews["today-conversation-scroll"]
-        XCTAssertTrue(conversation.waitForExistence(timeout: 10))
+        let conversationExists = conversation.waitForExistence(timeout: 10)
+        XCTAssertTrue(conversationExists)
         let weightAction = app.buttons["记录体重"]
         for _ in 0..<3 where !weightAction.exists {
             conversation.swipeUp()
         }
-        XCTAssertTrue(weightAction.waitForExistence(timeout: 10))
+        let weightActionExists = weightAction.waitForExistence(timeout: 10)
+        XCTAssertTrue(weightActionExists)
         weightAction.tap()
 
-        let composer = app.descendants(matching: .any)["today-composer"]
-        XCTAssertTrue(composer.waitForExistence(timeout: 5))
-        XCTAssertEqual(composer.value as? String, "我想记录体重")
-        XCTAssertFalse(app.staticTexts["正在整理草稿"].exists)
+        let composer = app.textFields["today-composer"]
+        let composerExists = composer.waitForExistence(timeout: 5)
+        XCTAssertTrue(composerExists)
+        let composerValue = composer.value as? String
+        XCTAssertEqual(composerValue, "我想记录体重")
+        let draftStatusExists = app.staticTexts["正在整理草稿"].exists
+        XCTAssertFalse(draftStatusExists)
     }
 
     func testVoiceBarPrioritizesVoiceAndOpensEditableTextEntry() throws {
@@ -37,21 +44,30 @@ final class Gate09IntegrationScreenshotsTests: XCTestCase {
         app.launchEnvironment = launchFixture.environment
         app.launch()
 
-        XCTAssertTrue(app.tabBars.buttons["今天"].waitForExistence(timeout: 15))
+        let todayTabExists = app.tabBars.buttons["今天"].waitForExistence(timeout: 15)
+        XCTAssertTrue(todayTabExists)
         let voiceButton = app.buttons["today-voice-primary"]
         let photoButton = app.buttons["today-photo-secondary"]
         let textEntryButton = app.buttons["today-text-entry"]
-        XCTAssertTrue(voiceButton.waitForExistence(timeout: 10))
-        XCTAssertEqual(voiceButton.label, "开始说话")
-        XCTAssertTrue(photoButton.exists)
-        XCTAssertTrue(textEntryButton.exists)
-        XCTAssertEqual(textEntryButton.label, "编辑文字")
+        let voiceButtonExists = voiceButton.waitForExistence(timeout: 10)
+        XCTAssertTrue(voiceButtonExists)
+        let voiceButtonLabel = voiceButton.label
+        XCTAssertEqual(voiceButtonLabel, "开始说话")
+        let photoButtonExists = photoButton.exists
+        XCTAssertTrue(photoButtonExists)
+        let textEntryButtonExists = textEntryButton.exists
+        XCTAssertTrue(textEntryButtonExists)
+        let textEntryButtonLabel = textEntryButton.label
+        XCTAssertEqual(textEntryButtonLabel, "编辑文字")
 
         textEntryButton.tap()
-        let composer = app.descendants(matching: .any)["today-composer"]
-        XCTAssertTrue(composer.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["today-send"].exists)
-        XCTAssertFalse(app.staticTexts["正在整理草稿"].exists)
+        let composer = app.textFields["today-composer"]
+        let composerExists = composer.waitForExistence(timeout: 5)
+        XCTAssertTrue(composerExists)
+        let sendButtonExists = app.buttons["today-send"].exists
+        XCTAssertTrue(sendButtonExists)
+        let draftStatusExists = app.staticTexts["正在整理草稿"].exists
+        XCTAssertFalse(draftStatusExists)
     }
 
     func testAllPrimaryTabsCapturePortraitScreensWithAccessibilityLabels() throws {
@@ -69,25 +85,27 @@ final class Gate09IntegrationScreenshotsTests: XCTestCase {
         app.launchEnvironment = launchFixture.environment
         app.launch()
 
-        XCTAssertTrue(app.tabBars.buttons["今天"].waitForExistence(timeout: 15))
-        XCTAssertTrue(
-            app.descendants(matching: .any)["daily-loop-snapshot"].waitForExistence(timeout: 10),
-            "Today should show the composed DailyLoop snapshot"
-        )
-        XCTAssertTrue(app.descendants(matching: .any)["daily-loop-phase"].waitForExistence(timeout: 5))
+        let todayTabExists = app.tabBars.buttons["今天"].waitForExistence(timeout: 15)
+        XCTAssertTrue(todayTabExists)
+        let dailyLoopSnapshotExists = app.descendants(matching: .any)["daily-loop-snapshot"]
+            .waitForExistence(timeout: 10)
+        XCTAssertTrue(dailyLoopSnapshotExists, "Today should show the composed DailyLoop snapshot")
+        let dailyLoopPhaseExists = app.descendants(matching: .any)["daily-loop-phase"]
+            .waitForExistence(timeout: 5)
+        XCTAssertTrue(dailyLoopPhaseExists)
         let appFrame = app.windows.firstMatch.frame
         XCTAssertGreaterThan(appFrame.width, 0)
         XCTAssertGreaterThan(appFrame.height, appFrame.width)
 
         for screen in screenFixtures.screens {
             let tab = app.tabBars.buttons[screen.tab]
-            XCTAssertTrue(tab.exists, "Missing accessible tab label: \(screen.tab)")
-            XCTAssertEqual(tab.label, screen.tab)
+            let tabExists = tab.exists
+            XCTAssertTrue(tabExists, "Missing accessible tab label: \(screen.tab)")
+            let tabLabel = tab.label
+            XCTAssertEqual(tabLabel, screen.tab)
             tab.tap()
-            XCTAssertTrue(
-                app.staticTexts[screen.marker].waitForExistence(timeout: 10),
-                "Missing marker for \(screen.id): \(screen.marker)"
-            )
+            let markerExists = app.staticTexts[screen.marker].waitForExistence(timeout: 10)
+            XCTAssertTrue(markerExists, "Missing marker for \(screen.id): \(screen.marker)")
             keepScreenshot(named: "gate-09-\(screen.id)-portrait")
         }
     }
@@ -112,12 +130,17 @@ final class Gate09IntegrationScreenshotsTests: XCTestCase {
         app.launchEnvironment = launchFixture.environment
         app.launch()
 
-        XCTAssertTrue(app.tabBars.buttons["今天"].waitForExistence(timeout: 15))
+        let todayTabExists = app.tabBars.buttons["今天"].waitForExistence(timeout: 15)
+        XCTAssertTrue(todayTabExists)
         for screen in screenFixtures.screens {
             let tab = app.tabBars.buttons[screen.tab]
-            XCTAssertTrue(tab.exists, "Missing accessible tab in large-text/dark mode: \(screen.tab)")
-            tab.tap()
-            XCTAssertTrue(app.staticTexts[screen.marker].waitForExistence(timeout: 10))
+            let tabExists = tab.exists
+            XCTAssertTrue(tabExists, "Missing accessible tab in large-text/dark mode: \(screen.tab)")
+            // The app launches on Today. Avoid a no-op tap on the selected tab, which
+            // can leave XCUITest waiting for an idle notification during accessibility mode.
+            if screen.id != "today" { tab.tap() }
+            let markerExists = app.staticTexts[screen.marker].waitForExistence(timeout: 10)
+            XCTAssertTrue(markerExists, "Missing marker in large-text/dark mode for \(screen.id): \(screen.marker)")
             keepScreenshot(named: "gate-09-\(screen.id)-dark-large-text")
         }
     }
