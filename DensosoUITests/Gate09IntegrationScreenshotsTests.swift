@@ -136,9 +136,18 @@ final class Gate09IntegrationScreenshotsTests: XCTestCase {
             let tab = app.tabBars.buttons[screen.tab]
             let tabExists = tab.exists
             XCTAssertTrue(tabExists, "Missing accessible tab in large-text/dark mode: \(screen.tab)")
-            // The app launches on Today. Avoid a no-op tap on the selected tab, which
-            // can leave XCUITest waiting for an idle notification during accessibility mode.
-            if screen.id != "today" { tab.tap() }
+            if screen.id == "today" {
+                // ChatScreen scrolls to the latest message after launch; bring its
+                // header back into the accessibility hierarchy before checking it.
+                let conversation = app.scrollViews["today-conversation-scroll"]
+                let conversationExists = conversation.waitForExistence(timeout: 10)
+                XCTAssertTrue(conversationExists, "Today conversation should remain reachable")
+                for _ in 0..<5 where !app.staticTexts[screen.marker].exists {
+                    conversation.swipeDown()
+                }
+            } else {
+                tab.tap()
+            }
             let markerExists = app.staticTexts[screen.marker].waitForExistence(timeout: 10)
             XCTAssertTrue(markerExists, "Missing marker in large-text/dark mode for \(screen.id): \(screen.marker)")
             keepScreenshot(named: "gate-09-\(screen.id)-dark-large-text")
