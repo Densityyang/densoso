@@ -47,7 +47,9 @@ HealthIntelligenceReadModel reads intake, deficit and nutrient values through
 the shared DailyMetrics read model; it continues to page weight and workout
 history inside its bounded date window.
 The `Health.StateRefresh` Instruments interval covers the explicit local
-read/compute/cache operation and contains no provider/network request.
+read/compute/cache operation and contains no provider/network request. A focused
+42-day persistent-store fixture reports simulator p50/p95 for that operation;
+the result does not represent a physical-device guarantee.
 Daily-loop plan loading pages stored plan events and retains only active sessions
 that can appear in today's or tomorrow's snapshot.
 Tomorrow-plan inference first checks for any event, then pages confirmed plan
@@ -137,6 +139,7 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `HealthProjectionActorTests.testActorHistoryRetainsExistingRangeValidation`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents`,
   `HealthProjectionActorTests.testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions`,
+  `HealthProjectionActorTests.testStateRefreshReportsP50P95ForFortyTwoDayLocalDataWindow`,
   `DailyLoopBackgroundSchedulerTests.testExpirationAndCompletionAreIdempotentAndLateExpirationDoesNotCancelNextWork`,
   `HistoricalMetricsRecomputeServiceTests.testRecomputesOnlyExistingEligiblePendingMetricsWithinBatch`,
   `HistoricalMetricsRecomputeServiceTests.testMissingDOBDoesNotLetObservedEnergyClearRecomputeFlag`,

@@ -89,6 +89,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
                 "HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches",
                 "HealthProjectionActorTests",
+                "HealthProjectionActorTests.testStateRefreshReportsP50P95ForFortyTwoDayLocalDataWindow",
                 "DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState",
                 "DailyLoopSnapshotCompositionTests.testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource",
                 "DailyLoopSnapshotCompositionTests.testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint",

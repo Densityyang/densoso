@@ -1,4 +1,5 @@
 import DensosoDomain
+import Dispatch
 import Foundation
 import SwiftData
 import XCTest
@@ -6,6 +7,90 @@ import XCTest
 
 @MainActor
 final class HealthProjectionActorTests: XCTestCase {
+    func testStateRefreshReportsP50P95ForFortyTwoDayLocalDataWindow() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let reference = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 23, hour: 12)))
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("densoso-health-refresh-perf-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let storeURL = directory.appendingPathComponent("default.store")
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let configuration = ModelConfiguration("HealthStatePerformance", schema: schema, url: storeURL)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let context = ModelContext(container)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+
+        for offset in -41...0 {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: reference)))
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                activeEnergyKcal: 480 + Double(offset + 41),
+                restingEnergyKcal: 1_400,
+                stepCount: 5_000 + Double((offset + 41) * 37),
+                exerciseMinutes: 25,
+                healthReadStates: [
+                    HealthMetricID.activeEnergy.rawValue: .available,
+                    HealthMetricID.restingEnergy.rawValue: .available,
+                    HealthMetricID.stepCount.rawValue: .available,
+                    HealthMetricID.exerciseMinutes.rawValue: .available,
+                ],
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: dayKey(day, calendar: calendar),
+                timezoneID: calendar.timeZone.identifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "health-refresh-perf-\(offset)",
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            ))
+            context.insert(DailyMetrics(
+                date: day,
+                totalExpenditureKcal: 1_880,
+                mealCount: 0,
+                energyQuality: "observed",
+                projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+                sourceFingerprint: "health-refresh-perf-metrics-\(offset)"
+            ))
+        }
+        try context.save()
+
+        let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
+        let warmupCount = 3
+        let sampleCount = 20
+        for _ in 0..<warmupCount {
+            let brief = try await service.refresh(asOf: reference)
+            XCTAssertNotNil(brief)
+        }
+
+        var durationsNanoseconds: [UInt64] = []
+        durationsNanoseconds.reserveCapacity(sampleCount)
+        for _ in 0..<sampleCount {
+            let startedAt = DispatchTime.now().uptimeNanoseconds
+            let brief = try await service.refresh(asOf: reference)
+            durationsNanoseconds.append(DispatchTime.now().uptimeNanoseconds - startedAt)
+            XCTAssertNotNil(brief)
+        }
+
+        let sortedDurations = durationsNanoseconds.sorted()
+        let p50 = sortedDurations[(sampleCount - 1) * 50 / 100]
+        let p95 = sortedDurations[(sampleCount * 95 + 99) / 100 - 1]
+        let environment = ProcessInfo.processInfo.environment
+        print(
+            "DENSOSO_PERF scenario=health_state_refresh "
+                + "device=\(environment["SIMULATOR_DEVICE_NAME"] ?? "iPhone 17 Pro (Gate 11 destination)") "
+                + "model=\(environment["SIMULATOR_MODEL_IDENTIFIER"] ?? "iPhone 17 Pro destination") "
+                + "os=\(ProcessInfo.processInfo.operatingSystemVersionString) "
+                + "dailyMetrics=42 snapshots=42 warmups=\(warmupCount) samples=\(sampleCount) "
+                + "p50_ms=\(Double(p50) / 1_000_000) p95_ms=\(Double(p95) / 1_000_000)"
+        )
+        XCTAssertLessThan(p95, 1_000_000_000, "42-day local health-state refresh p95 exceeded 1 second")
+    }
+
     func testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
