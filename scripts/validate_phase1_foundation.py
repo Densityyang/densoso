@@ -134,24 +134,42 @@ def main() -> int:
         "foundation:",
         "Packages/DensosoDomain",
         "validate_phase1_foundation.py",
+        "Generate Xcode project",
         "Build with iOS 18 deployment target",
         "IPHONEOS_DEPLOYMENT_TARGET=18.0",
+        "Record Gate 1 execution status",
+        "gate01-execution-summary.json",
         "Test units on iOS 26 Simulator",
+        "id: unit_tests",
         "-only-testing:DensosoTests",
         "Test UI fixtures and capture screenshots",
+        "id: ui_tests",
         "-only-testing:DensosoUITests",
         "xcresulttool export attachments",
         'test "$SCREENSHOT_COUNT" -ge 5',
         "-scheme DensosoWatch",
+        "id: watch_build",
         "WATCHOS_DEPLOYMENT_TARGET=11.0",
         "UILaunchStoryboardName",
         "LaunchScreen.storyboardc",
         "Gate01UnitTests.xcresult",
         "Gate01UITests.xcresult",
         "gate-01-foundation-results",
+        "alarm shift; exec @ARGV' 60 xcrun simctl list devices available",
+        "alarm shift; exec @ARGV' 60 xcrun simctl boot",
+        "alarm shift; exec @ARGV' 180 xcrun simctl bootstatus",
+        "if: ${{ always() && steps.prepare_simulator.outcome == 'success' && steps.set_paths.outcome == 'success' }}",
     ):
         if expected not in workflow_text:
             errors.append(f"foundation workflow is missing {expected}")
+    simulator_setup_count = workflow_text.count("xcrun simctl bootstatus")
+    bounded_simulator_setup_count = workflow_text.count("SIMULATOR_LIST=")
+    if simulator_setup_count != bounded_simulator_setup_count:
+        errors.append("every iOS Simulator setup must bound its simulator-list lookup")
+    if workflow_text.count("alarm shift; exec @ARGV' 60 xcrun simctl boot ") != simulator_setup_count:
+        errors.append("every iOS Simulator boot request must have a timeout")
+    if workflow_text.count("alarm shift; exec @ARGV' 180 xcrun simctl bootstatus ") != simulator_setup_count:
+        errors.append("every iOS Simulator boot-status wait must have a timeout")
 
     if errors:
         for error in errors:

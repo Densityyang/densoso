@@ -446,12 +446,12 @@ def main() -> int:
         "portionReferences": portion_count,
         "providerFixtures": len(fixture_paths),
         "liveNetworkCalls": 0,
-        "fieldMeasurementClaimed": False,
+        "fieldMeasurementClaimed": (manifest or {}).get("fieldMeasurementClaimed"),
         "fieldBenchmark": (manifest or {}).get(
             "fieldBenchmark",
             {"status": "BLOCKED", "reason": "MISSING_EVIDENCE"},
         ),
-        "protectedOCRRead": False,
+        "protectedOCRSourceUsed": (manifest or {}).get("protectedOCRSourceUsed"),
     }
     if args.report:
         Path(args.report).write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")

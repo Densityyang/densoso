@@ -34,13 +34,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set Gate 1 paths
+        id: set_paths
         run: |
           echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoDerivedData" >> "$GITHUB_ENV"
           echo "UNIT_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate01UnitTests.xcresult" >> "$GITHUB_ENV"
           echo "UI_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate01UITests.xcresult" >> "$GITHUB_ENV"
 
       - name: Validate Python scripts
+        id: validate_python
+        if: always()
         run: |
+          set -o pipefail
           python3 -m py_compile \
             scripts/evaluate_voice_transcripts.py \
             scripts/generate_voice_goldens.py \
@@ -59,32 +63,58 @@ jobs:
             scripts/validate_phase9_integration.py \
             scripts/validate_phase10_final_acceptance.py \
             scripts/validate_phase11_14_gates.py \
-            scripts/validate_voice_goldens.py
+            scripts/validate_voice_goldens.py 2>&1 | tee gate01-python-validation.log
 
       - name: Validate bundled food database
-        run: python3 scripts/validate_food_db.py
+        id: validate_food_db
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_food_db.py 2>&1 | tee gate01-food-db.log
 
       - name: Validate voice routing goldens
-        run: python3 scripts/validate_voice_goldens.py --input evals/voice-zh-CN.jsonl
+        id: validate_voice_goldens
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_voice_goldens.py --input evals/voice-zh-CN.jsonl 2>&1 | tee gate01-voice-goldens.log
 
       - name: Validate Gate 0 UI structure
-        run: python3 scripts/validate_gate0_ui.py
+        id: validate_gate0_ui
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_gate0_ui.py 2>&1 | tee gate01-ui-structure.log
 
       - name: Validate Phase 1 static contracts
-        run: python3 scripts/validate_phase1_foundation.py
+        id: validate_phase1
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_phase1_foundation.py 2>&1 | tee gate01-phase1-contracts.log
 
       - name: Test pure DensosoDomain package
+        id: domain_tests
+        if: always()
         run: |
           set -o pipefail
           swift test --package-path Packages/DensosoDomain 2>&1 | tee gate01-domain.log
 
       - name: Install XcodeGen
+        id: install_xcodegen
+        if: always()
         run: brew install xcodegen
 
+      - name: Generate Xcode project
+        id: generate_project
+        if: ${{ always() && steps.install_xcodegen.outcome == 'success' }}
+        run: xcodegen generate
+
       - name: Verify deterministic XcodeGen output
+        id: xcodegen_determinism
+        if: ${{ always() && steps.generate_project.outcome == 'success' }}
         run: |
           set -euo pipefail
-          xcodegen generate
           cp -R Densoso.xcodeproj "$RUNNER_TEMP/Densoso.first.xcodeproj"
           rm -rf Densoso.xcodeproj
           xcodegen generate
@@ -92,16 +122,21 @@ jobs:
             | tee gate01-xcodegen-determinism.log
 
       - name: Prepare iOS 26 Simulator
+        id: prepare_simulator
+        if: ${{ always() && steps.generate_project.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |
           set -euo pipefail
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
-          xcrun simctl list devices available
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available
 
       - name: Build with iOS 18 deployment target
+        id: ios18_build
+        if: ${{ always() && steps.generate_project.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |
           set -o pipefail
           perl -e 'alarm shift; exec @ARGV' 720 xcodebuild -project Densoso.xcodeproj \
@@ -113,6 +148,8 @@ jobs:
             clean build 2>&1 | tee gate01-ios18-build.log
 
       - name: Test units on iOS 26 Simulator
+        id: unit_tests
+        if: ${{ always() && steps.prepare_simulator.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |
           set -o pipefail
           rm -rf "$UNIT_RESULT_BUNDLE"
@@ -128,6 +165,8 @@ jobs:
             test 2>&1 | tee gate01-unit-tests.log
 
       - name: Test UI fixtures and capture screenshots
+        id: ui_tests
+        if: ${{ always() && steps.prepare_simulator.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |
           set -o pipefail
           rm -rf "$UI_RESULT_BUNDLE"
@@ -142,6 +181,8 @@ jobs:
             test 2>&1 | tee gate01-ui-tests.log
 
       - name: Export UI screenshot attachments
+        id: screenshot_export
+        if: ${{ always() && steps.ui_tests.outcome != 'skipped' }}
         run: |
           set -euo pipefail
           rm -rf Gate01Screenshots
@@ -154,6 +195,8 @@ jobs:
           echo "Exported $SCREENSHOT_COUNT Gate 1 screenshots."
 
       - name: Build Watch app and extension
+        id: watch_build
+        if: ${{ always() && steps.generate_project.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |
           set -o pipefail
           perl -e 'alarm shift; exec @ARGV' 720 xcodebuild -project Densoso.xcodeproj \
@@ -165,12 +208,112 @@ jobs:
             build 2>&1 | tee gate01-watch-build.log
 
       - name: Validate built launch screen
+        id: launch_screen
+        if: ${{ always() && steps.ios18_build.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |
           set -euo pipefail
           APP_BUNDLE="$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/Densoso.app"
           test -d "$APP_BUNDLE"
           test "$(/usr/libexec/PlistBuddy -c 'Print :UILaunchStoryboardName' "$APP_BUNDLE/Info.plist")" = "LaunchScreen"
           test -d "$APP_BUNDLE/LaunchScreen.storyboardc"
+
+      - name: Record Gate 1 execution status
+        if: always()
+        env:
+          PATH_SETUP_OUTCOME: ${{ steps.set_paths.outcome }}
+          PYTHON_VALIDATION_OUTCOME: ${{ steps.validate_python.outcome }}
+          FOOD_DB_VALIDATION_OUTCOME: ${{ steps.validate_food_db.outcome }}
+          VOICE_GOLDENS_OUTCOME: ${{ steps.validate_voice_goldens.outcome }}
+          GATE0_UI_OUTCOME: ${{ steps.validate_gate0_ui.outcome }}
+          PHASE1_CONTRACTS_OUTCOME: ${{ steps.validate_phase1.outcome }}
+          DOMAIN_TESTS_OUTCOME: ${{ steps.domain_tests.outcome }}
+          XCODEGEN_INSTALL_OUTCOME: ${{ steps.install_xcodegen.outcome }}
+          PROJECT_GENERATION_OUTCOME: ${{ steps.generate_project.outcome }}
+          XCODEGEN_DETERMINISM_OUTCOME: ${{ steps.xcodegen_determinism.outcome }}
+          SIMULATOR_SETUP_OUTCOME: ${{ steps.prepare_simulator.outcome }}
+          IOS18_BUILD_OUTCOME: ${{ steps.ios18_build.outcome }}
+          UNIT_TESTS_OUTCOME: ${{ steps.unit_tests.outcome }}
+          UI_TESTS_OUTCOME: ${{ steps.ui_tests.outcome }}
+          SCREENSHOT_EXPORT_OUTCOME: ${{ steps.screenshot_export.outcome }}
+          WATCH_BUILD_OUTCOME: ${{ steps.watch_build.outcome }}
+          LAUNCH_SCREEN_OUTCOME: ${{ steps.launch_screen.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          steps = {
+              "path_setup": os.environ["PATH_SETUP_OUTCOME"],
+              "python_validation": os.environ["PYTHON_VALIDATION_OUTCOME"],
+              "food_database_validation": os.environ["FOOD_DB_VALIDATION_OUTCOME"],
+              "voice_goldens": os.environ["VOICE_GOLDENS_OUTCOME"],
+              "gate0_ui_validation": os.environ["GATE0_UI_OUTCOME"],
+              "phase1_contracts": os.environ["PHASE1_CONTRACTS_OUTCOME"],
+              "domain_tests": os.environ["DOMAIN_TESTS_OUTCOME"],
+              "xcodegen_install": os.environ["XCODEGEN_INSTALL_OUTCOME"],
+              "project_generation": os.environ["PROJECT_GENERATION_OUTCOME"],
+              "xcodegen_determinism": os.environ["XCODEGEN_DETERMINISM_OUTCOME"],
+              "simulator_setup": os.environ["SIMULATOR_SETUP_OUTCOME"],
+              "ios18_build": os.environ["IOS18_BUILD_OUTCOME"],
+              "unit_tests": os.environ["UNIT_TESTS_OUTCOME"],
+              "ui_tests": os.environ["UI_TESTS_OUTCOME"],
+              "screenshot_export": os.environ["SCREENSHOT_EXPORT_OUTCOME"],
+              "watch_build": os.environ["WATCH_BUILD_OUTCOME"],
+              "launch_screen_validation": os.environ["LAUNCH_SCREEN_OUTCOME"],
+          }
+          evidence_paths = [
+              "gate01-python-validation.log",
+              "gate01-food-db.log",
+              "gate01-voice-goldens.log",
+              "gate01-ui-structure.log",
+              "gate01-phase1-contracts.log",
+              "gate01-domain.log",
+              "gate01-xcodegen-determinism.log",
+              "gate01-ios18-build.log",
+              "gate01-unit-tests.log",
+              "gate01-ui-tests.log",
+              "gate01-watch-build.log",
+              "Gate01UnitTests.xcresult",
+              "Gate01UITests.xcresult",
+              "Gate01Screenshots",
+          ]
+          evidence = {path: Path(path).exists() for path in evidence_paths}
+          results = {
+              name: {
+                  "status": "PASS" if outcome == "success" else "FAIL" if outcome == "failure" else "NOT RUN",
+                  "outcome": outcome,
+              }
+              for name, outcome in steps.items()
+          }
+          failed = [name for name, result in results.items() if result["status"] == "FAIL"]
+          not_run = [name for name, result in results.items() if result["status"] == "NOT RUN"]
+          report = {
+              "schemaVersion": 1,
+              "gate": "gate-01-foundation",
+              "headSha": os.environ.get("GITHUB_SHA"),
+              "runId": os.environ.get("GITHUB_RUN_ID"),
+              "runAttempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "status": "FAIL" if failed or not_run else "PASS",
+              "steps": results,
+              "evidenceFiles": evidence,
+              "diagnostics": [
+                  f"Step {name} did not run; inspect the first failed prerequisite in the job log."
+                  for name in not_run
+              ] + [
+                  f"Evidence file missing: {path}"
+                  for path, exists in evidence.items()
+                  if not exists
+              ],
+          }
+          Path("gate01-execution-summary.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if report["status"] != "PASS":
+              sys.exit(1)
+          PY
 
       - name: Upload Gate 1 evidence
         if: always()
@@ -182,6 +325,7 @@ jobs:
             Gate01UITests.xcresult
             Gate01Screenshots
             gate01-*.log
+            gate01-execution-summary.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -219,10 +363,11 @@ jobs:
       - name: Prepare iOS 26 Simulator
         run: |
           set -euo pipefail
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Test migration and confirmation transactions
@@ -319,10 +464,11 @@ jobs:
         if: ${{ always() && steps.generate_project.outcome == 'success' }}
         run: |
           set -euo pipefail
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Test Agent Provider Markdown and privacy contracts
@@ -497,10 +643,11 @@ jobs:
       - name: Prepare iOS 26 Simulator
         run: |
           set -euo pipefail
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Test speech capture routing privacy and cleanup contracts
@@ -591,10 +738,11 @@ jobs:
         if: ${{ always() && steps.generate_project.outcome == 'success' }}
         run: |
           set -euo pipefail
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Test meal capture evaluation privacy and confirmation contracts
@@ -761,10 +909,11 @@ jobs:
       - name: Prepare iOS 26 Simulator
         run: |
           set -euo pipefail
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Test cumulative iOS unit suite
@@ -843,10 +992,11 @@ jobs:
       - name: Prepare iOS 26 Simulator
         run: |
           set -euo pipefail
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Test Phase 7 app contracts
@@ -939,10 +1089,11 @@ jobs:
       - name: Prepare iOS 26 Simulator
         run: |
           set -euo pipefail
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Test Phase 8 message and scheduling idempotency
@@ -1021,10 +1172,11 @@ jobs:
       - name: Prepare iPhone 17 Pro iOS 26 Simulator
         run: |
           set -euo pipefail
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Run complete iOS unit suite with coverage
@@ -1172,10 +1324,11 @@ jobs:
           set -euo pipefail
           brew install xcodegen
           xcodegen generate
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Run focused HealthKit projection and DailyLoop tests
@@ -1277,10 +1430,11 @@ jobs:
           set -euo pipefail
           brew install xcodegen
           xcodegen generate
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Run focused unified text, voice, image and recovery tests
@@ -1405,10 +1559,11 @@ jobs:
           set -euo pipefail
           brew install xcodegen
           xcodegen generate
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Run focused meal and expenditure estimate tests
@@ -1480,10 +1635,11 @@ jobs:
           set -euo pipefail
           brew install xcodegen
           xcodegen generate
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Run focused Watch inbox and offline replay tests
