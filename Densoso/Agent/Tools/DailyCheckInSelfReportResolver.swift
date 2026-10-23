@@ -17,6 +17,12 @@ struct DailyCheckInSelfReportResolver {
         "过几天", "过几周", "过几个月", "未来", "以后", "之后",
         "tomorrow", "dayaftertomorrow", "nextweek", "nextmonth", "nextyear",
     ]
+    private static let futureRelativeDatePatterns = [
+        #"in(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|few|afew|several|some|acoupleof|coupleof)(?:days?|weeks?|months?|years?)"#,
+        #"next(?:few|several)?(?:days?|weeks?|months?)"#,
+        #"after(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|few|afew|several|acoupleof|coupleof)(?:days?|weeks?|months?|years?)"#,
+        #"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|few|afew|several|acoupleof|coupleof)(?:days?|weeks?|months?|years?)(?:fromnow|later)"#,
+    ]
     private static let unsupportedRelativeDateCues = [
         "上周", "上星期", "上个月", "去年", "前几天", "最近", "这两天", "近几天", "最近几天",
         "最近一周", "过去一周", "过去几天", "这周", "本周", "这个月", "本月", "几天前", "上周末",
@@ -201,9 +207,8 @@ struct DailyCheckInSelfReportResolver {
 
     private static func containsFutureRelativeDate(in text: String) -> Bool {
         futureDateCues.contains(where: text.contains)
-            || matches(#"in(?:\d+|a|one|two|three|four|five|six|seven|eight|nine|ten)(?:days?|weeks?|months?|years?)"#, in: text)
+            || futureRelativeDatePatterns.contains { matches($0, in: text) }
             || matches(#"(?:\d+|[一二两兩三四五六七八九十])(?:天|周|週|星期|个月|個月|年)(?:后|後)"#, in: text)
-            || matches(#"(?:\d+|[一二两兩三四五六七八九十])(?:days?|weeks?|months?|years?)fromnow"#, in: text)
             || matches(#"next(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)"#, in: text)
     }
 

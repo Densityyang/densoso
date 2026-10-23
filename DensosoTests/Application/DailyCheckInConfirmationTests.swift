@@ -347,6 +347,11 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         }
         for futureText in [
             "in two weeks I have normal energy, low stress, and fair sleep.",
+            "in a few days I have normal energy, low stress, and fair sleep.",
+            "in a couple of weeks I have normal energy, low stress, and fair sleep.",
+            "next few days I have normal energy, low stress, and fair sleep.",
+            "after a couple of weeks I have normal energy, low stress, and fair sleep.",
+            "a few days later I have normal energy, low stress, and fair sleep.",
             "三天后我不太累，压力不大，睡得一般。",
         ] {
             XCTAssertThrowsError(try resolver.validate(
