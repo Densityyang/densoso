@@ -18,6 +18,11 @@ estimates must not be added again when observed active energy is available.
   `CaloricEnergySemanticsTests.testMissingEffectiveProfileDoesNotInventEnergyExpenditure`,
   `CalorieEstimatorTests.testExplicitOilIsAddedOnceWithoutCookingMultiplier`, and
   `CalorieEstimatorTests.testInferredOilProducesAnHonestInterval`.
+- Performance: `CalorieEstimatorTests.testDeterministicMealEstimateReportsP50P95AgainstLatencyTarget`
+  warms up ten times, samples a twelve-ingredient estimate 100 times, reports
+  simulator/device/OS plus p50 and p95, and enforces the 100 ms p95 target.
+  Treat its result as a simulator measurement for this fixture size, not as a
+  physical-device guarantee.
 
 Only deterministic fixtures run here. No health estimate from this gate should
 be interpreted as a diagnosis or as a real-world energy-balance guarantee.

@@ -1583,6 +1583,7 @@ jobs:
             -only-testing:DensosoTests/HealthRepositoryTests/testLegacyPointEstimateIsNotProjectedAsCurrentIntakeOrMacros \
             -only-testing:DensosoTests/CalorieEstimatorTests/testExplicitOilIsAddedOnceWithoutCookingMultiplier \
             -only-testing:DensosoTests/CalorieEstimatorTests/testInferredOilProducesAnHonestInterval \
+            -only-testing:DensosoTests/CalorieEstimatorTests/testDeterministicMealEstimateReportsP50P95AgainstLatencyTarget \
             -only-testing:DensosoTests/WeeklyAnalyticsServiceTests \
             -resultBundlePath "$GATE13_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \

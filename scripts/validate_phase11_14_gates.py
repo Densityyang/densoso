@@ -1608,7 +1608,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "DensosoTests/CalorieEstimatorTests.swift",
-            ("testExplicitOilIsAddedOnceWithoutCookingMultiplier", "testInferredOilProducesAnHonestInterval"),
+            (
+                "testExplicitOilIsAddedOnceWithoutCookingMultiplier",
+                "testInferredOilProducesAnHonestInterval",
+                "testDeterministicMealEstimateReportsP50P95AgainstLatencyTarget",
+            ),
             errors,
         )
         return "energy-accounting"
@@ -2217,6 +2221,7 @@ def main() -> int:
                 "--filter DailyMetricsUsabilityTests",
                 "-only-testing:DensosoTests/CaloricEnergySemanticsTests/testMeasuredActiveEnergyIsNotAddedToWorkoutEnergy",
                 "-only-testing:DensosoTests/CalorieEstimatorTests/testInferredOilProducesAnHonestInterval",
+                "-only-testing:DensosoTests/CalorieEstimatorTests/testDeterministicMealEstimateReportsP50P95AgainstLatencyTarget",
                     "-only-testing:DensosoTests/WeeklyAnalyticsServiceTests",
             ),
         ),
