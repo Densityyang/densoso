@@ -461,7 +461,7 @@ def main() -> int:
     )
     require_text(
         "docs/gates/gate-05-meal-capture.md",
-        ("Status: approved by user after successful macOS CI", "Approved by user; Phase 6 may proceed"),
+        ("Status: approved by user after successful macOS CI", "HealthKit delivery workers remain Phase 6."),
         errors,
     )
     require_text(
