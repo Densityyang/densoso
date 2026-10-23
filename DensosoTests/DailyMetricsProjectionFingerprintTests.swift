@@ -73,11 +73,12 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         ))
         try reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
 
+        let futureGoalDay = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 2, to: day))
         let futureGoal = GoalProfileRecord(
             profileKey: "primary",
             dailyDeficitKcal: 250,
             dailyProteinGrams: 110,
-            effectiveFrom: day.addingTimeInterval(2)
+            effectiveFrom: futureGoalDay
         )
         context.insert(futureGoal)
         try reprojectAndAssertFingerprintUnchanged(day: day, metric: metric, in: context)

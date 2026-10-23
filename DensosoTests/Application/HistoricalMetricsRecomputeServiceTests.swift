@@ -29,7 +29,12 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
             energyQuality: "legacy",
             requiresRecompute: true
         )
-        let nonPending = DailyMetrics(date: nonPendingDay, energyQuality: "legacy")
+        let nonPending = DailyMetrics(
+            date: nonPendingDay,
+            energyQuality: "legacy",
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "current-non-pending"
+        )
         let outsideWindow = DailyMetrics(
             date: outsideWindowDay,
             totalExpenditureKcal: 1_600,
