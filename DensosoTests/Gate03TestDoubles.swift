@@ -261,6 +261,7 @@ actor InMemoryProviderGovernanceRepository: ProviderGovernanceRepository {
     func recordUsage(
         usage: ProviderUsage,
         usageKey: String,
+        requestID: UUID,
         estimatedCostMicros: Int64?,
         currency: String?,
         rateVersion: String
@@ -279,11 +280,18 @@ actor InMemoryProviderGovernanceRepository: ProviderGovernanceRepository {
     ) -> ProviderUsageSummary {
         let matching = usages.values.filter { $0.0.provider == provider }
         let costs = matching.compactMap { $0.1 }
+        let latencies = matching.compactMap { $0.0.latencyMilliseconds }
         return ProviderUsageSummary(
             provider: provider,
             inputTokens: matching.reduce(0) { $0 + $1.0.inputTokens },
+            cachedInputTokens: matching.reduce(0) { $0 + $1.0.cachedInputTokens },
             outputTokens: matching.reduce(0) { $0 + $1.0.outputTokens },
+            reasoningTokens: matching.reduce(0) { $0 + $1.0.reasoningTokens },
+            imageCount: matching.reduce(0) { $0 + $1.0.imageCount },
             audioSeconds: matching.reduce(0) { $0 + $1.0.audioSeconds },
+            averageLatencyMilliseconds: latencies.isEmpty
+                ? nil
+                : latencies.reduce(0, +) / latencies.count,
             estimatedCostMicros: costs.count == matching.count ? costs.reduce(0, +) : nil,
             currency: matching.compactMap { $0.2 }.first
         )

@@ -52,16 +52,26 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
     func recordUsage(
         usage: ProviderUsage,
         usageKey: String,
+        requestID: UUID,
         estimatedCostMicros: Int64?,
         currency: String?,
         rateVersion: String
     ) throws -> Bool {
+        guard usage.requestID == nil || usage.requestID == requestID else {
+            throw ProviderUsageLedgerError.requestIdentityMismatch
+        }
         var descriptor = FetchDescriptor<ProviderUsageRecord>(
             predicate: #Predicate { $0.usageKey == usageKey }
         )
         descriptor.fetchLimit = 1
         if let existing = try modelContext.fetch(descriptor).first {
+            guard existing.requestID == nil || existing.requestID == requestID,
+                  existing.attempt == 0 || existing.attempt == usage.attempt else {
+                throw ProviderUsageLedgerError.requestIdentityMismatch
+            }
             return existing.estimatedCostMicros >= 0
+                && existing.rateVersion != "unknown"
+                && existing.currency != "unavailable"
                 && existing.currency == (currency ?? "unavailable")
                 && existing.rateVersion == rateVersion
         }
@@ -71,9 +81,15 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
             model: usage.model,
             capability: usage.capability.rawValue
         )
+        record.requestID = requestID
+        record.attempt = usage.attempt
         record.inputTokens = max(usage.inputTokens, 0)
+        record.cachedInputTokens = max(usage.cachedInputTokens, 0)
         record.outputTokens = max(usage.outputTokens, 0)
+        record.reasoningTokens = max(usage.reasoningTokens, 0)
+        record.imageCount = max(usage.imageCount, 0)
         record.audioSeconds = max(usage.audioSeconds, 0)
+        record.latencyMilliseconds = usage.latencyMilliseconds.map { max($0, 0) }
         record.estimatedCostMicros = estimatedCostMicros ?? -1
         record.currency = currency ?? "unavailable"
         record.rateVersion = rateVersion
@@ -96,8 +112,13 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
         var recordCount = 0
         var pricedCount = 0
         var inputTokens = 0
+        var cachedInputTokens = 0
         var outputTokens = 0
+        var reasoningTokens = 0
+        var imageCount = 0
         var audioSeconds = 0.0
+        var latencyMillisecondsTotal = 0
+        var latencySampleCount = 0
         var pricedCost: Int64 = 0
         var currencies = Set<String>()
         while true {
@@ -128,9 +149,18 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
                 cursor = UsageCursor(createdAt: record.createdAt, usageKey: record.usageKey)
                 recordCount += 1
                 inputTokens += record.inputTokens
+                cachedInputTokens += record.cachedInputTokens
                 outputTokens += record.outputTokens
+                reasoningTokens += record.reasoningTokens
+                imageCount = Self.saturatingAdd(imageCount, record.imageCount)
                 audioSeconds += record.audioSeconds
-                if record.estimatedCostMicros >= 0 {
+                if let latency = record.latencyMilliseconds, latency >= 0 {
+                    latencyMillisecondsTotal = Self.saturatingAdd(latencyMillisecondsTotal, latency)
+                    latencySampleCount += 1
+                }
+                if record.estimatedCostMicros >= 0,
+                   record.rateVersion != "unknown",
+                   record.currency != "unavailable" {
                     pricedCount += 1
                     currencies.insert(record.currency)
                     pricedCost += record.estimatedCostMicros
@@ -141,11 +171,22 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
         return ProviderUsageSummary(
             provider: provider,
             inputTokens: inputTokens,
+            cachedInputTokens: cachedInputTokens,
             outputTokens: outputTokens,
+            reasoningTokens: reasoningTokens,
+            imageCount: imageCount,
             audioSeconds: audioSeconds,
+            averageLatencyMilliseconds: latencySampleCount > 0
+                ? latencyMillisecondsTotal / latencySampleCount
+                : nil,
             estimatedCostMicros: cost,
             currency: cost == nil ? nil : currencies.first
         )
+    }
+
+    private static func saturatingAdd(_ lhs: Int, _ rhs: Int) -> Int {
+        let result = lhs.addingReportingOverflow(rhs)
+        return result.overflow ? Int.max : result.partialValue
     }
 
     private func consentKey(provider: ProviderID, dataClass: ProviderDataClass) -> String {

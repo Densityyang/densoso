@@ -416,6 +416,14 @@ struct ModelRequest: Sendable {
     let thinking: ThinkingPolicy
     var responseFormat: StructuredOutputFormat? = nil
     let deadline: Date
+
+    var imageCount: Int {
+        messages.reduce(0) { count, message in
+            count + message.content.reduce(0) { messageCount, content in
+                if case .image = content { messageCount + 1 } else { messageCount }
+            }
+        }
+    }
 }
 
 struct ProviderUsage: Codable, Equatable, Sendable {
@@ -426,8 +434,11 @@ struct ProviderUsage: Codable, Equatable, Sendable {
     let cachedInputTokens: Int
     let outputTokens: Int
     let reasoningTokens: Int
+    let imageCount: Int
     let audioSeconds: Double
     let attempt: Int
+    let requestID: UUID?
+    let latencyMilliseconds: Int?
 
     init(
         provider: ProviderID,
@@ -438,7 +449,10 @@ struct ProviderUsage: Codable, Equatable, Sendable {
         audioSeconds: Double,
         attempt: Int,
         cachedInputTokens: Int = 0,
-        reasoningTokens: Int = 0
+        reasoningTokens: Int = 0,
+        imageCount: Int = 0,
+        requestID: UUID? = nil,
+        latencyMilliseconds: Int? = nil
     ) {
         self.provider = provider
         self.model = model
@@ -447,8 +461,44 @@ struct ProviderUsage: Codable, Equatable, Sendable {
         self.cachedInputTokens = max(cachedInputTokens, 0)
         self.outputTokens = max(outputTokens, 0)
         self.reasoningTokens = max(reasoningTokens, 0)
+        self.imageCount = max(imageCount, 0)
         self.audioSeconds = max(audioSeconds, 0)
         self.attempt = max(attempt, 0)
+        self.requestID = requestID
+        self.latencyMilliseconds = latencyMilliseconds.map { max($0, 0) }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case model
+        case capability
+        case inputTokens
+        case cachedInputTokens
+        case outputTokens
+        case reasoningTokens
+        case imageCount
+        case audioSeconds
+        case attempt
+        case requestID
+        case latencyMilliseconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            provider: try values.decode(ProviderID.self, forKey: .provider),
+            model: try values.decode(String.self, forKey: .model),
+            capability: try values.decode(ProviderCapability.self, forKey: .capability),
+            inputTokens: try values.decode(Int.self, forKey: .inputTokens),
+            outputTokens: try values.decode(Int.self, forKey: .outputTokens),
+            audioSeconds: try values.decode(Double.self, forKey: .audioSeconds),
+            attempt: try values.decode(Int.self, forKey: .attempt),
+            cachedInputTokens: try values.decodeIfPresent(Int.self, forKey: .cachedInputTokens) ?? 0,
+            reasoningTokens: try values.decodeIfPresent(Int.self, forKey: .reasoningTokens) ?? 0,
+            imageCount: try values.decodeIfPresent(Int.self, forKey: .imageCount) ?? 0,
+            requestID: try values.decodeIfPresent(UUID.self, forKey: .requestID),
+            latencyMilliseconds: try values.decodeIfPresent(Int.self, forKey: .latencyMilliseconds)
+        )
     }
 }
 

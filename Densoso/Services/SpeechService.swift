@@ -615,6 +615,7 @@ final class SpeechService {
         }
 
         do {
+            let providerStartedAt = Date()
             let cloud = try await cloudProvider.transcribe(
                 audio: audio,
                 locale: locale,
@@ -633,7 +634,9 @@ final class SpeechService {
                         inputTokens: 0,
                         outputTokens: 0,
                         audioSeconds: cloud.billedAudioSeconds,
-                        attempt: cloud.attempt
+                        attempt: cloud.attempt,
+                        requestID: captureRequestID,
+                        latencyMilliseconds: Self.latencyMilliseconds(since: providerStartedAt)
                     ),
                     requestID: captureRequestID
                 )
@@ -768,6 +771,11 @@ final class SpeechService {
             elapsedMillisecondsSince: captureStartedAt,
             clock: performanceClock
         )
+    }
+
+    private static func latencyMilliseconds(since start: Date) -> Int {
+        let milliseconds = max(Date().timeIntervalSince(start) * 1_000, 0)
+        return Int(min(milliseconds, Double(Int.max)))
     }
 
     private func makeFailure(

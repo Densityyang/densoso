@@ -112,10 +112,18 @@ struct StaticPricingDescriptorSource: PricingDescriptorSource, Sendable {
 struct ProviderUsageSummary: Equatable, Sendable {
     let provider: ProviderID
     let inputTokens: Int
+    let cachedInputTokens: Int
     let outputTokens: Int
+    let reasoningTokens: Int
+    let imageCount: Int
     let audioSeconds: Double
+    let averageLatencyMilliseconds: Int?
     let estimatedCostMicros: Int64?
     let currency: String?
+}
+
+enum ProviderUsageLedgerError: Error, Equatable {
+    case requestIdentityMismatch
 }
 
 protocol ProviderGovernanceRepository: Sendable {
@@ -129,6 +137,7 @@ protocol ProviderGovernanceRepository: Sendable {
     func recordUsage(
         usage: ProviderUsage,
         usageKey: String,
+        requestID: UUID,
         estimatedCostMicros: Int64?,
         currency: String?,
         rateVersion: String
@@ -189,6 +198,9 @@ actor ProviderUsageLedger {
         requestID: UUID,
         providerRound: Int = 1
     ) async throws -> Bool {
+        guard usage.requestID == nil || usage.requestID == requestID else {
+            throw ProviderUsageLedgerError.requestIdentityMismatch
+        }
         let descriptor = pricingDescriptorSource.descriptor(for: usage)
         let estimate = descriptor?.estimate(usage)
         let key = [
@@ -200,6 +212,7 @@ actor ProviderUsageLedger {
         let storedCostIsPriced = try await repository.recordUsage(
             usage: usage,
             usageKey: key,
+            requestID: requestID,
             estimatedCostMicros: estimate?.micros,
             currency: estimate?.currency,
             rateVersion: estimate == nil ? "unknown" : descriptor?.version ?? "unknown"

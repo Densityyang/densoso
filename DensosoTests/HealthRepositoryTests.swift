@@ -61,6 +61,49 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).count, 2)
     }
 
+    func testMeasuredDailyActivityAggregateFeedsProjectionWithoutWorkoutEnergy() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: now)
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
+        let dayKey = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            activeEnergyKcal: 510,
+            restingEnergyKcal: 1_420,
+            healthReadStates: [
+                HealthMetricID.activeEnergy.rawValue: .available,
+                HealthMetricID.restingEnergy.rawValue: .available,
+            ],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey,
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "measured-energy-projection-fixture",
+            algorithmVersion: snapshot.algorithmVersion
+        ))
+        context.insert(WorkoutRecord(
+            date: now,
+            type: "running",
+            durationMinutes: 60,
+            estimatedCaloriesBurned: 420
+        ))
+
+        try DailyMetricsProjector.reproject(on: day, now: now, in: context)
+
+        let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(metrics.bmrKcal, 1_420)
+        XCTAssertEqual(metrics.activeCaloriesKcal, 510)
+        XCTAssertEqual(metrics.totalExpenditureKcal, 1_930)
+        XCTAssertEqual(metrics.energyQuality, "observed")
+        XCTAssertEqual(metrics.workoutCount, 1)
+    }
+
     func testLegacyPointEstimateIsNotProjectedAsCurrentIntakeOrMacros() throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let meal = MealRecord(

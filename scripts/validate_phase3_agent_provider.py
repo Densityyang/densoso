@@ -127,6 +127,7 @@ def main() -> int:
             "recordWithCostAvailability(",
             "ProviderRequestExecutor.defaultMaximumAttempts",
             "usage.cachedInputTokens <= usage.inputTokens",
+            "usage.requestID == nil || usage.requestID == requestID",
             'rateVersion: estimate == nil ? "unknown"',
         ],
         errors,
@@ -152,6 +153,9 @@ def main() -> int:
             "testQwenSpeechUsageWithoutPricingDescriptorKeepsCostUnknown",
             "testMissingCachedPriceAndUnlistedVisionModelKeepCostUnknown",
             "testPreflightCostUsesInputUpperBoundMaximumOutputAndRetryAttempts",
+            "testUsageIdentityImageCountAndLatencyAreRetainedInLedgerSummary",
+            "testUsageWithMismatchedRequestIdentityIsRejectedBeforePersistence",
+            "testLegacyUsagePayloadDecodesWithUnknownImageAndLatencyMetadata",
         ],
         errors,
     )
@@ -190,6 +194,9 @@ def main() -> int:
             "ProviderCapabilityCatalog.deepSeekCapabilities(for: model, endpoint: endpoint)",
             "input_image",
             "response.output_text.delta",
+            "requestID: request.requestID",
+            "imageCount: request.imageCount",
+            "latencyMilliseconds: Self.latencyMilliseconds(since: startedAt)",
         ],
         errors,
     )
@@ -198,8 +205,19 @@ def main() -> int:
         [
             'XCTAssertEqual(sent.url?.absoluteString, "https://api.deepseek.com/responses")',
             'XCTAssertEqual(object["model"] as? String, "deepseek-flash")',
+            "usage.imageCount == 1",
+            "usage.requestID == requestID",
             "testRetiredDeepSeekVisionCompatibilityAliasIsNotVisionCapable",
         ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Infrastructure" / "LLM" / "QwenProviderContractTests.swift",
+        (
+            "usage.requestID == requestID",
+            "usage.imageCount == 0",
+            "usage.latencyMilliseconds ?? -1",
+        ),
         errors,
     )
     require_text(
@@ -334,6 +352,12 @@ def main() -> int:
             "private struct UsageCursor",
             "record.usageKey > cursorUsageKey",
             "descriptor.fetchLimit = Self.monthlyUsageBatchSize",
+            "record.imageCount = max(usage.imageCount, 0)",
+            "record.requestID = requestID",
+            "record.latencyMilliseconds = usage.latencyMilliseconds",
+            'record.rateVersion != "unknown"',
+            'record.currency != "unavailable"',
+            "averageLatencyMilliseconds:",
         ],
         errors,
     )
@@ -416,6 +440,12 @@ def main() -> int:
     require_text(
         ROOT / "Densoso" / "Persistence" / "Schemas" / "DensosoSchemaV9.swift",
         (
+            "DensosoSchemaV8.models.filter",
+            "ObjectIdentifier($0) != ObjectIdentifier(DensosoSchemaV4.ProviderUsageRecord.self)",
+            "ProviderUsageRecord.self",
+            "var imageCount: Int = 0",
+            "var requestID: UUID?",
+            "var latencyMilliseconds: Int?",
             "AgentRequestCostBudgetRecord",
             "maximumCostMicros",
             "reservedCostMicros",
@@ -549,6 +579,8 @@ def main() -> int:
             "testConsentAndUsageDedupResolveExactKeysWithoutDuplicatingRows",
             "testMonthlyUsageQueriesProviderAndHalfOpenDateWindowAndKeepsUnknownCost",
             "testMonthlyUsagePagesLastCrossCurrencyRecordAndFiltersProviderWindow",
+            "records.first?.imageCount",
+            "records.first?.requestID",
         ],
         errors,
     )
@@ -899,6 +931,9 @@ def main() -> int:
             "testPricingDescriptorRequiresExactModelAndCapability",
             "testMissingCachedPriceAndUnlistedVisionModelKeepCostUnknown",
             "testQwenSpeechUsageWithoutPricingDescriptorKeepsCostUnknown",
+            "testUsageIdentityImageCountAndLatencyAreRetainedInLedgerSummary",
+            "testUsageWithMismatchedRequestIdentityIsRejectedBeforePersistence",
+            "testLegacyUsagePayloadDecodesWithUnknownImageAndLatencyMetadata",
         ],
         errors,
     )

@@ -20,6 +20,7 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
         let granted = try await repository.isConsentGranted(provider: .deepSeek, dataClass: .healthText)
         XCTAssertTrue(granted)
 
+        let requestID = UUID()
         let usage = ProviderUsage(
             provider: .deepSeek,
             model: "fixture",
@@ -27,11 +28,17 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
             inputTokens: 40,
             outputTokens: 5,
             audioSeconds: 0,
-            attempt: 1
+            attempt: 2,
+            cachedInputTokens: 5,
+            reasoningTokens: 3,
+            imageCount: 2,
+            requestID: requestID,
+            latencyMilliseconds: 125
         )
         try await repository.recordUsage(
             usage: usage,
             usageKey: "exact-usage-key",
+            requestID: requestID,
             estimatedCostMicros: 12,
             currency: "USD",
             rateVersion: "fixture-v1"
@@ -44,9 +51,10 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
                 inputTokens: 999,
                 outputTokens: 999,
                 audioSeconds: 0,
-                attempt: 1
+                attempt: 2
             ),
             usageKey: "exact-usage-key",
+            requestID: requestID,
             estimatedCostMicros: 999,
             currency: "USD",
             rateVersion: "fixture-v2"
@@ -57,9 +65,15 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
         let records = try context.fetch(FetchDescriptor<ProviderUsageRecord>())
         XCTAssertEqual(consents.count, 1)
         XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.requestID, requestID)
+        XCTAssertEqual(records.first?.attempt, 2)
         XCTAssertEqual(records.first?.inputTokens, 40)
+        XCTAssertEqual(records.first?.cachedInputTokens, 5)
         XCTAssertEqual(records.first?.estimatedCostMicros, 12)
         XCTAssertEqual(records.first?.rateVersion, "fixture-v1")
+        XCTAssertEqual(records.first?.imageCount, 2)
+        XCTAssertEqual(records.first?.latencyMilliseconds, 125)
+        XCTAssertEqual(records.first?.reasoningTokens, 3)
     }
 
     func testMonthlyUsageQueriesProviderAndHalfOpenDateWindowAndKeepsUnknownCost() async throws {
@@ -70,7 +84,11 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
         let insideEnd = monthEnd.addingTimeInterval(-1)
 
         [
-            usageRecord(key: "start", provider: .deepSeek, createdAt: monthStart, input: 10, output: 1, cost: 100),
+            usageRecord(
+                key: "start", provider: .deepSeek, createdAt: monthStart,
+                input: 10, output: 1, cost: 100, cachedInput: 2, reasoning: 1,
+                imageCount: 2, latencyMilliseconds: 100
+            ),
             usageRecord(key: "inside-end", provider: .deepSeek, createdAt: insideEnd, input: 20, output: 2, cost: 200),
             usageRecord(key: "before", provider: .deepSeek, createdAt: monthStart.addingTimeInterval(-1), input: 500, output: 50, cost: 500),
             usageRecord(key: "end-exclusive", provider: .deepSeek, createdAt: monthEnd, input: 600, output: 60, cost: 600),
@@ -85,7 +103,11 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
             monthEnd: monthEnd
         )
         XCTAssertEqual(pricedSummary.inputTokens, 30)
+        XCTAssertEqual(pricedSummary.cachedInputTokens, 2)
         XCTAssertEqual(pricedSummary.outputTokens, 3)
+        XCTAssertEqual(pricedSummary.reasoningTokens, 1)
+        XCTAssertEqual(pricedSummary.imageCount, 2)
+        XCTAssertEqual(pricedSummary.averageLatencyMilliseconds, 100)
         XCTAssertEqual(pricedSummary.estimatedCostMicros, 300)
         XCTAssertEqual(pricedSummary.currency, "USD")
 
@@ -174,7 +196,7 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
     }
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         return try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -189,7 +211,11 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
         output: Int,
         audioSeconds: Double = 0,
         cost: Int64,
-        currency: String = "USD"
+        currency: String = "USD",
+        cachedInput: Int = 0,
+        reasoning: Int = 0,
+        imageCount: Int = 0,
+        latencyMilliseconds: Int? = nil
     ) -> ProviderUsageRecord {
         let record = ProviderUsageRecord(
             usageKey: key,
@@ -199,8 +225,12 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
         )
         record.createdAt = createdAt
         record.inputTokens = input
+        record.cachedInputTokens = cachedInput
         record.outputTokens = output
+        record.reasoningTokens = reasoning
         record.audioSeconds = audioSeconds
+        record.imageCount = imageCount
+        record.latencyMilliseconds = latencyMilliseconds
         record.estimatedCostMicros = cost
         record.currency = currency
         record.rateVersion = cost < 0 ? "unknown" : "fixture-v1"

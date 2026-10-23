@@ -96,6 +96,9 @@ struct DeepSeekProvider: MultimodalModelProvider {
                                     from: response,
                                     providerModel: descriptor.model,
                                     attempt: result.attempt,
+                                    requestID: request.requestID,
+                                    imageCount: request.imageCount,
+                                    latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
                                     didEmitText: &didEmitText,
                                     continuation: continuation
                                 )
@@ -107,6 +110,9 @@ struct DeepSeekProvider: MultimodalModelProvider {
                                     from: response,
                                     providerModel: descriptor.model,
                                     attempt: result.attempt,
+                                    requestID: request.requestID,
+                                    imageCount: request.imageCount,
+                                    latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
                                     didEmitText: &didEmitText,
                                     continuation: continuation
                                 )
@@ -129,6 +135,9 @@ struct DeepSeekProvider: MultimodalModelProvider {
                                     from: response,
                                     providerModel: descriptor.model,
                                     attempt: result.attempt,
+                                    requestID: request.requestID,
+                                    imageCount: request.imageCount,
+                                    latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
                                     didEmitText: &didEmitText,
                                     continuation: continuation
                                 )
@@ -229,6 +238,9 @@ struct DeepSeekProvider: MultimodalModelProvider {
         from response: [String: JSONValue],
         providerModel: String,
         attempt: Int,
+        requestID: UUID,
+        imageCount: Int,
+        latencyMilliseconds: Int,
         didEmitText: inout Bool,
         continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
     ) throws {
@@ -307,7 +319,10 @@ struct DeepSeekProvider: MultimodalModelProvider {
                         audioSeconds: 0,
                         attempt: attempt,
                         cachedInputTokens: cachedInputTokens,
-                        reasoningTokens: reasoningTokens
+                        reasoningTokens: reasoningTokens,
+                        imageCount: imageCount,
+                        requestID: requestID,
+                        latencyMilliseconds: latencyMilliseconds
                     )
                 )
             )

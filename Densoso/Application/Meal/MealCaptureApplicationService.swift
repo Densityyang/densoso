@@ -358,9 +358,12 @@ final class MealCaptureApplicationService {
                     inputTokens: usage.inputTokens,
                     outputTokens: usage.outputTokens,
                     audioSeconds: 0,
-                    attempt: usage.attempt
+                    attempt: usage.attempt,
+                    imageCount: usage.imageCount,
+                    requestID: usage.requestID,
+                    latencyMilliseconds: usage.latencyMilliseconds
                 ),
-                requestID: UUID()
+                requestID: usage.requestID ?? UUID()
             )
         }
         let visionEvidence = observation.labels.map {

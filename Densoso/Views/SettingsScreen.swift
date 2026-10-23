@@ -664,10 +664,12 @@ struct SettingsScreen: View {
         let audio = summary.audioSeconds > 0
             ? " · \(summary.audioSeconds.formatted(.number.precision(.fractionLength(0...1)))) 秒音频"
             : ""
+        let images = summary.imageCount > 0 ? " · \(summary.imageCount) 张图" : ""
+        let latency = summary.averageLatencyMilliseconds.map { " · 平均 \($0) ms" } ?? ""
         guard let cost = summary.estimatedCostMicros, let currency = summary.currency else {
-            return "\(tokens) tokens\(audio) · 费用暂不可估"
+            return "\(tokens) tokens\(images)\(audio)\(latency) · 费用暂不可估"
         }
-        return "\(tokens) tokens\(audio) · 保守估算 \(String(format: "%.2f", Double(cost) / 1_000_000)) \(currency)"
+        return "\(tokens) tokens\(images)\(audio)\(latency) · 保守估算 \(String(format: "%.2f", Double(cost) / 1_000_000)) \(currency)"
     }
 
     private func exportData() async {

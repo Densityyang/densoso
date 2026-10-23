@@ -5,7 +5,75 @@ enum DensosoSchemaV9: VersionedSchema {
     static var versionIdentifier: Schema.Version { .init(9, 0, 0) }
 
     static var models: [any PersistentModel.Type] {
-        DensosoSchemaV8.models + [AgentRequestCostBudgetRecord.self]
+        DensosoSchemaV8.models.filter {
+            ObjectIdentifier($0) != ObjectIdentifier(DensosoSchemaV4.ProviderUsageRecord.self)
+        } + [
+            ProviderUsageRecord.self,
+            AgentRequestCostBudgetRecord.self,
+        ]
+    }
+
+    /// V9 retains the usage rows while adding request identity and bounded
+    /// measurement fields. Legacy rows keep nil/zero unknown defaults.
+    @Model final class ProviderUsageRecord {
+        @Attribute(.unique) var id: UUID
+        @Attribute(.unique) var usageKey: String
+        var provider: String
+        var model: String
+        var capability: String
+        var requestID: UUID?
+        var attempt: Int = 0
+        var inputTokens: Int
+        var cachedInputTokens: Int = 0
+        var outputTokens: Int
+        var reasoningTokens: Int = 0
+        var imageCount: Int = 0
+        var audioSeconds: Double
+        var latencyMilliseconds: Int?
+        var estimatedCostMicros: Int64
+        var currency: String
+        var rateVersion: String
+        var createdAt: Date
+
+        init(
+            id: UUID = UUID(),
+            usageKey: String,
+            provider: String,
+            model: String,
+            capability: String,
+            requestID: UUID? = nil,
+            attempt: Int = 0,
+            inputTokens: Int = 0,
+            cachedInputTokens: Int = 0,
+            outputTokens: Int = 0,
+            reasoningTokens: Int = 0,
+            imageCount: Int = 0,
+            audioSeconds: Double = 0,
+            latencyMilliseconds: Int? = nil,
+            estimatedCostMicros: Int64 = 0,
+            currency: String = "USD",
+            rateVersion: String = "unknown",
+            createdAt: Date = Date()
+        ) {
+            self.id = id
+            self.usageKey = usageKey
+            self.provider = provider
+            self.model = model
+            self.capability = capability
+            self.requestID = requestID
+            self.attempt = max(attempt, 0)
+            self.inputTokens = max(inputTokens, 0)
+            self.cachedInputTokens = max(cachedInputTokens, 0)
+            self.outputTokens = max(outputTokens, 0)
+            self.reasoningTokens = max(reasoningTokens, 0)
+            self.imageCount = max(imageCount, 0)
+            self.audioSeconds = audioSeconds.isFinite ? max(audioSeconds, 0) : 0
+            self.latencyMilliseconds = latencyMilliseconds.map { max($0, 0) }
+            self.estimatedCostMicros = estimatedCostMicros
+            self.currency = currency
+            self.rateVersion = rateVersion
+            self.createdAt = createdAt
+        }
     }
 
     /// Stores the request's conservative cost reservations separately so V5's

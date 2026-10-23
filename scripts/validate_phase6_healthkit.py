@@ -255,7 +255,7 @@ def main() -> int:
         (
             "BGTaskScheduler.shared.register(",
             "BGAppRefreshTaskRequest(identifier: Self.taskIdentifier)",
-            "task.expirationHandler",
+            "backgroundTask.expirationHandler",
             "syncAvailableData(using: repository)",
             "self.healthIntelligenceService.refresh()",
             "self.dailyLoopSnapshotService.snapshot()",

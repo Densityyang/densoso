@@ -73,11 +73,45 @@ public struct MealVisionObservation: Codable, Equatable, Sendable {
         public let inputTokens: Int
         public let outputTokens: Int
         public let attempt: Int
+        public let imageCount: Int
+        public let requestID: UUID?
+        public let latencyMilliseconds: Int?
 
-        public init(inputTokens: Int, outputTokens: Int, attempt: Int) {
+        public init(
+            inputTokens: Int,
+            outputTokens: Int,
+            attempt: Int,
+            imageCount: Int = 1,
+            requestID: UUID? = nil,
+            latencyMilliseconds: Int? = nil
+        ) {
             self.inputTokens = max(inputTokens, 0)
             self.outputTokens = max(outputTokens, 0)
             self.attempt = max(attempt, 1)
+            self.imageCount = max(imageCount, 0)
+            self.requestID = requestID
+            self.latencyMilliseconds = latencyMilliseconds.map { max($0, 0) }
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case inputTokens
+            case outputTokens
+            case attempt
+            case imageCount
+            case requestID
+            case latencyMilliseconds
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                inputTokens: try values.decode(Int.self, forKey: .inputTokens),
+                outputTokens: try values.decode(Int.self, forKey: .outputTokens),
+                attempt: try values.decode(Int.self, forKey: .attempt),
+                imageCount: try values.decodeIfPresent(Int.self, forKey: .imageCount) ?? 1,
+                requestID: try values.decodeIfPresent(UUID.self, forKey: .requestID),
+                latencyMilliseconds: try values.decodeIfPresent(Int.self, forKey: .latencyMilliseconds)
+            )
         }
     }
 

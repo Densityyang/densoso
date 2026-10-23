@@ -139,7 +139,10 @@ struct QwenMealVisionProvider: MealVisionProviding {
             usage: MealVisionObservation.Usage(
                 inputTokens: response.usage?.promptTokens ?? 0,
                 outputTokens: response.usage?.completionTokens ?? 0,
-                attempt: result.attempt
+                attempt: result.attempt,
+                imageCount: 1,
+                requestID: requestID,
+                latencyMilliseconds: Self.latencyMilliseconds(since: startedAt)
             )
         )
     }

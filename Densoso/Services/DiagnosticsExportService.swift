@@ -8,7 +8,7 @@ struct DiagnosticsRuntimeInfo: Codable, Equatable, Sendable {
     let appBuild: String
     let schemaVersion: String
 
-    static func current(bundle: Bundle = .main, schemaVersion: String = "5.0.0") -> Self {
+    static func current(bundle: Bundle = .main, schemaVersion: String = "9.0.0") -> Self {
         let version = ProcessInfo.processInfo.operatingSystemVersion
         return Self(
             osVersion: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)",
@@ -64,8 +64,12 @@ struct DiagnosticsUsageGroup: Codable, Equatable, Sendable {
     let capability: String
     let requestCount: Int
     let inputTokens: Int
+    let cachedInputTokens: Int
     let outputTokens: Int
+    let reasoningTokens: Int
+    let imageCount: Int
     let audioSeconds: Double
+    let averageLatencyMilliseconds: Int?
 }
 
 struct DiagnosticsUsageStatus: Codable, Equatable, Sendable {
@@ -235,9 +239,16 @@ final class DiagnosticsExportService {
             )
             group.requestCount = Self.saturatingAdd(group.requestCount, 1)
             group.inputTokens = Self.saturatingAdd(group.inputTokens, max(record.inputTokens, 0))
+            group.cachedInputTokens = Self.saturatingAdd(group.cachedInputTokens, max(record.cachedInputTokens, 0))
             group.outputTokens = Self.saturatingAdd(group.outputTokens, max(record.outputTokens, 0))
+            group.reasoningTokens = Self.saturatingAdd(group.reasoningTokens, max(record.reasoningTokens, 0))
+            group.imageCount = Self.saturatingAdd(group.imageCount, max(record.imageCount, 0))
             if record.audioSeconds.isFinite, record.audioSeconds > 0 {
                 group.audioSeconds = min(group.audioSeconds + record.audioSeconds, 1_000_000_000)
+            }
+            if let latency = record.latencyMilliseconds, latency >= 0 {
+                group.latencyMillisecondsTotal = Self.saturatingAdd(group.latencyMillisecondsTotal, latency)
+                group.latencySampleCount = Self.saturatingAdd(group.latencySampleCount, 1)
             }
             grouped[key] = group
         }
@@ -359,8 +370,13 @@ private struct UsageAccumulator {
     let capability: String
     var requestCount = 0
     var inputTokens = 0
+    var cachedInputTokens = 0
     var outputTokens = 0
+    var reasoningTokens = 0
+    var imageCount = 0
     var audioSeconds = 0.0
+    var latencyMillisecondsTotal = 0
+    var latencySampleCount = 0
 
     var exportValue: DiagnosticsUsageGroup {
         DiagnosticsUsageGroup(
@@ -369,8 +385,14 @@ private struct UsageAccumulator {
             capability: capability,
             requestCount: requestCount,
             inputTokens: inputTokens,
+            cachedInputTokens: cachedInputTokens,
             outputTokens: outputTokens,
-            audioSeconds: audioSeconds
+            reasoningTokens: reasoningTokens,
+            imageCount: imageCount,
+            audioSeconds: audioSeconds,
+            averageLatencyMilliseconds: latencySampleCount > 0
+                ? latencyMillisecondsTotal / latencySampleCount
+                : nil
         )
     }
 }

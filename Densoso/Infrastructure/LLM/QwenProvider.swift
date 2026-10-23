@@ -123,7 +123,10 @@ struct QwenProvider: TextModelProvider {
                                     audioSeconds: usage.audioSeconds ?? 0,
                                     attempt: result.attempt,
                                     cachedInputTokens: usage.promptTokensDetails?.cachedTokens ?? 0,
-                                    reasoningTokens: usage.completionTokensDetails?.reasoningTokens ?? 0
+                                    reasoningTokens: usage.completionTokensDetails?.reasoningTokens ?? 0,
+                                    imageCount: request.imageCount,
+                                    requestID: request.requestID,
+                                    latencyMilliseconds: Self.latencyMilliseconds(since: startedAt)
                                 )
                             )
                         )

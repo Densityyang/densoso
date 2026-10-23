@@ -120,8 +120,9 @@ final class DeepSeekProviderContractTests: XCTestCase {
             name: "MealVisionIntent",
             schema: .object(properties: [:], required: [], additionalProperties: false)
         )
+        let requestID = UUID()
         let request = ModelRequest(
-            requestID: UUID(),
+            requestID: requestID,
             conversationID: UUID(),
             systemPrompt: "inspect image",
             messages: [
@@ -142,7 +143,14 @@ final class DeepSeekProviderContractTests: XCTestCase {
             deadline: clock.now().addingTimeInterval(45)
         )
 
-        _ = try await collect(provider.stream(request))
+        let events = try await collect(provider.stream(request))
+        XCTAssertTrue(events.contains { event in
+            guard case .usage(let usage) = event else { return false }
+            return usage.requestID == requestID
+                && usage.imageCount == 1
+                && usage.attempt == 1
+                && (usage.latencyMilliseconds ?? -1) >= 0
+        })
 
         let requests = await transport.recordedRequests()
         let sent = try XCTUnwrap(requests.first)

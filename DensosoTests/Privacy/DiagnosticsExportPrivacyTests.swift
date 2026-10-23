@@ -7,7 +7,7 @@ import XCTest
 final class DiagnosticsExportPrivacyTests: XCTestCase {
     func testExportContainsOnlyWhitelistedDiagnosticsAndIsReadOnly() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -24,7 +24,13 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
         )
         usage.createdAt = now.addingTimeInterval(-60)
         usage.inputTokens = 321
+        usage.cachedInputTokens = 21
         usage.outputTokens = 123
+        usage.reasoningTokens = 13
+        usage.imageCount = 2
+        usage.requestID = UUID()
+        usage.attempt = 1
+        usage.latencyMilliseconds = 84
         usage.audioSeconds = 0
         usage.currency = "PRIVATE-CURRENCY"
         usage.estimatedCostMicros = 987_654
@@ -157,7 +163,7 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
                 osVersion: "18.0.1",
                 appVersion: "1.2.3",
                 appBuild: "45",
-                schemaVersion: "5.0.0"
+                schemaVersion: "9.0.0"
             )
         )
         let exportService = DiagnosticsExportService(providerLogs: logs)
@@ -178,11 +184,16 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
 
         XCTAssertTrue(json.contains("18.0.1"))
         XCTAssertTrue(json.contains("1.2.3"))
-        XCTAssertTrue(json.contains("5.0.0"))
+        XCTAssertTrue(json.contains("9.0.0"))
         XCTAssertTrue(json.contains("qwen-flash"))
         XCTAssertTrue(json.contains("84"))
         XCTAssertTrue(json.contains("321"))
         XCTAssertTrue(json.contains("123"))
+        XCTAssertTrue(json.contains("21"))
+        XCTAssertTrue(json.contains("13"))
+        let usageGroup = try XCTUnwrap(document.usage.groups.first)
+        XCTAssertEqual(usageGroup.imageCount, 2)
+        XCTAssertEqual(usageGroup.averageLatencyMilliseconds, 84)
         XCTAssertTrue(json.contains("retryable"))
         XCTAssertTrue(json.contains("complete"))
         XCTAssertTrue(json.contains("watch_error"))

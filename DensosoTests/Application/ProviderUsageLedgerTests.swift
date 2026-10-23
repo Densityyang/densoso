@@ -91,6 +91,77 @@ final class ProviderUsageLedgerTests: XCTestCase {
         XCTAssertTrue(exceeded)
     }
 
+    func testUsageIdentityImageCountAndLatencyAreRetainedInLedgerSummary() async throws {
+        let repository = InMemoryProviderGovernanceRepository()
+        let ledger = ProviderUsageLedger(
+            repository: repository,
+            pricingDescriptorSource: StaticPricingDescriptorSource.unconfigured
+        )
+        let requestID = UUID()
+        let usage = ProviderUsage(
+            provider: .deepSeek,
+            model: "fixture",
+            capability: .vision,
+            inputTokens: 200,
+            outputTokens: 30,
+            audioSeconds: 0,
+            attempt: 2,
+            cachedInputTokens: 20,
+            reasoningTokens: 5,
+            imageCount: 2,
+            requestID: requestID,
+            latencyMilliseconds: 340
+        )
+
+        try await ledger.record(usage, requestID: requestID)
+
+        let summary = try await ledger.monthlySummary(provider: .deepSeek)
+        XCTAssertEqual(summary.inputTokens, 200)
+        XCTAssertEqual(summary.cachedInputTokens, 20)
+        XCTAssertEqual(summary.outputTokens, 30)
+        XCTAssertEqual(summary.reasoningTokens, 5)
+        XCTAssertEqual(summary.imageCount, 2)
+        XCTAssertEqual(summary.averageLatencyMilliseconds, 340)
+    }
+
+    func testUsageWithMismatchedRequestIdentityIsRejectedBeforePersistence() async throws {
+        let repository = InMemoryProviderGovernanceRepository()
+        let ledger = ProviderUsageLedger(repository: repository)
+
+        do {
+            try await ledger.record(
+                ProviderUsage(
+                    provider: .deepSeek,
+                    model: "fixture",
+                    capability: .text,
+                    inputTokens: 1,
+                    outputTokens: 1,
+                    audioSeconds: 0,
+                    attempt: 1,
+                    requestID: UUID()
+                ),
+                requestID: UUID()
+            )
+            XCTFail("A usage row must not be relabeled with another request identity")
+        } catch {
+            XCTAssertEqual(error as? ProviderUsageLedgerError, .requestIdentityMismatch)
+        }
+        let usageCount = await repository.usageCount()
+        XCTAssertEqual(usageCount, 0)
+    }
+
+    func testLegacyUsagePayloadDecodesWithUnknownImageAndLatencyMetadata() throws {
+        let data = Data(
+            #"{"provider":"deepSeek","model":"fixture","capability":"text","inputTokens":10,"cachedInputTokens":2,"outputTokens":3,"reasoningTokens":1,"audioSeconds":0,"attempt":1}"#.utf8
+        )
+
+        let usage = try JSONDecoder().decode(ProviderUsage.self, from: data)
+
+        XCTAssertEqual(usage.imageCount, 0)
+        XCTAssertNil(usage.requestID)
+        XCTAssertNil(usage.latencyMilliseconds)
+    }
+
     func testMissingRateIsUnavailableRatherThanZero() async throws {
         let repository = InMemoryProviderGovernanceRepository()
         let ledger = ProviderUsageLedger(
@@ -237,7 +308,7 @@ final class ProviderUsageLedgerTests: XCTestCase {
     }
 
     func testSwiftDataLedgerSurvivesRepositoryRecreation() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

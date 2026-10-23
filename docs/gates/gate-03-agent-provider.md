@@ -35,8 +35,11 @@ PR; older V3 PR evidence below has been replaced with the current run state.
 - Preserve provider reasoning only in the active request's in-memory
   continuation. Persisted and post-request histories remove reasoning and image
   payloads, while the same request can still complete its required continuation.
-- Resolve consent and usage idempotency by exact keys; aggregate usage only for
-  the requested provider and half-open month window `[start, end)`. Focused
+- Resolve consent and usage idempotency by exact keys; usage rows retain the
+  request ID, provider attempt, cached/reasoning tokens, image count and measured
+  latency. Monthly summaries and redacted diagnostics aggregate image counts and
+  available average latency without exporting request identifiers. Aggregate
+  usage is limited to the requested provider and half-open month window `[start, end)`. Focused
   repository tests cover key de-duplication, month boundaries and unknown-price
   preservation. Monthly token, audio and cost summaries stream through stable
   64-row keyset pages; a cross-page currency fixture preserves the existing

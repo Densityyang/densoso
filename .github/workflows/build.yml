@@ -715,6 +715,7 @@ jobs:
             docs/gates/gate-06-healthkit.md
             DensosoTests/FakeHealthStoreClient.swift
             DensosoTests/HealthKitSyncCoordinatorTests.swift
+            DensosoTests/HealthRepositoryTests.swift
             DensosoTests/HealthSyncOutboxWorkerTests.swift
             DensosoTests/ConfirmationCoordinatorTests.swift
           if-no-files-found: warn
@@ -1102,6 +1103,7 @@ jobs:
             -only-testing:DensosoTests/HealthRepositoryTests/testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData \
             -only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion \
             -only-testing:DensosoTests/HealthRepositoryTests/testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages \
+            -only-testing:DensosoTests/HealthRepositoryTests/testMeasuredDailyActivityAggregateFeedsProjectionWithoutWorkoutEnergy \
             -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor \
             -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder \
             -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testOneFailedStreamDoesNotBlockOtherHealthMetrics \
@@ -1219,6 +1221,9 @@ jobs:
             -only-testing:DensosoTests/AgentRequestResumeTests/testPerRequestCostReservationPersistsAndCannotResetOnResume \
             -only-testing:DensosoTests/AgentRequestResumeTests/testLegacyInterruptedRequestWithoutProviderIdentityFailsClosedBeforeCall \
             -only-testing:DensosoTests/ProviderUsageLedgerTests/testPreflightCostUsesInputUpperBoundMaximumOutputAndRetryAttempts \
+            -only-testing:DensosoTests/ProviderUsageLedgerTests/testUsageIdentityImageCountAndLatencyAreRetainedInLedgerSummary \
+            -only-testing:DensosoTests/ProviderUsageLedgerTests/testUsageWithMismatchedRequestIdentityIsRejectedBeforePersistence \
+            -only-testing:DensosoTests/ProviderUsageLedgerTests/testLegacyUsagePayloadDecodesWithUnknownImageAndLatencyMetadata \
             -only-testing:DensosoTests/DensosoMigrationTests/testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1 \
             -only-testing:DensosoTests/DensosoMigrationTests/testV7ToV9PreservesHealthKitSampleIndexState \
             -only-testing:DensosoTests/DensosoMigrationTests/testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity \

@@ -22,12 +22,22 @@ final class QwenProviderContractTests: XCTestCase {
             jitter: { _ in 0 }
         )
 
-        let events = try await collect(provider.stream(request(deadline: clock.now().addingTimeInterval(45))))
+        let requestID = UUID()
+        let events = try await collect(
+            provider.stream(request(deadline: clock.now().addingTimeInterval(45), requestID: requestID))
+        )
 
         XCTAssertTrue(events.contains(.textDelta("我会先生成可检查的草稿。")))
         XCTAssertTrue(events.contains { event in
             guard case .toolCall(let call) = event else { return false }
             return call.name == "log_weight"
+        })
+        XCTAssertTrue(events.contains { event in
+            guard case .usage(let usage) = event else { return false }
+            return usage.requestID == requestID
+                && usage.imageCount == 0
+                && usage.attempt == 1
+                && (usage.latencyMilliseconds ?? -1) >= 0
         })
         let requests = await transport.recordedRequests()
         let sent = try XCTUnwrap(requests.first)
@@ -167,9 +177,9 @@ final class QwenProviderContractTests: XCTestCase {
         XCTAssertEqual(requests.count, 0)
     }
 
-    private func request(deadline: Date) -> ModelRequest {
+    private func request(deadline: Date, requestID: UUID = UUID()) -> ModelRequest {
         ModelRequest(
-            requestID: UUID(),
+            requestID: requestID,
             conversationID: UUID(),
             systemPrompt: "fixture",
             messages: [ModelMessage(role: .user, text: "记录体重")],

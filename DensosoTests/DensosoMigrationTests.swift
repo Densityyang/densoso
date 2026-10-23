@@ -315,6 +315,18 @@ final class DensosoMigrationTests: XCTestCase {
             outputTokens: 12,
             stateRaw: AgentRequestState.interrupted.rawValue
         ))
+        let legacyUsage = DensosoSchemaV4.ProviderUsageRecord(
+            usageKey: "legacy-provider-usage",
+            provider: ProviderID.deepSeek.rawValue,
+            model: "deepseek-flash",
+            capability: ProviderCapability.text.rawValue
+        )
+        legacyUsage.inputTokens = 41
+        legacyUsage.outputTokens = 12
+        legacyUsage.estimatedCostMicros = 0
+        legacyUsage.currency = "USD"
+        legacyUsage.rateVersion = "unknown"
+        context!.insert(legacyUsage)
         try context!.save()
         context = nil
         container = nil
@@ -322,6 +334,32 @@ final class DensosoMigrationTests: XCTestCase {
 
         container = try openCurrentStore(at: location.storeURL)
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "9.0.0")
+        let migratedUsage = try XCTUnwrap(
+            container!.mainContext.fetch(FetchDescriptor<ProviderUsageRecord>()).first
+        )
+        XCTAssertEqual(migratedUsage.usageKey, "legacy-provider-usage")
+        XCTAssertEqual(migratedUsage.inputTokens, 41)
+        XCTAssertEqual(migratedUsage.outputTokens, 12)
+        XCTAssertEqual(migratedUsage.estimatedCostMicros, 0)
+        XCTAssertEqual(migratedUsage.currency, "USD")
+        XCTAssertEqual(migratedUsage.rateVersion, "unknown")
+        XCTAssertNil(migratedUsage.requestID)
+        XCTAssertEqual(migratedUsage.attempt, 0)
+        XCTAssertEqual(migratedUsage.cachedInputTokens, 0)
+        XCTAssertEqual(migratedUsage.reasoningTokens, 0)
+        XCTAssertEqual(migratedUsage.imageCount, 0)
+        XCTAssertNil(migratedUsage.latencyMilliseconds)
+        let usageMonthStart = Date().addingTimeInterval(-60)
+        let usageMonthEnd = Date().addingTimeInterval(60)
+        let migratedUsageSummary = try await SwiftDataProviderGovernanceRepository(
+            modelContainer: container!
+        ).monthlyUsage(
+            provider: .deepSeek,
+            monthStart: usageMonthStart,
+            monthEnd: usageMonthEnd
+        )
+        XCTAssertNil(migratedUsageSummary.estimatedCostMicros)
+        XCTAssertNil(migratedUsageSummary.currency)
         let request = try await SwiftDataAgentRepository(modelContainer: container!)
             .beginAgentRequest(
                 requestID: requestID,
