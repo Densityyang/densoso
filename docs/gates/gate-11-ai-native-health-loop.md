@@ -26,7 +26,9 @@ projection-day keys supports deletion and moved-sample rebuilds. Ambiguous
 full-day reads retain history but suppress it from the live projection. Pending
 sample-index traversal uses stable, bounded 400-row pages; targeted UUID
 membership queries are limited to 64 IDs, and deletion cleanup collects target
-rows before changing the paged result set.
+rows before changing the paged result set. HealthRepository collapses affected
+timestamps to sorted local-day keys before reprojecting, so multiple samples or
+weight edits on one day write that daily projection at most once per batch.
 DailyMetrics fingerprints include source-record revisions, canonical daily
 HealthKit snapshot values consumed by the projection, profile and goal revisions
 effective at the projection's `asOf` time, and a dedicated daily-projection
@@ -108,6 +110,7 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `DailyLoopSnapshotTests` also pins all main-PR algorithm versions and the daily-brief cache version in
   `DailyLoopSnapshotTests.testMainPRAlgorithmVersionsAreCentralizedAndInvalidateDailyBriefCache`.
 - iOS tests: `HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay`,
+  `HealthRepositoryTests.testProjectionAffectedDaysDeduplicatesAndSortsLocalDays`,
   `HealthRepositoryTests.testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs`,
   `HealthRepositoryTests.testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData`,
   `HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion`,

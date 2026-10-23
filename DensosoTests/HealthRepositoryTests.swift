@@ -20,6 +20,23 @@ final class HealthRepositoryTests: XCTestCase {
         try context.save()
     }
 
+    func testProjectionAffectedDaysDeduplicatesAndSortsLocalDays() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let firstDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20)))
+        let secondDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: firstDay))
+        let affectedDates: Set<Date> = [
+            firstDay.addingTimeInterval(3_600),
+            firstDay.addingTimeInterval(72_000),
+            secondDay.addingTimeInterval(14_400),
+        ]
+
+        XCTAssertEqual(
+            HealthRepository.affectedProjectionDays(from: affectedDates, calendar: calendar),
+            [firstDay, secondDay]
+        )
+    }
+
     override func tearDown() {
         context = nil
         container = nil

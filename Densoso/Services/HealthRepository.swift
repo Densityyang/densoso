@@ -508,7 +508,7 @@ final class HealthRepository: HealthSyncRepository {
         do {
             var affectedDates = Set(dates)
             try change(&affectedDates)
-            for date in affectedDates {
+            for date in Self.affectedProjectionDays(from: affectedDates) {
                 try DailyMetricsProjector.reproject(on: date, in: modelContext)
             }
             try willSave?()
@@ -517,6 +517,11 @@ final class HealthRepository: HealthSyncRepository {
             modelContext.rollback()
             throw error
         }
+    }
+
+    static func affectedProjectionDays(from dates: Set<Date>, calendar: Calendar = .current) -> [Date] {
+        // Multiple source timestamps can belong to one local day; project that day once.
+        Set(dates.map { calendar.startOfDay(for: $0) }).sorted()
     }
 
     private func enqueue(operation: String, recordID: UUID, syncType: String, receiptID: UUID? = nil) throws {

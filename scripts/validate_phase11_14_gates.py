@@ -38,6 +38,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "Gate 11",
                 "effective historical profiles",
                 "HealthRepositoryTests.testInsertAndDeleteReprojectsTheSameDay",
+                "HealthRepositoryTests.testProjectionAffectedDaysDeduplicatesAndSortsLocalDays",
                 "HealthRepositoryTests.testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs",
                 "HealthRepositoryTests.testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData",
                 "HealthRepositoryTests.testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
@@ -590,6 +591,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "DensosoTests/HealthRepositoryTests.swift",
             (
                 "testInsertAndDeleteReprojectsTheSameDay",
+                "testProjectionAffectedDaysDeduplicatesAndSortsLocalDays",
                 "testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs",
                 "testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData",
                 "testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
@@ -599,6 +601,14 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown",
                 "testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays",
                 "testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Services/HealthRepository.swift",
+            (
+                "for date in Self.affectedProjectionDays(from: affectedDates)",
+                "static func affectedProjectionDays(from dates: Set<Date>, calendar: Calendar = .current)",
             ),
             errors,
         )
@@ -2129,6 +2139,7 @@ def main() -> int:
                 "--filter HealthNarrativeTests",
                 "--filter SharedErrorDescriptorTests",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay",
+                "-only-testing:DensosoTests/HealthRepositoryTests/testProjectionAffectedDaysDeduplicatesAndSortsLocalDays",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages",
