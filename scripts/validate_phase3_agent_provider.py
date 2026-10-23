@@ -386,6 +386,8 @@ def main() -> int:
         [
             "testComposerUsesMatchingExistingBriefAndPreservesOptionalState",
             "testComposerKeepsMissingMorningAndDaytimeSummariesNil",
+            "testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource",
+            "testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint",
             "stale-plan",
             "distant-plan",
         ],
@@ -396,6 +398,13 @@ def main() -> int:
         [
             "struct DailyLoopSnapshotComposer",
             "healthIntelligenceService.dailyBrief",
+            "dailyBriefSourceFingerprint",
+            "dailyBriefValidatedAt",
+            "sourceFingerprint",
+            "projectionVersion",
+            "refreshState",
+            "coverage",
+            "func refreshSnapshot(asOf date: Date = Date()) async throws -> DailyLoopSnapshot",
             "agentSession.pendingActions",
             "plansThroughTomorrow",
             "scheduledAt >= dayStart",

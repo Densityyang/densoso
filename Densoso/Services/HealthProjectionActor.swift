@@ -34,6 +34,8 @@ actor HealthProjectionActor {
         ) else {
             return HealthIntelligenceRefreshSnapshot(
                 dailyBrief: nil,
+                dailyBriefSourceFingerprint: nil,
+                dailyBriefValidatedAt: nil,
                 weeklyBrief: nil,
                 updatesWeeklyBrief: false
             )
@@ -71,6 +73,8 @@ actor HealthProjectionActor {
         )
         return HealthIntelligenceRefreshSnapshot(
             dailyBrief: daily,
+            dailyBriefSourceFingerprint: dailySnapshotHash,
+            dailyBriefValidatedAt: date,
             weeklyBrief: cachedWeekly,
             updatesWeeklyBrief: true
         )
@@ -88,9 +92,12 @@ actor HealthProjectionActor {
         weeklyDescriptor.fetchLimit = 1
         let dailyRecord = try? modelContext.fetch(dailyDescriptor).first
         let weeklyRecord = try? modelContext.fetch(weeklyDescriptor).first
+        let dailyBrief = dailyRecord.flatMap { try? decoder.decode(DailyHealthBrief.self, from: $0.payloadData) }
         return HealthIntelligenceCachedBriefs(
             hasDailyRecord: dailyRecord != nil,
-            dailyBrief: dailyRecord.flatMap { try? decoder.decode(DailyHealthBrief.self, from: $0.payloadData) },
+            dailyBrief: dailyBrief,
+            dailyBriefSourceFingerprint: dailyBrief == nil ? nil : dailyRecord?.snapshotHash,
+            dailyBriefValidatedAt: nil,
             hasWeeklyRecord: weeklyRecord != nil,
             weeklyBrief: weeklyRecord.flatMap { try? decoder.decode(WeeklyHealthBrief.self, from: $0.payloadData) }
         )
@@ -296,15 +303,40 @@ actor HealthProjectionActor {
     func dailyLoopSnapshot(
         asOf date: Date,
         dailyBrief: DailyHealthBrief?,
+        dailyBriefSourceFingerprint: String?,
+        dailyBriefValidatedAt: Date?,
         pendingActions: [PendingAction]
     ) throws -> DailyLoopSnapshot {
         let plans = try loadConfirmedPlanEntries(asOf: date)
+        let coverage = try dailyLoopMetricCoverage(on: date)
         return DailyLoopSnapshotComposer(calendar: calendar).compose(
             asOf: date,
             dailyBrief: dailyBrief,
+            dailyBriefSourceFingerprint: dailyBriefSourceFingerprint,
+            dailyBriefValidatedAt: dailyBriefValidatedAt,
+            coverage: coverage,
             pendingActions: pendingActions,
             workoutPlans: plans.workoutPlans,
             trainingPlans: plans.trainingPlans
+        )
+    }
+
+    private func dailyLoopMetricCoverage(on date: Date) throws -> DailyLoopMetricCoverage {
+        let day = calendar.startOfDay(for: date)
+        let predicate = #Predicate<DailyMetrics> { $0.date == day }
+        var descriptor = FetchDescriptor<DailyMetrics>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        guard let metric = try modelContext.fetch(descriptor).first else {
+            return .unavailable
+        }
+        let result = DailyMetricsReadModelMapper.make(metric)
+        return DailyLoopMetricCoverage(
+            intake: result.intake.availability,
+            expenditure: result.expenditure.availability,
+            deficit: result.deficit.availability,
+            proteinG: result.proteinG.availability,
+            fatG: result.fatG.availability,
+            carbsG: result.carbsG.availability
         )
     }
 
@@ -325,11 +357,12 @@ actor HealthProjectionActor {
             return cached
         }
         let payload = try encode(brief)
+        let generatedAt = Date()
         if let existing {
             existing.snapshotHash = snapshotHash
             existing.algorithmVersion = brief.algorithmVersion
             existing.payloadData = payload
-            existing.generatedAt = Date()
+            existing.generatedAt = generatedAt
         } else {
             context.insert(DailyBriefRecord(
                 cacheKey: key,
@@ -425,6 +458,8 @@ actor HealthProjectionActor {
 
 struct HealthIntelligenceRefreshSnapshot: Sendable {
     let dailyBrief: DailyHealthBrief?
+    let dailyBriefSourceFingerprint: String?
+    let dailyBriefValidatedAt: Date?
     let weeklyBrief: WeeklyHealthBrief?
     let updatesWeeklyBrief: Bool
 }
@@ -432,6 +467,8 @@ struct HealthIntelligenceRefreshSnapshot: Sendable {
 struct HealthIntelligenceCachedBriefs: Sendable {
     let hasDailyRecord: Bool
     let dailyBrief: DailyHealthBrief?
+    let dailyBriefSourceFingerprint: String?
+    let dailyBriefValidatedAt: Date?
     let hasWeeklyRecord: Bool
     let weeklyBrief: WeeklyHealthBrief?
 }

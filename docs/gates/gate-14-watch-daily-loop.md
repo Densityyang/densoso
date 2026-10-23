@@ -11,6 +11,11 @@ and retry/resume behavior. Inbox reads push state, identity, sort order, and
 recent-item limits into SwiftData while preserving durable arrival ordering;
 equal ordinals use message ID as a deterministic tie-breaker across receipt
 pages.
+The iPhone DailyLoop snapshot includes its local day key/time zone, projection
+version, stable source fingerprint, per-metric availability and freshness
+state. The Watch still receives its compact current-state projection; missing
+health coverage is not represented as a measured zero. A stale or missing brief
+offers a refresh that runs the canonical local health projection first.
 The pending-command query matches a zero UUID receipt without admitting an
 envelope whose optional request ID is nil; recent receipt IDs also skip that
 envelope while preserving durable inbox arrival order. Pending receipt IDs and
@@ -79,6 +84,8 @@ health refreshes reach the companion without waiting for another activation.
   and `testTerminalSequenceWatermarkAcknowledgesOnlyCoveredCausalEntries`),
   and `WatchWorkoutCoordinatorTests`.
 - iOS tests: `DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState`,
+  `DailyLoopSnapshotCompositionTests.testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource`,
+  `DailyLoopSnapshotCompositionTests.testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint`,
   `DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays`,
   `DailyLoopSnapshotCompositionTests.testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary`,
   `WatchMessageInboxStoreTests.testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder`,

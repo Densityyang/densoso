@@ -25,6 +25,18 @@ struct DailyLoopSnapshotCard: View {
                         .buttonStyle(.bordered)
                 }
                 .accessibilityIdentifier("daily-loop-snapshot-error")
+            } else if snapshot?.refreshState == .error {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("今日概览刷新失败", systemImage: "exclamationmark.triangle.fill")
+                        .font(.headline)
+                        .foregroundStyle(OrbitPalette.coral)
+                    Text("本地健康摘要暂时无法读取。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button("重试", action: onRetry)
+                        .buttonStyle(.bordered)
+                }
+                .accessibilityIdentifier("daily-loop-snapshot-error")
             } else if let snapshot {
                 HStack(alignment: .firstTextBaseline) {
                     Label("今日节奏", systemImage: "sun.max.fill")
@@ -32,6 +44,22 @@ struct DailyLoopSnapshotCard: View {
                     Spacer()
                     OrbitStatusBadge(text: phaseName(snapshot.phase), tone: .blue)
                         .accessibilityIdentifier("daily-loop-phase")
+                }
+
+                if snapshot.refreshState == .stale || snapshot.refreshState == .refreshRequired {
+                    HStack(spacing: 8) {
+                        Label(
+                            snapshot.refreshState == .stale ? "健康摘要需要更新" : "今日摘要待刷新",
+                            systemImage: "arrow.clockwise"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        Button("刷新", action: onRetry)
+                            .font(.caption.weight(.semibold))
+                            .buttonStyle(.borderless)
+                    }
+                    .accessibilityIdentifier("daily-loop-refresh-state")
                 }
 
                 VStack(alignment: .leading, spacing: 5) {
@@ -64,6 +92,8 @@ struct DailyLoopSnapshotCard: View {
                     }
                 }
 
+                coverageSection(snapshot.coverage)
+
                 Divider()
 
                 guidanceSection(snapshot.tomorrowGuidance)
@@ -82,6 +112,47 @@ struct DailyLoopSnapshotCard: View {
         .orbitCard(emphasized: true)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("daily-loop-snapshot")
+    }
+
+    @ViewBuilder
+    private func coverageSection(_ coverage: DailyLoopMetricCoverage) -> some View {
+        let columns = Array(repeating: GridItem(.flexible(), alignment: .leading), count: 3)
+        let items: [(String, MetricAvailability)] = [
+            ("摄入", coverage.intake),
+            ("消耗", coverage.expenditure),
+            ("缺口", coverage.deficit),
+            ("蛋白", coverage.proteinG),
+            ("脂肪", coverage.fatG),
+            ("碳水", coverage.carbsG),
+        ]
+        VStack(alignment: .leading, spacing: 6) {
+            Text("数据覆盖")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+                ForEach(Array(items.enumerated()), id: \.offset) { item in
+                    HStack(spacing: 4) {
+                        Text(item.element.0)
+                            .foregroundStyle(.secondary)
+                        Text(availabilityName(item.element.1))
+                            .fontWeight(.medium)
+                    }
+                    .font(.caption2)
+                    .lineLimit(1)
+                }
+            }
+        }
+        .accessibilityIdentifier("daily-loop-data-coverage")
+    }
+
+    private func availabilityName(_ availability: MetricAvailability) -> String {
+        switch availability {
+        case .observed: "实测"
+        case .estimated: "估算"
+        case .partial: "部分"
+        case .unavailable: "暂缺"
+        case .pendingRecompute: "待重算"
+        }
     }
 
     @ViewBuilder

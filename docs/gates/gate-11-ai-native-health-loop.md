@@ -36,6 +36,13 @@ writes when inputs are unchanged; pending legacy rows still run through
 projection. Daily-brief cache versions
 include the recommendation-policy version, while DailyLoop exposes its own
 algorithm version for its on-demand composed snapshot.
+The DailyLoop snapshot also carries the local day key and time zone, a stable
+source fingerprint, per-metric observed/estimated/partial/unavailable/pending
+coverage, and refresh state. A current-day brief is fresh for six hours after
+its source fingerprint was verified; an older brief is stale, while missing
+same-day provenance requires refresh. Failed reads retain a safe error code and
+the Today card shows the mapped user-safe error. Legacy snapshots decode with
+unknown coverage and `refreshRequired` until current provenance is available.
 HealthIntelligenceReadModel reads intake, deficit and nutrient values through
 the shared DailyMetrics read model; it continues to page weight and workout
 history inside its bounded date window.
@@ -137,6 +144,8 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `ConfirmationCoordinatorTests.testHistoricalConfirmationKeepsPendingMetricsWhenProfileAndWeightAreMissing`,
   `HealthNarrativePolicyTests`,
   `DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState`,
+  `DailyLoopSnapshotCompositionTests.testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource`,
+  `DailyLoopSnapshotCompositionTests.testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint`,
   and `DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays`.
 
 This gate uses fixtures and simulator persistence only. It does not prove access

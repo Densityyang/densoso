@@ -8,6 +8,7 @@ final class DailyLoopSnapshotCompositionTests: XCTestCase {
         let calendar = localCalendar()
         let dayStart = try date(2026, 10, 16, 0, 0, calendar: calendar)
         let asOf = try date(2026, 10, 16, 20, 30, calendar: calendar)
+        let generatedAt = asOf.addingTimeInterval(17)
         let guidance = NextDayGuidance(
             expectedState: .favorable,
             confidence: .high,
@@ -99,13 +100,31 @@ final class DailyLoopSnapshotCompositionTests: XCTestCase {
 
         let snapshot = DailyLoopSnapshotComposer(calendar: calendar).compose(
             asOf: asOf,
+            generatedAt: generatedAt,
             dailyBrief: dailyBrief,
+            dailyBriefSourceFingerprint: "health-input-fingerprint",
+            dailyBriefValidatedAt: asOf.addingTimeInterval(-600),
+            coverage: DailyLoopMetricCoverage(
+                intake: .estimated,
+                expenditure: .observed,
+                deficit: .partial,
+                proteinG: .estimated,
+                fatG: .unavailable,
+                carbsG: .pendingRecompute
+            ),
             pendingActions: [expiredAction, activeAction],
             workoutPlans: [terminalPlan, distantPlan, stalePlan, tomorrowPlan, workoutPlan]
         )
 
         XCTAssertEqual(snapshot.dayStart, dayStart)
-        XCTAssertEqual(snapshot.generatedAt, asOf)
+        XCTAssertEqual(snapshot.dayKey, "2026-10-16")
+        XCTAssertEqual(snapshot.timezoneIdentifier, "America/Los_Angeles")
+        XCTAssertEqual(snapshot.generatedAt, generatedAt)
+        XCTAssertEqual(snapshot.projectionVersion, DailyLoopSnapshot.currentAlgorithmVersion)
+        XCTAssertNotNil(snapshot.sourceFingerprint)
+        XCTAssertEqual(snapshot.refreshState, .fresh)
+        XCTAssertEqual(snapshot.coverage.expenditure, .observed)
+        XCTAssertEqual(snapshot.coverage.fatG, .unavailable)
         XCTAssertEqual(snapshot.phase, .evening)
         XCTAssertEqual(snapshot.todaySummary, dailyBrief.summary)
         XCTAssertEqual(snapshot.todayState?.healthState, healthState)
@@ -130,12 +149,67 @@ final class DailyLoopSnapshotCompositionTests: XCTestCase {
             )
 
             XCTAssertEqual(snapshot.phase, expectedPhase)
+            XCTAssertEqual(snapshot.refreshState, .refreshRequired)
             XCTAssertNil(snapshot.todayState)
             XCTAssertNil(snapshot.todaySummary)
             XCTAssertNil(snapshot.tomorrowGuidance)
             XCTAssertTrue(snapshot.pendingActions.isEmpty)
             XCTAssertTrue(snapshot.workoutPlans.isEmpty)
         }
+    }
+
+    func testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource() throws {
+        let calendar = localCalendar()
+        let dayStart = try date(2026, 10, 16, 0, 0, calendar: calendar)
+        let asOf = try date(2026, 10, 16, 20, 30, calendar: calendar)
+        let brief = makeBrief(dayStart: dayStart, summary: "今天的摘要", state: makeHealthState())
+        let composer = DailyLoopSnapshotComposer(calendar: calendar)
+
+        let stale = composer.compose(
+            asOf: asOf,
+            dailyBrief: brief,
+            dailyBriefSourceFingerprint: "old-source",
+            dailyBriefValidatedAt: asOf.addingTimeInterval(-7 * 60 * 60),
+            pendingActions: [],
+            workoutPlans: []
+        )
+        let changedSource = composer.compose(
+            asOf: asOf,
+            dailyBrief: brief,
+            dailyBriefSourceFingerprint: "new-source",
+            dailyBriefValidatedAt: asOf.addingTimeInterval(-600),
+            pendingActions: [],
+            workoutPlans: []
+        )
+        let repeated = composer.compose(
+            asOf: asOf,
+            dailyBrief: brief,
+            dailyBriefSourceFingerprint: "new-source",
+            dailyBriefValidatedAt: asOf.addingTimeInterval(-600),
+            pendingActions: [],
+            workoutPlans: []
+        )
+
+        XCTAssertEqual(stale.refreshState, .stale)
+        XCTAssertEqual(changedSource.refreshState, .fresh)
+        XCTAssertNotEqual(stale.sourceFingerprint, changedSource.sourceFingerprint)
+        XCTAssertEqual(changedSource.sourceFingerprint, repeated.sourceFingerprint)
+    }
+
+    func testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint() throws {
+        let asOf = Date(timeIntervalSince1970: 1_800_000_000)
+        let snapshot = DailyLoopSnapshotComposer().compose(
+            asOf: asOf,
+            dailyBrief: nil,
+            pendingActions: [],
+            workoutPlans: [],
+            errorCode: "ProjectionFailed"
+        )
+
+        XCTAssertEqual(snapshot.refreshState, .error)
+        XCTAssertEqual(snapshot.errorCode, "ProjectionFailed")
+        XCTAssertNil(snapshot.sourceFingerprint)
+        XCTAssertEqual(snapshot.coverage, .unavailable)
     }
 
     func testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays() throws {

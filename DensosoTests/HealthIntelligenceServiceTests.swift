@@ -77,6 +77,8 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         let service = HealthIntelligenceService(modelContainer: container)
         let firstResult = try await service.refresh(asOf: reference)
         let first = try XCTUnwrap(firstResult)
+        XCTAssertFalse(service.dailyBriefSourceFingerprint?.isEmpty ?? true)
+        XCTAssertEqual(service.dailyBriefValidatedAt, reference)
         XCTAssertEqual(first.contextSummary.sevenDay.windowDays, 7)
         XCTAssertEqual(first.contextSummary.twentyEightDay.windowDays, 28)
         XCTAssertEqual(first.contextSummary.targetWeightKilograms, 68)
@@ -87,11 +89,18 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         )
         let firstHash = firstRecord.snapshotHash
         let firstPayload = firstRecord.payloadData
+        XCTAssertEqual(service.dailyBriefSourceFingerprint, firstHash)
         _ = try await service.refresh(asOf: reference)
         let unchanged = try XCTUnwrap(context.fetch(FetchDescriptor<DailyBriefRecord>()).first(where: { $0.dayKey == key }))
         XCTAssertEqual(unchanged.snapshotHash, firstHash)
         XCTAssertEqual(unchanged.payloadData, firstPayload)
+        XCTAssertEqual(service.dailyBriefValidatedAt, reference)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyBriefRecord>()), 1)
+
+        let cachedService = HealthIntelligenceService(modelContainer: container)
+        await cachedService.loadCachedBriefs()
+        XCTAssertEqual(cachedService.dailyBriefSourceFingerprint, firstHash)
+        XCTAssertNil(cachedService.dailyBriefValidatedAt)
 
         metric.totalExpenditureKcal = 2_400
         metric.expenditureEnergyLowKcal = 2_400

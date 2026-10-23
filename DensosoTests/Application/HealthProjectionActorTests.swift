@@ -505,6 +505,20 @@ final class HealthProjectionActorTests: XCTestCase {
             notes: "not-a-confirmed-plan",
             startTime: terminalTime
         ))
+        context.insert(DailyMetrics(
+            date: today,
+            totalIntakeKcal: 500,
+            totalExpenditureKcal: 1_820,
+            deficitKcal: 1_320,
+            proteinG: 25,
+            fatG: 20,
+            carbsG: 60,
+            mealCount: 1,
+            energyQuality: "observed",
+            dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true}"#,
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "daily-loop-coverage-fixture"
+        ))
         try context.save()
 
         let actor = HealthProjectionActor(modelContainer: container, calendar: calendar)
@@ -520,6 +534,10 @@ final class HealthProjectionActorTests: XCTestCase {
         XCTAssertEqual(snapshot.workoutPlans.count, 10)
         XCTAssertEqual(snapshot.workoutPlans.map(\.actionID), trainingSessionIDs + expectedSinglePlanIDs)
         XCTAssertFalse(snapshot.workoutPlans.contains { $0.actionID == terminalActionID })
+        XCTAssertEqual(snapshot.coverage.intake, .estimated)
+        XCTAssertEqual(snapshot.coverage.expenditure, .observed)
+        XCTAssertEqual(snapshot.refreshState, .refreshRequired)
+        XCTAssertNotNil(snapshot.sourceFingerprint)
     }
 
     func testPlannedWorkoutTomorrowPagesTerminalPlansUntilActiveTrainingPlan() throws {

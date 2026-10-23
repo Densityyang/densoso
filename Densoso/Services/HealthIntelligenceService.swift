@@ -11,6 +11,8 @@ final class HealthIntelligenceService {
     private let projectionActor: HealthProjectionActor
 
     private(set) var dailyBrief: DailyHealthBrief?
+    private(set) var dailyBriefSourceFingerprint: String?
+    private(set) var dailyBriefValidatedAt: Date?
     private(set) var weeklyBrief: WeeklyHealthBrief?
     private(set) var lastError: String?
 
@@ -29,6 +31,8 @@ final class HealthIntelligenceService {
             do {
                 let snapshot = try await projectionActor.refresh(asOf: date)
                 dailyBrief = snapshot.dailyBrief
+                dailyBriefSourceFingerprint = snapshot.dailyBriefSourceFingerprint
+                dailyBriefValidatedAt = snapshot.dailyBriefValidatedAt
                 if snapshot.updatesWeeklyBrief {
                     weeklyBrief = snapshot.weeklyBrief
                 }
@@ -46,8 +50,10 @@ final class HealthIntelligenceService {
 
     func loadCachedBriefs() async {
         let cached = await projectionActor.loadCachedBriefs()
-        if cached.hasDailyRecord { dailyBrief = cached.dailyBrief }
-        if cached.hasWeeklyRecord { weeklyBrief = cached.weeklyBrief }
+        dailyBrief = cached.hasDailyRecord ? cached.dailyBrief : nil
+        dailyBriefSourceFingerprint = cached.dailyBriefSourceFingerprint
+        dailyBriefValidatedAt = cached.dailyBriefValidatedAt
+        weeklyBrief = cached.hasWeeklyRecord ? cached.weeklyBrief : nil
     }
 
     func healthContextSummary(asOf date: Date = Date()) async throws -> HealthContextSummary? {

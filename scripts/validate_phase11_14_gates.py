@@ -73,15 +73,23 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "Ordinary reprojects also apply the policy to new",
                 "Both projection entry points share the same fingerprint comparison",
                 "Daily-brief cache versions",
+                "local day key and time zone",
+                "source fingerprint",
+                "per-metric observed/estimated/partial/unavailable/pending",
+                "fresh for six hours",
+                "Legacy snapshots decode with",
                 "CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics",
                 "DailyMetricsProjectionFingerprintTests.testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected",
                 "DailyMetricsProjectionFingerprintTests.testSourceCursorProfileAndGoalRevisionsChangeProjectionFingerprint",
                 "DailyMetricsProjectionFingerprintTests.testWorkoutEnergyAndProvenanceChangesProjectionFingerprint",
                 "DailyLoopSnapshotTests.testMainPRAlgorithmVersionsAreCentralizedAndInvalidateDailyBriefCache",
+                "DailyLoopSnapshotTests.testLegacySnapshotDecodesWithUnknownProvenanceAndRefreshRequiredState",
                 "HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash",
                 "HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches",
                 "HealthProjectionActorTests",
                 "DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState",
+                "DailyLoopSnapshotCompositionTests.testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource",
+                "DailyLoopSnapshotCompositionTests.testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint",
                 "DailyLoopSnapshotCompositionTests.testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
                 "HealthNarrativePolicyTests",
                 "does not prove access to a real person's HealthKit data",
@@ -129,7 +137,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 'public static let portionEstimator = "portion-estimator-v2"',
                 'public static let healthIntelligence = "health-intelligence-v2"',
                 'public static let recommendationPolicy = "recommendation-policy-v1"',
-                'public static let dailyLoop = "daily-loop-v1"',
+                'public static let dailyLoop = "daily-loop-v2"',
             ),
             errors,
         )
@@ -211,6 +219,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "读取今日概览失败：",
                 "SharedErrorDescriptor.mapped(",
                 "fallback: .projectionFailedFallback",
+                "onChange(of: dependencies.healthIntelligenceService.dailyBriefSourceFingerprint)",
+                "refreshDailyLoopSnapshot(refreshHealth: true)",
+                "refreshSnapshot()",
+                "errorCode: descriptor.code.rawValue",
             ),
             errors,
         )
@@ -230,6 +242,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "今日概览读取失败",
                 'Button("重试", action: onRetry)',
                 "今日状态暂不可用",
+                "snapshot.refreshState == .stale || snapshot.refreshState == .refreshRequired",
+                "coverageSection(snapshot.coverage)",
+                "availabilityName(_ availability: MetricAvailability)",
             ),
             errors,
         )
@@ -1600,6 +1615,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "Gate 14",
             "daily snapshot summaries",
+            "local day key/time zone, projection version, stable source fingerprint, per-metric availability and freshness state",
+            "stale or missing brief offers a refresh",
             "offline replay deduplication",
             "arrival ordering",
             "Sequenced commands wait while their predecessor is missing",
@@ -1651,7 +1668,26 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         errors.append("Refreshing confirmed workout plans must restart both bounded pages at zero")
     require(
         "Packages/DensosoDomain/Tests/DensosoDomainTests/DailyLoopSnapshotTests.swift",
-        ("testSnapshotRoundTripsStateGuidanceAndActionSummaries",),
+        (
+            "testSnapshotRoundTripsStateGuidanceAndActionSummaries",
+            "testLegacySnapshotDecodesWithUnknownProvenanceAndRefreshRequiredState",
+        ),
+        errors,
+    )
+    require(
+        "Packages/DensosoDomain/Sources/DensosoDomain/DailyLoopSnapshot.swift",
+        (
+            "public let dayKey: String",
+            "public let timezoneIdentifier: String",
+            "public let sourceFingerprint: String?",
+            "public let projectionVersion: String",
+            "public static let legacyProjectionVersion = \"legacy-unknown\"",
+            "public let coverage: DailyLoopMetricCoverage",
+            "public let refreshState: DailyLoopRefreshState",
+            "public let errorCode: String?",
+            "case error",
+            "public static func localDayKey(for date: Date, timezoneIdentifier: String)",
+        ),
         errors,
     )
     require(
@@ -1933,6 +1969,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         "DensosoTests/Application/DailyLoopSnapshotCompositionTests.swift",
         (
             "testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
+            "testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource",
+            "testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint",
             "testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary",
         ),
         errors,
@@ -1985,6 +2023,12 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     require(
         "Densoso/Services/HealthProjectionActor.swift",
         (
+            "dailyLoopMetricCoverage(on: date)",
+            "DailyMetricsReadModelMapper.make(metric)",
+            "intake: result.intake.availability",
+            "expenditure: result.expenditure.availability",
+            "dailyBriefValidatedAt: date",
+            "dailyBriefValidatedAt: nil",
             "func confirmedPlanEntries() throws -> ConfirmedDailyLoopPlans",
             "private static let confirmedPlanFetchBatchSize = 64",
             "private static let watchPlanSummaryLimit = 10",
@@ -1999,10 +2043,24 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         errors,
     )
     require(
+        "Densoso/Services/HealthIntelligenceService.swift",
+        (
+            "private(set) var dailyBriefSourceFingerprint: String?",
+            "private(set) var dailyBriefValidatedAt: Date?",
+            "dailyBriefValidatedAt = snapshot.dailyBriefValidatedAt",
+            "dailyBriefValidatedAt = cached.dailyBriefValidatedAt",
+        ),
+        errors,
+    )
+    require(
         "Densoso/Application/DailyLoop/DailyLoopSnapshotService.swift",
         (
             "func snapshot(asOf date: Date = Date()) async throws -> DailyLoopSnapshot",
             "try await healthProjectionActor.dailyLoopSnapshot(",
+            "dailyBriefSourceFingerprint: healthIntelligenceService.dailyBriefSourceFingerprint",
+            "dailyBriefValidatedAt: healthIntelligenceService.dailyBriefValidatedAt",
+            "func refreshSnapshot(asOf date: Date = Date()) async throws -> DailyLoopSnapshot",
+            "healthIntelligenceService.refresh(asOf: date)",
             "pendingActions: agentSession.pendingActions",
         ),
         errors,
@@ -2082,6 +2140,8 @@ def main() -> int:
                 "-only-testing:DensosoTests/DailyLoopBackgroundSchedulerTests",
                 "-only-testing:DensosoTests/HistoricalMetricsRecomputeServiceTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
+                "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource",
+                "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint",
                 "-only-testing:DensosoTests/HealthNarrativePolicyTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary",
             ),
@@ -2163,6 +2223,8 @@ def main() -> int:
                 "--filter WatchMessageOutboxTests",
                 "--filter WatchWorkoutCoordinatorTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
+                "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource",
+                "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry",
                 "-only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays",

@@ -57,6 +57,9 @@ struct ChatScreen: View {
             .onChange(of: dependencies.healthIntelligenceService.dailyBrief) { _, _ in
                 Task { await refreshDailyLoopSnapshot() }
             }
+            .onChange(of: dependencies.healthIntelligenceService.dailyBriefSourceFingerprint) { _, _ in
+                Task { await refreshDailyLoopSnapshot() }
+            }
             .onChange(of: appState.shouldFocusComposer) { _, shouldFocus in
                 if shouldFocus { focusComposer() }
             }
@@ -107,7 +110,7 @@ struct ChatScreen: View {
                         errorMessage: dailyLoopSnapshotReadError,
                         isLoading: isLoadingDailyLoopSnapshot
                     ) {
-                        Task { await refreshDailyLoopSnapshot() }
+                        Task { await refreshDailyLoopSnapshot(refreshHealth: true) }
                     }
                     .id("daily-loop-snapshot-anchor")
 
@@ -449,7 +452,7 @@ struct ChatScreen: View {
         didHydratePersistedMessages = true
     }
 
-    private func refreshDailyLoopSnapshot() async {
+    private func refreshDailyLoopSnapshot(refreshHealth: Bool = false) async {
         guard !isRefreshingDailyLoopSnapshot else { return }
         isRefreshingDailyLoopSnapshot = true
         isLoadingDailyLoopSnapshot = true
@@ -459,15 +462,27 @@ struct ChatScreen: View {
         }
 
         do {
-            dailyLoopSnapshot = try await dependencies.dailyLoopSnapshotService.snapshot()
+            let snapshot: DailyLoopSnapshot
+            if refreshHealth {
+                snapshot = try await dependencies.dailyLoopSnapshotService.refreshSnapshot()
+            } else {
+                snapshot = try await dependencies.dailyLoopSnapshotService.snapshot()
+            }
+            dailyLoopSnapshot = snapshot
             dailyLoopSnapshotReadError = nil
         } catch {
-            dailyLoopSnapshot = nil
-            let errorMessage = SharedErrorDescriptor.mapped(
+            let descriptor = SharedErrorDescriptor.mapped(
                 from: error,
                 fallback: .projectionFailedFallback
-            ).userMessage
-            dailyLoopSnapshotReadError = "读取今日概览失败：\(errorMessage)"
+            )
+            dailyLoopSnapshot = DailyLoopSnapshotComposer(calendar: .current).compose(
+                asOf: Date(),
+                dailyBrief: nil,
+                pendingActions: [],
+                workoutPlans: [],
+                errorCode: descriptor.code.rawValue
+            )
+            dailyLoopSnapshotReadError = "读取今日概览失败：\(descriptor.userMessage)"
         }
     }
 

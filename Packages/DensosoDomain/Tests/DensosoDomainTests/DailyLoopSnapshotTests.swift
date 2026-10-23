@@ -10,7 +10,7 @@ final class DailyLoopSnapshotTests: XCTestCase {
         XCTAssertEqual(AlgorithmVersions.portionEstimator, "portion-estimator-v2")
         XCTAssertEqual(AlgorithmVersions.healthIntelligence, "health-intelligence-v2")
         XCTAssertEqual(AlgorithmVersions.recommendationPolicy, "recommendation-policy-v1")
-        XCTAssertEqual(AlgorithmVersions.dailyLoop, "daily-loop-v1")
+        XCTAssertEqual(AlgorithmVersions.dailyLoop, "daily-loop-v2")
         XCTAssertEqual(RecommendationEngine.algorithmVersion, AlgorithmVersions.recommendationPolicy)
         XCTAssertEqual(DailyLoopSnapshot.currentAlgorithmVersion, AlgorithmVersions.dailyLoop)
         XCTAssertEqual(
@@ -57,7 +57,19 @@ final class DailyLoopSnapshotTests: XCTestCase {
         )
         let snapshot = DailyLoopSnapshot(
             dayStart: day,
+            timezoneIdentifier: "America/Los_Angeles",
             generatedAt: day.addingTimeInterval(18 * 60 * 60),
+            sourceFingerprint: "daily-loop-source-v1",
+            projectionVersion: "daily-loop-v2",
+            coverage: DailyLoopMetricCoverage(
+                intake: .estimated,
+                expenditure: .observed,
+                deficit: .partial,
+                proteinG: .unavailable,
+                fatG: .estimated,
+                carbsG: .pendingRecompute
+            ),
+            refreshState: .fresh,
             phase: .evening,
             todayState: DailyStateSummary(
                 headline: "恢复状态需要谨慎",
@@ -88,6 +100,11 @@ final class DailyLoopSnapshotTests: XCTestCase {
         XCTAssertEqual(decoded, snapshot)
         XCTAssertEqual(decoded.todayState?.healthState, healthState)
         XCTAssertEqual(decoded.tomorrowGuidance, guidance)
+        XCTAssertEqual(decoded.timezoneIdentifier, "America/Los_Angeles")
+        XCTAssertEqual(decoded.projectionVersion, "daily-loop-v2")
+        XCTAssertEqual(decoded.sourceFingerprint, "daily-loop-source-v1")
+        XCTAssertEqual(decoded.refreshState, .fresh)
+        XCTAssertEqual(decoded.coverage.carbsG, .pendingRecompute)
         XCTAssertEqual(decoded.pendingActions.count, 1)
         XCTAssertEqual(decoded.pendingActions.first?.requiresPhoneReview, true)
         XCTAssertEqual(decoded.workoutPlans.count, 1)
@@ -113,5 +130,20 @@ final class DailyLoopSnapshotTests: XCTestCase {
             XCTAssertTrue(decoded.workoutPlans.isEmpty)
             XCTAssertTrue(decoded.quickActions.isEmpty)
         }
+    }
+
+    func testLegacySnapshotDecodesWithUnknownProvenanceAndRefreshRequiredState() throws {
+        let data = Data(
+            #"{"dayStart":0,"generatedAt":0,"phase":"morning","pendingActions":[],"workoutPlans":[],"quickActions":[]}"#.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(DailyLoopSnapshot.self, from: data)
+
+        XCTAssertEqual(decoded.timezoneIdentifier, "unknown")
+        XCTAssertEqual(decoded.dayKey, "unknown")
+        XCTAssertNil(decoded.sourceFingerprint)
+        XCTAssertEqual(decoded.projectionVersion, DailyLoopSnapshot.legacyProjectionVersion)
+        XCTAssertEqual(decoded.coverage, .unavailable)
+        XCTAssertEqual(decoded.refreshState, .refreshRequired)
     }
 }
