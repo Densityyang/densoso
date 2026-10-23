@@ -4,9 +4,13 @@ import Foundation
 struct DailyCheckInSelfReportResolver {
     private static let negations = ["并没有", "不是", "没有", "并不", "不太", "不", "没", "未", "not"]
     private static let otherPersonCues = [
-        "我朋友", "我的朋友", "我妈妈", "我妈", "我爸爸", "我爸", "我孩子", "我同事", "我伴侣",
-        "我丈夫", "我妻子", "我老公", "我老婆", "我和朋友", "朋友说", "他说", "她说",
-        "myfriend", "mymother", "mymom", "myfather", "mydad", "mymum", "mychild", "mycoworker", "mypartner",
+        "我朋友", "我的朋友", "我妈妈", "我妈", "我爸爸", "我爸", "我孩子", "我儿子", "我女儿", "我闺女",
+        "我同事", "我伴侣", "我对象", "我男朋友", "我女朋友", "我男友", "我女友", "我丈夫", "我妻子", "我老公", "我老婆",
+        "我爷爷", "我奶奶", "我哥哥", "我姐姐",
+        "我弟弟", "我妹妹", "我家人", "我和朋友", "朋友说", "他说", "她说",
+        "myfriend", "friendofmine", "mymother", "mymom", "myfather", "mydad", "mymum", "mychild", "myson",
+        "mydaughter", "mycoworker", "mycolleague", "mypartner", "myspouse", "myhusband", "mywife", "myboyfriend",
+        "mygirlfriend", "mygrandparent", "mygrandmother", "mygrandfather", "mybrother", "mysister",
     ]
     private static let futureDateCues = [
         "明天", "明日", "后天", "大后天", "下周", "下星期", "下月", "下个月", "下半年",
@@ -14,9 +18,11 @@ struct DailyCheckInSelfReportResolver {
         "tomorrow", "dayaftertomorrow", "nextweek", "nextmonth", "nextyear",
     ]
     private static let unsupportedRelativeDateCues = [
-        "上周", "上星期", "上个月", "去年", "前几天", "最近几天", "几天前", "上周末",
+        "上周", "上星期", "上个月", "去年", "前几天", "最近", "这两天", "近几天", "最近几天",
+        "最近一周", "过去一周", "过去几天", "这周", "本周", "这个月", "本月", "几天前", "上周末",
         "lastweek", "lastmonth", "lastyear", "lastmonday", "lasttuesday", "lastwednesday",
-        "lastthursday", "lastfriday", "lastsaturday", "lastsunday", "afewdaysago",
+        "lastthursday", "lastfriday", "lastsaturday", "lastsunday", "afewdaysago", "thisweek",
+        "pastweek", "pastfewdays", "lastfewdays", "recently", "thismonth",
     ]
 
     func validate(_ checkIn: DailyCheckIn, userText: String, asOf date: Date) throws {

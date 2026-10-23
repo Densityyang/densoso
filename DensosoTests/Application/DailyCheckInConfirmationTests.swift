@@ -212,6 +212,9 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         for thirdPartyText in [
             "我妈今天很累、压力很大，昨晚没睡好。",
             "My dad is tired, stressed, and slept badly.",
+            "My wife is tired, stressed, and slept badly.",
+            "A friend of mine is tired, stressed, and slept badly.",
+            "我女儿今天很累，压力很大，昨晚没睡好。",
             "我很累，我爸压力很大，昨晚没睡好。",
             "他今天很累，压力很大，昨晚没睡好。",
             "She is tired, stressed, and slept badly.",
@@ -353,6 +356,8 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         for unsupportedPastText in [
             "last week I had normal energy, low stress, and fair sleep.",
             "三天前我不太累，压力不大，睡得一般。",
+            "过去一周我一直很累，压力很大，睡得一般。",
+            "Recently I felt tired, stressed, and slept badly.",
         ] {
             XCTAssertThrowsError(try resolver.validate(
                 checkIn,
