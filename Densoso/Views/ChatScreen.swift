@@ -478,9 +478,9 @@ struct ChatScreen: View {
             dailyLoopSnapshot = DailyLoopSnapshotComposer(calendar: .current).compose(
                 asOf: Date(),
                 dailyBrief: nil,
+                errorCode: descriptor.code.rawValue,
                 pendingActions: [],
-                workoutPlans: [],
-                errorCode: descriptor.code.rawValue
+                workoutPlans: []
             )
             dailyLoopSnapshotReadError = "读取今日概览失败：\(descriptor.userMessage)"
         }

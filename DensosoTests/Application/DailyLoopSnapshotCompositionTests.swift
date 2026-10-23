@@ -201,9 +201,9 @@ final class DailyLoopSnapshotCompositionTests: XCTestCase {
         let snapshot = DailyLoopSnapshotComposer().compose(
             asOf: asOf,
             dailyBrief: nil,
+            errorCode: "ProjectionFailed",
             pendingActions: [],
-            workoutPlans: [],
-            errorCode: "ProjectionFailed"
+            workoutPlans: []
         )
 
         XCTAssertEqual(snapshot.refreshState, .error)
