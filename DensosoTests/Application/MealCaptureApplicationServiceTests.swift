@@ -707,7 +707,7 @@ private struct MealCaptureHarness {
             allowsQwenMealVision: allowsQwenMealVision,
             governanceRepository: governance,
             providerConfiguration: configuration,
-            usageLedger: ProviderUsageLedger(repository: governance),
+            usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
             confirmationCoordinator: confirmation,
             qualityGate: qualityGate
         )

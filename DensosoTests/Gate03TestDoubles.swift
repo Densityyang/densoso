@@ -1,6 +1,30 @@
 import Foundation
 @testable import Densoso
 
+enum TestPricingDescriptorCatalog {
+    static let source = StaticPricingDescriptorSource(descriptors: [
+        descriptor(provider: .deepSeek, model: "fixture-model", currency: "USD"),
+        descriptor(provider: .deepSeek, model: "retry-fixture-model", currency: "USD"),
+        descriptor(provider: .deepSeek, model: "resume-test", currency: "USD"),
+        descriptor(provider: .qwen, model: "fixture-model", currency: "CNY"),
+    ])
+
+    private static func descriptor(provider: ProviderID, model: String, currency: String) -> PricingDescriptor {
+        PricingDescriptor(
+            provider: provider,
+            model: model,
+            capability: .text,
+            version: "agent-test-price-v1",
+            origin: .localConfiguration(identifier: "agent-test-price-v1"),
+            currency: currency,
+            inputMicrosPerMillionTokens: 1_000_000,
+            cachedInputMicrosPerMillionTokens: 100_000,
+            outputMicrosPerMillionTokens: 2_000_000,
+            audioMicrosPerSecond: nil
+        )
+    }
+}
+
 struct TestCredentialSource: ProviderCredentialSource {
     let values: [ProviderID: String]
 
@@ -100,12 +124,13 @@ final class ScriptedTextProvider: TextModelProvider, @unchecked Sendable {
 
     init(
         provider: ProviderID = .deepSeek,
+        model: String = "fixture-model",
         scripts: [[ProviderEvent]],
         capabilities: Set<ProviderCapability> = [.text, .toolCalling]
     ) {
         descriptor = ProviderDescriptor(
             id: provider,
-            model: "fixture-model",
+            model: model,
             capabilities: capabilities
         )
         self.scripts = scripts
@@ -239,8 +264,12 @@ actor InMemoryProviderGovernanceRepository: ProviderGovernanceRepository {
         estimatedCostMicros: Int64?,
         currency: String?,
         rateVersion: String
-    ) {
+    ) -> Bool {
+        if let existing = usages[usageKey] {
+            return existing.1 != nil && existing.2 == currency
+        }
         usages[usageKey] = (usage, estimatedCostMicros, currency)
+        return estimatedCostMicros != nil
     }
 
     func monthlyUsage(
@@ -282,6 +311,7 @@ actor BlockingConversationRepository: ConversationRepository {
                 startedAt: existing.startedAt,
                 budget: existing.budget,
                 consumption: existing.consumption,
+                costBudget: existing.costBudget,
                 resumeCount: existing.resumeCount + 1,
                 containsTransientImage: existing.containsTransientImage,
                 state: .running
@@ -295,6 +325,17 @@ actor BlockingConversationRepository: ConversationRepository {
             startedAt: startedAt,
             budget: initialBudget,
             consumption: .zero,
+            costBudget: AgentRequestCostBudget(
+                maximumCostMicros: initialBudget.maximumCostMicros,
+                reservedCostMicros: 0,
+                provider: nil,
+                model: nil,
+                currency: nil,
+                pricingVersion: nil,
+                lastReservedProviderRound: 0,
+                lastReservedCostMicros: 0,
+                state: .unresolved
+            ),
             resumeCount: 0,
             containsTransientImage: containsTransientImage,
             state: .running
@@ -315,6 +356,87 @@ actor BlockingConversationRepository: ConversationRepository {
             startedAt: existing.startedAt,
             budget: existing.budget,
             consumption: consumption,
+            costBudget: existing.costBudget,
+            resumeCount: existing.resumeCount,
+            containsTransientImage: existing.containsTransientImage,
+            state: existing.state
+        )
+    }
+
+    func reserveAgentRequestCost(
+        requestID: UUID,
+        conversationID: UUID,
+        provider: ProviderID,
+        model: String,
+        currency: String,
+        pricingVersion: String,
+        providerRound: Int,
+        estimatedCostMicros: Int64
+    ) throws -> AgentRequestCostBudget {
+        guard let existing = requests[requestID] else { throw AgentRequestPersistenceError.requestNotFound }
+        let current = existing.costBudget
+        guard current.state != .unavailable else { throw AgentRequestPersistenceError.costBudgetUnavailable }
+        if let currentProvider = current.provider,
+           (currentProvider != provider
+                || current.model != model
+                || current.currency != currency
+                || current.pricingVersion != pricingVersion) {
+            throw AgentRequestPersistenceError.costBudgetMismatch
+        }
+        if current.lastReservedProviderRound == providerRound { return current }
+        guard current.lastReservedProviderRound < Int.max,
+              providerRound == current.lastReservedProviderRound + 1 else {
+            throw AgentRequestPersistenceError.costBudgetMismatch
+        }
+        let total = current.reservedCostMicros.addingReportingOverflow(estimatedCostMicros)
+        guard !total.overflow, total.partialValue <= current.maximumCostMicros else {
+            throw AgentRequestPersistenceError.costBudgetExceeded
+        }
+        let updated = AgentRequestCostBudget(
+            maximumCostMicros: current.maximumCostMicros,
+            reservedCostMicros: total.partialValue,
+            provider: provider,
+            model: model,
+            currency: currency,
+            pricingVersion: pricingVersion,
+            lastReservedProviderRound: providerRound,
+            lastReservedCostMicros: estimatedCostMicros,
+            state: .estimated
+        )
+        requests[requestID] = AgentRequestSnapshot(
+            requestID: existing.requestID,
+            conversationID: existing.conversationID,
+            startedAt: existing.startedAt,
+            budget: existing.budget,
+            consumption: existing.consumption,
+            costBudget: updated,
+            resumeCount: existing.resumeCount,
+            containsTransientImage: existing.containsTransientImage,
+            state: existing.state
+        )
+        return updated
+    }
+
+    func markAgentRequestCostUnavailable(requestID: UUID, conversationID: UUID) throws {
+        guard let existing = requests[requestID] else { throw AgentRequestPersistenceError.requestNotFound }
+        let current = existing.costBudget
+        requests[requestID] = AgentRequestSnapshot(
+            requestID: existing.requestID,
+            conversationID: existing.conversationID,
+            startedAt: existing.startedAt,
+            budget: existing.budget,
+            consumption: existing.consumption,
+            costBudget: AgentRequestCostBudget(
+                maximumCostMicros: current.maximumCostMicros,
+                reservedCostMicros: current.reservedCostMicros,
+                provider: current.provider,
+                model: current.model,
+                currency: current.currency,
+                pricingVersion: current.pricingVersion,
+                lastReservedProviderRound: current.lastReservedProviderRound,
+                lastReservedCostMicros: current.lastReservedCostMicros,
+                state: .unavailable
+            ),
             resumeCount: existing.resumeCount,
             containsTransientImage: existing.containsTransientImage,
             state: existing.state
@@ -333,6 +455,7 @@ actor BlockingConversationRepository: ConversationRepository {
             startedAt: existing.startedAt,
             budget: existing.budget,
             consumption: existing.consumption.adding(usage),
+            costBudget: existing.costBudget,
             resumeCount: existing.resumeCount,
             containsTransientImage: existing.containsTransientImage,
             state: existing.state
@@ -351,6 +474,7 @@ actor BlockingConversationRepository: ConversationRepository {
             startedAt: existing.startedAt,
             budget: existing.budget,
             consumption: existing.consumption,
+            costBudget: existing.costBudget,
             resumeCount: existing.resumeCount,
             containsTransientImage: existing.containsTransientImage,
             state: state

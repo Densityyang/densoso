@@ -93,6 +93,9 @@ struct ProviderHTTPStreamResult: Sendable {
 }
 
 struct ProviderRequestExecutor: Sendable {
+    static let defaultMaximumRetries = 2
+    static let defaultMaximumAttempts = defaultMaximumRetries + 1
+
     let transport: any ProviderHTTPTransport
     let clock: any ProviderRetryClock
     let maximumRetries: Int
@@ -101,7 +104,7 @@ struct ProviderRequestExecutor: Sendable {
     init(
         transport: any ProviderHTTPTransport,
         clock: any ProviderRetryClock = SystemProviderRetryClock(),
-        maximumRetries: Int = 2,
+        maximumRetries: Int = ProviderRequestExecutor.defaultMaximumRetries,
         jitter: @escaping @Sendable (Int) -> Double = { _ in Double.random(in: 0...0.25) }
     ) {
         self.transport = transport

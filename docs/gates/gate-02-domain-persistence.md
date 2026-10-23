@@ -38,20 +38,24 @@ does not authorize Phase 3 without explicit user approval.
 ## Cumulative schema extension
 
 The original Gate 2 acceptance remains the historical V1/V2-to-V3 migration
-record. The current cumulative main-PR branch extends the schema through V8;
+record. The current cumulative main-PR branch extends the schema through V9;
 V5-to-V6 adds a HealthKit sample-ID/day index with pending projection-day and
 deletion state, and rewrites legacy daily snapshot payloads to compact
 summaries. The migration groups workouts by local day and uses a single
 wake-day overlap index for missing sleep snapshots, preserving cross-midnight
 and adjacent-window coverage without rescanning every sample per day.
 V1–V7 schema identities remain intact. V7-to-V8 renames the sample-index
-tombstone flag while preserving its stored column. Gate 2 CI includes the V1/V2
-disk fixtures migrated and reopened at the current schema, plus the V5-to-V6,
-V6-to-V7, and V7-to-V8 fixtures.
+tombstone flag while preserving its stored column. V8-to-V9 adds the isolated
+`AgentRequestCostBudgetRecord` sidecar without rewriting V5 request rows. When an
+older interrupted request has already used provider rounds but has no
+recoverable request-cost reservations, restoration marks its cost state
+unavailable and stops before another provider call. Gate 2 CI covers V1/V2 disk
+fixtures reopened at the current schema, the V5-to-V6 through V8-to-V9
+migrations, and request-budget recovery behavior.
 
 ## Non-goals
 
-- No Provider retry/budget/usage behavior, strict Provider JSON schema, Agent
+- No Provider retry policy, strict Provider JSON schema, Agent
   event stream, or Markdown rendering from Phase 3.
 - No Speech/AVAudioSession repair from Phase 4.
 - No candidate ambiguity, portion algorithm, OCR, photo, or VLM work from Phase 5.
@@ -95,9 +99,11 @@ to domain/persistence behavior and have a dedicated evidence artifact.
     and workouts in stable 64-row keyset batches while preserving totals and
     source fingerprints, covered by
     `ConfirmationCoordinatorTests.testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts`;
-    confirmation-driven health snapshots also page meal inputs and select the
-    latest local weight with a one-row query, covered by
-    `ConfirmationCoordinatorTests.testConfirmationDailySnapshotPagesMealsAndReadsLatestWeightOnly`.
+    confirmation-driven health snapshots read intake from the just-refreshed
+    canonical `DailyMetrics` read model and select the latest local weight with
+    a one-row query, covered by
+    `ConfirmationCoordinatorTests.testConfirmationDailySnapshotPagesMealsAndReadsLatestWeightOnly` and
+    `ConfirmationCoordinatorTests.testConfirmationSnapshotDoesNotExposeLegacyPointMealAsCurrentIntake`.
 13. crash recovery pages committing actions and sending outbox rows in stable
     64-row keyset batches, then saves all recovered states once, covered by
     `ConfirmationCoordinatorTests.testRecoveryPagesCommittingActionsAndSendingOutboxAcrossBoundaries`.
@@ -113,6 +119,13 @@ to domain/persistence behavior and have a dedicated evidence artifact.
     its receipt, local record and HealthKit outbox by action ID and idempotency
     key, covered by
     `ConfirmationCoordinatorTests.testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox`.
+17. V8-to-V9 adds an isolated Agent cost-budget sidecar without rewriting the
+    existing request ledger. Requests from before V9 with prior provider rounds
+    and no recoverable reservations become cost-unavailable and cannot make
+    another provider call; new reservations persist their cap and cumulative
+    conservative estimate across resume, covered by
+    `DensosoMigrationTests.testV8MigrationPreservesInterruptedRequestForSafeCostBudgetBackfill` and
+    `AgentRequestResumeTests.testPerRequestCostReservationPersistsAndCannotResetOnResume`.
 
 The restore routine verifies store/WAL/SHM checksums, stages replacement files,
 and rolls back ordinary file-operation errors. The immutable migration backup is

@@ -436,7 +436,7 @@ private struct SpeechHarness {
             transcriberFactory: factory,
             cloudProvider: cloud,
             governanceRepository: governance,
-            usageLedger: ProviderUsageLedger(repository: governance),
+            usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
             providerConfiguration: configuration,
             audioStore: store,
             diagnostics: diagnostics,

@@ -209,6 +209,24 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? DailyCheckInSelfReportError, .otherPerson)
         }
+        for thirdPartyText in [
+            "我妈今天很累、压力很大，昨晚没睡好。",
+            "My dad is tired, stressed, and slept badly.",
+            "我很累，我爸压力很大，昨晚没睡好。",
+        ] {
+            XCTAssertThrowsError(try resolver.validate(
+                DailyCheckIn(
+                    occurredAt: date,
+                    energy: .low,
+                    stress: .elevated,
+                    subjectiveSleep: .poor
+                ),
+                userText: thirdPartyText,
+                asOf: date
+            )) { error in
+                XCTAssertEqual(error as? DailyCheckInSelfReportError, .otherPerson)
+            }
+        }
 
         XCTAssertThrowsError(try resolver.validate(
             DailyCheckIn(
@@ -251,6 +269,76 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             userText: "今天不太累，压力不大，昨晚睡得一般。",
             asOf: date
         ))
+    }
+
+    func testSelfReportResolverRejectsConflictingOrMalformedExplicitDates() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let calendar = Calendar.current
+        let previousDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: date)))
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        let currentDayText = formatter.string(from: date)
+        let previousDayText = formatter.string(from: previousDay)
+        let resolver = DailyCheckInSelfReportResolver()
+        let checkIn = DailyCheckIn(
+            occurredAt: date,
+            energy: .typical,
+            stress: .low,
+            subjectiveSleep: .fair
+        )
+
+        XCTAssertThrowsError(try resolver.validate(
+            checkIn,
+            userText: "今天不太累，压力不大，昨晚睡得一般，日期是\(currentDayText) 而不是\(previousDayText)。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+        }
+        XCTAssertThrowsError(try resolver.validate(
+            checkIn,
+            userText: "今天不太累，压力不大，昨晚睡得一般，日期是2026-02-30。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+        }
+        let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date)))
+        let tomorrowText = formatter.string(from: tomorrow)
+        XCTAssertThrowsError(try resolver.validate(
+            DailyCheckIn(
+                occurredAt: tomorrow,
+                energy: .typical,
+                stress: .low,
+                subjectiveSleep: .fair
+            ),
+            userText: "明天我不太累，压力不大，睡得一般，日期是\(tomorrowText)。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+        }
+    }
+
+    func testSelfReportResolverRejectsDoubleNegationAndMixedEnergySignals() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let resolver = DailyCheckInSelfReportResolver()
+
+        XCTAssertThrowsError(try resolver.validate(
+            DailyCheckIn(occurredAt: date, energy: .typical, stress: .low, subjectiveSleep: .fair),
+            userText: "今天不算不累，压力不大，昨晚睡得一般。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .ambiguousNegation(.energy))
+        }
+
+        XCTAssertThrowsError(try resolver.validate(
+            DailyCheckIn(occurredAt: date, energy: .low, stress: .low, subjectiveSleep: .fair),
+            userText: "今天有点累但也挺精神，压力不大，昨晚睡得一般。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .conflicting(.energy))
+        }
     }
 
     func testAgentDoesNotStageInferredStressButStagesAndCommitsExplicitCheckIn() async throws {
@@ -349,7 +437,7 @@ final class DailyCheckInConfirmationTests: XCTestCase {
     }
 
     private func makeCurrentContainer() throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         return try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -379,7 +467,7 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             intelligencePreferences: preferences,
             providerConfiguration: ProviderConfigurationPreferences(),
             governanceRepository: governance,
-            usageLedger: ProviderUsageLedger(repository: governance),
+            usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
             registry: ToolRegistry(),
             confirmationCoordinator: ConfirmationCoordinator(
                 repository: confirmationRepository,

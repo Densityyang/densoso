@@ -16,6 +16,7 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
             DensosoSchemaV6.self,
             DensosoSchemaV7.self,
             DensosoSchemaV8.self,
+            DensosoSchemaV9.self,
         ]
     }
 
@@ -350,6 +351,7 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
             ),
             .lightweight(fromVersion: DensosoSchemaV6.self, toVersion: DensosoSchemaV7.self),
             .lightweight(fromVersion: DensosoSchemaV7.self, toVersion: DensosoSchemaV8.self),
+            .lightweight(fromVersion: DensosoSchemaV8.self, toVersion: DensosoSchemaV9.self),
         ]
     }
 

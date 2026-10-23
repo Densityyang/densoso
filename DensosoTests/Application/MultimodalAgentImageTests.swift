@@ -13,7 +13,7 @@ final class MultimodalAgentImageTests: XCTestCase {
         let usage = ProviderUsage(
             provider: .deepSeek,
             model: "fixture-model",
-            capability: .vision,
+            capability: .text,
             inputTokens: 30,
             outputTokens: 12,
             audioSeconds: 0,
@@ -286,7 +286,7 @@ final class MultimodalAgentImageTests: XCTestCase {
         let firstUsage = ProviderUsage(
             provider: .deepSeek,
             model: "fixture-model",
-            capability: .vision,
+            capability: .text,
             inputTokens: 40,
             outputTokens: 10,
             audioSeconds: 0,
@@ -332,7 +332,7 @@ final class MultimodalAgentImageTests: XCTestCase {
                 .usage(ProviderUsage(
                     provider: .deepSeek,
                     model: "fixture-model",
-                    capability: .vision,
+                    capability: .text,
                     inputTokens: 5,
                     outputTokens: 3,
                     audioSeconds: 0,
@@ -507,7 +507,7 @@ final class MultimodalAgentImageTests: XCTestCase {
         if let existingContainer {
             container = existingContainer
         } else {
-            let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+            let schema = Schema(versionedSchema: DensosoSchemaV9.self)
             container = try ModelContainer(
                 for: schema,
                 configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -530,7 +530,7 @@ final class MultimodalAgentImageTests: XCTestCase {
             intelligencePreferences: preferences,
             providerConfiguration: ProviderConfigurationPreferences(),
             governanceRepository: governance,
-            usageLedger: ProviderUsageLedger(repository: governance),
+            usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
             registry: ToolRegistry(),
             confirmationCoordinator: confirmationCoordinator,
             readRepository: repository,

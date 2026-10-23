@@ -163,12 +163,36 @@ struct AgentBudgetConsumption: Equatable, Sendable {
     }
 }
 
+enum AgentCostBudgetState: String, Codable, CaseIterable, Sendable {
+    case unresolved
+    case estimated
+    case unavailable
+}
+
+struct AgentRequestCostBudget: Equatable, Sendable {
+    let maximumCostMicros: Int64
+    /// Conservative cost reservations are not invoice totals.
+    let reservedCostMicros: Int64
+    let provider: ProviderID?
+    let model: String?
+    let currency: String?
+    let pricingVersion: String?
+    let lastReservedProviderRound: Int
+    let lastReservedCostMicros: Int64
+    let state: AgentCostBudgetState
+
+    var remainingCostMicros: Int64 {
+        max(maximumCostMicros - reservedCostMicros, 0)
+    }
+}
+
 struct AgentRequestSnapshot: Equatable, Sendable {
     let requestID: UUID
     let conversationID: UUID
     let startedAt: Date
     let budget: AgentBudget
     let consumption: AgentBudgetConsumption
+    let costBudget: AgentRequestCostBudget
     let resumeCount: Int
     let containsTransientImage: Bool
     let state: AgentRequestState
@@ -178,6 +202,9 @@ enum AgentRequestPersistenceError: Error, Equatable {
     case requestNotFound
     case conversationMismatch
     case requestMediaMismatch
+    case costBudgetUnavailable
+    case costBudgetMismatch
+    case costBudgetExceeded
     case invalidState(String)
 }
 
@@ -202,6 +229,17 @@ protocol ConversationRepository: Sendable {
         conversationID: UUID,
         consumption: AgentBudgetConsumption
     ) async throws
+    func reserveAgentRequestCost(
+        requestID: UUID,
+        conversationID: UUID,
+        provider: ProviderID,
+        model: String,
+        currency: String,
+        pricingVersion: String,
+        providerRound: Int,
+        estimatedCostMicros: Int64
+    ) async throws -> AgentRequestCostBudget
+    func markAgentRequestCostUnavailable(requestID: UUID, conversationID: UUID) async throws
     func addAgentRequestUsage(
         requestID: UUID,
         conversationID: UUID,

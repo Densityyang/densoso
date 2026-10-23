@@ -353,7 +353,7 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
     }
 
     private func makeHarness(provider: ScriptedTextProvider) throws -> MealQuantityHarness {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -371,7 +371,7 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
             intelligencePreferences: preferences,
             providerConfiguration: ProviderConfigurationPreferences(),
             governanceRepository: governance,
-            usageLedger: ProviderUsageLedger(repository: governance),
+            usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
             registry: ToolRegistry(),
             confirmationCoordinator: confirmation,
             readRepository: repository,

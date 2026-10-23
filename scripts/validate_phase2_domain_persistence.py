@@ -51,6 +51,9 @@ def main() -> int:
         "DensosoSchemaV4.swift",
         "DensosoSchemaV5.swift",
         "DensosoSchemaV6.swift",
+        "DensosoSchemaV7.swift",
+        "DensosoSchemaV8.swift",
+        "DensosoSchemaV9.swift",
     ):
         if not (schemas / name).is_file():
             errors.append(f"missing Densoso/Persistence/Schemas/{name}")
@@ -64,6 +67,8 @@ def main() -> int:
             "legacy-outbox-",
             "legacyPointEstimate",
             "DensosoSchemaV6.self",
+            "DensosoSchemaV8.self",
+            "DensosoSchemaV9.self",
             "var sleepSamplesByWakeDay: [Date: [HealthSampleSnapshot]] = [:]",
             "sleepSamplesByWakeDay[wakeDay, default: []].append(sample)",
             "for wakeDay in sleepSamplesByWakeDay.keys.sorted()",
@@ -71,6 +76,7 @@ def main() -> int:
             "let workoutsByDay = Dictionary(grouping: workouts)",
             "let dayWorkouts = workoutsByDay[day] ?? []",
             "for (sampleID, location) in locationsBySampleID {",
+            ".lightweight(fromVersion: DensosoSchemaV8.self, toVersion: DensosoSchemaV9.self)",
         ],
         errors,
     )
@@ -165,6 +171,7 @@ def main() -> int:
             "backupProvider",
             "DensosoDiagnostic",
             "isStoredInMemoryOnly: true",
+            "Schema(versionedSchema: DensosoSchemaV9.self)",
         ],
         errors,
     )
@@ -182,6 +189,7 @@ def main() -> int:
             "DensosoSchemaV1.self",
             "DensosoSchemaV6.self",
             "DensosoSchemaV8.self",
+            "DensosoSchemaV9.self",
             "DensosoSchemaV2.self",
         ],
         errors,
@@ -225,6 +233,16 @@ def main() -> int:
         if not (ROOT / "DensosoTests" / test_name).is_file():
             errors.append(f"missing DensosoTests/{test_name}")
     require_text(
+        ROOT / "DensosoTests" / "ConversationPersistenceTests.swift",
+        (
+            "testResetPagesMessagesAndRequestsAcross64RowBoundaries",
+            "AgentRequestCostBudgetRecord",
+            "budgets.count, 1",
+            "budgets.first?.requestID, otherRequestID",
+        ),
+        errors,
+    )
+    require_text(
         ROOT / "DensosoTests/DensosoMigrationTests.swift",
         [
             "testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation",
@@ -233,8 +251,15 @@ def main() -> int:
             "openCurrentStore(at: location.storeURL)",
             "testV5MigrationMovesRawSamplesIntoIndexAndDailySummary",
             "testV5MigrationIndexesSleepSamplesAcrossMidnightAndAdjacentWindows",
+            "testV7ToV9PreservesHealthKitSampleIndexState",
+            "testV8MigrationPreservesInterruptedRequestForSafeCostBudgetBackfill",
             "existingDaySnapshot.healthKitSampleSummary?.workoutEffort.first?.score",
         ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests/Application/AgentRequestResumeTests.swift",
+        ("testPerRequestCostReservationPersistsAndCannotResetOnResume",),
         errors,
     )
     require_text(

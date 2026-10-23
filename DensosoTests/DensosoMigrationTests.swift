@@ -253,7 +253,7 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "7.0.0")
     }
 
-    func testV7ToV8PreservesHealthKitSampleIndexState() throws {
+    func testV7ToV9PreservesHealthKitSampleIndexState() throws {
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
         var container: ModelContainer? = try makeContainer(version: DensosoSchemaV7.self, url: location.storeURL)
@@ -291,7 +291,51 @@ final class DensosoMigrationTests: XCTestCase {
         )
         XCTAssertTrue(sampleIndex.needsRequery)
         XCTAssertFalse(sampleIndex.isTombstoned)
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "9.0.0")
+    }
+
+    func testV8MigrationPreservesInterruptedRequestForSafeCostBudgetBackfill() async throws {
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        var container: ModelContainer? = try makeContainer(version: DensosoSchemaV8.self, url: location.storeURL)
+        var context: ModelContext? = ModelContext(container!)
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000908")!
+        let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000909")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        context!.insert(ConversationRecord(id: conversationID))
+        context!.insert(AgentRequestRecord(
+            requestID: requestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(120),
+            maximumProviderRounds: 3,
+            maximumToolCalls: 2,
+            providerRoundsUsed: 1,
+            inputTokens: 40,
+            outputTokens: 12,
+            stateRaw: AgentRequestState.interrupted.rawValue
+        ))
+        try context!.save()
+        context = nil
+        container = nil
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "8.0.0")
+
+        container = try openCurrentStore(at: location.storeURL)
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "9.0.0")
+        let request = try await SwiftDataAgentRepository(modelContainer: container!)
+            .beginAgentRequest(
+                requestID: requestID,
+                conversationID: conversationID,
+                initialBudget: AgentBudget(maximumCostMicros: Int64.max, deadline: .distantFuture),
+                startedAt: Date(),
+                containsTransientImage: false
+            )
+
+        XCTAssertEqual(request.consumption.providerRoundsUsed, 1)
+        XCTAssertEqual(request.consumption.inputTokens, 40)
+        XCTAssertEqual(request.budget.maximumCostMicros, AgentBudget.defaultMaximumCostMicros)
+        XCTAssertEqual(request.costBudget.state, .unavailable)
+        XCTAssertEqual(request.costBudget.reservedCostMicros, 0)
     }
 
     func testV5MigrationMovesRawSamplesIntoIndexAndDailySummary() throws {
@@ -771,7 +815,7 @@ final class DensosoMigrationTests: XCTestCase {
     }
 
     private func openCurrentStore(at url: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let configuration = ModelConfiguration("Densoso", schema: schema, url: url)
         return try ModelContainer(
             for: schema,

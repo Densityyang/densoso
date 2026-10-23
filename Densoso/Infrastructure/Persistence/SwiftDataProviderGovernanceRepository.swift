@@ -55,12 +55,16 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
         estimatedCostMicros: Int64?,
         currency: String?,
         rateVersion: String
-    ) throws {
+    ) throws -> Bool {
         var descriptor = FetchDescriptor<ProviderUsageRecord>(
             predicate: #Predicate { $0.usageKey == usageKey }
         )
         descriptor.fetchLimit = 1
-        guard try modelContext.fetch(descriptor).isEmpty else { return }
+        if let existing = try modelContext.fetch(descriptor).first {
+            return existing.estimatedCostMicros >= 0
+                && existing.currency == (currency ?? "unavailable")
+                && existing.rateVersion == rateVersion
+        }
         let record = ProviderUsageRecord(
             usageKey: usageKey,
             provider: usage.provider.rawValue,
@@ -75,6 +79,7 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
         record.rateVersion = rateVersion
         modelContext.insert(record)
         try modelContext.save()
+        return record.estimatedCostMicros >= 0
     }
 
     func monthlyUsage(

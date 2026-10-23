@@ -78,6 +78,14 @@ struct PricingDescriptor: Equatable, Sendable {
     }
 }
 
+struct ProviderRequestCostEstimate: Equatable, Sendable {
+    let maximumCostMicros: Int64
+    let currency: String
+    let pricingVersion: String
+    let provider: ProviderID
+    let model: String
+}
+
 protocol PricingDescriptorSource: Sendable {
     func descriptor(for usage: ProviderUsage) -> PricingDescriptor?
 }
@@ -124,7 +132,7 @@ protocol ProviderGovernanceRepository: Sendable {
         estimatedCostMicros: Int64?,
         currency: String?,
         rateVersion: String
-    ) async throws
+    ) async throws -> Bool
     func monthlyUsage(provider: ProviderID, monthStart: Date, monthEnd: Date) async throws -> ProviderUsageSummary
 }
 
@@ -140,11 +148,47 @@ actor ProviderUsageLedger {
         self.pricingDescriptorSource = pricingDescriptorSource
     }
 
+    func maximumRequestCostEstimate(
+        provider: ProviderDescriptor,
+        request: ModelRequest
+    ) -> ProviderRequestCostEstimate? {
+        guard request.maxOutputTokens >= 0 else { return nil }
+        let usage = ProviderUsage(
+            provider: provider.id,
+            model: provider.model,
+            capability: .text,
+            inputTokens: AgentProviderContextPolicy.estimatedInputTokenUpperBound(for: request),
+            outputTokens: request.maxOutputTokens,
+            audioSeconds: 0,
+            attempt: 1
+        )
+        guard let descriptor = pricingDescriptorSource.descriptor(for: usage),
+              let singleAttempt = descriptor.estimate(usage) else { return nil }
+        let maximumAttempts = Int64(ProviderRequestExecutor.defaultMaximumAttempts)
+        let maximumCost = singleAttempt.micros.multipliedReportingOverflow(by: maximumAttempts)
+        guard !maximumCost.overflow else { return nil }
+        return ProviderRequestCostEstimate(
+            maximumCostMicros: maximumCost.partialValue,
+            currency: singleAttempt.currency,
+            pricingVersion: descriptor.version,
+            provider: descriptor.provider,
+            model: descriptor.model
+        )
+    }
+
     func record(
         _ usage: ProviderUsage,
         requestID: UUID,
         providerRound: Int = 1
     ) async throws {
+        _ = try await recordWithCostAvailability(usage, requestID: requestID, providerRound: providerRound)
+    }
+
+    func recordWithCostAvailability(
+        _ usage: ProviderUsage,
+        requestID: UUID,
+        providerRound: Int = 1
+    ) async throws -> Bool {
         let descriptor = pricingDescriptorSource.descriptor(for: usage)
         let estimate = descriptor?.estimate(usage)
         let key = [
@@ -153,13 +197,14 @@ actor ProviderUsageLedger {
             String(providerRound),
             String(usage.attempt),
         ].joined(separator: "|")
-        try await repository.recordUsage(
+        let storedCostIsPriced = try await repository.recordUsage(
             usage: usage,
             usageKey: key,
             estimatedCostMicros: estimate?.micros,
             currency: estimate?.currency,
             rateVersion: estimate == nil ? "unknown" : descriptor?.version ?? "unknown"
         )
+        return estimate != nil && storedCostIsPriced
     }
 
     func monthlySummary(provider: ProviderID, referenceDate: Date = Date()) async throws -> ProviderUsageSummary {

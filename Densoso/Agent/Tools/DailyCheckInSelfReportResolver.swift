@@ -4,9 +4,9 @@ import Foundation
 struct DailyCheckInSelfReportResolver {
     private static let negations = ["并没有", "不是", "没有", "并不", "不太", "不", "没", "未", "not"]
     private static let otherPersonCues = [
-        "我朋友", "我的朋友", "我妈妈", "我爸爸", "我孩子", "我同事", "我伴侣",
+        "我朋友", "我的朋友", "我妈妈", "我妈", "我爸爸", "我爸", "我孩子", "我同事", "我伴侣",
         "我丈夫", "我妻子", "我老公", "我老婆", "我和朋友", "朋友说", "他说", "她说",
-        "myfriend", "mymother", "myfather", "mychild", "mycoworker", "mypartner",
+        "myfriend", "mymother", "mymom", "myfather", "mydad", "mymum", "mychild", "mycoworker", "mypartner",
     ]
 
     func validate(_ checkIn: DailyCheckIn, userText: String, asOf date: Date) throws {
@@ -15,6 +15,9 @@ struct DailyCheckInSelfReportResolver {
         guard text.count <= 4_000 else { throw DailyCheckInSelfReportError.reportTooLong }
         guard !Self.otherPersonCues.contains(where: text.contains) else {
             throw DailyCheckInSelfReportError.otherPerson
+        }
+        if let field = Self.ambiguousNegationField(in: text) {
+            throw DailyCheckInSelfReportError.ambiguousNegation(field)
         }
 
         try requireMatch(
@@ -70,6 +73,7 @@ struct DailyCheckInSelfReportResolver {
         let text = Self.normalized(rawText)
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: date)
+        guard occurredAt <= date else { throw DailyCheckInSelfReportError.dateNotSupported }
         var expectedDays: [Date] = []
         if text.contains("前天") || text.contains("daybeforeyesterday"),
            let day = calendar.date(byAdding: .day, value: -2, to: today) {
@@ -80,7 +84,10 @@ struct DailyCheckInSelfReportResolver {
             expectedDays.append(day)
         }
         if text.contains("今天") || text.contains("today") { expectedDays.append(today) }
-        if let explicitDate = Self.explicitDay(in: rawText) { expectedDays.append(explicitDate) }
+        guard let explicitDates = Self.explicitDays(in: rawText) else {
+            throw DailyCheckInSelfReportError.dateNotSupported
+        }
+        expectedDays.append(contentsOf: explicitDates)
         if expectedDays.isEmpty { expectedDays.append(today) }
         let uniqueDays = Set(expectedDays)
         guard uniqueDays.count == 1,
@@ -100,7 +107,8 @@ struct DailyCheckInSelfReportResolver {
             "normalenergy", "nottired",
         ]),
         .init(value: UserReportedEnergy.high.rawValue, cues: [
-            "精力充沛", "精神很好", "特别有精神", "精力很好", "很有活力", "energized", "highenergy",
+            "精力充沛", "精神很好", "精神挺好", "挺精神", "挺有精神",
+            "特别有精神", "精力很好", "很有活力", "energized", "highenergy",
         ]),
     ]
 
@@ -132,6 +140,19 @@ struct DailyCheckInSelfReportResolver {
         ]),
     ]
 
+    private static func ambiguousNegationField(in text: String) -> DailyCheckInSelfReportField? {
+        if ["不算不累", "不是不累", "不至于不累", "不完全不累"].contains(where: text.contains) {
+            return .energy
+        }
+        if ["不算没压力", "不是没压力", "不至于没压力"].contains(where: text.contains) {
+            return .stress
+        }
+        if ["不是没睡好", "不算没睡好", "不是睡不好"].contains(where: text.contains) {
+            return .subjectiveSleep
+        }
+        return nil
+    }
+
     private static func containsUnnegated(_ cue: String, in text: String) -> Bool {
         let normalizedCue = normalized(cue)
         guard !normalizedCue.isEmpty else { return false }
@@ -150,19 +171,24 @@ struct DailyCheckInSelfReportResolver {
             .joined()
     }
 
-    private static func explicitDay(in text: String) -> Date? {
+    private static func explicitDays(in text: String) -> [Date]? {
         guard let regex = try? NSRegularExpression(pattern: #"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)"#) else { return nil }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let match = regex.firstMatch(in: text, range: range),
-              let matchRange = Range(match.range, in: text) else { return nil }
+        let matches = regex.matches(in: text, range: range)
+        guard !matches.isEmpty else { return [] }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.isLenient = false
-        guard let date = formatter.date(from: String(text[matchRange])) else { return nil }
-        return Calendar.current.startOfDay(for: date)
+        var days: [Date] = []
+        for match in matches {
+            guard let matchRange = Range(match.range, in: text),
+                  let date = formatter.date(from: String(text[matchRange])) else { return nil }
+            days.append(Calendar.current.startOfDay(for: date))
+        }
+        return days
     }
 }
 
@@ -191,6 +217,7 @@ enum DailyCheckInSelfReportError: Equatable, SharedErrorDescribing {
     case otherPerson
     case missing([DailyCheckInSelfReportField])
     case conflicting(DailyCheckInSelfReportField)
+    case ambiguousNegation(DailyCheckInSelfReportField)
     case modelValueNotSupported(DailyCheckInSelfReportField)
     case noteNotReported
     case dateNotSupported
@@ -217,6 +244,8 @@ enum DailyCheckInSelfReportError: Equatable, SharedErrorDescribing {
             return "用户原话没有明确说明\(names)；请只询问缺少的主观感受，收到回答后再准备草稿。"
         case .conflicting(let field):
             return "用户原话对\(field.displayName)的描述有冲突；请先请用户澄清，再准备草稿。"
+        case .ambiguousNegation(let field):
+            return "用户原话对\(field.displayName)使用了无法安全归类的双重否定；请先请用户澄清，再准备草稿。"
         case .modelValueNotSupported(let field):
             return "模型填写的\(field.displayName)等级与用户原话不一致；请只询问该主观感受并等待回答，不得推断或生成草稿。"
         case .noteNotReported:

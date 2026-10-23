@@ -543,6 +543,68 @@ final class AgentSession {
             )
 
             while true {
+                guard tracker.remainingProviderRounds > 0 else {
+                    throw ProviderError.budgetExceeded
+                }
+                let providerSystemPrompt = HealthContextPromptBuilder.prompt(
+                    basePrompt: systemPrompt.text,
+                    userText: promptUserText,
+                    summary: healthSummary,
+                    narrativeContext: narrativeContext,
+                    structuredNarrative: useStructuredHealthNarrative
+                )
+                let responseFormat = useStructuredHealthNarrative
+                    ? HealthNarrativePolicy.responseFormat(
+                        allowedEvidenceKeys: narrativeContext?.allowedEvidenceKeys ?? []
+                    )
+                    : nil
+                let request = ModelRequest(
+                    requestID: requestID,
+                    conversationID: conversationID,
+                    systemPrompt: providerSystemPrompt,
+                    messages: try providerMessagesIncludingTransientMealEvidence(
+                        systemPrompt: providerSystemPrompt,
+                        responseFormat: responseFormat
+                    ),
+                    tools: registry.toolDefinitions,
+                    maxOutputTokens: 2_048,
+                    thinking: provider.descriptor.capabilities.contains(.reasoning)
+                        ? AgentReasoningPolicy.forUserMessage(userText)
+                        : .none,
+                    responseFormat: responseFormat,
+                    deadline: tracker.budget.deadline
+                )
+                try tracker.requireTime()
+                guard let costEstimate = await usageLedger.maximumRequestCostEstimate(
+                    provider: provider.descriptor,
+                    request: request
+                ) else {
+                    throw ProviderError.budgetUnavailable
+                }
+                let nextProviderRound = tracker.providerRounds == Int.max
+                    ? Int.max
+                    : tracker.providerRounds + 1
+                do {
+                    _ = try await conversationRepository.reserveAgentRequestCost(
+                        requestID: requestID,
+                        conversationID: conversationID,
+                        provider: costEstimate.provider,
+                        model: costEstimate.model,
+                        currency: costEstimate.currency,
+                        pricingVersion: costEstimate.pricingVersion,
+                        providerRound: nextProviderRound,
+                        estimatedCostMicros: costEstimate.maximumCostMicros
+                    )
+                } catch let error as AgentRequestPersistenceError {
+                    switch error {
+                    case .costBudgetUnavailable, .costBudgetMismatch:
+                        throw ProviderError.budgetUnavailable
+                    case .costBudgetExceeded:
+                        throw ProviderError.budgetExceeded
+                    default:
+                        throw error
+                    }
+                }
                 try tracker.consumeProviderRound()
                 try await persist(consumption: tracker.consumption, requestID: requestID)
                 emit(
@@ -552,29 +614,6 @@ final class AgentSession {
                     )
                 )
                 if containsImage { emit(.imageVision) }
-                let request = ModelRequest(
-                    requestID: requestID,
-                    conversationID: conversationID,
-                    systemPrompt: HealthContextPromptBuilder.prompt(
-                        basePrompt: systemPrompt.text,
-                        userText: promptUserText,
-                        summary: healthSummary,
-                        narrativeContext: narrativeContext,
-                        structuredNarrative: useStructuredHealthNarrative
-                    ),
-                    messages: try providerMessagesIncludingTransientMealEvidence(),
-                    tools: registry.toolDefinitions,
-                    maxOutputTokens: 2_048,
-                    thinking: provider.descriptor.capabilities.contains(.reasoning)
-                        ? AgentReasoningPolicy.forUserMessage(userText)
-                        : .none,
-                    responseFormat: useStructuredHealthNarrative
-                        ? HealthNarrativePolicy.responseFormat(
-                            allowedEvidenceKeys: narrativeContext?.allowedEvidenceKeys ?? []
-                        )
-                        : nil,
-                    deadline: tracker.budget.deadline
-                )
                 let result = try await performProviderRound(
                     provider: provider,
                     request: request,
@@ -668,8 +707,17 @@ final class AgentSession {
             throw error
         } catch let error as ProviderError {
             if requestRecordStarted {
+                let requestState: AgentRequestState
+                switch error {
+                case .timeout:
+                    requestState = .expired
+                case .budgetExceeded, .budgetUnavailable:
+                    requestState = .failed
+                default:
+                    requestState = .interrupted
+                }
                 await persist(
-                    state: error == .timeout ? .expired : (error == .budgetExceeded ? .failed : .interrupted),
+                    state: requestState,
                     requestID: requestID
                 )
             }
@@ -924,7 +972,10 @@ final class AgentSession {
         transientMealHasImage
     }
 
-    private func providerMessagesIncludingTransientMealEvidence() throws -> [ModelMessage] {
+    private func providerMessagesIncludingTransientMealEvidence(
+        systemPrompt providerSystemPrompt: String,
+        responseFormat: StructuredOutputFormat?
+    ) throws -> [ModelMessage] {
         let messagesWithoutLocalMetadata = conversationHistory.map { message in
             ModelMessage(role: message.role, content: message.content)
         }
@@ -939,8 +990,9 @@ final class AgentSession {
             providerMessages,
             currentTurnStartIndex: userIndex,
             additionalContextBytes: AgentProviderContextPolicy.fixedContextBytes(
-                systemPrompt: systemPrompt.text,
-                tools: registry.toolDefinitions
+                systemPrompt: providerSystemPrompt,
+                tools: registry.toolDefinitions,
+                responseFormat: responseFormat
             )
         )
     }
@@ -1070,11 +1122,33 @@ final class AgentSession {
                             reasoningTokens: usage.reasoningTokens
                         )
                     )
-                    try await usageLedger.record(
+                    let selectedModel = provider.descriptor.model
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased()
+                    let reportedModel = usage.model
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased()
+                    guard usage.provider == provider.descriptor.id,
+                          usage.capability == .text,
+                          reportedModel == selectedModel else {
+                        try await conversationRepository.markAgentRequestCostUnavailable(
+                            requestID: request.requestID,
+                            conversationID: request.conversationID
+                        )
+                        throw ProviderError.budgetUnavailable
+                    }
+                    let costIsPriced = try await usageLedger.recordWithCostAvailability(
                         usage,
                         requestID: request.requestID,
                         providerRound: providerRound
                     )
+                    guard costIsPriced else {
+                        try await conversationRepository.markAgentRequestCostUnavailable(
+                            requestID: request.requestID,
+                            conversationID: request.conversationID
+                        )
+                        throw ProviderError.budgetUnavailable
+                    }
                     await MainActor.run { emit(.usage(usage)) }
                     let budget = usage.provider == .deepSeek
                         ? providerConfiguration.deepSeekMonthlyBudgetMicros
@@ -1333,7 +1407,7 @@ enum AgentError: Equatable, Sendable, SharedErrorDescribing {
             )
         case .contextWindowExceeded:
             SharedErrorDescriptor(
-                code: .requestTooLarge,
+                code: .providerUnavailable,
                 userMessage: "这条请求的当前内容超过了发送上限，请缩短问题或移除部分信息后重试。",
                 subsystem: .agent,
                 reason: .requestTooLarge

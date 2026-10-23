@@ -18,6 +18,7 @@ enum ProviderError: Equatable, Sendable, SharedErrorDescribing {
     case unsupportedCapability(ProviderCapability)
     case cancelled
     case budgetExceeded
+    case budgetUnavailable
 
     var sharedErrorDescriptor: SharedErrorDescriptor {
         switch self {
@@ -135,6 +136,13 @@ enum ProviderError: Equatable, Sendable, SharedErrorDescribing {
             SharedErrorDescriptor(
                 code: .providerUnavailable,
                 userMessage: "本次请求处理预算已用尽。",
+                subsystem: .provider,
+                reason: .budgetExceeded
+            )
+        case .budgetUnavailable:
+            SharedErrorDescriptor(
+                code: .providerUnavailable,
+                userMessage: "无法验证当前模型的价格预算，已停止本次云端请求；请检查模型和价格配置后重试。",
                 subsystem: .provider,
                 reason: .budgetExceeded
             )

@@ -168,7 +168,7 @@ private struct PromptInjectionHarness {
         provider: any TextModelProvider,
         readRepository: any AgentReadRepository
     ) async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: container)
@@ -183,7 +183,7 @@ private struct PromptInjectionHarness {
             intelligencePreferences: preferences,
             providerConfiguration: ProviderConfigurationPreferences(),
             governanceRepository: governance,
-            usageLedger: ProviderUsageLedger(repository: governance),
+            usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
             registry: ToolRegistry(),
             confirmationCoordinator: ConfirmationCoordinator(
                 repository: confirmationRepository,

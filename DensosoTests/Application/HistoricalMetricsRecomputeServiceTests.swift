@@ -344,7 +344,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
     }
 
     private func makeContainer() throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return try ModelContainer(for: schema, configurations: [configuration])
     }

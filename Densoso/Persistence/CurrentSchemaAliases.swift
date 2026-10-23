@@ -25,3 +25,4 @@ typealias DailyCheckInRecord = DensosoSchemaV5.DailyCheckInRecord
 typealias UserPreferenceRecord = DensosoSchemaV5.UserPreferenceRecord
 typealias HealthKitSampleIndexRecord = DensosoSchemaV8.HealthKitSampleIndexRecord
 typealias ConversationToolSchemaVersionRecord = DensosoSchemaV7.ConversationToolSchemaVersionRecord
+typealias AgentRequestCostBudgetRecord = DensosoSchemaV9.AgentRequestCostBudgetRecord

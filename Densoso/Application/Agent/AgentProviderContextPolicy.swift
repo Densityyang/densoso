@@ -6,7 +6,9 @@ enum AgentProviderContextPolicy {
     static let maximumRecentTurns = 8
     static let maximumMessages = 64
     static let maximumEstimatedInputBytes = 96 * 1_024
-    private static let imageBudgetBytes = 8 * 1_024
+    /// Reserves a conservative high-detail vision-token allowance; JPEG body
+    /// size is bounded separately by `MultimodalModelRequest`.
+    private static let imageBudgetBytes = 64 * 1_024
 
     static func boundedMessages(
         _ messages: [ModelMessage],
@@ -33,9 +35,27 @@ enum AgentProviderContextPolicy {
         return selected
     }
 
-    static func fixedContextBytes(systemPrompt: String, tools: [ToolSchema]) -> Int {
+    static func fixedContextBytes(
+        systemPrompt: String,
+        tools: [ToolSchema],
+        responseFormat: StructuredOutputFormat? = nil
+    ) -> Int {
         let toolsBytes = (try? JSONEncoder().encode(tools).count) ?? maximumEstimatedInputBytes
-        return systemPrompt.utf8.count + toolsBytes + 1_024
+        let responseFormatBytes = responseFormat.map { format in
+            format.name.utf8.count + ((try? JSONEncoder().encode(format.schema).count) ?? maximumEstimatedInputBytes)
+        } ?? 0
+        return systemPrompt.utf8.count + toolsBytes + responseFormatBytes + 1_024
+    }
+
+    static func estimatedInputTokenUpperBound(for request: ModelRequest) -> Int {
+        let fixedBytes = fixedContextBytes(
+            systemPrompt: request.systemPrompt ?? "",
+            tools: request.tools,
+            responseFormat: request.responseFormat
+        )
+        let messageBytes = estimatedInputBytes(request.messages)
+        let total = fixedBytes.addingReportingOverflow(messageBytes)
+        return total.overflow ? Int.max : max(total.partialValue, 1)
     }
 
     private static func fits(_ messages: [ModelMessage], additionalContextBytes: Int) -> Bool {

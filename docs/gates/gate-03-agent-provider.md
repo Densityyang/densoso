@@ -27,6 +27,14 @@ PR; older V3 PR evidence below has been replaced with the current run state.
   conflicting subjective fields must be clarified and never inferred from
   HealthKit.
 - Persist provider-neutral conversations, real tool counts, consent and usage.
+- Keep full local chat history for user-visible audit while sending only the
+  last eight complete turns plus the active request, capped at 64 messages and
+  a conservative 96 KiB input estimate. The active turn keeps intact tool-call
+  and result pairs; an oversized active turn is rejected before another provider
+  call.
+- Preserve provider reasoning only in the active request's in-memory
+  continuation. Persisted and post-request histories remove reasoning and image
+  payloads, while the same request can still complete its required continuation.
 - Resolve consent and usage idempotency by exact keys; aggregate usage only for
   the requested provider and half-open month window `[start, end)`. Focused
   repository tests cover key de-duplication, month boundaries and unknown-price
@@ -63,13 +71,24 @@ PR; older V3 PR evidence below has been replaced with the current run state.
   session exposes structured read-intent metadata; free-form reply wording is
   not used to infer them.
 - Add soft monthly budget reminders without interrupting an active request.
+  Each Agent request also has a hard per-request cost cap in the V9
+  `AgentRequestCostBudgetRecord`. Before a provider call, the Agent reserves a
+  conservative cost estimate from the bounded input upper bound, maximum output
+  and transport retry limit. The request ID, provider/model/currency/rate version,
+  cap, cumulative reservation and round are durable; resume cannot replace them
+  with a larger factory budget. The default cap is 1,000,000 micros in the
+  selected descriptor's currency. A legacy in-flight request that has prior rounds
+  but no recoverable cost reservations is terminated before another provider
+  call. Unknown pricing or a model mismatch fails closed; reservations are
+  estimates, not invoice totals.
   Estimates resolve through a versioned `PricingDescriptor` matched by exact
   provider, model and capability tuple. DeepSeek uses the model ID and Responses
   endpoint from `ProviderCapabilityCatalog`; its fake-transport contract tests
-  assert the actual request URL and model. DeepSeek Flash uses the 2026-09-01
-  peak/cache-miss snapshot; Qwen Flash uses the Beijing standard non-cached
-  <=128k snapshot, with cached input conservatively priced at the non-cached
-  rate. Qwen request bodies are capped at 120 KB to stay inside that tier.
+  assert the actual request URL and model. DeepSeek Flash uses the official
+  2026-09-10 peak-rate schedule checked on 2026-10-23. Qwen Flash uses the
+  Beijing standard non-cached <=128k tier checked on 2026-10-23, with cached
+  input conservatively priced at the non-cached rate. Qwen request bodies are
+  capped at 120 KB to stay inside that tier.
   Models or usage units without a verified descriptor (including current Qwen
   ASR and vision) retain unknown cost instead of falling back to another model's
   price. These estimates are not invoice totals.
@@ -83,7 +102,7 @@ PR; older V3 PR evidence below has been replaced with the current run state.
 Pricing and capability baselines are versioned from the official
 [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing/) and
 [Qwen Flash capability/pricing](https://help.aliyun.com/en/model-studio/qwen-flash)
-pages as checked on 2026-09-01.
+pages as checked on 2026-10-23.
 
 ## Non-goals
 

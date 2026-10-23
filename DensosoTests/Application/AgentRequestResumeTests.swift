@@ -5,8 +5,84 @@ import XCTest
 
 @MainActor
 final class AgentRequestResumeTests: XCTestCase {
+    func testPerRequestCostReservationPersistsAndCannotResetOnResume() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000919")!
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000920")!
+        let startedAt = Date()
+        let firstRepository = SwiftDataAgentRepository(modelContainer: container)
+        _ = try await firstRepository.beginAgentRequest(
+            requestID: requestID,
+            conversationID: conversationID,
+            initialBudget: AgentBudget(maximumCostMicros: 5_000, deadline: startedAt.addingTimeInterval(120)),
+            startedAt: startedAt,
+            containsTransientImage: false
+        )
+
+        let firstReservation = try await firstRepository.reserveAgentRequestCost(
+            requestID: requestID,
+            conversationID: conversationID,
+            provider: .deepSeek,
+            model: "deepseek-flash",
+            currency: "USD",
+            pricingVersion: "cost-reservation-fixture-v1",
+            providerRound: 1,
+            estimatedCostMicros: 3_500
+        )
+
+        XCTAssertEqual(firstReservation.reservedCostMicros, 3_500)
+        XCTAssertEqual(firstReservation.remainingCostMicros, 1_500)
+        let resumedRepository = SwiftDataAgentRepository(modelContainer: container)
+        let resumed = try await resumedRepository.beginAgentRequest(
+            requestID: requestID,
+            conversationID: conversationID,
+            initialBudget: AgentBudget(maximumCostMicros: Int64.max, deadline: .distantFuture),
+            startedAt: Date(),
+            containsTransientImage: false
+        )
+        XCTAssertEqual(resumed.budget.maximumCostMicros, 5_000)
+        XCTAssertEqual(resumed.costBudget.reservedCostMicros, 3_500)
+        XCTAssertEqual(resumed.costBudget.remainingCostMicros, 1_500)
+        let resumedSameRound = try await resumedRepository.reserveAgentRequestCost(
+            requestID: requestID,
+            conversationID: conversationID,
+            provider: .deepSeek,
+            model: "deepseek-flash",
+            currency: "USD",
+            pricingVersion: "cost-reservation-fixture-v1",
+            providerRound: 1,
+            estimatedCostMicros: 1_000
+        )
+        XCTAssertEqual(resumedSameRound.reservedCostMicros, 3_500)
+
+        do {
+            _ = try await resumedRepository.reserveAgentRequestCost(
+                requestID: requestID,
+                conversationID: conversationID,
+                provider: .deepSeek,
+                model: "deepseek-flash",
+                currency: "USD",
+                pricingVersion: "cost-reservation-fixture-v1",
+                providerRound: 2,
+                estimatedCostMicros: 2_000
+            )
+            XCTFail("A resumed request must not exceed its persisted cost cap")
+        } catch {
+            XCTAssertEqual(error as? AgentRequestPersistenceError, .costBudgetExceeded)
+        }
+        let afterAttempt = try await resumedRepository.agentRequest(
+            requestID: requestID,
+            conversationID: conversationID
+        )
+        XCTAssertEqual(afterAttempt?.costBudget.reservedCostMicros, 3_500)
+    }
+
     func testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -25,7 +101,7 @@ final class AgentRequestResumeTests: XCTestCase {
             cachedInputTokens: 10,
             reasoningTokens: 3
         )
-        let interruptedProvider = ScriptedTextProvider(scripts: [
+        let interruptedProvider = ScriptedTextProvider(model: "resume-test", scripts: [
             [
                 .toolCall(ToolCall(id: "tool-1", name: "unknown_read", arguments: .object([:]))),
                 .usage(usageOne),
@@ -68,11 +144,13 @@ final class AgentRequestResumeTests: XCTestCase {
         XCTAssertEqual(beforeResume.consumption.cachedInputTokens, 10)
         XCTAssertEqual(beforeResume.consumption.outputTokens, 12)
         XCTAssertEqual(beforeResume.consumption.reasoningTokens, 3)
+        XCTAssertEqual(beforeResume.costBudget.state, .estimated)
+        XCTAssertGreaterThan(beforeResume.costBudget.reservedCostMicros, 0)
 
         // Recreate the repository/session as after process restoration. A larger
         // factory budget must not replace the request's original limits/deadline.
         let resumedRepository = SwiftDataAgentRepository(modelContainer: container)
-        let resumedProvider = ScriptedTextProvider(scripts: [[
+        let resumedProvider = ScriptedTextProvider(model: "resume-test", scripts: [[
             .toolCall(ToolCall(id: "tool-2", name: "unknown_read", arguments: .object([:]))),
             .usage(ProviderUsage(
                 provider: .deepSeek,
@@ -120,6 +198,8 @@ final class AgentRequestResumeTests: XCTestCase {
         XCTAssertEqual(afterResume.consumption.cachedInputTokens, 15)
         XCTAssertEqual(afterResume.consumption.outputTokens, 18)
         XCTAssertEqual(afterResume.consumption.reasoningTokens, 5)
+        XCTAssertEqual(afterResume.costBudget.maximumCostMicros, beforeResume.costBudget.maximumCostMicros)
+        XCTAssertGreaterThan(afterResume.costBudget.reservedCostMicros, beforeResume.costBudget.reservedCostMicros)
         XCTAssertEqual(resumedProvider.recordedRequests().count, 1)
         let resumedRequest = try XCTUnwrap(resumedProvider.recordedRequests().first)
         let resumedUserText = resumedRequest.messages
@@ -146,7 +226,7 @@ final class AgentRequestResumeTests: XCTestCase {
     }
 
     func testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -274,7 +354,7 @@ final class AgentRequestResumeTests: XCTestCase {
             intelligencePreferences: preferences,
             providerConfiguration: ProviderConfigurationPreferences(),
             governanceRepository: governance,
-            usageLedger: ProviderUsageLedger(repository: governance),
+            usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
             registry: ToolRegistry(),
             confirmationCoordinator: ConfirmationCoordinator(
                 repository: confirmationRepository,

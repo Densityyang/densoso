@@ -4,6 +4,46 @@ import SwiftData
 
 @MainActor
 final class ProviderUsageLedgerTests: XCTestCase {
+    func testPreflightCostUsesInputUpperBoundMaximumOutputAndRetryAttempts() async throws {
+        let ledger = ProviderUsageLedger(
+            repository: InMemoryProviderGovernanceRepository(),
+            pricingDescriptorSource: StaticPricingDescriptorSource(descriptors: [
+                PricingDescriptor(
+                    provider: .deepSeek,
+                    model: "fixture",
+                    capability: .text,
+                    version: "fixture-v1",
+                    origin: .localConfiguration(identifier: "fixture-v1"),
+                    currency: "USD",
+                    inputMicrosPerMillionTokens: 1_000_000,
+                    cachedInputMicrosPerMillionTokens: 0,
+                    outputMicrosPerMillionTokens: 2_000_000,
+                    audioMicrosPerSecond: nil
+                ),
+            ])
+        )
+        let provider = ProviderDescriptor(id: .deepSeek, model: "fixture", capabilities: [.text])
+        let request = ModelRequest(
+            requestID: UUID(),
+            conversationID: UUID(),
+            systemPrompt: "sys",
+            messages: [ModelMessage(role: .user, text: "hello")],
+            tools: [],
+            maxOutputTokens: 100,
+            thinking: .none,
+            deadline: .distantFuture
+        )
+
+        let estimateValue = await ledger.maximumRequestCostEstimate(provider: provider, request: request)
+        let estimate = try XCTUnwrap(estimateValue)
+
+        // Input estimate includes the system prompt, empty tool schema, fixed overhead, and message.
+        // Each attempt reserves the input estimate plus 200 output micros; all three attempts are covered.
+        XCTAssertEqual(estimate.maximumCostMicros, 3_846)
+        XCTAssertEqual(estimate.currency, "USD")
+        XCTAssertEqual(estimate.pricingVersion, "fixture-v1")
+    }
+
     func testUsageIsIdempotentAndUsesVersionedIntegerRates() async throws {
         let repository = InMemoryProviderGovernanceRepository()
         let ledger = ProviderUsageLedger(
@@ -57,7 +97,7 @@ final class ProviderUsageLedgerTests: XCTestCase {
             repository: repository,
             pricingDescriptorSource: StaticPricingDescriptorSource.unconfigured
         )
-        try await ledger.record(
+        let costWasPriced = try await ledger.recordWithCostAvailability(
             ProviderUsage(
                 provider: ProviderID.qwen,
                 model: "fixture",
@@ -69,6 +109,7 @@ final class ProviderUsageLedgerTests: XCTestCase {
             ),
             requestID: UUID()
         )
+        XCTAssertFalse(costWasPriced)
 
         let summary = try await ledger.monthlySummary(provider: ProviderID.qwen)
         XCTAssertNil(summary.estimatedCostMicros)
@@ -186,7 +227,7 @@ final class ProviderUsageLedgerTests: XCTestCase {
         )
 
         let summary = try await ledger.monthlySummary(provider: .deepSeek)
-        XCTAssertEqual(summary.estimatedCostMicros, 1_760_000)
+        XCTAssertEqual(summary.estimatedCostMicros, 1_500_000)
         XCTAssertEqual(summary.currency, "USD")
         let exceeded = try await ledger.isSoftBudgetExceeded(
             provider: .deepSeek,
@@ -254,10 +295,10 @@ final class ProviderUsageLedgerTests: XCTestCase {
             attempt: 1
         )
 
-        XCTAssertEqual(source.descriptor(for: usage)?.version, "deepseek-2026-09-01-conservative")
+        XCTAssertEqual(source.descriptor(for: usage)?.version, "deepseek-2026-09-10-peak-upper-bound")
         XCTAssertEqual(
             source.descriptor(for: usage)?.origin,
-            .publishedPriceList(documentID: "deepseek-pricing", checkedOn: "2026-09-01")
+            .publishedPriceList(documentID: "deepseek-pricing", checkedOn: "2026-10-23")
         )
         XCTAssertNil(source.descriptor(for: ProviderUsage(
             provider: .deepSeek,

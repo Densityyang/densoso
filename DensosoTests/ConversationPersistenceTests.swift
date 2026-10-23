@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class ConversationPersistenceTests: XCTestCase {
     func testMessageQueriesAndResetStayScopedToConversationAndRequest() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -118,7 +118,7 @@ final class ConversationPersistenceTests: XCTestCase {
     }
 
     func testConversationMessagesSurviveRepositoryRecreationInOrdinalOrder() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -150,7 +150,7 @@ final class ConversationPersistenceTests: XCTestCase {
     }
 
     func testMessagePagesPreserveOrdinalAndResumeFilterAcrossPageBoundary() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -221,7 +221,7 @@ final class ConversationPersistenceTests: XCTestCase {
     }
 
     func testResetPagesMessagesAndRequestsAcross64RowBoundaries() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -248,6 +248,11 @@ final class ConversationPersistenceTests: XCTestCase {
                 maximumProviderRounds: 5,
                 maximumToolCalls: 8
             ))
+            context.insert(AgentRequestCostBudgetRecord(
+                requestID: requestID,
+                conversationID: conversationID,
+                maximumCostMicros: AgentBudget.defaultMaximumCostMicros
+            ))
         }
         let otherRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000433")!
         context.insert(MessageRecord(
@@ -265,6 +270,11 @@ final class ConversationPersistenceTests: XCTestCase {
             maximumProviderRounds: 5,
             maximumToolCalls: 8
         ))
+        context.insert(AgentRequestCostBudgetRecord(
+            requestID: otherRequestID,
+            conversationID: otherConversationID,
+            maximumCostMicros: AgentBudget.defaultMaximumCostMicros
+        ))
         try context.save()
 
         try await SwiftDataAgentRepository(modelContainer: container).reset(conversationID: conversationID)
@@ -277,10 +287,13 @@ final class ConversationPersistenceTests: XCTestCase {
         let requests = try verificationContext.fetch(FetchDescriptor<AgentRequestRecord>())
         XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(requests.first?.requestID, otherRequestID)
+        let budgets = try verificationContext.fetch(FetchDescriptor<AgentRequestCostBudgetRecord>())
+        XCTAssertEqual(budgets.count, 1)
+        XCTAssertEqual(budgets.first?.requestID, otherRequestID)
     }
 
     func testAgentRestorePublishesUserVisibleConversationMessages() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -308,7 +321,7 @@ final class ConversationPersistenceTests: XCTestCase {
             intelligencePreferences: preferences,
             providerConfiguration: ProviderConfigurationPreferences(),
             governanceRepository: governance,
-            usageLedger: ProviderUsageLedger(repository: governance),
+            usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
             registry: ToolRegistry(),
             confirmationCoordinator: ConfirmationCoordinator(
                 repository: confirmationRepository,

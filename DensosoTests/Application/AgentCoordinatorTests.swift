@@ -99,6 +99,48 @@ final class AgentCoordinatorTests: XCTestCase {
         XCTAssertTrue(try ModelContext(harness.container).fetch(FetchDescriptor<MessageRecord>()).isEmpty)
     }
 
+    func testUnpricedProviderRequestStopsBeforeNetworkOrToolCalls() async throws {
+        let provider = ScriptedTextProvider(model: "unpriced-fixture-model", scripts: [])
+        let harness = try await Harness(provider: provider)
+        let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000921")!
+
+        do {
+            _ = try await harness.session.send(userText: "给我讲个笑话", requestID: requestID)
+            XCTFail("An unpriced model must not consume an unbounded provider request")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .budgetUnavailable)
+        }
+
+        XCTAssertTrue(provider.recordedRequests().isEmpty)
+        let record = try XCTUnwrap(
+            ModelContext(harness.container).fetch(
+                FetchDescriptor<AgentRequestRecord>(predicate: #Predicate { $0.requestID == requestID })
+            ).first
+        )
+        XCTAssertEqual(record.stateRaw, AgentRequestState.failed.rawValue)
+    }
+
+    func testCostCapIsReservedBeforeProviderOrToolInvocation() async throws {
+        let provider = ScriptedTextProvider(scripts: [])
+        let harness = try await Harness(
+            provider: provider,
+            budgetFactory: { AgentBudget(maximumCostMicros: 0) }
+        )
+
+        do {
+            _ = try await harness.session.send(userText: "给我讲一个笑话")
+            XCTFail("A zero-cost request budget must stop before network or tool calls")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .budgetExceeded)
+        }
+
+        XCTAssertTrue(provider.recordedRequests().isEmpty)
+        XCTAssertEqual(
+            try ModelContext(harness.container).fetch(FetchDescriptor<AgentRequestRecord>()).first?.stateRaw,
+            AgentRequestState.failed.rawValue
+        )
+    }
+
     func testHealthContextLoadsOnlyForRelevantHealthQuestions() async throws {
         let provider = ScriptedTextProvider(scripts: [
             [.textDelta("给你讲个笑话。"), .completed(.completed)],
@@ -312,7 +354,7 @@ final class AgentCoordinatorTests: XCTestCase {
     }
 
     func testCloudProviderRequiresExplicitConsent() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -329,7 +371,7 @@ final class AgentCoordinatorTests: XCTestCase {
             intelligencePreferences: preferences,
             providerConfiguration: ProviderConfigurationPreferences(),
             governanceRepository: governance,
-            usageLedger: ProviderUsageLedger(repository: governance),
+            usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
             registry: ToolRegistry(),
             confirmationCoordinator: ConfirmationCoordinator(
                 repository: confirmationRepository,
@@ -522,7 +564,7 @@ private struct Harness {
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
         healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil
     ) async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV8.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: modelContainer)
@@ -535,7 +577,7 @@ private struct Harness {
             intelligencePreferences: preferences,
             providerConfiguration: ProviderConfigurationPreferences(),
             governanceRepository: governance,
-            usageLedger: ProviderUsageLedger(repository: governance),
+            usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
             registry: ToolRegistry(),
             confirmationCoordinator: ConfirmationCoordinator(
                 repository: confirmationRepository,

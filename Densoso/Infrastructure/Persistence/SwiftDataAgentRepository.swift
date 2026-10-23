@@ -49,6 +49,10 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
             guard existing.containsTransientImage == containsTransientImage else {
                 throw AgentRequestPersistenceError.requestMediaMismatch
             }
+            try ensureCostBudgetRecord(
+                for: existing,
+                fallbackMaximumCostMicros: AgentBudget.defaultMaximumCostMicros
+            )
             let state = try requestState(existing)
             if state == .running || state == .interrupted {
                 existing.resumeCount = existing.resumeCount == Int.max ? Int.max : existing.resumeCount + 1
@@ -69,6 +73,11 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
             containsTransientImage: containsTransientImage
         )
         modelContext.insert(record)
+        modelContext.insert(AgentRequestCostBudgetRecord(
+            requestID: requestID,
+            conversationID: conversationID,
+            maximumCostMicros: initialBudget.maximumCostMicros
+        ))
         try modelContext.save()
         return try requestSnapshot(record)
     }
@@ -85,6 +94,69 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         record.cachedInputTokens = consumption.cachedInputTokens
         record.outputTokens = consumption.outputTokens
         record.reasoningTokens = consumption.reasoningTokens
+        record.updatedAt = Date()
+        try modelContext.save()
+    }
+
+    func reserveAgentRequestCost(
+        requestID: UUID,
+        conversationID: UUID,
+        provider: ProviderID,
+        model: String,
+        currency: String,
+        pricingVersion: String,
+        providerRound: Int,
+        estimatedCostMicros: Int64
+    ) throws -> AgentRequestCostBudget {
+        guard providerRound > 0, estimatedCostMicros >= 0 else {
+            throw AgentRequestPersistenceError.costBudgetMismatch
+        }
+        _ = try fetchAgentRequest(requestID: requestID, conversationID: conversationID)
+        let record = try fetchCostBudgetRecord(requestID: requestID, conversationID: conversationID)
+        let budgetState = AgentCostBudgetState(rawValue: record.costStateRaw) ?? .unavailable
+        guard budgetState != .unavailable else {
+            throw AgentRequestPersistenceError.costBudgetUnavailable
+        }
+        if budgetState == .estimated && record.providerRaw == "unresolved" {
+            throw AgentRequestPersistenceError.costBudgetMismatch
+        }
+        if record.providerRaw != "unresolved",
+           (record.providerRaw != provider.rawValue
+                || record.model != model
+                || record.currency != currency
+                || record.pricingVersion != pricingVersion) {
+            throw AgentRequestPersistenceError.costBudgetMismatch
+        }
+        guard record.reservedCostMicros <= record.maximumCostMicros else {
+            throw AgentRequestPersistenceError.costBudgetExceeded
+        }
+        if record.lastReservedProviderRound == providerRound {
+            return costBudgetSnapshot(record)
+        }
+        guard record.lastReservedProviderRound < Int.max,
+              providerRound == record.lastReservedProviderRound + 1 else {
+            throw AgentRequestPersistenceError.costBudgetMismatch
+        }
+        let total = record.reservedCostMicros.addingReportingOverflow(estimatedCostMicros)
+        guard !total.overflow, total.partialValue <= record.maximumCostMicros else {
+            throw AgentRequestPersistenceError.costBudgetExceeded
+        }
+        record.providerRaw = provider.rawValue
+        record.model = model
+        record.currency = currency
+        record.pricingVersion = pricingVersion
+        record.reservedCostMicros = total.partialValue
+        record.lastReservedProviderRound = providerRound
+        record.lastReservedCostMicros = estimatedCostMicros
+        record.costStateRaw = AgentCostBudgetState.estimated.rawValue
+        record.updatedAt = Date()
+        try modelContext.save()
+        return costBudgetSnapshot(record)
+    }
+
+    func markAgentRequestCostUnavailable(requestID: UUID, conversationID: UUID) throws {
+        let record = try fetchCostBudgetRecord(requestID: requestID, conversationID: conversationID)
+        record.costStateRaw = AgentCostBudgetState.unavailable.rawValue
         record.updatedAt = Date()
         try modelContext.save()
     }
@@ -622,6 +694,31 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
             requestCursor = lastRequest.requestID
         }
 
+        var costBudgetCursor: UUID?
+        let costBudgetSortBy = [SortDescriptor(\AgentRequestCostBudgetRecord.requestID)]
+        while true {
+            let costBudgetPredicate: Predicate<AgentRequestCostBudgetRecord>
+            if let costBudgetCursor {
+                let cursorRequestID = costBudgetCursor
+                costBudgetPredicate = #Predicate<AgentRequestCostBudgetRecord> { budget in
+                    budget.conversationID == conversationID && budget.requestID > cursorRequestID
+                }
+            } else {
+                costBudgetPredicate = #Predicate<AgentRequestCostBudgetRecord> {
+                    $0.conversationID == conversationID
+                }
+            }
+            var costBudgetDescriptor = FetchDescriptor<AgentRequestCostBudgetRecord>(
+                predicate: costBudgetPredicate,
+                sortBy: costBudgetSortBy
+            )
+            costBudgetDescriptor.fetchLimit = Self.conversationResetBatchSize
+            let budgets = try modelContext.fetch(costBudgetDescriptor)
+            guard let lastBudget = budgets.last else { break }
+            for budget in budgets { modelContext.delete(budget) }
+            costBudgetCursor = lastBudget.requestID
+        }
+
         var conversationDescriptor = FetchDescriptor<ConversationRecord>(
             predicate: #Predicate { $0.id == conversationID }
         )
@@ -662,6 +759,22 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
 
     private func requestSnapshot(_ record: AgentRequestRecord) throws -> AgentRequestSnapshot {
         let state = try requestState(record)
+        let costBudgetRecord = try findCostBudgetRecord(
+            requestID: record.requestID,
+            conversationID: record.conversationID
+        )
+        let costBudget = costBudgetRecord.map(costBudgetSnapshot)
+            ?? AgentRequestCostBudget(
+                maximumCostMicros: AgentBudget.defaultMaximumCostMicros,
+                reservedCostMicros: 0,
+                provider: nil,
+                model: nil,
+                currency: nil,
+                pricingVersion: nil,
+                lastReservedProviderRound: 0,
+                lastReservedCostMicros: 0,
+                state: .unavailable
+            )
         return AgentRequestSnapshot(
             requestID: record.requestID,
             conversationID: record.conversationID,
@@ -669,6 +782,7 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
             budget: AgentBudget(
                 maximumProviderRounds: record.maximumProviderRounds,
                 maximumToolCalls: record.maximumToolCalls,
+                maximumCostMicros: costBudget.maximumCostMicros,
                 deadline: record.absoluteDeadline
             ),
             consumption: AgentBudgetConsumption(
@@ -679,9 +793,96 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
                 outputTokens: record.outputTokens,
                 reasoningTokens: record.reasoningTokens
             ),
+            costBudget: costBudget,
             resumeCount: record.resumeCount,
             containsTransientImage: record.containsTransientImage,
             state: state
+        )
+    }
+
+    private func ensureCostBudgetRecord(
+        for request: AgentRequestRecord,
+        fallbackMaximumCostMicros: Int64
+    ) throws {
+        if let existing = try findCostBudgetRecord(
+            requestID: request.requestID,
+            conversationID: request.conversationID
+        ) {
+            guard AgentCostBudgetState(rawValue: existing.costStateRaw) == .estimated else { return }
+            let usages = try providerUsageRecords(for: request.requestID)
+            let hasUnpricedOrMismatchedUsage = usages.count >= 64
+                || usages.contains { usage in
+                    usage.estimatedCostMicros < 0
+                        || usage.provider != existing.providerRaw
+                        || usage.model != existing.model
+                        || usage.currency != existing.currency
+                        || usage.rateVersion != existing.pricingVersion
+                }
+            if hasUnpricedOrMismatchedUsage {
+                existing.costStateRaw = AgentCostBudgetState.unavailable.rawValue
+                existing.updatedAt = Date()
+                try modelContext.save()
+            }
+            return
+        }
+        let hasPriorUsage = request.providerRoundsUsed > 0
+            || request.inputTokens > 0
+            || request.cachedInputTokens > 0
+            || request.outputTokens > 0
+            || request.reasoningTokens > 0
+        let record = AgentRequestCostBudgetRecord(
+            requestID: request.requestID,
+            conversationID: request.conversationID,
+            maximumCostMicros: fallbackMaximumCostMicros,
+            costStateRaw: hasPriorUsage
+                ? AgentCostBudgetState.unavailable.rawValue
+                : AgentCostBudgetState.unresolved.rawValue
+        )
+        modelContext.insert(record)
+        try modelContext.save()
+    }
+
+    private func providerUsageRecords(for requestID: UUID) throws -> [ProviderUsageRecord] {
+        let requestToken = requestID.uuidString.lowercased()
+        let predicate = #Predicate<ProviderUsageRecord> { $0.usageKey.contains(requestToken) }
+        var descriptor = FetchDescriptor<ProviderUsageRecord>(predicate: predicate)
+        descriptor.fetchLimit = 64
+        return try modelContext.fetch(descriptor)
+    }
+
+    private func fetchCostBudgetRecord(requestID: UUID, conversationID: UUID) throws -> AgentRequestCostBudgetRecord {
+        guard let record = try findCostBudgetRecord(requestID: requestID, conversationID: conversationID) else {
+            throw AgentRequestPersistenceError.costBudgetUnavailable
+        }
+        return record
+    }
+
+    private func findCostBudgetRecord(
+        requestID: UUID,
+        conversationID: UUID
+    ) throws -> AgentRequestCostBudgetRecord? {
+        var descriptor = FetchDescriptor<AgentRequestCostBudgetRecord>(
+            predicate: #Predicate { $0.requestID == requestID }
+        )
+        descriptor.fetchLimit = 1
+        guard let record = try modelContext.fetch(descriptor).first else { return nil }
+        guard record.conversationID == conversationID else {
+            throw AgentRequestPersistenceError.conversationMismatch
+        }
+        return record
+    }
+
+    private func costBudgetSnapshot(_ record: AgentRequestCostBudgetRecord) -> AgentRequestCostBudget {
+        AgentRequestCostBudget(
+            maximumCostMicros: record.maximumCostMicros,
+            reservedCostMicros: record.reservedCostMicros,
+            provider: ProviderID(rawValue: record.providerRaw),
+            model: record.model == "unresolved" ? nil : record.model,
+            currency: record.currency == "unresolved" ? nil : record.currency,
+            pricingVersion: record.pricingVersion == "unavailable" ? nil : record.pricingVersion,
+            lastReservedProviderRound: record.lastReservedProviderRound,
+            lastReservedCostMicros: record.lastReservedCostMicros,
+            state: AgentCostBudgetState(rawValue: record.costStateRaw) ?? .unavailable
         )
     }
 

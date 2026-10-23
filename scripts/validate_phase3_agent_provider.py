@@ -62,6 +62,7 @@ def main() -> int:
         "Densoso/Infrastructure/LLM/QwenProvider.swift",
         "Densoso/Infrastructure/LLM/ProviderConfiguration.swift",
         "Densoso/Application/Agent/AgentBudget.swift",
+        "Densoso/Application/Agent/AgentProviderContextPolicy.swift",
         "Densoso/Application/Agent/AgentReasoningPolicy.swift",
         "Densoso/Application/Agent/AgentEvents.swift",
         "Densoso/Application/Agent/AgentIntent.swift",
@@ -69,6 +70,7 @@ def main() -> int:
         "Densoso/Application/Agent/ToolSchemaValidator.swift",
         "Densoso/Application/Usage/ProviderUsageLedger.swift",
         "Densoso/Application/Usage/PricingDescriptorCatalog.swift",
+        "Densoso/Persistence/Schemas/DensosoSchemaV9.swift",
         "Densoso/Application/Formatting/AssistantBlock.swift",
         "Densoso/Application/Formatting/RestrictedMarkdownRenderer.swift",
         "Densoso/Views/Components/AssistantBlockView.swift",
@@ -88,6 +90,12 @@ def main() -> int:
             "a note absent from the user's words",
             "do not enter HealthKit projections",
             "PricingDescriptor",
+            "hard per-request cost cap",
+            "conservative cost estimate",
+            "legacy in-flight request",
+            "last eight complete turns",
+            "64 messages",
+            "96 KiB input estimate",
             "exact provider, model and capability",
             "retain unknown cost",
             "stable 64-row keyset pages",
@@ -112,8 +120,12 @@ def main() -> int:
         [
             "enum PricingDescriptorOrigin",
             "struct PricingDescriptor",
+            "struct ProviderRequestCostEstimate",
             "protocol PricingDescriptorSource",
             "struct StaticPricingDescriptorSource",
+            "maximumRequestCostEstimate(",
+            "recordWithCostAvailability(",
+            "ProviderRequestExecutor.defaultMaximumAttempts",
             "usage.cachedInputTokens <= usage.inputTokens",
             'rateVersion: estimate == nil ? "unknown"',
         ],
@@ -125,7 +137,11 @@ def main() -> int:
             "enum PricingDescriptorCatalog",
             "model: \"deepseek-flash\"",
             "model: \"qwen-flash\"",
-            "cachedInputMicrosPerMillionTokens: 440_000",
+            "version: \"deepseek-2026-09-10-peak-upper-bound\"",
+            "inputMicrosPerMillionTokens: 300_000",
+            "cachedInputMicrosPerMillionTokens: 300_000",
+            "outputMicrosPerMillionTokens: 1_200_000",
+            "checkedOn: \"2026-10-23\"",
             "cachedInputMicrosPerMillionTokens: 150_000",
         ],
         errors,
@@ -135,6 +151,7 @@ def main() -> int:
         [
             "testQwenSpeechUsageWithoutPricingDescriptorKeepsCostUnknown",
             "testMissingCachedPriceAndUnlistedVisionModelKeepCostUnknown",
+            "testPreflightCostUsesInputUpperBoundMaximumOutputAndRetryAttempts",
         ],
         errors,
     )
@@ -145,12 +162,13 @@ def main() -> int:
             "configurationMissing", "consentRequired", "unauthorized", "rateLimited",
             "timeout", "network", "server", "malformedResponse", "contentRejected",
             "cancelled", "budgetExceeded",
+            "budgetUnavailable",
         ],
         errors,
     )
     require_text(
         ROOT / "Densoso" / "Infrastructure" / "LLM" / "ProviderHTTPTransport.swift",
-        ["maximumRetries: Int = 2", "Retry-After", "Task.checkCancellation", "deadline"],
+        ["defaultMaximumRetries = 2", "defaultMaximumAttempts", "Retry-After", "Task.checkCancellation", "deadline"],
         errors,
     )
     require_text(
@@ -396,8 +414,29 @@ def main() -> int:
         errors,
     )
     require_text(
+        ROOT / "Densoso" / "Persistence" / "Schemas" / "DensosoSchemaV9.swift",
+        (
+            "AgentRequestCostBudgetRecord",
+            "maximumCostMicros",
+            "reservedCostMicros",
+            "lastReservedProviderRound",
+            "pricingVersion",
+        ),
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Application" / "Agent" / "AgentBudget.swift",
+        ("defaultMaximumCostMicros", "maximumCostMicros"),
+        errors,
+    )
+    require_text(
         ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataAgentRepository.swift",
-        ["beginAgentRequest", "absoluteDeadline", "resumeCount", "containsTransientImage", "updateAgentRequestConsumption"],
+        [
+            "beginAgentRequest", "absoluteDeadline", "resumeCount", "containsTransientImage",
+            "updateAgentRequestConsumption", "reserveAgentRequestCost(",
+            "markAgentRequestCostUnavailable(", "ensureCostBudgetRecord(",
+            "AgentRequestCostBudgetRecord",
+        ],
         errors,
     )
     require_text(
@@ -406,12 +445,30 @@ def main() -> int:
             "func send(multimodalRequest: MultimodalModelRequest",
             "containsTransientImage: multimodalRequest.image != nil || !multimodalRequest.mealEvidence.isEmpty",
             "transientMealImageEvidence = multimodalRequest.mealEvidence",
-            "providerMessagesIncludingTransientMealEvidence()",
+            "providerMessagesIncludingTransientMealEvidence(",
             "transientMealEvidenceMessage",
             "requestSnapshot.resumeCount > 0",
             "AgentError.transientImageRequired",
-            "withoutTransientImages",
+            "withoutSensitiveTransientContent",
+            "AgentProviderContextPolicy.boundedMessages(",
+            "maximumRequestCostEstimate(",
+            "reserveAgentRequestCost(",
+            "recordWithCostAvailability(",
+            "usage.capability == .text",
+            "reportedModel == selectedModel",
+            "markAgentRequestCostUnavailable(",
         ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Application" / "Agent" / "AgentProviderContextPolicy.swift",
+        (
+            "maximumRecentTurns",
+            "maximumMessages",
+            "maximumEstimatedInputBytes",
+            "currentTurnStartIndex",
+            "estimatedInputTokenUpperBound",
+        ),
         errors,
     )
     require_text(
@@ -419,9 +476,29 @@ def main() -> int:
         [
             "testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage",
             "testV4StoreMigratesToV5AndAddsAnEmptyRequestLedger",
+            "testPerRequestCostReservationPersistsAndCannotResetOnResume",
             "resumeCount", "cachedInputTokens", "reasoningTokens",
             "containsTransientImage",
         ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "DensosoMigrationTests.swift",
+        ("testV8MigrationPreservesInterruptedRequestForSafeCostBudgetBackfill",),
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "AgentProviderContextPolicyTests.swift",
+        ("testProviderHistoryKeepsRecentWholeTurnsAndTheCurrentTurn", "testCurrentTurnOverBudgetFailsBeforeProviderInvocation"),
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "AgentCoordinatorTests.swift",
+        (
+            "testProviderReasoningContinuesInMemoryButIsNeverPersisted",
+            "testUnpricedProviderRequestStopsBeforeNetworkOrToolCalls",
+            "testCostCapIsReservedBeforeProviderOrToolInvocation",
+        ),
         errors,
     )
     require_text(
@@ -621,7 +698,14 @@ def main() -> int:
             "modelValueNotSupported",
             "noteNotReported",
             "otherPerson",
+            "ambiguousNegationField(in: text)",
             "dateNotSupported",
+            "guard occurredAt <= date",
+            "explicitDays(in: rawText)",
+            "\"我妈\"",
+            "\"我爸\"",
+            "\"mymom\"",
+            "\"mydad\"",
             "压力",
             "notstressed",
             "nottired",
@@ -648,6 +732,8 @@ def main() -> int:
             "testSelfReportResolverDoesNotInferStressFromFatigueAndSleep",
             "testSelfReportResolverRejectsContradictionsOtherPeopleAndInventedNotes",
             "testSelfReportResolverRejectsUnsupportedDateAndHonorsNegation",
+            "testSelfReportResolverRejectsConflictingOrMalformedExplicitDates",
+            "testSelfReportResolverRejectsDoubleNegationAndMixedEnergySignals",
             "testAgentDoesNotStageInferredStressButStagesAndCommitsExplicitCheckIn",
         ],
         errors,
