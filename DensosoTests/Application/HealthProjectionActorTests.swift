@@ -328,6 +328,8 @@ final class HealthProjectionActorTests: XCTestCase {
         let snapshot = try await actor.dailyLoopSnapshot(
             asOf: asOf,
             dailyBrief: nil,
+            dailyBriefSourceFingerprint: nil,
+            dailyBriefValidatedAt: nil,
             pendingActions: [expiredAction, activeAction]
         )
         XCTAssertEqual(snapshot.phase, .morning)
@@ -419,6 +421,8 @@ final class HealthProjectionActorTests: XCTestCase {
         let snapshot = try await actor.dailyLoopSnapshot(
             asOf: today.addingTimeInterval(10 * 60 * 60),
             dailyBrief: nil,
+            dailyBriefSourceFingerprint: nil,
+            dailyBriefValidatedAt: nil,
             pendingActions: []
         )
         XCTAssertEqual(snapshot.workoutPlans.map(\.actionID), [todaySessionID])
@@ -506,8 +510,8 @@ final class HealthProjectionActorTests: XCTestCase {
         ))
         context.insert(DailyMetrics(
             date: today,
-            totalIntakeKcal: 500,
             totalExpenditureKcal: 1_820,
+            totalIntakeKcal: 500,
             deficitKcal: 1_320,
             proteinG: 25,
             fatG: 20,
@@ -524,6 +528,8 @@ final class HealthProjectionActorTests: XCTestCase {
         let snapshot = try await actor.dailyLoopSnapshot(
             asOf: today.addingTimeInterval(8 * 60 * 60),
             dailyBrief: nil,
+            dailyBriefSourceFingerprint: nil,
+            dailyBriefValidatedAt: nil,
             pendingActions: []
         )
         let expectedSinglePlanIDs = (0..<6).map {
