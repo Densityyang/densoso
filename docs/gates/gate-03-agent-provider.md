@@ -77,11 +77,11 @@ PR; older V3 PR evidence below has been replaced with the current run state.
   and transport retry limit. The request ID, provider/model/currency/rate version,
   cap, cumulative reservation and round are durable; resume cannot replace them
   with a larger factory budget. The default cap is 1,000,000 micros in the
-  selected descriptor's currency. A legacy in-flight request that has prior rounds
-  but no recoverable cost reservations is terminated before another provider
-  call. Unknown pricing remains unavailable and does not fail an otherwise
-  bounded provider request; a provider/model mismatch fails closed. Reservations
-  are estimates, not invoice totals.
+  selected descriptor's currency. A legacy in-flight request with prior rounds
+  but no stored provider/model identity is terminated before another provider
+  call to prevent a silent provider switch. Unknown pricing remains unavailable
+  and does not fail an otherwise bounded provider request; a provider/model
+  mismatch fails closed. Reservations are estimates, not invoice totals.
   Estimates resolve through a versioned `PricingDescriptor` matched by exact
   provider, model and capability tuple. DeepSeek uses the model ID and Responses
   endpoint from `ProviderCapabilityCatalog`; its fake-transport contract tests

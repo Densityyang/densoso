@@ -711,7 +711,7 @@ final class AgentSession {
                 switch error {
                 case .timeout:
                     requestState = .expired
-                case .budgetExceeded, .budgetUnavailable:
+                case .budgetExceeded, .budgetUnavailable, .requestModelMismatch:
                     requestState = .failed
                 default:
                     requestState = .interrupted
@@ -976,17 +976,14 @@ final class AgentSession {
         systemPrompt providerSystemPrompt: String,
         responseFormat: StructuredOutputFormat?
     ) throws -> [ModelMessage] {
-        let messagesWithoutLocalMetadata = conversationHistory.map { message in
-            ModelMessage(role: message.role, content: message.content)
-        }
-        guard let userIndex = messagesWithoutLocalMetadata.lastIndex(where: { $0.role == .user }) else {
+        guard let userIndex = conversationHistory.lastIndex(where: { $0.role == .user }) else {
             throw AgentError.contextWindowExceeded
         }
-        var providerMessages = messagesWithoutLocalMetadata
+        var providerMessages = conversationHistory
         if let evidenceMessage = Self.transientMealEvidenceMessage(transientMealImageEvidence) {
             providerMessages.insert(evidenceMessage, at: userIndex + 1)
         }
-        return try AgentProviderContextPolicy.boundedMessages(
+        let boundedMessages = try AgentProviderContextPolicy.boundedMessages(
             providerMessages,
             currentTurnStartIndex: userIndex,
             additionalContextBytes: AgentProviderContextPolicy.fixedContextBytes(
@@ -995,6 +992,7 @@ final class AgentSession {
                 responseFormat: responseFormat
             )
         )
+        return boundedMessages.map { ModelMessage(role: $0.role, content: $0.content) }
     }
 
     private static func transientMealEvidenceMessage(_ evidence: [MealEvidence]) -> ModelMessage? {
@@ -1128,6 +1126,11 @@ final class AgentSession {
                     let reportedModel = usage.model
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                         .lowercased()
+                    let costIsPriced = try await usageLedger.recordWithCostAvailability(
+                        usage,
+                        requestID: request.requestID,
+                        providerRound: providerRound
+                    )
                     guard usage.provider == provider.descriptor.id,
                           usage.capability == .text,
                           reportedModel == selectedModel else {
@@ -1137,11 +1140,6 @@ final class AgentSession {
                         )
                         throw ProviderError.requestModelMismatch
                     }
-                    let costIsPriced = try await usageLedger.recordWithCostAvailability(
-                        usage,
-                        requestID: request.requestID,
-                        providerRound: providerRound
-                    )
                     guard costIsPriced else {
                         try await conversationRepository.markAgentRequestCostUnavailable(
                             requestID: request.requestID,

@@ -1221,7 +1221,7 @@ jobs:
             -only-testing:DensosoTests/ProviderUsageLedgerTests/testPreflightCostUsesInputUpperBoundMaximumOutputAndRetryAttempts \
             -only-testing:DensosoTests/DensosoMigrationTests/testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1 \
             -only-testing:DensosoTests/DensosoMigrationTests/testV7ToV9PreservesHealthKitSampleIndexState \
-            -only-testing:DensosoTests/DensosoMigrationTests/testV8MigrationPreservesInterruptedRequestForSafeCostBudgetBackfill \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity \
             -only-testing:DensosoTests/DensosoMigrationTests/testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation \
             -only-testing:DensosoTests/DensosoMigrationTests/testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox \
             -only-testing:DensosoTests/DensosoMigrationTests/testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords \

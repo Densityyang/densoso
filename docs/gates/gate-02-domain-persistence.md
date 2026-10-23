@@ -47,9 +47,11 @@ and adjacent-window coverage without rescanning every sample per day.
 V1–V7 schema identities remain intact. V7-to-V8 renames the sample-index
 tombstone flag while preserving its stored column. V8-to-V9 adds the isolated
 `AgentRequestCostBudgetRecord` sidecar without rewriting V5 request rows. When an
-older interrupted request has already used provider rounds but has no
-recoverable cost reservation or provider/model identity, restoration marks its
-cost state unavailable and stops before another provider call. Gate 2 CI covers V1/V2 disk
+older interrupted request has prior provider rounds but no provider/model
+identity in its V5 ledger, the sidecar is marked unavailable and recovery stops
+before another provider call rather than risking a silent model switch. Unknown
+pricing on a new request is recorded as unavailable and does not block a
+request that remains within its durable round, tool and time limits. Gate 2 CI covers V1/V2 disk
 fixtures reopened at the current schema, the V5-to-V6 through V8-to-V9
 migrations, and request-budget recovery behavior.
 
@@ -124,7 +126,7 @@ to domain/persistence behavior and have a dedicated evidence artifact.
     and no recoverable reservations become cost-unavailable and cannot make
     another provider call; new reservations persist their cap and cumulative
     conservative estimate across resume, covered by
-    `DensosoMigrationTests.testV8MigrationPreservesInterruptedRequestForSafeCostBudgetBackfill` and
+    `DensosoMigrationTests.testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity` and
     `AgentRequestResumeTests.testPerRequestCostReservationPersistsAndCannotResetOnResume`.
 
 The restore routine verifies store/WAL/SHM checksums, stages replacement files,

@@ -252,7 +252,7 @@ def main() -> int:
             "testV5MigrationMovesRawSamplesIntoIndexAndDailySummary",
             "testV5MigrationIndexesSleepSamplesAcrossMidnightAndAdjacentWindows",
             "testV7ToV9PreservesHealthKitSampleIndexState",
-            "testV8MigrationPreservesInterruptedRequestForSafeCostBudgetBackfill",
+            "testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity",
             "existingDaySnapshot.healthKitSampleSummary?.workoutEffort.first?.score",
         ],
         errors,

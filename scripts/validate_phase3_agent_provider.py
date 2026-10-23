@@ -485,7 +485,7 @@ def main() -> int:
     )
     require_text(
         ROOT / "DensosoTests" / "DensosoMigrationTests.swift",
-        ("testV8MigrationPreservesInterruptedRequestForSafeCostBudgetBackfill",),
+        ("testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity",),
         errors,
     )
     require_text(

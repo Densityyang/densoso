@@ -294,7 +294,7 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "9.0.0")
     }
 
-    func testV8MigrationPreservesInterruptedRequestForSafeCostBudgetBackfill() async throws {
+    func testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity() async throws {
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
         var container: ModelContainer? = try makeContainer(version: DensosoSchemaV8.self, url: location.storeURL)
