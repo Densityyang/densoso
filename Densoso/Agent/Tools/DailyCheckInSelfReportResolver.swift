@@ -8,12 +8,23 @@ struct DailyCheckInSelfReportResolver {
         "我丈夫", "我妻子", "我老公", "我老婆", "我和朋友", "朋友说", "他说", "她说",
         "myfriend", "mymother", "mymom", "myfather", "mydad", "mymum", "mychild", "mycoworker", "mypartner",
     ]
+    private static let futureDateCues = [
+        "明天", "明日", "后天", "大后天", "下周", "下星期", "下月", "下个月", "下半年",
+        "过几天", "过几周", "过几个月", "未来", "以后", "之后",
+        "tomorrow", "dayaftertomorrow", "nextweek", "nextmonth", "nextyear",
+    ]
+    private static let unsupportedRelativeDateCues = [
+        "上周", "上星期", "上个月", "去年", "前几天", "最近几天", "几天前", "上周末",
+        "lastweek", "lastmonth", "lastyear", "lastmonday", "lasttuesday", "lastwednesday",
+        "lastthursday", "lastfriday", "lastsaturday", "lastsunday", "afewdaysago",
+    ]
 
     func validate(_ checkIn: DailyCheckIn, userText: String, asOf date: Date) throws {
         let text = Self.normalized(userText)
         guard !text.isEmpty else { throw DailyCheckInSelfReportError.emptyReport }
         guard text.count <= 4_000 else { throw DailyCheckInSelfReportError.reportTooLong }
-        guard !Self.otherPersonCues.contains(where: text.contains) else {
+        guard !Self.otherPersonCues.contains(where: text.contains),
+              !Self.containsThirdPersonSubject(in: text, rawText: userText) else {
             throw DailyCheckInSelfReportError.otherPerson
         }
         if let field = Self.ambiguousNegationField(in: text) {
@@ -71,6 +82,12 @@ struct DailyCheckInSelfReportResolver {
 
     private func validateDate(_ occurredAt: Date, in rawText: String, asOf date: Date) throws {
         let text = Self.normalized(rawText)
+        guard !Self.containsFutureRelativeDate(in: text) else {
+            throw DailyCheckInSelfReportError.dateNotSupported
+        }
+        guard !Self.containsUnsupportedRelativeDate(in: text) else {
+            throw DailyCheckInSelfReportError.dateNotSupported
+        }
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: date)
         guard occurredAt <= date else { throw DailyCheckInSelfReportError.dateNotSupported }
@@ -169,6 +186,33 @@ struct DailyCheckInSelfReportResolver {
         value.lowercased()
             .components(separatedBy: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
             .joined()
+    }
+
+    private static func containsThirdPersonSubject(in normalizedText: String, rawText: String) -> Bool {
+        matches(#"(?<!其)[他她]"#, in: normalizedText)
+            || matches(#"\b(?:he|she|they)\b"#, in: rawText)
+    }
+
+    private static func containsFutureRelativeDate(in text: String) -> Bool {
+        futureDateCues.contains(where: text.contains)
+            || matches(#"in(?:\d+|a|one|two|three|four|five|six|seven|eight|nine|ten)(?:days?|weeks?|months?|years?)"#, in: text)
+            || matches(#"(?:\d+|[一二两兩三四五六七八九十])(?:天|周|週|星期|个月|個月|年)(?:后|後)"#, in: text)
+            || matches(#"(?:\d+|[一二两兩三四五六七八九十])(?:days?|weeks?|months?|years?)fromnow"#, in: text)
+            || matches(#"next(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)"#, in: text)
+    }
+
+    private static func containsUnsupportedRelativeDate(in text: String) -> Bool {
+        unsupportedRelativeDateCues.contains(where: text.contains)
+            || matches(#"(?:\d+|[一二两兩三四五六七八九十])(?:天|周|週|星期|个月|個月|年)(?:前|以前)"#, in: text)
+            || matches(#"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)(?:days?|weeks?|months?|years?)ago"#, in: text)
+    }
+
+    private static func matches(_ pattern: String, in text: String) -> Bool {
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return false
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return expression.firstMatch(in: text, range: range) != nil
     }
 
     private static func explicitDays(in text: String) -> [Date]? {

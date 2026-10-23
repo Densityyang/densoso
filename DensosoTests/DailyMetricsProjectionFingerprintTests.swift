@@ -47,13 +47,18 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         context.insert(meal)
         try reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
 
-        context.insert(HealthKitImportCursor(
+        let cursor = HealthKitImportCursor(
             stream: "activeEnergy",
             anchorData: Data([1, 2, 3]),
             lastSuccessfulAt: Date(),
             lookbackStart: day.addingTimeInterval(-86_400)
-        ))
+        )
+        context.insert(cursor)
         try reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
+
+        cursor.lastSuccessfulAt = Date().addingTimeInterval(60)
+        cursor.updatedAt = Date().addingTimeInterval(120)
+        try reprojectAndAssertFingerprintUnchanged(day: day, metric: metric, in: context)
 
         context.insert(ProfileRevisionRecord(
             profileKey: "primary",

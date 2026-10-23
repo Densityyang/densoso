@@ -213,6 +213,8 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             "我妈今天很累、压力很大，昨晚没睡好。",
             "My dad is tired, stressed, and slept badly.",
             "我很累，我爸压力很大，昨晚没睡好。",
+            "他今天很累，压力很大，昨晚没睡好。",
+            "She is tired, stressed, and slept badly.",
         ] {
             XCTAssertThrowsError(try resolver.validate(
                 DailyCheckIn(
@@ -227,6 +229,17 @@ final class DailyCheckInConfirmationTests: XCTestCase {
                 XCTAssertEqual(error as? DailyCheckInSelfReportError, .otherPerson)
             }
         }
+
+        XCTAssertNoThrow(try resolver.validate(
+            DailyCheckIn(
+                occurredAt: date,
+                energy: .typical,
+                stress: .low,
+                subjectiveSleep: .fair
+            ),
+            userText: "我不想考虑其他因素，今天不太累，压力不大，睡得一般。",
+            asOf: date
+        ))
 
         XCTAssertThrowsError(try resolver.validate(
             DailyCheckIn(
@@ -317,6 +330,37 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             asOf: date
         )) { error in
             XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+        }
+        XCTAssertThrowsError(try resolver.validate(
+            checkIn,
+            userText: "明天我不太累，压力不大，睡得一般。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+        }
+        for futureText in [
+            "in two weeks I have normal energy, low stress, and fair sleep.",
+            "三天后我不太累，压力不大，睡得一般。",
+        ] {
+            XCTAssertThrowsError(try resolver.validate(
+                checkIn,
+                userText: futureText,
+                asOf: date
+            )) { error in
+                XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+            }
+        }
+        for unsupportedPastText in [
+            "last week I had normal energy, low stress, and fair sleep.",
+            "三天前我不太累，压力不大，睡得一般。",
+        ] {
+            XCTAssertThrowsError(try resolver.validate(
+                checkIn,
+                userText: unsupportedPastText,
+                asOf: date
+            )) { error in
+                XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+            }
         }
     }
 

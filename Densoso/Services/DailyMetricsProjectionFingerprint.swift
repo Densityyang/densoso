@@ -71,8 +71,6 @@ enum DailyMetricsProjectionFingerprint {
                 let anchorDigest = cursor.anchorData.map(digest) ?? "none"
                 return [
                     cursor.stream,
-                    "updated:\(cursor.updatedAt.timeIntervalSince1970)",
-                    "successful:\(cursor.lastSuccessfulAt?.timeIntervalSince1970 ?? -1)",
                     "lookback:\(cursor.lookbackStart?.timeIntervalSince1970 ?? -1)",
                     "anchor:\(anchorDigest)",
                 ].joined(separator: ":")
