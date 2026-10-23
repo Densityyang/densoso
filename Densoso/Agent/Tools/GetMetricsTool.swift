@@ -7,7 +7,7 @@ struct GetMetricsTool: AgentTool {
 
     var definition: ToolSchema { .strictObject(
         name: "get_metrics",
-        description: "获取最多 90 天的热量与营养汇总；每项结果包含可用状态和覆盖率。日期按用户本地日历日闭区间处理。dailyBreakdown 最多返回 4 天；truncated=true 时可从 nextStartDate 继续查询。",
+        description: "获取最多 90 天的热量与营养汇总；每项结果包含可用状态和覆盖率。日期按用户本地日历日闭区间处理。dailyBreakdown 最多返回 4 天，并包含每日覆盖率、能量质量、待重算状态和投影版本；truncated=true 时可从 nextStartDate 继续查询。",
         properties: [
             "startDate": .string(format: "date-time", description: "开始日期 ISO8601，按本地日历日包含"),
             "endDate": .string(format: "date-time", description: "结束日期 ISO8601，按本地日历日包含"),
@@ -151,6 +151,10 @@ private struct DailyMetricBreakdown: Encodable {
     let proteinG: MetricValue<Double>
     let fatG: MetricValue<Double>
     let carbsG: MetricValue<Double>
+    let coverage: DailyMetricCoverage
+    let energyQuality: EnergyQuality
+    let requiresRecompute: Bool
+    let projectionVersion: String
 
     init(_ result: DailyMetricsReadResult) {
         date = result.date
@@ -160,6 +164,10 @@ private struct DailyMetricBreakdown: Encodable {
         proteinG = result.proteinG
         fatG = result.fatG
         carbsG = result.carbsG
+        coverage = result.coverage
+        energyQuality = result.energyQuality
+        requiresRecompute = result.requiresRecompute
+        projectionVersion = result.projectionVersion
     }
 }
 

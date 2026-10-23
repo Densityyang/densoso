@@ -25,12 +25,51 @@ final class GetMetricsToolTests: XCTestCase {
         XCTAssertNotNil(response["nextStartDate"] as? String)
         XCTAssertEqual((response["dailyBreakdown"] as? [Any])?.count, 4)
 
+        let firstDay = try XCTUnwrap((response["dailyBreakdown"] as? [[String: Any]])?.first)
+        XCTAssertEqual(firstDay["energyQuality"] as? String, EnergyQuality.observed.rawValue)
+        XCTAssertEqual(firstDay["requiresRecompute"] as? Bool, false)
+        XCTAssertEqual(firstDay["projectionVersion"] as? String, AlgorithmVersions.dailyMetricsProjection)
+        let dailyCoverage = try XCTUnwrap(firstDay["coverage"] as? [String: Any])
+        let deficitCoverage = try XCTUnwrap(dailyCoverage["deficit"] as? [String: Any])
+        XCTAssertEqual(deficitCoverage["availableDays"] as? Int, 1)
+        XCTAssertEqual(deficitCoverage["expectedDays"] as? Int, 1)
+
         let deficit = try XCTUnwrap(response["deficit"] as? [String: Any])
         let total = try XCTUnwrap(deficit["total"] as? [String: Any])
         let value = try XCTUnwrap(total["value"] as? [String: Any])
         XCTAssertEqual(total["availability"] as? String, "partial")
         XCTAssertEqual(try XCTUnwrap(value["likely"] as? Double), 615)
         XCTAssertLessThanOrEqual(output.utf8.count, AgentToolOutputLimiter.maximumUTF8Bytes)
+    }
+
+    func testDailyBreakdownPreservesPendingRecomputeEvidence() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let pending = DailyMetrics(
+            date: day,
+            energyQuality: EnergyQuality.unavailable.rawValue,
+            requiresRecompute: true,
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "pending-get-metrics"
+        )
+
+        let output = GetMetricsTool.responseJSON(
+            [DailyMetricsReadModelMapper.make(pending)],
+            from: day,
+            through: day,
+            calendar: calendar
+        )
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+        let firstDay = try XCTUnwrap((response["dailyBreakdown"] as? [[String: Any]])?.first)
+        let coverage = try XCTUnwrap(firstDay["coverage"] as? [String: Any])
+        let expenditureCoverage = try XCTUnwrap(coverage["expenditure"] as? [String: Any])
+
+        XCTAssertEqual(firstDay["energyQuality"] as? String, EnergyQuality.unavailable.rawValue)
+        XCTAssertEqual(firstDay["requiresRecompute"] as? Bool, true)
+        XCTAssertEqual(firstDay["projectionVersion"] as? String, AlgorithmVersions.dailyMetricsProjection)
+        XCTAssertEqual(expenditureCoverage["pendingRecomputeDays"] as? Int, 1)
+        XCTAssertEqual(expenditureCoverage["availableDays"] as? Int, 0)
     }
 
     func testNoValidDaysReturnsInsufficientDataWithoutZeroTotals() throws {
