@@ -311,8 +311,8 @@ final class HealthIntelligenceTests: XCTestCase {
             recommendations: []
         )
 
-        XCTAssertEqual(summary.sevenDay.averageDailyDeficitKcal, 100)
-        XCTAssertEqual(summary.sevenDay.averageProteinGrams, 90)
+        XCTAssertEqual(try XCTUnwrap(summary.sevenDay.averageDailyDeficitKcal), 100, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(summary.sevenDay.averageProteinGrams), 90, accuracy: 0.001)
         XCTAssertEqual(summary.sevenDay.coverageDays["dailyDeficitKcal"], 2)
         XCTAssertEqual(summary.sevenDay.coverageDays["proteinGrams"], 2)
 
@@ -322,7 +322,7 @@ final class HealthIntelligenceTests: XCTestCase {
             goals: nil,
             recommendations: []
         )
-        XCTAssertEqual(surplusOnly.sevenDay.averageDailyDeficitKcal, -250)
+        XCTAssertEqual(try XCTUnwrap(surplusOnly.sevenDay.averageDailyDeficitKcal), -250, accuracy: 0.001)
         XCTAssertEqual(surplusOnly.sevenDay.coverageDays["dailyDeficitKcal"], 1)
     }
 
