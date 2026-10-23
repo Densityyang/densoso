@@ -289,6 +289,17 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             userText: "今天不太累，压力不大，昨晚睡得一般。",
             asOf: date
         ))
+
+        XCTAssertNoThrow(try resolver.validate(
+            DailyCheckIn(
+                occurredAt: date,
+                energy: .typical,
+                stress: .low,
+                subjectiveSleep: .fair
+            ),
+            userText: "今天周一不太累，压力不大，昨晚睡得一般。",
+            asOf: date
+        ))
     }
 
     func testSelfReportResolverRejectsConflictingOrMalformedExplicitDates() throws {
@@ -362,15 +373,18 @@ final class DailyCheckInConfirmationTests: XCTestCase {
                 XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
             }
         }
-        for unsupportedPastText in [
+        for unsupportedRelativeText in [
             "last week I had normal energy, low stress, and fair sleep.",
             "三天前我不太累，压力不大，睡得一般。",
             "过去一周我一直很累，压力很大，睡得一般。",
             "Recently I felt tired, stressed, and slept badly.",
+            "This Friday I have normal energy, low stress, and fair sleep.",
+            "Monday I had normal energy, low stress, and fair sleep.",
+            "周五我不太累，压力不大，睡得一般。",
         ] {
             XCTAssertThrowsError(try resolver.validate(
                 checkIn,
-                userText: unsupportedPastText,
+                userText: unsupportedRelativeText,
                 asOf: date
             )) { error in
                 XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)

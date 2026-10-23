@@ -116,6 +116,9 @@ struct DailyCheckInSelfReportResolver {
         guard let explicitDates = Self.explicitDays(in: rawText) else {
             throw DailyCheckInSelfReportError.dateNotSupported
         }
+        guard !expectedDays.isEmpty || !explicitDates.isEmpty || !Self.containsWeekday(in: text) else {
+            throw DailyCheckInSelfReportError.dateNotSupported
+        }
         expectedDays.append(contentsOf: explicitDates)
         if expectedDays.isEmpty { expectedDays.append(today) }
         let uniqueDays = Set(expectedDays)
@@ -224,6 +227,11 @@ struct DailyCheckInSelfReportResolver {
         }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         return expression.firstMatch(in: text, range: range) != nil
+    }
+
+    private static func containsWeekday(in text: String) -> Bool {
+        matches(#"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#, in: text)
+            || matches(#"(?:周|星期)[一二三四五六日天]"#, in: text)
     }
 
     private static func explicitDays(in text: String) -> [Date]? {
