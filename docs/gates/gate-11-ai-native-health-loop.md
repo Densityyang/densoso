@@ -127,7 +127,7 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `GetTodayHealthStateToolTests.testUnavailableTrainingLoadEncodesMissingRecentLoadAsNull`,
   `GetHealthHistoryToolTests.testResponseCoalescesDuplicateLocalDaysAndDomainStatuses`,
   `GetHealthHistoryToolTests.testResponseTieBreaksEqualTimestampPointsIndependentOfInputOrder`,
-  `HealthProjectionActorTests.testHealthContextSummaryAggregatesMealProteinAcrossStableFetchPages`,
+  `HealthProjectionActorTests.testHealthContextSummaryReadsCanonicalDailyMetricsProteinOnlyWhenUsable`,
   `HealthProjectionActorTests.testLoadDaysIncludesAllWorkoutsAcrossStableFetchPages`,
   `HealthProjectionActorTests.testLoadDaysIncludesAllWeightsAcrossStableFetchPages`,
   `HealthProjectionActorTests.testPlannedWorkoutTomorrowPagesTerminalPlansUntilActiveTrainingPlan`,

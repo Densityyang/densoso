@@ -100,42 +100,41 @@ final class HealthProjectionActorTests: XCTestCase {
         }
     }
 
-    func testHealthContextSummaryAggregatesMealProteinAcrossStableFetchPages() async throws {
+    func testHealthContextSummaryReadsCanonicalDailyMetricsProteinOnlyWhenUsable() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
         let today = calendar.startOfDay(for: Date())
-        let mealDate = try XCTUnwrap(calendar.date(bySettingHour: 12, minute: 0, second: 0, of: today))
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
         )
         let context = ModelContext(container)
-        let mealCount = HealthIntelligenceReadModel.mealFetchBatchSize + 1
-        for index in 0..<mealCount {
-            context.insert(MealRecord(
-                date: mealDate,
-                totalCaloriesKcal: 100,
-                sourceActionKey: String(format: "projection-meal-%04d", index),
-                proteinLikelyG: 2
-            ))
-        }
+        let mealProtein = 2_000.0
+        context.insert(DailyMetrics(
+            date: today,
+            proteinG: mealProtein,
+            mealCount: 12,
+            dataCoverageJSON: #"{"protein":true}"#,
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "canonical-protein-available"
+        ))
         let previousDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
-        let incompleteMealDate = try XCTUnwrap(
-            calendar.date(bySettingHour: 12, minute: 0, second: 0, of: previousDay)
-        )
-        context.insert(MealRecord(
-            date: incompleteMealDate,
-            totalCaloriesKcal: 100,
-            sourceActionKey: "projection-meal-incomplete-protein"
+        context.insert(DailyMetrics(
+            date: previousDay,
+            proteinG: 900,
+            mealCount: 1,
+            dataCoverageJSON: #"{"protein":false}"#,
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "canonical-protein-unavailable"
         ))
         try context.save()
 
         let actor = HealthProjectionActor(modelContainer: container, calendar: calendar)
-        let result = try await actor.healthContextSummary(asOf: mealDate)
+        let result = try await actor.healthContextSummary(asOf: today.addingTimeInterval(12 * 60 * 60))
         let summary = try XCTUnwrap(result)
 
-        XCTAssertEqual(summary.sevenDay.averageProteinGrams, Double(mealCount * 2))
+        XCTAssertEqual(summary.sevenDay.averageProteinGrams, mealProtein)
     }
 
     func testLoadDaysIncludesAllWorkoutsAcrossStableFetchPages() throws {

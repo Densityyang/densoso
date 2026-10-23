@@ -524,7 +524,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "DensosoTests/Application/HealthProjectionActorTests.swift",
             (
                 "testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites",
-                "testHealthContextSummaryAggregatesMealProteinAcrossStableFetchPages",
+                "testHealthContextSummaryReadsCanonicalDailyMetricsProteinOnlyWhenUsable",
                 "testLoadDaysIncludesAllWorkoutsAcrossStableFetchPages",
                 "testLoadDaysIncludesAllWeightsAcrossStableFetchPages",
                 "testPlannedWorkoutTomorrowPagesTerminalPlansUntilActiveTrainingPlan",
