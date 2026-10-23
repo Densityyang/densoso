@@ -5,6 +5,7 @@ import XCTest
 final class DailyLoopSnapshotTests: XCTestCase {
     func testMainPRAlgorithmVersionsAreCentralizedAndInvalidateDailyBriefCache() {
         XCTAssertEqual(AlgorithmVersions.calorieAccounting, "calorie-accounting-v2")
+        XCTAssertEqual(AlgorithmVersions.dailyMetricsProjection, "daily-metrics-projection-v1")
         XCTAssertEqual(AlgorithmVersions.mealEstimator, "meal-estimator-v2")
         XCTAssertEqual(AlgorithmVersions.portionEstimator, "portion-estimator-v2")
         XCTAssertEqual(AlgorithmVersions.healthIntelligence, "health-intelligence-v2")

@@ -75,6 +75,34 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         ).requiresRecompute)
     }
 
+    func testStaleProjectionVersionIsDiscoveredWithoutPendingFlag() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let calendar = Calendar.current
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 12)))
+        let today = calendar.startOfDay(for: now)
+        try insertValidProfileAndWeight(in: context, effectiveAt: today)
+        let day = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        context.insert(DailyMetrics(
+            date: day,
+            totalExpenditureKcal: 1_800,
+            energyQuality: "estimated",
+            projectionVersion: AlgorithmVersions.calorieAccounting,
+            sourceFingerprint: "old-but-present-fingerprint",
+            requiresRecompute: false
+        ))
+        try context.save()
+
+        let result = try await HistoricalMetricsRecomputeService(modelContainer: container)
+            .recomputePendingMetrics(now: now, batchSize: 10, shouldStop: { false })
+
+        XCTAssertEqual(result.processedCount, 1)
+        let projected = try XCTUnwrap(fetchMetrics(in: container).first)
+        XCTAssertEqual(projected.projectionVersion, AlgorithmVersions.dailyMetricsProjection)
+        XCTAssertNotEqual(projected.sourceFingerprint, "old-but-present-fingerprint")
+        XCTAssertFalse(projected.requiresRecompute)
+    }
+
     func testMissingDOBDoesNotLetObservedEnergyClearRecomputeFlag() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
@@ -143,6 +171,121 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         XCTAssertEqual(projected.energyQuality, "observed")
         XCTAssertEqual(projected.totalExpenditureKcal, 1_900)
         XCTAssertFalse(projected.requiresRecompute)
+    }
+
+    func testNewHistoricalProjectionWithoutRequiredInputsIsPersistedAsPending() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let calendar = Calendar.current
+        let now = Date()
+        let day = try XCTUnwrap(calendar.date(byAdding: .day, value: -2, to: calendar.startOfDay(for: now)))
+        try insertObservedEnergySnapshot(on: day, in: context)
+
+        try DailyMetricsProjector.reproject(on: day, now: now, in: context)
+        try context.save()
+
+        let projected = try XCTUnwrap(
+            ModelContext(container).fetch(FetchDescriptor<DailyMetrics>(predicate: #Predicate { $0.date == day })).first
+        )
+        XCTAssertEqual(projected.energyQuality, "unavailable")
+        XCTAssertTrue(projected.requiresRecompute)
+        XCTAssertEqual(projected.totalExpenditureKcal, 0)
+    }
+
+    func testCurrentDayUsesProfileAndWeightAddedAfterMidnight() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let calendar = Calendar.current
+        let now = Date()
+        let day = calendar.startOfDay(for: now)
+        context.insert(ProfileRevisionRecord(
+            effectiveFrom: now.addingTimeInterval(-3_600),
+            dateOfBirth: dateOfBirth(in: calendar),
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: nil,
+            activityLevel: "moderate",
+            source: "userEdited"
+        ))
+        context.insert(WeightRecord(
+            sourceActionKey: "current-day-asof-weight-\(UUID().uuidString.lowercased())",
+            measuredAt: now.addingTimeInterval(-1_800),
+            kilograms: 62,
+            source: "manual",
+            algorithmVersion: "test",
+            confidence: 0.9
+        ))
+
+        try DailyMetricsProjector.reproject(on: day, now: now, in: context)
+        try context.save()
+
+        let projected = try XCTUnwrap(
+            ModelContext(container).fetch(FetchDescriptor<DailyMetrics>(predicate: #Predicate { $0.date == day })).first
+        )
+        XCTAssertEqual(projected.energyQuality, "estimated")
+        XCTAssertFalse(projected.requiresRecompute)
+        XCTAssertGreaterThan(projected.totalExpenditureKcal, 0)
+    }
+
+    func testHistoricalProjectionUsesProfileAndWeightEffectiveLaterThatDay() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let calendar = Calendar.current
+        let now = Date()
+        let day = try XCTUnwrap(calendar.date(byAdding: .day, value: -3, to: calendar.startOfDay(for: now)))
+        let effectiveFrom = try XCTUnwrap(calendar.date(byAdding: .hour, value: 6, to: day))
+        let measuredAt = try XCTUnwrap(calendar.date(byAdding: .hour, value: 8, to: day))
+        context.insert(ProfileRevisionRecord(
+            effectiveFrom: effectiveFrom,
+            dateOfBirth: dateOfBirth(in: calendar),
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: nil,
+            activityLevel: "moderate",
+            source: "userEdited"
+        ))
+        context.insert(WeightRecord(
+            sourceActionKey: "same-day-historical-weight-\(UUID().uuidString.lowercased())",
+            measuredAt: measuredAt,
+            kilograms: 62,
+            source: "manual",
+            algorithmVersion: "test",
+            confidence: 0.9
+        ))
+
+        try DailyMetricsProjector.reproject(on: day, now: now, in: context)
+        try context.save()
+
+        let projected = try XCTUnwrap(
+            ModelContext(container).fetch(FetchDescriptor<DailyMetrics>(predicate: #Predicate { $0.date == day })).first
+        )
+        XCTAssertEqual(projected.energyQuality, "estimated")
+        XCTAssertFalse(projected.requiresRecompute)
+        XCTAssertGreaterThan(projected.totalExpenditureKcal, 0)
+    }
+
+    func testProjectionReferenceUsesTodayAndHistoricalDayEndAcrossDST() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 3, day: 9, hour: 12)))
+        let today = calendar.startOfDay(for: now)
+        let historicalDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 3, day: 8)))
+
+        XCTAssertEqual(
+            HistoricalMetricsEligibilityPolicy.referenceDate(for: today, now: now, calendar: calendar),
+            now
+        )
+        let historicalAsOf = HistoricalMetricsEligibilityPolicy.referenceDate(
+            for: historicalDay,
+            now: now,
+            calendar: calendar
+        )
+        XCTAssertTrue(calendar.isDate(historicalAsOf, inSameDayAs: historicalDay))
+        XCTAssertEqual(calendar.component(.hour, from: historicalAsOf), 23)
+        XCTAssertLessThan(
+            historicalAsOf,
+            try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: historicalDay))
+        )
     }
 
     func testMissingWeightDoesNotLetObservedEnergyClearRecomputeFlag() async throws {

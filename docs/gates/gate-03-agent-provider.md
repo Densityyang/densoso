@@ -1,9 +1,11 @@
 # Gate 03 — Agent and Provider
 
-Status: approved by user on 2026-09-02
+Status: Gate 3 contract for the `codex/ai-native-health-loop` main coding line.
+The earlier 2026-09-02 phase approval is historical and is not a current PR or
+phase-advance decision.
 
-Gate 3 extends the same V3 core Draft PR. It runs only after foundation and
-domain-persistence pass on the same head, and does not authorize Speech work.
+This file records Gate 3 scope and evidence. The current branch has no associated
+PR; older V3 PR evidence below has been replaced with the current run state.
 
 ## Scope
 
@@ -35,8 +37,12 @@ domain-persistence pass on the same head, and does not authorize Speech work.
   SwiftData with stable 64-row date pages and return rows in ascending date
   order; focused tests cover both range boundaries, ordering, cross-page rows
   and an inverted-range empty result.
-- Read today's normal schedule and active historical training plans in stable
-  64-row pages so a plan beginning earlier can still contribute a session today.
+- Read the Agent's requested-day schedule through the bounded repository query,
+  including active historical training-plan sessions across stable 64-row
+  pages.
+- Load confirmed workout and training-plan entries for the DailyLoop/Watch
+  snapshot through `HealthProjectionActor`; retain only eligible today/tomorrow
+  sessions after paging persisted plan metadata in batches of 64.
 - Read visible and resumable conversation messages in stable 64-row ordinal
   pages while preserving message order and the current-request resume filter.
 - Reset conversation messages and Agent request history in stable 64-row pages
@@ -58,7 +64,9 @@ domain-persistence pass on the same head, and does not authorize Speech work.
   not used to infer them.
 - Add soft monthly budget reminders without interrupting an active request.
   Estimates resolve through a versioned `PricingDescriptor` matched by exact
-  provider, model and capability. DeepSeek Flash uses the 2026-09-01
+  provider, model and capability tuple. DeepSeek uses the model ID and Responses
+  endpoint from `ProviderCapabilityCatalog`; its fake-transport contract tests
+  assert the actual request URL and model. DeepSeek Flash uses the 2026-09-01
   peak/cache-miss snapshot; Qwen Flash uses the Beijing standard non-cached
   <=128k snapshot, with cached input conservatively priced at the non-cached
   rate. Qwen request bodies are capped at 120 KB to stay inside that tier.
@@ -95,7 +103,8 @@ stay in the local user-reported ledger and do not enter HealthKit projections.
 Local turn contract tests verify answer, non-persisting capture proposal, and
 cloud-staged action outcomes use the same typed result boundary.
 
-The `agent-provider` job has `needs: domain-persistence` and must prove:
+The `agent-provider` job follows `domain-persistence` in the full workflow and
+must prove:
 
 1. DeepSeek and Qwen request/response/tool/usage fixture contracts;
 2. 401/403 no retry, bounded 429/network/5xx retry, timeout and cancellation;
@@ -111,21 +120,47 @@ The `agent-provider` job has `needs: domain-persistence` and must prove:
 9. logs contain no credentials, complete health input or transcript; and
 10. `.xcresult`, logs, test summary, fixture summary and redaction evidence are retained.
 
+The workflow treats gate dependencies as execution order, not as a reason to
+hide independent test evidence: in a full run, later gates still execute after
+an earlier gate fails. The aggregate job reports all Gates 1-14 as `PASS`,
+`FAIL`, `BLOCKED` or `NOT RUN` and fails if any selected gate is not `PASS`.
+Gate artifacts are attempted with `if: always()`; missing files are listed in
+the Gate 3 execution summary and produce upload-step warnings elsewhere. A
+warning cannot change a failed gate to a successful one.
+
+## Static contract anchors
+
+- Provider identity is declared once in `ProviderCapabilityCatalog`. The
+  validator checks that `DeepSeekProvider` uses those defaults and that the
+  fake-transport contract tests assert the endpoint, model ID and capability
+  behavior. It does not require the URL or model string to be duplicated in the
+  provider implementation file.
+- Pricing checks cover exact provider/model/capability matching and known
+  descriptor entries. XCTest contracts assert that unsupported Qwen speech and
+  vision usage keep unknown cost; a comment's exact capitalization is not the
+  source of truth.
+- DailyLoop plan reads are performed by `HealthProjectionActor` and the Agent's
+  requested-day schedule is read by its repository. Gate tests cover historical
+  multi-day plans, ordinary schedule filtering, page boundaries and the final
+  today/tomorrow snapshot. The validator follows these current call paths rather
+  than requiring a direct call to `WorkoutPlanSchedulingService.confirmedPlans()`
+  from `DailyLoopSnapshotService`.
+- `DailyCheckIn` represents user-reported energy, stress and subjective sleep;
+  `DailyCheckInSelfReportResolver` checks proposed values and notes against the
+  current user's words before staging. Domain and confirmation tests cover this
+  contract; static validation uses the type and test names rather than an exact
+  prose phrase in the source comment.
+
 ## Evidence record
 
-| Evidence | Required result | Current result |
+| Evidence | Required result | Current result before CI repair |
 | --- | --- | --- |
-| PR head | Phase 3 implementation on Draft PR #14 | `b5766cc70c247f980f9c5c7bb59f3c5b3dc9de26` (`fix: preserve provider cancellation contracts`) |
-| CI run | Same head completes the cumulative chain | [Run 33577727374](https://github.com/Densityyang/densoso/actions/runs/33577727374) — success |
-| Foundation | gate-01-foundation succeeds | [Job 100085250453](https://github.com/Densityyang/densoso/actions/runs/33577727374/job/100085250453) — success |
-| Dependencies | foundation and domain-persistence succeed | [Job 100090437216](https://github.com/Densityyang/densoso/actions/runs/33577727374/job/100090437216) — success |
-| Provider contracts | DeepSeek/Qwen fixtures pass | [Job 100092358853](https://github.com/Densityyang/densoso/actions/runs/33577727374/job/100092358853) — success |
-| Agent governance | 5/8/45, consent and injection tests pass | Gate3 selected tests — success |
-| Tool schemas | Closed schemas and typed meal arrays pass | Gate3 selected tests — success |
-| Daily check-in | User-reported values are locally checked against the current turn before staging | Added focused resolver coverage; pending CI on the updated head |
-| Usage/privacy | Ledger, budget and redaction tests pass | Gate3 selected tests — success |
-| Markdown | Restricted renderer tests pass | Gate3 selected tests — success |
-| Fixture packaging | Prompt-injection fixture is in the test bundle | `CpResource .../prompt-injection-phase3.yaml .../DensosoTests.xctest` observed in Gate3 build log |
-| Artifact | `.xcresult`, logs and JSON summaries retained | `gate-03-agent-provider-results` — artifact ID `9828254631` |
-| Signing | Simulator evidence only | `blocked-by-signing` |
-| User decision | Approve or reject entry to Phase 4 | Approved 2026-09-02 |
+| Branch / head | Main coding line and exact SHA | `codex/ai-native-health-loop` at `e7d273ae87cd7eded510c0aed3a003acaeba0e58`; no associated PR |
+| Latest full Build CI | Gates 1-14 report their actual result | [Run 39714060743](https://github.com/Densityyang/densoso/actions/runs/39714060743) — failed in Gate 3 static validation after Gates 1 and 2 passed |
+| Gate 3 static validation | Source/config/test contracts match the current implementation | Failed on seven stale path/wording assertions; the run log identifies the validator step as the failure |
+| Gate 3 XCTest | Independent provider/agent contracts execute and report results | `NOT RUN`; skipped after the validator step failed |
+| Gate 3 artifact | Fixture report, test bundle and logs are available even on failure | Not uploaded; validator did not write its JSON on failure and upload required result files that had not been created |
+| IPA build | Unsigned device build result is reported separately | [Build IPA 39716002512](https://github.com/Densityyang/densoso/actions/runs/39716002512) — succeeded; does not establish full test CI or signed-device acceptance |
+| Last full Build CI pass | Same SHA as current head | Last known full pass is on `3628d42`, earlier than the current head |
+| Device acceptance | Signed iPhone/Watch evidence | Not established by the cited unsigned IPA build |
+| Repair acceptance | Repaired validator, continued independent gates, complete aggregate report | Awaiting a future GitHub Actions run; no Actions run was triggered for this edit |

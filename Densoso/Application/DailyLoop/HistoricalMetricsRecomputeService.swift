@@ -1,3 +1,4 @@
+import DensosoDomain
 import Foundation
 import SwiftData
 
@@ -30,8 +31,12 @@ final class HistoricalMetricsRecomputeService: HistoricalMetricsRecomputing {
 
         let queryContext = ModelContext(modelContainer)
         let requiresRecompute = true
+        let currentProjectionVersion = AlgorithmVersions.dailyMetricsProjection
         let predicate = #Predicate<DailyMetrics> {
-            $0.date >= firstDay && $0.date < dayAfterToday && $0.requiresRecompute == requiresRecompute
+            $0.date >= firstDay && $0.date < dayAfterToday
+                && ($0.requiresRecompute == requiresRecompute
+                    || $0.projectionVersion != currentProjectionVersion
+                    || $0.sourceFingerprint == "")
         }
         var descriptor = FetchDescriptor<DailyMetrics>(
             predicate: predicate,
@@ -54,7 +59,7 @@ final class HistoricalMetricsRecomputeService: HistoricalMetricsRecomputing {
             }
 
             if processedCount >= boundedBatchSize {
-                if try DailyMetricsProjector.hasValidHistoricalRecomputeInputs(on: day, in: queryContext) {
+                if try DailyMetricsProjector.hasValidHistoricalRecomputeInputs(on: day, now: now, in: queryContext) {
                     return HistoricalMetricsRecomputeResult(
                         processedCount: processedCount,
                         hasMoreEligibleWork: true,
@@ -63,7 +68,7 @@ final class HistoricalMetricsRecomputeService: HistoricalMetricsRecomputing {
                 }
             } else {
                 do {
-                    if try DailyMetricsProjector.reprojectHistoricalIfInputsAvailable(on: day, in: queryContext) {
+                    if try DailyMetricsProjector.reprojectHistoricalIfInputsAvailable(on: day, now: now, in: queryContext) {
                         try queryContext.save()
                         processedCount += 1
                     }

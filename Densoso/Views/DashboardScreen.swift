@@ -70,7 +70,7 @@ struct DashboardScreen: View {
                         .orbitCard()
                     }
 
-                    if let weekly, weekly.hasData {
+                    if let weekly, weekly.hasData, weekly.totalDeficitKcal != nil {
                         weeklyCard(weekly)
                     } else {
                         ContentUnavailableView(
@@ -98,11 +98,15 @@ struct DashboardScreen: View {
     }
 
     private func todayCard(_ metrics: DailyMetrics) -> some View {
-        let hasEnergyEstimate = metrics.energyQuality != "unavailable" && !metrics.requiresRecompute
-        let energyPrefix = metrics.energyQuality == "estimated" ? "约 " : ""
-        let intakeValue = metrics.mealCount == 0 ? "未记录" : "\(metrics.totalIntakeKcal)"
-        let expenditureValue = hasEnergyEstimate ? "\(energyPrefix)\(metrics.totalExpenditureKcal)" : "暂无"
-        let balanceValue = hasEnergyEstimate ? "\(energyPrefix)\(metrics.deficitKcal)" : "暂无"
+        let result = DailyMetricsReadModelMapper.make(metrics)
+        let expenditure = result.expenditure.value?.likely
+        let intake = result.intake.value?.likely
+        let deficit = result.deficit.value?.likely
+        let hasEnergyEstimate = expenditure != nil
+        let energyPrefix = result.energyQuality == .estimated ? "约 " : ""
+        let intakeValue = intake.map { String(format: "%.0f", $0) } ?? (metrics.mealCount == 0 ? "未记录" : "暂无")
+        let expenditureValue = expenditure.map { "\(energyPrefix)\(String(format: "%.0f", $0))" } ?? "暂无"
+        let balanceValue = deficit.map { "\(energyPrefix)\(String(format: "%.0f", $0))" } ?? "暂无"
         return VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Text("今日热量")
@@ -117,16 +121,16 @@ struct DashboardScreen: View {
                 OrbitMetric(
                     value: balanceValue,
                     label: "缺口 kcal",
-                    tint: hasEnergyEstimate
-                        ? (metrics.deficitKcal >= 0 ? OrbitPalette.green : OrbitPalette.coral)
+                    tint: deficit != nil
+                        ? ((deficit ?? 0) >= 0 ? OrbitPalette.green : OrbitPalette.coral)
                         : Color.gray
                 )
             }
 
-            if hasEnergyEstimate, metrics.totalExpenditureKcal > 0 {
+            if let expenditure, let intake, expenditure > 0 {
                 ProgressView(
-                    value: Double(max(metrics.totalIntakeKcal, 0)),
-                    total: Double(metrics.totalExpenditureKcal)
+                    value: max(intake, 0),
+                    total: expenditure
                 )
                 .tint(OrbitPalette.blue)
                 .accessibilityLabel("今日摄入占总消耗")
@@ -150,24 +154,27 @@ struct DashboardScreen: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("过去 7 天")
                         .font(.headline)
-                    Text("\(weekly.recordedDays) 天有记录")
+                    Text("\(weekly.recordedDays) / 7 天有有效缺口数据")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                OrbitStatusBadge(text: "总缺口 \(weekly.totalDeficitKcal)", tone: .gold)
+                OrbitStatusBadge(
+                    text: weekly.totalDeficitKcal.map { "总缺口 \($0)" } ?? "缺口数据不足",
+                    tone: .gold
+                )
             }
 
             Chart {
-                ForEach(weekly.points) { point in
-                    BarMark(
-                        x: .value("日期", point.date, unit: .day),
-                        y: .value("实际缺口", point.deficitKcal)
-                    )
-                    .foregroundStyle(
-                        point.hasData ? OrbitPalette.blue.gradient : Color(.quaternarySystemFill).gradient
-                    )
-                    .cornerRadius(4)
+                ForEach(weekly.points.filter { $0.deficitKcal != nil }) { point in
+                    if let deficit = point.deficitKcal {
+                        BarMark(
+                            x: .value("日期", point.date, unit: .day),
+                            y: .value("实际缺口", deficit)
+                        )
+                        .foregroundStyle(OrbitPalette.blue.gradient)
+                        .cornerRadius(4)
+                    }
                 }
 
                 if let target = weekly.points.first?.targetDeficitKcal {
@@ -190,11 +197,11 @@ struct DashboardScreen: View {
 
             HStack(spacing: 12) {
                 OrbitMetric(
-                    value: String(format: "%.0f", weekly.averageDailyDeficitKcal),
+                    value: weekly.averageDailyDeficitKcal.map { String(format: "%.0f", $0) } ?? "暂无",
                     label: "记录日均缺口"
                 )
                 OrbitMetric(
-                    value: String(format: "%.2f", weekly.projectedWeightLossKg),
+                    value: weekly.projectedWeightLossKg.map { String(format: "%.2f", $0) } ?? "暂无",
                     label: "按当前七日缺口折算 kg",
                     tint: OrbitPalette.green
                 )

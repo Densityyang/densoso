@@ -20,28 +20,19 @@ enum DailyMetricsProjectionError: Equatable, Sendable, SharedErrorDescribing {
 
 @MainActor
 enum DailyMetricsProjector {
-    static func reproject(on date: Date, in modelContext: ModelContext) throws {
+    static func reproject(on date: Date, now: Date = Date(), in modelContext: ModelContext) throws {
         try withProjectionErrorMapping {
             let calendar = Calendar.current
             let day = calendar.startOfDay(for: date)
+            let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
             let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
             let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first
-            let effectiveInputs = try resolveEffectiveInputs(on: day, in: modelContext)
-            if let existing,
-               existing.requiresRecompute,
-               day < calendar.startOfDay(for: Date()),
-               !HistoricalMetricsEligibilityPolicy.hasValidInputs(
-                   profile: effectiveInputs.profile,
-                   weight: effectiveInputs.weight,
-                   on: day,
-                   calendar: calendar
-               ) {
-                return
-            }
+            let effectiveInputs = try resolveEffectiveInputs(on: day, asOf: asOf, in: modelContext)
             let projectionInputs = try DailyMetricsProjectionInputReader.read(on: day, in: modelContext)
             let healthSnapshot = try healthSnapshot(for: day, in: modelContext)
             let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
                 on: day,
+                asOf: asOf,
                 inputs: projectionInputs,
                 profileRevision: effectiveInputs.profileRevision,
                 weightObservations: effectiveInputs.weightObservations,
@@ -59,15 +50,32 @@ enum DailyMetricsProjector {
                 exerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
                 context: fingerprintContext
             )
+            let historicalInputsMissing = day < calendar.startOfDay(for: now)
+                && !HistoricalMetricsEligibilityPolicy.hasValidInputs(
+                    profile: effectiveInputs.profile,
+                    weight: effectiveInputs.weight,
+                    asOf: asOf,
+                    calendar: calendar
+                )
             if let existing,
-               DailyMetricsProjectionFingerprint.isCurrent(
+               DailyMetricsProjectionFingerprint.sourceMatches(
                    storedFingerprint: existing.sourceFingerprint,
                    storedAlgorithmVersion: existing.projectionVersion,
-                   requiresRecompute: existing.requiresRecompute,
                    expectedFingerprint: expectedFingerprint,
                    expectedAlgorithmVersion: fingerprintContext.algorithmVersion
                ) {
-                return
+                if historicalInputsMissing && existing.requiresRecompute {
+                    HistoricalMetricsEligibilityPolicy.markPendingIfHistoricalInputsAreMissing(
+                        existing,
+                        on: day,
+                        now: now,
+                        profile: effectiveInputs.profile,
+                        weight: effectiveInputs.weight,
+                        calendar: calendar
+                    )
+                    return
+                }
+                if !historicalInputsMissing && !existing.requiresRecompute { return }
             }
             let projected = makeProjection(
                 on: day,
@@ -75,6 +83,14 @@ enum DailyMetricsProjector {
                 projectionInputs: projectionInputs,
                 healthSnapshot: healthSnapshot,
                 fingerprintContext: fingerprintContext
+            )
+            HistoricalMetricsEligibilityPolicy.markPendingIfHistoricalInputsAreMissing(
+                projected,
+                on: day,
+                now: now,
+                profile: effectiveInputs.profile,
+                weight: effectiveInputs.weight,
+                calendar: calendar
             )
 
             if let existing {
@@ -85,38 +101,53 @@ enum DailyMetricsProjector {
         }
     }
 
-    static func hasValidHistoricalRecomputeInputs(on date: Date, in modelContext: ModelContext) throws -> Bool {
+    static func hasValidHistoricalRecomputeInputs(
+        on date: Date,
+        now: Date = Date(),
+        in modelContext: ModelContext
+    ) throws -> Bool {
         try withProjectionErrorMapping {
-            let day = Calendar.current.startOfDay(for: date)
+            let calendar = Calendar.current
+            let day = calendar.startOfDay(for: date)
             guard try hasPendingMetric(on: day, in: modelContext) else { return false }
-            let effectiveInputs = try resolveEffectiveInputs(on: day, in: modelContext)
+            let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
+            let effectiveInputs = try resolveEffectiveInputs(on: day, asOf: asOf, in: modelContext)
             return HistoricalMetricsEligibilityPolicy.hasValidInputs(
                 profile: effectiveInputs.profile,
                 weight: effectiveInputs.weight,
-                on: day
+                asOf: asOf,
+                calendar: calendar
             )
         }
     }
 
     @discardableResult
-    static func reprojectHistoricalIfInputsAvailable(on date: Date, in modelContext: ModelContext) throws -> Bool {
+    static func reprojectHistoricalIfInputsAvailable(
+        on date: Date,
+        now: Date = Date(),
+        in modelContext: ModelContext
+    ) throws -> Bool {
         try withProjectionErrorMapping {
-            let day = Calendar.current.startOfDay(for: date)
+            let calendar = Calendar.current
+            let day = calendar.startOfDay(for: date)
             let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
             guard let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first,
                   existing.requiresRecompute else { return false }
 
-            let effectiveInputs = try resolveEffectiveInputs(on: day, in: modelContext)
+            let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
+            let effectiveInputs = try resolveEffectiveInputs(on: day, asOf: asOf, in: modelContext)
             guard HistoricalMetricsEligibilityPolicy.hasValidInputs(
                 profile: effectiveInputs.profile,
                 weight: effectiveInputs.weight,
-                on: day
+                asOf: asOf,
+                calendar: calendar
             ) else { return false }
 
             let projectionInputs = try DailyMetricsProjectionInputReader.read(on: day, in: modelContext)
             let healthSnapshot = try healthSnapshot(for: day, in: modelContext)
             let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
                 on: day,
+                asOf: asOf,
                 inputs: projectionInputs,
                 profileRevision: effectiveInputs.profileRevision,
                 weightObservations: effectiveInputs.weightObservations,
@@ -156,7 +187,11 @@ enum DailyMetricsProjector {
         return try modelContext.fetch(descriptor).first != nil
     }
 
-    private static func resolveEffectiveInputs(on day: Date, in modelContext: ModelContext) throws -> EffectiveProjectionInputs {
+    private static func resolveEffectiveInputs(
+        on day: Date,
+        asOf referenceDate: Date,
+        in modelContext: ModelContext
+    ) throws -> EffectiveProjectionInputs {
         let primaryProfileKey = "primary"
         let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
         var profileDescriptor = FetchDescriptor<UserProfile>(predicate: profilePredicate)
@@ -165,22 +200,22 @@ enum DailyMetricsProjector {
         let effectiveRevision = try EffectiveProfileRevisionReader.latest(
             in: modelContext,
             profileKey: profileKey,
-            effectiveAt: day
+            effectiveAt: referenceDate
         )
         let effectiveProfile: EffectiveProfile?
         if let effectiveRevision {
             effectiveProfile = EffectiveProfileResolver(
                 profileKey: profileKey,
                 revisions: [domainRevision(effectiveRevision)]
-            ).profile(at: day)
+            ).profile(at: referenceDate)
         } else {
             effectiveProfile = nil
         }
-        let localWeight = try LocalWeightObservationReader.latestObservation(in: modelContext, effectiveAt: day)
-        let healthKitWeight = try HealthKitWeightObservationReader.latestObservation(in: modelContext, effectiveAt: day)
+        let localWeight = try LocalWeightObservationReader.latestObservation(in: modelContext, effectiveAt: referenceDate)
+        let healthKitWeight = try HealthKitWeightObservationReader.latestObservation(in: modelContext, effectiveAt: referenceDate)
         let weightObservations = [localWeight, healthKitWeight].compactMap { $0 }
         let effectiveWeight = WeightTimeline(observations: weightObservations).effectiveWeight(
-            at: day,
+            at: referenceDate,
             profileWeightKg: effectiveRevision?.weightKg,
             profileEffectiveFrom: effectiveRevision?.effectiveFrom
         )

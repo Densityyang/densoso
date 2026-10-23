@@ -64,11 +64,20 @@ final class ToolRegistry {
             context: context,
             clientRequestID: clientRequestID
         )
-        return String(output.prefix(8_192))
+        return AgentToolOutputLimiter.limit(output)
     }
 
     func effect(for name: String) -> ToolEffect? {
         allTools.first(where: { $0.definition.name == name })?.definition.effect
+    }
+}
+
+enum AgentToolOutputLimiter {
+    static let maximumUTF8Bytes = 8_192
+
+    static func limit(_ output: String) -> String {
+        guard output.utf8.count > maximumUTF8Bytes else { return output }
+        return #"{"error":{"code":"tool_output_limit_exceeded","message":"Narrow the requested date range or ask for fewer records.","truncated":true}}"#
     }
 }
 

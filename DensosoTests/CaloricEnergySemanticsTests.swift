@@ -74,7 +74,14 @@ final class CaloricEnergySemanticsTests: XCTestCase {
         let day = Date(timeIntervalSince1970: 1_700_000_000)
         let profile = effectiveProfile(at: day, activityLevel: .moderate)
         let weight = effectiveWeight(at: day, kilograms: 60)
-        let meal = MealRecord(date: day, totalCaloriesKcal: 500, proteinG: 30, fatG: 10, carbsG: 70)
+        let meal = MealRecord(
+            date: day,
+            totalCaloriesKcal: 500,
+            proteinG: 30,
+            fatG: 10,
+            carbsG: 70,
+            evidenceData: currentMealEvidenceData()
+        )
 
         let first = CaloricEngine.computeDailyMetrics(
             date: day,
@@ -92,7 +99,14 @@ final class CaloricEnergySemanticsTests: XCTestCase {
         )
         let changed = CaloricEngine.computeDailyMetrics(
             date: day,
-            meals: [MealRecord(date: day, totalCaloriesKcal: 520, proteinG: 30, fatG: 10, carbsG: 70)],
+            meals: [MealRecord(
+                date: day,
+                totalCaloriesKcal: 520,
+                proteinG: 30,
+                fatG: 10,
+                carbsG: 70,
+                evidenceData: currentMealEvidenceData()
+            )],
             workouts: [],
             effectiveProfile: profile,
             effectiveWeight: weight
@@ -123,5 +137,14 @@ final class CaloricEnergySemanticsTests: XCTestCase {
             source: .manual,
             confidence: 0.9
         )
+    }
+
+    private func currentMealEvidenceData() -> Data {
+        let evidence = EvidenceSnapshot(
+            grade: .userReported,
+            sourceID: "test-current-meal",
+            summary: "Regression fixture with current estimate evidence."
+        )
+        return try! JSONEncoder().encode([evidence])
     }
 }

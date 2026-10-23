@@ -1,9 +1,10 @@
+import DensosoDomain
 import Foundation
 
 struct GetWeeklyDeficitTool: AgentTool {
     var definition: ToolSchema { .strictObject(
         name: "get_weekly_deficit",
-        description: "获取本周（或指定周）的热量缺口汇总。weekOffset=0为本週，-1为上週。",
+        description: "获取本周或指定历史周的热量缺口，返回有效天数、缺失天数、可用状态与覆盖率；本周只统计截至今天的日期。",
         properties: [
             "weekOffset": .integer(minimum: -52, maximum: 0, description: "周偏移: 0=本周, -1=上周")
         ],
@@ -12,38 +13,137 @@ struct GetWeeklyDeficitTool: AgentTool {
 
     func execute(argumentsJSON: String, context: AgentSession, clientRequestID: UUID) async throws -> String {
         guard let data = argumentsJSON.data(using: .utf8),
-              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return #"{"error": "参数解析失败"}"#
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return #"{"error":{"code":"invalid_arguments","message":"weekOffset must be an integer."}}"#
         }
-
-        let offset = json["weekOffset"] as? Int ?? 0
+        let offset: Int
+        if let suppliedOffset = json["weekOffset"] {
+            guard let parsedOffset = suppliedOffset as? Int else {
+                return #"{"error":{"code":"invalid_arguments","message":"weekOffset must be an integer."}}"#
+            }
+            offset = parsedOffset
+        } else {
+            offset = 0
+        }
+        guard (-52...0).contains(offset) else {
+            return #"{"error":{"code":"invalid_range","minimumWeekOffset":-52,"maximumWeekOffset":0}}"#
+        }
 
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let weekday = calendar.component(.weekday, from: today)
         let mondayOffset = weekday == 1 ? -6 : 2 - weekday
-        let monday = calendar.date(byAdding: .day, value: mondayOffset + offset * 7, to: today)!
-        let sunday = calendar.date(byAdding: .day, value: 6, to: monday)!
+        guard let monday = calendar.date(byAdding: .day, value: mondayOffset + offset * 7, to: today),
+              let sunday = calendar.date(byAdding: .day, value: 6, to: monday) else {
+            return #"{"error":{"code":"invalid_calendar_range"}}"#
+        }
 
-        let metricsList = try await context.dailyMetrics(from: monday, through: sunday)
-        let totalDeficit = metricsList.reduce(0) { $0 + $1.deficitKcal }
-        let daysWithData = metricsList.count
-        let average = daysWithData == 0 ? 0 : Double(totalDeficit) / Double(daysWithData)
-
-        let formatter = ISO8601DateFormatter()
-        let resp: [String: Any] = [
-            "weekStart": formatter.string(from: monday),
-            "weekEnd": formatter.string(from: sunday),
-            "totalDeficitKcal": totalDeficit,
-            "avgDailyDeficitKcal": average,
-            "projectedWeightLossKg": Double(totalDeficit) / 7_700,
-            "daysWithData": daysWithData,
-            "totalMeals": metricsList.reduce(0) { $0 + $1.mealCount },
-            "totalWorkouts": metricsList.reduce(0) { $0 + $1.workoutCount },
-            "bestDayDeficit": metricsList.map(\.deficitKcal).max() ?? 0,
-            "worstDayDeficit": metricsList.map(\.deficitKcal).min() ?? 0,
-        ]
-        let respData = try JSONSerialization.data(withJSONObject: resp)
-        return String(data: respData, encoding: .utf8) ?? "{}"
+        let queryEnd = offset == 0 ? today : sunday
+        let expectedDays = offset == 0
+            ? (calendar.dateComponents([.day], from: monday, to: today).day ?? 0) + 1
+            : 7
+        let metrics = try await context.dailyMetrics(from: monday, through: queryEnd)
+        let deficit = DailyMetricsUsabilityPolicy.aggregateSignedRanges(
+            metrics.map(\.deficit),
+            expectedDays: expectedDays
+        )
+        let average = Self.average(deficit)
+        let projectedWeightLoss = Self.projectedWeightLoss(from: deficit.total)
+        let validDeficits = metrics.compactMap { metric -> (Date, Double)? in
+            guard let value = metric.deficit.value,
+                  metric.deficit.availability == .observed
+                    || metric.deficit.availability == .estimated
+                    || metric.deficit.availability == .partial else { return nil }
+            return (metric.date, value.likely)
+        }
+        let bestDay = validDeficits.max(by: { $0.1 < $1.1 })
+        let worstDay = validDeficits.min(by: { $0.1 < $1.1 })
+        let response = WeeklyDeficitToolResponse(
+            status: deficit.coverage.availableDays == 0 ? "insufficient_data" : "available",
+            weekStart: monday,
+            weekEnd: queryEnd,
+            timeZone: calendar.timeZone.identifier,
+            requestedDays: expectedDays,
+            daysWithData: deficit.coverage.availableDays,
+            missingDays: max(expectedDays - deficit.coverage.availableDays, 0),
+            coverage: deficit.coverage,
+            totalDeficitKcal: Self.likelyValue(from: deficit.total),
+            avgDailyDeficitKcal: Self.likelyValue(from: average),
+            projectedWeightLossKg: projectedWeightLoss,
+            bestDay: bestDay.map { DatedDeficit(date: $0.0, deficitKcal: $0.1) },
+            worstDay: worstDay.map { DatedDeficit(date: $0.0, deficitKcal: $0.1) },
+            totalMeals: metrics.reduce(0) { $0 + $1.mealCount },
+            totalWorkouts: metrics.reduce(0) { $0 + $1.workoutCount }
+        )
+        return Self.encode(response)
     }
+
+    private static func average(
+        _ aggregate: MetricAggregate<SignedEstimateRange>
+    ) -> MetricValue<SignedEstimateRange> {
+        guard let total = aggregate.total.value,
+              let average = total.divided(by: aggregate.coverage.availableDays) else {
+            return MetricValue(value: nil, availability: aggregate.total.availability)
+        }
+        return MetricValue(
+            value: average,
+            availability: aggregate.total.availability,
+            sourceReferences: aggregate.total.sourceReferences,
+            sourceReferencesTruncated: aggregate.total.sourceReferencesTruncated
+        )
+    }
+
+    private static func likelyValue(from value: MetricValue<SignedEstimateRange>) -> MetricValue<Double> {
+        MetricValue(
+            value: value.value?.likely,
+            availability: value.availability,
+            sourceReferences: value.sourceReferences,
+            sourceReferencesTruncated: value.sourceReferencesTruncated
+        )
+    }
+
+    private static func projectedWeightLoss(
+        from deficit: MetricValue<SignedEstimateRange>
+    ) -> MetricValue<Double> {
+        MetricValue(
+            value: deficit.value.map { $0.likely / 7_700 },
+            availability: deficit.availability,
+            sourceReferences: deficit.sourceReferences,
+            sourceReferencesTruncated: deficit.sourceReferencesTruncated
+        )
+    }
+
+    private static func encode<Value: Encodable>(_ value: Value) -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(value),
+              let string = String(data: data, encoding: .utf8) else {
+            return #"{"error":{"code":"encoding_failed"}}"#
+        }
+        return string
+    }
+}
+
+private struct DatedDeficit: Encodable {
+    let date: Date
+    let deficitKcal: Double
+}
+
+private struct WeeklyDeficitToolResponse: Encodable {
+    let status: String
+    let weekStart: Date
+    let weekEnd: Date
+    let timeZone: String
+    let requestedDays: Int
+    let daysWithData: Int
+    let missingDays: Int
+    let coverage: MetricCoverage
+    let totalDeficitKcal: MetricValue<Double>
+    let avgDailyDeficitKcal: MetricValue<Double>
+    let projectedWeightLossKg: MetricValue<Double>
+    let bestDay: DatedDeficit?
+    let worstDay: DatedDeficit?
+    let totalMeals: Int
+    let totalWorkouts: Int
 }

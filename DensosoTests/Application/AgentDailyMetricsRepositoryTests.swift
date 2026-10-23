@@ -36,7 +36,8 @@ final class AgentDailyMetricsRepositoryTests: XCTestCase {
         let results = try await repository.dailyMetrics(from: start, through: end)
 
         XCTAssertEqual(results.map(\.date), [start, middle, end])
-        XCTAssertEqual(results.map(\.deficitKcal), [101, 102, 103])
+        XCTAssertEqual(results.compactMap { $0.deficit.value?.likely }, [101, 102, 103])
+        XCTAssertTrue(results.allSatisfy { $0.deficit.availability == .observed })
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyMetrics>()), countBefore)
     }
 
@@ -65,7 +66,7 @@ final class AgentDailyMetricsRepositoryTests: XCTestCase {
 
         XCTAssertEqual(results.count, metricCount)
         XCTAssertEqual(results.map(\.date), dates)
-        XCTAssertEqual(results.map(\.deficitKcal), (0..<metricCount).map { 100 + $0 })
+        XCTAssertEqual(results.compactMap { $0.deficit.value?.likely }, (0..<metricCount).map { Double(100 + $0) })
     }
 
     func testRepositoryReturnsEmptyForInvertedDateRange() async throws {
@@ -82,6 +83,18 @@ final class AgentDailyMetricsRepositoryTests: XCTestCase {
         XCTAssertTrue(results.isEmpty)
     }
 
+    func testLegacyZeroScalarsMapToUnavailableInsteadOfObservedZero() {
+        let metric = DailyMetrics(date: Date(), totalExpenditureKcal: 0, totalIntakeKcal: 0, deficitKcal: 0)
+
+        let result = DailyMetricsReadModelMapper.make(metric)
+
+        XCTAssertNil(result.expenditure.value)
+        XCTAssertNil(result.deficit.value)
+        XCTAssertEqual(result.expenditure.availability, .unavailable)
+        XCTAssertEqual(result.deficit.availability, .unavailable)
+        XCTAssertEqual(result.coverage.deficit.availableDays, 0)
+    }
+
     private func metric(at date: Date, deficit: Int) -> DailyMetrics {
         DailyMetrics(
             date: date,
@@ -94,7 +107,11 @@ final class AgentDailyMetricsRepositoryTests: XCTestCase {
             fatG: 50,
             carbsG: 180,
             mealCount: 2,
-            workoutCount: 1
+            workoutCount: 1,
+            energyQuality: "observed",
+            dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true}"#,
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "agent-metrics-test-\(date.timeIntervalSince1970)"
         )
     }
 }

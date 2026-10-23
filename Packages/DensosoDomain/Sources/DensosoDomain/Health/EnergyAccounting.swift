@@ -70,6 +70,22 @@ public struct EnergyEstimate: Codable, Equatable, Sendable {
     }
 }
 
+public struct EnergyAccountingResult: Equatable, Sendable {
+    public let expenditure: EnergyEstimate?
+    public let basalComponent: EnergyEstimate?
+    public let activeComponent: EnergyEstimate?
+
+    public init(
+        expenditure: EnergyEstimate?,
+        basalComponent: EnergyEstimate?,
+        activeComponent: EnergyEstimate?
+    ) {
+        self.expenditure = expenditure
+        self.basalComponent = basalComponent
+        self.activeComponent = activeComponent
+    }
+}
+
 /// Canonical daily expenditure rules. Workout records are intentionally absent:
 /// HealthKit active energy already includes workout activity.
 public enum EnergyAccounting {
@@ -82,45 +98,53 @@ public enum EnergyAccounting {
         profile: EffectiveProfile?,
         effectiveWeightKg: Double?
     ) -> EnergyEstimate? {
-        if let basal = validEnergy(observedBasalEnergyKcal),
-           let active = validEnergy(observedActiveEnergyKcal) {
-            return try? EnergyEstimate(
-                low: basal + active,
-                likely: basal + active,
-                high: basal + active,
-                confidence: .high,
-                source: .observed
+        calculate(
+            observedBasalEnergyKcal: observedBasalEnergyKcal,
+            observedActiveEnergyKcal: observedActiveEnergyKcal,
+            profile: profile,
+            effectiveWeightKg: effectiveWeightKg
+        ).expenditure
+    }
+
+    /// Uses each observed HealthKit component once and estimates only the
+    /// missing component. An observed active value is never added to a full
+    /// activity-factor TDEE prior.
+    public static func calculate(
+        observedBasalEnergyKcal: Double?,
+        observedActiveEnergyKcal: Double?,
+        profile: EffectiveProfile?,
+        effectiveWeightKg: Double?
+    ) -> EnergyAccountingResult {
+        let observedBasal = validEnergy(observedBasalEnergyKcal).flatMap(observedComponent)
+        let observedActive = validEnergy(observedActiveEnergyKcal).flatMap(observedComponent)
+        let basal = observedBasal ?? estimatedBasal(profile: profile, weightKg: effectiveWeightKg)
+        let active = observedActive ?? estimatedActive(basal: basal, activityLevel: profile?.activityLevel)
+        guard let basal, let active else {
+            return EnergyAccountingResult(
+                expenditure: nil,
+                basalComponent: basal,
+                activeComponent: active
             )
         }
 
-        guard let profile,
-              let age = profile.age,
-              age >= 0,
-              let weight = effectiveWeightKg,
-              weight.isFinite,
-              weight > 0,
-              profile.heightCm.isFinite,
-              profile.heightCm > 0,
-              let basal = basalMetabolicRate(
-                sex: profile.biologicalSex,
-                weightKg: weight,
-                heightCm: profile.heightCm,
-                age: age
-              )
-        else {
-            return nil
+        let bothObserved = basal.source == .observed && active.source == .observed
+        guard let expenditure = try? EnergyEstimate(
+            low: basal.low + active.low,
+            likely: basal.likely + active.likely,
+            high: basal.high + active.high,
+            confidence: bothObserved ? .high : .low,
+            source: bothObserved ? .observed : .estimated
+        ) else {
+            return EnergyAccountingResult(
+                expenditure: nil,
+                basalComponent: basal,
+                activeComponent: active
+            )
         }
-
-        guard let activityFactor = activityFactor(for: profile.activityLevel) else { return nil }
-        let likely = basal * activityFactor
-        guard likely.isFinite, likely > 0 else { return nil }
-        let margin = likely * fallbackRelativeUncertainty
-        return try? EnergyEstimate(
-            low: max(likely - margin, 0),
-            likely: likely,
-            high: likely + margin,
-            confidence: .low,
-            source: .estimated
+        return EnergyAccountingResult(
+            expenditure: expenditure,
+            basalComponent: basal,
+            activeComponent: active
         )
     }
 
@@ -159,6 +183,58 @@ public enum EnergyAccounting {
         case .active: 1.725
         case .veryActive: 1.9
         }
+    }
+
+    private static func observedComponent(_ value: Double) -> EnergyEstimate? {
+        try? EnergyEstimate(
+            low: value,
+            likely: value,
+            high: value,
+            confidence: .high,
+            source: .observed
+        )
+    }
+
+    private static func estimatedBasal(profile: EffectiveProfile?, weightKg: Double?) -> EnergyEstimate? {
+        guard let profile,
+              let age = profile.age,
+              age >= 0,
+              let weightKg,
+              weightKg.isFinite,
+              weightKg > 0,
+              profile.heightCm.isFinite,
+              profile.heightCm > 0,
+              let likely = basalMetabolicRate(
+                sex: profile.biologicalSex,
+                weightKg: weightKg,
+                heightCm: profile.heightCm,
+                age: age
+              ) else { return nil }
+        return estimatedComponent(likely)
+    }
+
+    private static func estimatedActive(
+        basal: EnergyEstimate?,
+        activityLevel: ActivityLevel?
+    ) -> EnergyEstimate? {
+        guard let basal,
+              let activityLevel,
+              let factor = activityFactor(for: activityLevel) else { return nil }
+        let likely = basal.likely * (factor - 1)
+        guard likely.isFinite, likely > 0 else { return nil }
+        return estimatedComponent(likely)
+    }
+
+    private static func estimatedComponent(_ likely: Double) -> EnergyEstimate? {
+        guard likely.isFinite, likely > 0 else { return nil }
+        let margin = likely * fallbackRelativeUncertainty
+        return try? EnergyEstimate(
+            low: max(likely - margin, 0),
+            likely: likely,
+            high: likely + margin,
+            confidence: .low,
+            source: .estimated
+        )
     }
 
     private static func validEnergy(_ value: Double?) -> Double? {

@@ -192,6 +192,38 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertTrue(metric.requiresRecompute)
     }
 
+    func testV4StoreMigrationMarksOldProjectionForRecompute() throws {
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        var container: ModelContainer? = try makeContainer(
+            version: DensosoSchemaV4.self,
+            url: location.storeURL
+        )
+        var context: ModelContext? = ModelContext(container!)
+        let day = Date(timeIntervalSince1970: 1_700_000_000)
+        context!.insert(DensosoSchemaV4.DailyMetrics(
+            date: day,
+            totalIntakeKcal: 1_500,
+            totalExpenditureKcal: 2_000,
+            deficitKcal: 500,
+            energyQuality: "estimated",
+            projectionVersion: AlgorithmVersions.calorieAccounting,
+            sourceFingerprint: "v4-fingerprint",
+            requiresRecompute: false
+        ))
+        try context!.save()
+        context = nil
+        container = nil
+
+        container = try openCurrentStore(at: location.storeURL)
+        context = ModelContext(container!)
+        let migrated = try XCTUnwrap(context!.fetch(FetchDescriptor<DailyMetrics>()).first)
+
+        XCTAssertTrue(migrated.requiresRecompute)
+        XCTAssertEqual(migrated.projectionVersion, AlgorithmVersions.calorieAccounting)
+        XCTAssertEqual(migrated.sourceFingerprint, "v4-fingerprint")
+    }
+
     func testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1() async throws {
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
@@ -912,7 +944,21 @@ private enum Gate02FaultingMigrationPlan: SchemaMigrationPlan {
                 didMigrate: nil
             ),
             .lightweight(fromVersion: DensosoSchemaV3.self, toVersion: DensosoSchemaV4.self),
-            .lightweight(fromVersion: DensosoSchemaV4.self, toVersion: DensosoSchemaV5.self),
+            .custom(
+                fromVersion: DensosoSchemaV4.self,
+                toVersion: DensosoSchemaV5.self,
+                willMigrate: { context in
+                    let currentProjectionVersion = AlgorithmVersions.dailyMetricsProjection
+                    let metrics = try context.fetch(FetchDescriptor<DensosoSchemaV4.DailyMetrics>())
+                    for metric in metrics
+                    where metric.projectionVersion != currentProjectionVersion
+                        || metric.sourceFingerprint.isEmpty {
+                        metric.requiresRecompute = true
+                    }
+                    try context.save()
+                },
+                didMigrate: nil
+            ),
             .custom(
                 fromVersion: DensosoSchemaV5.self,
                 toVersion: DensosoSchemaV6.self,

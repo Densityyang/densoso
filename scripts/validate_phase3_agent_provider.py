@@ -16,13 +16,35 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def require_text(path: Path, needles: list[str], errors: list[str]) -> None:
+def read_text(path: Path, errors: list[str]) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        errors.append(f"could not read {path.relative_to(ROOT)}: {error}")
+        return ""
+
+
+def require_text(
+    path: Path,
+    needles: list[str],
+    errors: list[str],
+    *,
+    normalize_whitespace: bool = False,
+    ignore_case: bool = False,
+) -> None:
     if not path.is_file():
         errors.append(f"missing {path.relative_to(ROOT)}")
         return
-    text = path.read_text(encoding="utf-8")
+    text = read_text(path, errors)
+    if normalize_whitespace:
+        text = " ".join(text.split())
+    if ignore_case:
+        text = text.casefold()
     for needle in needles:
-        if needle not in text:
+        expected = " ".join(needle.split()) if normalize_whitespace else needle
+        if ignore_case:
+            expected = expected.casefold()
+        if expected not in text:
             errors.append(f"{path.relative_to(ROOT)} is missing {needle}")
 
 
@@ -51,6 +73,8 @@ def main() -> int:
         "Densoso/Application/Formatting/RestrictedMarkdownRenderer.swift",
         "Densoso/Views/Components/AssistantBlockView.swift",
         "Densoso/Agent/Tools/CreateWorkoutPlanTool.swift",
+        "Densoso/Agent/Tools/GetMetricsTool.swift",
+        "Densoso/Agent/ToolRegistry.swift",
         "docs/gates/gate-03-agent-provider.md",
     ]
     for relative in required_files:
@@ -71,7 +95,8 @@ def main() -> int:
             "Normalize local and cloud turns as `AgentTurnResult`",
             "Local capture detection is a proposal only",
             "workout cannot be classified as a future workout plan",
-            "Read today's normal schedule and active historical training plans",
+            "Read the Agent's requested-day schedule through the bounded repository query",
+            "Load confirmed workout and training-plan entries for the DailyLoop/Watch snapshot",
             "visible and resumable conversation messages",
             "current-request resume filter",
             "Reset conversation messages and Agent request history in stable 64-row pages",
@@ -79,6 +104,8 @@ def main() -> int:
             "invalid rows and valid ties across the page boundary",
         ],
         errors,
+        normalize_whitespace=True,
+        ignore_case=True,
     )
     require_text(
         ROOT / "Densoso/Application/Usage/ProviderUsageLedger.swift",
@@ -100,7 +127,14 @@ def main() -> int:
             "model: \"qwen-flash\"",
             "cachedInputMicrosPerMillionTokens: 440_000",
             "cachedInputMicrosPerMillionTokens: 150_000",
-            "No descriptor is supplied for Qwen ASR or vision",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "ProviderUsageLedgerTests.swift",
+        [
+            "testQwenSpeechUsageWithoutPricingDescriptorKeepsCostUnknown",
+            "testMissingCachedPriceAndUnlistedVisionModelKeepCostUnknown",
         ],
         errors,
     )
@@ -120,8 +154,34 @@ def main() -> int:
         errors,
     )
     require_text(
+        ROOT / "Densoso" / "Infrastructure" / "LLM" / "ProviderConfiguration.swift",
+        [
+            'static let deepSeekFlashModel = "deepseek-flash"',
+            'static let deepSeekResponsesEndpoint = URL(string: "https://api.deepseek.com/responses")!',
+            "static func deepSeekCapabilities(for model: String, endpoint: URL)",
+            "guard model == deepSeekFlashModel",
+            "endpoint == deepSeekResponsesEndpoint",
+        ],
+        errors,
+    )
+    require_text(
         ROOT / "Densoso" / "Infrastructure" / "LLM" / "DeepSeekProvider.swift",
-        ["https://api.deepseek.com/responses", "deepseek-flash", "input_image", "response.output_text.delta"],
+        [
+            "endpoint: URL = ProviderCapabilityCatalog.deepSeekResponsesEndpoint",
+            "model: String = ProviderCapabilityCatalog.deepSeekFlashModel",
+            "ProviderCapabilityCatalog.deepSeekCapabilities(for: model, endpoint: endpoint)",
+            "input_image",
+            "response.output_text.delta",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Infrastructure" / "LLM" / "DeepSeekProviderContractTests.swift",
+        [
+            'XCTAssertEqual(sent.url?.absoluteString, "https://api.deepseek.com/responses")',
+            'XCTAssertEqual(object["model"] as? String, "deepseek-flash")',
+            "testRetiredDeepSeekVisionCompatibilityAliasIsNotVisionCapable",
+        ],
         errors,
     )
     require_text(
@@ -217,7 +277,7 @@ def main() -> int:
         ],
         errors,
     )
-    agent_text = (ROOT / "Densoso" / "Agent" / "AgentSession.swift").read_text(encoding="utf-8")
+    agent_text = read_text(ROOT / "Densoso" / "Agent" / "AgentSession.swift", errors)
     if "DeepSeekClient" in agent_text or "ModelContext" in agent_text:
         errors.append("AgentSession must remain provider-neutral and free of ModelContext")
     require_text(
@@ -295,10 +355,30 @@ def main() -> int:
             "struct DailyLoopSnapshotComposer",
             "healthIntelligenceService.dailyBrief",
             "agentSession.pendingActions",
-            "workoutPlanSchedulingService.confirmedPlans()",
             "plansThroughTomorrow",
             "scheduledAt >= dayStart",
             "DailyLoopSnapshot(",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Services" / "HealthProjectionActor.swift",
+        [
+            "private static let confirmedPlanFetchBatchSize = 64",
+            "func dailyLoopSnapshot(",
+            "let plans = try loadConfirmedPlanEntries(asOf: date)",
+            "descriptor.fetchLimit = Self.confirmedPlanFetchBatchSize",
+            "descriptor.fetchOffset = offset",
+            "planWindow.contains(scheduledAt)",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "HealthProjectionActorTests.swift",
+        [
+            "testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents",
+            "testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions",
+            "testDailyLoopSnapshotRetainsTenEarliestPlanSessionsAcrossPages",
         ],
         errors,
     )
@@ -432,6 +512,29 @@ def main() -> int:
         errors,
     )
     require_text(
+        ROOT / "Densoso" / "Agent" / "Tools" / "GetMetricsTool.swift",
+        ["maximumRangeDays = 90", "dailyBreakdownPageSize = 4", "DailyMetricsUsabilityPolicy.aggregateSignedRanges", "nextStartDate"],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Agent" / "ToolRegistry.swift",
+        ["AgentToolOutputLimiter.limit(output)", "maximumUTF8Bytes", "tool_output_limit_exceeded"],
+        errors,
+    )
+    tool_registry_path = ROOT / "Densoso" / "Agent" / "ToolRegistry.swift"
+    if tool_registry_path.is_file() and "String(output.prefix(8_192))" in tool_registry_path.read_text(encoding="utf-8"):
+        errors.append("Densoso/Agent/ToolRegistry.swift truncates tool output by character prefix")
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "GetMetricsToolTests.swift",
+        ["testResponseKeepsPartialCoverageAndPagesDailyBreakdownAsValidJSON", "testNoValidDaysReturnsInsufficientDataWithoutZeroTotals"],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests" / "Application" / "AgentToolOutputLimiterTests.swift",
+        ["testOutputWithinUTF8BudgetIsPreserved", "testOversizedOutputReturnsValidStructuredJSONInsteadOfCharacterTruncation"],
+        errors,
+    )
+    require_text(
         ROOT / "DensosoTests" / "ConversationPersistenceTests.swift",
         [
             "testMessagePagesPreserveOrdinalAndResumeFilterAcrossPageBoundary",
@@ -485,7 +588,17 @@ def main() -> int:
     )
     require_text(
         ROOT / "Packages" / "DensosoDomain" / "Sources" / "DensosoDomain" / "DailyCheckIn.swift",
-        ["user-reported facts", "UserReportedEnergy", "UserReportedStress", "SubjectiveSleepQuality"],
+        [
+            "Facts explicitly reported by the user",
+            "public enum UserReportedEnergy",
+            "public enum UserReportedStress",
+            "public enum SubjectiveSleepQuality",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Packages" / "DensosoDomain" / "Tests" / "DensosoDomainTests" / "DailyCheckInTests.swift",
+        ["testDailyCheckInRepresentsOnlyUserReportedFields"],
         errors,
     )
     require_text(
@@ -574,7 +687,7 @@ def main() -> int:
         ["\"dishes\": .array", "LogMealArguments", "additionalProperties: false"],
         errors,
     )
-    if "dishesJSON" in (ROOT / "Densoso" / "Agent" / "Tools" / "LogMealTool.swift").read_text(encoding="utf-8"):
+    if "dishesJSON" in read_text(ROOT / "Densoso" / "Agent" / "Tools" / "LogMealTool.swift", errors):
         errors.append("log_meal still accepts stringified nested JSON")
     require_text(
         ROOT / "Densoso" / "Agent" / "Tools" / "CreateTrainingPlanTool.swift",
@@ -669,6 +782,8 @@ def main() -> int:
         "DensosoTests/Application/AgentCoordinatorTests.swift",
         "DensosoTests/Application/SwiftDataProviderGovernanceQueryTests.swift",
         "DensosoTests/Application/AgentDailyMetricsRepositoryTests.swift",
+        "DensosoTests/Application/GetMetricsToolTests.swift",
+        "DensosoTests/Application/AgentToolOutputLimiterTests.swift",
         "DensosoTests/ConversationPersistenceTests.swift",
         "DensosoTests/Application/AgentRequestResumeTests.swift",
         "DensosoTests/Application/PromptInjectionEvalTests.swift",
@@ -728,7 +843,7 @@ def main() -> int:
             errors.append(f"missing {path.relative_to(ROOT)}")
         elif path.suffix == ".sse":
             event_types: set[str] = set()
-            for line in path.read_text(encoding="utf-8").splitlines():
+            for line in read_text(path, errors).splitlines():
                 if not line.startswith("data:"):
                     continue
                 try:
@@ -741,7 +856,10 @@ def main() -> int:
             if not {"response.output_text.delta", "response.completed"}.issubset(event_types):
                 errors.append("DeepSeek Responses fixture must cover text delta and completion events")
         else:
-            json.loads(path.read_text(encoding="utf-8"))
+            try:
+                json.loads(read_text(path, errors))
+            except json.JSONDecodeError as error:
+                errors.append(f"invalid JSON in {path.relative_to(ROOT)}: {error}")
 
     injection = ROOT / "evals" / "prompt-injection-phase3.yaml"
     injection_cases: list[dict[str, object]] = []
@@ -749,7 +867,7 @@ def main() -> int:
         errors.append("missing evals/prompt-injection-phase3.yaml")
     else:
         try:
-            injection_suite = json.loads(injection.read_text(encoding="utf-8"))
+            injection_suite = json.loads(read_text(injection, errors))
         except (json.JSONDecodeError, OSError) as error:
             errors.append(f"prompt injection eval is not executable JSON/YAML: {error}")
         else:
@@ -807,18 +925,19 @@ def main() -> int:
             "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests",
             "-only-testing:DensosoTests/SwiftDataProviderGovernanceQueryTests",
             "-only-testing:DensosoTests/AgentDailyMetricsRepositoryTests",
+            "-only-testing:DensosoTests/GetMetricsToolTests",
+            "-only-testing:DensosoTests/AgentToolOutputLimiterTests",
             "-only-testing:DensosoTests/ConversationPersistenceTests",
         ],
         errors,
     )
 
-    if errors:
-        for error in errors:
-            print(f"ERROR: {error}", file=sys.stderr)
-        return 1
-
     report = {
-        "status": "pass",
+        "schemaVersion": 1,
+        "gate": "gate-03-agent-provider-static-contracts",
+        "status": "FAIL" if errors else "PASS",
+        "failedAssertions": len(errors),
+        "errors": errors,
         "providerFixtures": len(fixture_paths),
         "testFiles": len(test_files),
         "liveNetworkCalls": 0,
@@ -826,7 +945,15 @@ def main() -> int:
         "protectedOCRRead": False,
     }
     if args.report:
-        Path(args.report).write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+
+    if errors:
+        for error in errors:
+            print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+
     print("Phase 3 agent-provider static contracts: PASS")
     return 0
 

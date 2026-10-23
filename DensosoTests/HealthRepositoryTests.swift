@@ -29,7 +29,14 @@ final class HealthRepositoryTests: XCTestCase {
     func testInsertAndDeleteReprojectsTheSameDay() throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let repository = HealthRepository(modelContext: context)
-        let meal = MealRecord(date: date, totalCaloriesKcal: 500, proteinG: 30, fatG: 10, carbsG: 70)
+        let meal = MealRecord(
+            date: date,
+            totalCaloriesKcal: 500,
+            proteinG: 30,
+            fatG: 10,
+            carbsG: 70,
+            evidenceData: try mealEvidenceData(grade: .userReported)
+        )
         let workout = WorkoutRecord(date: date, type: "walking", durationMinutes: 30, estimatedCaloriesBurned: 120)
 
         try repository.insert(meal)
@@ -52,6 +59,48 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metrics[0].totalIntakeKcal, 0)
         XCTAssertEqual(metrics[0].activeCaloriesKcal, activeEnergyWithoutWorkout)
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).count, 2)
+    }
+
+    func testLegacyPointEstimateIsNotProjectedAsCurrentIntakeOrMacros() throws {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let meal = MealRecord(
+            date: date,
+            totalCaloriesKcal: 640,
+            proteinG: 28,
+            fatG: 18,
+            carbsG: 75,
+            energyLowKcal: 640,
+            energyLikelyKcal: 640,
+            energyHighKcal: 640,
+            proteinLowG: 28,
+            proteinLikelyG: 28,
+            proteinHighG: 28,
+            fatLowG: 18,
+            fatLikelyG: 18,
+            fatHighG: 18,
+            carbsLowG: 75,
+            carbsLikelyG: 75,
+            carbsHighG: 75,
+            evidenceData: try mealEvidenceData(grade: .legacyPointEstimate)
+        )
+
+        let projection = CaloricEngine.computeDailyMetrics(
+            date: date,
+            meals: [meal],
+            workouts: [],
+            effectiveProfile: nil,
+            effectiveWeight: nil
+        )
+        let readResult = DailyMetricsReadModelMapper.make(projection)
+
+        XCTAssertEqual(projection.totalIntakeKcal, 0)
+        XCTAssertEqual(readResult.coverage.intake.availableDays, 0)
+        XCTAssertEqual(readResult.coverage.intake.unavailableDays, 1)
+        XCTAssertNil(readResult.intake.value)
+        XCTAssertNil(readResult.proteinG.value)
+        XCTAssertNil(readResult.fatG.value)
+        XCTAssertNil(readResult.carbsG.value)
+        XCTAssertNil(readResult.deficit.value)
     }
 
     func testOutboxEnqueueReadsMatchingVersionsAndLatestReceiptAmongManyRows() throws {
@@ -1441,6 +1490,16 @@ final class HealthRepositoryTests: XCTestCase {
     private static func dayKey(_ date: Date) -> String {
         let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
+
+    private func mealEvidenceData(grade: EvidenceGrade) throws -> Data {
+        try JSONEncoder().encode([
+            EvidenceSnapshot(
+                grade: grade,
+                sourceID: "test-meal-evidence",
+                summary: "Regression fixture meal evidence."
+            ),
+        ])
     }
 }
 

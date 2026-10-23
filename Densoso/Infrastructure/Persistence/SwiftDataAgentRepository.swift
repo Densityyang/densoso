@@ -150,14 +150,7 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
             let batch = try modelContext.fetch(descriptor)
             guard let last = batch.last else { break }
             metrics.append(contentsOf: batch.map {
-                AgentDailyMetric(
-                    date: $0.date,
-                    deficitKcal: $0.deficitKcal,
-                    intakeKcal: $0.totalIntakeKcal,
-                    expenditureKcal: $0.totalExpenditureKcal,
-                    mealCount: $0.mealCount,
-                    workoutCount: $0.workoutCount
-                )
+                DailyMetricsReadModelMapper.make($0)
             })
             cursor = last.date
         }

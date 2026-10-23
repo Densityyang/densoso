@@ -48,7 +48,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyMetrics>()), 1)
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyReport>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyReport>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 1)
     }
 
@@ -91,6 +91,9 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         let day = Calendar.current.startOfDay(for: date)
         let context = ModelContext(harness.container)
         let existingRecordCount = DailyMetricsProjectionInputReader.fetchBatchSize + 1
+        let evidenceData = try JSONEncoder().encode([
+            EvidenceSnapshot(grade: .userReported, sourceID: "test-current-meal", summary: "Explicit fixture evidence."),
+        ])
 
         for index in 0..<existingRecordCount {
             context.insert(MealRecord(
@@ -99,6 +102,16 @@ final class ConfirmationCoordinatorTests: XCTestCase {
                 proteinG: 1,
                 fatG: 2,
                 carbsG: 3,
+                proteinLowG: 1,
+                proteinLikelyG: 1,
+                proteinHighG: 1,
+                fatLowG: 2,
+                fatLikelyG: 2,
+                fatHighG: 2,
+                carbsLowG: 3,
+                carbsLikelyG: 3,
+                carbsHighG: 3,
+                evidenceData: evidenceData,
                 sourceActionKey: "projection-parity-meal-\(index)"
             ))
             context.insert(WorkoutRecord(
@@ -149,11 +162,15 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let context = ModelContext(harness.container)
         let existingMealCount = DailyMetricsProjectionInputReader.fetchBatchSize + 1
+        let evidenceData = try JSONEncoder().encode([
+            EvidenceSnapshot(grade: .userReported, sourceID: "test-current-meal", summary: "Explicit fixture evidence."),
+        ])
 
         for index in 0..<existingMealCount {
             context.insert(MealRecord(
                 date: date,
                 totalCaloriesKcal: 10,
+                evidenceData: evidenceData,
                 sourceActionKey: "daily-snapshot-page-meal-\(index)"
             ))
             context.insert(WeightRecord(
@@ -437,7 +454,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(revisions.first?.weightKg, 62.5)
     }
 
-    func testConfirmationWeeklyReportUsesOnlyMetricsInsideItsWeek() async throws {
+    func testConfirmationDoesNotPersistAnIncompleteWeeklyReport() async throws {
         let harness = try Harness()
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let calendar = Calendar.current
@@ -465,11 +482,11 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         }
         let weekStart = calendar.startOfDay(for: interval.start)
         let reportPredicate = #Predicate<WeeklyReport> { $0.weekStartDate == weekStart }
-        let report = try XCTUnwrap(verificationContext.fetch(
+        let report = verificationContext.fetch(
             FetchDescriptor<WeeklyReport>(predicate: reportPredicate)
-        ).first)
-        XCTAssertEqual(report.totalDeficitKcal, weeklyMetrics.reduce(0) { $0 + $1.deficitKcal })
-        XCTAssertEqual(report.mealsCount, weeklyMetrics.reduce(0) { $0 + $1.mealCount })
+        ).first
+        XCTAssertNil(report)
+        XCTAssertEqual(weeklyMetrics.count, 2)
         XCTAssertFalse(weeklyMetrics.contains { $0.deficitKcal == 10_000 || $0.deficitKcal == 20_000 })
     }
 

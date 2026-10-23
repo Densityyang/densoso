@@ -205,7 +205,21 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                     try context.save()
                 }
             ),
-            .lightweight(fromVersion: DensosoSchemaV4.self, toVersion: DensosoSchemaV5.self),
+            .custom(
+                fromVersion: DensosoSchemaV4.self,
+                toVersion: DensosoSchemaV5.self,
+                willMigrate: { context in
+                    let currentProjectionVersion = AlgorithmVersions.dailyMetricsProjection
+                    let metrics = try context.fetch(FetchDescriptor<DensosoSchemaV4.DailyMetrics>())
+                    for metric in metrics
+                    where metric.projectionVersion != currentProjectionVersion
+                        || metric.sourceFingerprint.isEmpty {
+                        metric.requiresRecompute = true
+                    }
+                    try context.save()
+                },
+                didMigrate: nil
+            ),
             .custom(
                 fromVersion: DensosoSchemaV5.self,
                 toVersion: DensosoSchemaV6.self,

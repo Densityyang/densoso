@@ -1,14 +1,7 @@
 import Foundation
 import DensosoDomain
 
-struct AgentDailyMetric: Codable, Equatable, Sendable {
-    let date: Date
-    let deficitKcal: Int
-    let intakeKcal: Int
-    let expenditureKcal: Int
-    let mealCount: Int
-    let workoutCount: Int
-}
+typealias AgentDailyMetric = DailyMetricsReadResult
 
 struct AgentScheduleItem: Codable, Equatable, Sendable {
     let title: String

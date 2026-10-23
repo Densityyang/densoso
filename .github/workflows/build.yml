@@ -26,7 +26,7 @@ jobs:
   # meal-capture -> healthkit -> health-intelligence -> watch -> integration.
   foundation:
     name: gate-01-foundation
-    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 35
     steps:
@@ -188,7 +188,7 @@ jobs:
   domain-persistence:
     name: gate-02-domain-persistence
     needs: foundation
-    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -272,13 +272,13 @@ jobs:
             gate02-domain.log
             gate02-persistence-tests.log
             gate02-test-summary.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   agent-provider:
     name: gate-03-agent-provider
     needs: domain-persistence
-    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -291,23 +291,32 @@ jobs:
           echo "GATE03_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate03AgentProviderTests.xcresult" >> "$GITHUB_ENV"
 
       - name: Validate Phase 3 contracts and fixtures
+        id: validate
+        continue-on-error: true
         run: |
           python3 -m py_compile scripts/validate_phase3_agent_provider.py
           python3 scripts/validate_phase3_agent_provider.py \
             --report gate03-fixture-summary.json
 
       - name: Test cumulative domain contracts
+        id: domain_tests
         run: |
           set -o pipefail
           swift test --package-path Packages/DensosoDomain 2>&1 | tee gate03-domain.log
 
       - name: Install XcodeGen
+        id: install_xcodegen
+        if: always()
         run: brew install xcodegen
 
       - name: Generate Xcode project
+        id: generate_project
+        if: ${{ always() && steps.install_xcodegen.outcome == 'success' }}
         run: xcodegen generate
 
       - name: Prepare iOS 26 Simulator
+        id: prepare_simulator
+        if: ${{ always() && steps.generate_project.outcome == 'success' }}
         run: |
           set -euo pipefail
           SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
@@ -317,6 +326,8 @@ jobs:
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Test Agent Provider Markdown and privacy contracts
+        id: xcode_tests
+        if: ${{ always() && steps.prepare_simulator.outcome == 'success' }}
         run: |
           set -o pipefail
           rm -rf "$GATE03_RESULT_BUNDLE"
@@ -352,16 +363,88 @@ jobs:
             -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests \
             -only-testing:DensosoTests/SwiftDataProviderGovernanceQueryTests \
             -only-testing:DensosoTests/AgentDailyMetricsRepositoryTests \
+            -only-testing:DensosoTests/GetMetricsToolTests \
+            -only-testing:DensosoTests/AgentToolOutputLimiterTests \
             -resultBundlePath "$GATE03_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
             test 2>&1 | tee gate03-agent-provider-tests.log
 
       - name: Export Gate 3 test summary
+        id: export_summary
+        if: ${{ always() && steps.xcode_tests.outcome != 'skipped' }}
         run: |
           set -euo pipefail
           xcrun xcresulttool get test-results summary \
             --path "$GATE03_RESULT_BUNDLE" > gate03-test-summary.json
           grep -q '"result" : "Passed"' gate03-test-summary.json
+
+      - name: Record Gate 3 execution status
+        if: always()
+        env:
+          VALIDATOR_OUTCOME: ${{ steps.validate.outcome }}
+          DOMAIN_TESTS_OUTCOME: ${{ steps.domain_tests.outcome }}
+          XCODEGEN_INSTALL_OUTCOME: ${{ steps.install_xcodegen.outcome }}
+          PROJECT_GENERATION_OUTCOME: ${{ steps.generate_project.outcome }}
+          SIMULATOR_SETUP_OUTCOME: ${{ steps.prepare_simulator.outcome }}
+          XCODE_TESTS_OUTCOME: ${{ steps.xcode_tests.outcome }}
+          TEST_SUMMARY_OUTCOME: ${{ steps.export_summary.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          steps = {
+              "static_contracts": os.environ["VALIDATOR_OUTCOME"],
+              "domain_tests": os.environ["DOMAIN_TESTS_OUTCOME"],
+              "xcodegen_install": os.environ["XCODEGEN_INSTALL_OUTCOME"],
+              "project_generation": os.environ["PROJECT_GENERATION_OUTCOME"],
+              "simulator_setup": os.environ["SIMULATOR_SETUP_OUTCOME"],
+              "xcode_tests": os.environ["XCODE_TESTS_OUTCOME"],
+              "test_summary_export": os.environ["TEST_SUMMARY_OUTCOME"],
+          }
+          evidence_paths = [
+              "gate03-fixture-summary.json",
+              "gate03-domain.log",
+              "gate03-agent-provider-tests.log",
+              "gate03-test-summary.json",
+              "Gate03AgentProviderTests.xcresult",
+          ]
+          evidence = {path: Path(path).exists() for path in evidence_paths}
+          results = {
+              name: {
+                  "status": "PASS" if outcome == "success" else "FAIL" if outcome == "failure" else "NOT RUN",
+                  "outcome": outcome,
+              }
+              for name, outcome in steps.items()
+          }
+          failed = [name for name, result in results.items() if result["status"] == "FAIL"]
+          not_run = [name for name, result in results.items() if result["status"] == "NOT RUN"]
+          report = {
+              "schemaVersion": 1,
+              "gate": "gate-03-agent-provider",
+              "headSha": os.environ.get("GITHUB_SHA"),
+              "runId": os.environ.get("GITHUB_RUN_ID"),
+              "runAttempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "status": "FAIL" if failed or not_run else "PASS",
+              "steps": results,
+              "evidenceFiles": evidence,
+              "diagnostics": [
+                  f"Step {name} did not run; inspect the first failed prerequisite in the job log."
+                  for name in not_run
+              ] + [
+                  f"Evidence file missing: {path}"
+                  for path, exists in evidence.items()
+                  if not exists
+              ],
+          }
+          Path("gate03-execution-summary.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if report["status"] != "PASS":
+              sys.exit(1)
 
       - name: Upload Gate 3 evidence
         if: always()
@@ -374,13 +457,14 @@ jobs:
             gate03-agent-provider-tests.log
             gate03-test-summary.json
             gate03-fixture-summary.json
-          if-no-files-found: error
+            gate03-execution-summary.json
+          if-no-files-found: warn
           retention-days: 14
 
   speech:
     name: gate-04-speech
     needs: agent-provider
-    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -459,13 +543,13 @@ jobs:
             gate04-fixture-summary.json
             docs/gates/gate-04-routing-matrix.json
             docs/gates/gate-04-device-matrix.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   meal-capture:
     name: gate-05-meal-capture
     needs: speech
-    if: ${{ always() && (needs.speech.result == 'success' || inputs.run_scope == 'focused-pr-tests') }}
+    if: ${{ always() }}
     runs-on: macos-latest
     timeout-minutes: 35
     steps:
@@ -550,13 +634,13 @@ jobs:
             evals/gate05/food-resolution.json
             evals/gate05/portion-reference.json
             DensosoTests/Fixtures/Gate05/Providers/Qwen
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   healthkit:
     name: gate-06-healthkit
     needs: meal-capture
-    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -632,13 +716,13 @@ jobs:
             DensosoTests/HealthKitSyncCoordinatorTests.swift
             DensosoTests/HealthSyncOutboxWorkerTests.swift
             DensosoTests/ConfirmationCoordinatorTests.swift
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   health-intelligence:
     name: gate-07-health-intelligence
     needs: healthkit
-    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -712,13 +796,13 @@ jobs:
             gate07-test-summary.json
             gate07-contract-summary.json
             docs/gates/gate-07-health-intelligence.md
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   watch:
     name: gate-08-watch
     needs: health-intelligence
-    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 50
     steps:
@@ -810,13 +894,13 @@ jobs:
             gate08-test-summary.json
             gate08-contract-summary.json
             docs/gates/gate-08-watch.md
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   integration:
     name: gate-09-integration
     needs: watch
-    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
@@ -914,13 +998,13 @@ jobs:
             gate09-coverage-summary.txt
             gate09-contract-summary.json
             docs/gates/gate-09-integration.md
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   final-acceptance:
     name: gate-10-final-acceptance
     needs: integration
-    if: ${{ inputs.run_scope != 'focused-pr-tests' }}
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -964,13 +1048,13 @@ jobs:
           path: |
             Gate10Acceptance
             docs/gates/gate-10-final-acceptance.md
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
   gate-11-ai-native-health-loop:
     name: gate-11-ai-native-health-loop
     needs: final-acceptance
-    if: ${{ always() && (needs.final-acceptance.result == 'success' || inputs.run_scope == 'focused-pr-tests') }}
+    if: ${{ always() }}
     runs-on: macos-latest
     timeout-minutes: 50
     steps:
@@ -1072,13 +1156,13 @@ jobs:
             gate11-test-summary.json
             gate11-contract-summary.json
             docs/gates/gate-11-ai-native-health-loop.md
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   gate-12-multimodal-agent:
     name: gate-12-multimodal-agent
     needs: gate-11-ai-native-health-loop
-    if: ${{ always() && needs.gate-11-ai-native-health-loop.result == 'success' }}
+    if: ${{ always() && (inputs.run_scope != 'focused-pr-tests' || needs.gate-11-ai-native-health-loop.result == 'success') }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -1189,13 +1273,13 @@ jobs:
             gate12-test-summary.json
             gate12-contract-summary.json
             docs/gates/gate-12-multimodal-agent.md
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   gate-13-energy-accounting:
     name: gate-13-energy-accounting
     needs: gate-12-multimodal-agent
-    if: ${{ always() && needs.gate-12-multimodal-agent.result == 'success' }}
+    if: ${{ always() && (inputs.run_scope != 'focused-pr-tests' || needs.gate-12-multimodal-agent.result == 'success') }}
     runs-on: macos-latest
     timeout-minutes: 35
     steps:
@@ -1208,7 +1292,10 @@ jobs:
           echo "GATE13_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate13EnergyAccountingTests.xcresult" >> "$GITHUB_ENV"
 
       - name: Run focused EnergyAccounting domain contracts
-        run: swift test --package-path Packages/DensosoDomain --filter EnergyAccountingTests 2>&1 | tee gate13-domain-contracts.log
+        run: |
+          set -euo pipefail
+          swift test --package-path Packages/DensosoDomain --filter EnergyAccountingTests 2>&1 | tee gate13-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter DailyMetricsUsabilityTests 2>&1 | tee -a gate13-domain-contracts.log
 
       - name: Generate Xcode project and select iPhone Simulator
         run: |
@@ -1232,8 +1319,10 @@ jobs:
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testMeasuredActiveEnergyIsNotAddedToWorkoutEnergy \
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testWorkoutPresenceDoesNotChangeEstimatedActiveEnergyFallback \
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testMissingEffectiveProfileDoesNotInventEnergyExpenditure \
+            -only-testing:DensosoTests/HealthRepositoryTests/testLegacyPointEstimateIsNotProjectedAsCurrentIntakeOrMacros \
             -only-testing:DensosoTests/CalorieEstimatorTests/testExplicitOilIsAddedOnceWithoutCookingMultiplier \
             -only-testing:DensosoTests/CalorieEstimatorTests/testInferredOilProducesAnHonestInterval \
+            -only-testing:DensosoTests/WeeklyAnalyticsServiceTests \
             -resultBundlePath "$GATE13_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
             test 2>&1 | tee gate13-energy-accounting-tests.log
@@ -1257,13 +1346,13 @@ jobs:
             gate13-test-summary.json
             gate13-contract-summary.json
             docs/gates/gate-13-energy-accounting.md
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   gate-14-watch-daily-loop:
     name: gate-14-watch-daily-loop
     needs: gate-13-energy-accounting
-    if: ${{ always() && needs.gate-13-energy-accounting.result == 'success' }}
+    if: ${{ always() && (inputs.run_scope != 'focused-pr-tests' || needs.gate-13-energy-accounting.result == 'success') }}
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -1353,5 +1442,147 @@ jobs:
             gate14-test-summary.json
             gate14-contract-summary.json
             docs/gates/gate-14-watch-daily-loop.md
-          if-no-files-found: error
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-status:
+    name: gate-01-to-14-aggregate
+    needs:
+      - foundation
+      - domain-persistence
+      - agent-provider
+      - speech
+      - meal-capture
+      - healthkit
+      - health-intelligence
+      - watch
+      - integration
+      - final-acceptance
+      - gate-11-ai-native-health-loop
+      - gate-12-multimodal-agent
+      - gate-13-energy-accounting
+      - gate-14-watch-daily-loop
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate Gate 1-14 results
+        env:
+          RUN_SCOPE: ${{ inputs.run_scope }}
+          GATE_01: ${{ needs.foundation.result }}
+          GATE_02: ${{ needs.domain-persistence.result }}
+          GATE_03: ${{ needs.agent-provider.result }}
+          GATE_04: ${{ needs.speech.result }}
+          GATE_05: ${{ needs.meal-capture.result }}
+          GATE_06: ${{ needs.healthkit.result }}
+          GATE_07: ${{ needs.health-intelligence.result }}
+          GATE_08: ${{ needs.watch.result }}
+          GATE_09: ${{ needs.integration.result }}
+          GATE_10: ${{ needs.final-acceptance.result }}
+          GATE_11: ${{ needs.gate-11-ai-native-health-loop.result }}
+          GATE_12: ${{ needs.gate-12-multimodal-agent.result }}
+          GATE_13: ${{ needs.gate-13-energy-accounting.result }}
+          GATE_14: ${{ needs.gate-14-watch-daily-loop.result }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          run_scope = os.environ.get("RUN_SCOPE") or "full"
+          selected = set(range(1, 15))
+          if run_scope == "focused-pr-tests":
+              selected = {5, 11, 12, 13, 14}
+
+          gate_jobs = {
+              1: ("foundation", "GATE_01", None),
+              2: ("domain-persistence", "GATE_02", 1),
+              3: ("agent-provider", "GATE_03", 2),
+              4: ("speech", "GATE_04", 3),
+              5: ("meal-capture", "GATE_05", 4),
+              6: ("healthkit", "GATE_06", 5),
+              7: ("health-intelligence", "GATE_07", 6),
+              8: ("watch", "GATE_08", 7),
+              9: ("integration", "GATE_09", 8),
+              10: ("final-acceptance", "GATE_10", 9),
+              11: ("gate-11-ai-native-health-loop", "GATE_11", 10),
+              12: ("gate-12-multimodal-agent", "GATE_12", 11),
+              13: ("gate-13-energy-accounting", "GATE_13", 12),
+              14: ("gate-14-watch-daily-loop", "GATE_14", 13),
+          }
+          job_outcomes = {
+              number: os.environ[env_name]
+              for number, (_, env_name, _) in gate_jobs.items()
+          }
+          gates = []
+          for number, (job, _, predecessor) in gate_jobs.items():
+              outcome = job_outcomes[number]
+              if outcome == "success":
+                  status, reason = "PASS", "job succeeded"
+              elif outcome == "failure":
+                  status, reason = "FAIL", "job failed; see its retained job artifact and logs"
+              elif outcome == "cancelled":
+                  status, reason = "BLOCKED", "job was cancelled before completion"
+              elif number not in selected:
+                  status, reason = "NOT RUN", f"not selected in {run_scope} scope"
+              else:
+                  status = "BLOCKED"
+                  if predecessor is not None and job_outcomes[predecessor] != "success":
+                      reason = f"blocked because Gate {predecessor} result was {job_outcomes[predecessor]}"
+                  else:
+                      reason = "selected job was skipped; inspect its condition and prerequisite logs"
+              gates.append({
+                  "gate": number,
+                  "job": job,
+                  "jobOutcome": outcome,
+                  "status": status,
+                  "reason": reason,
+              })
+
+          selected_results = [gate for gate in gates if gate["gate"] in selected]
+          overall = "PASS" if all(gate["status"] == "PASS" for gate in selected_results) else "FAIL"
+          report = {
+              "schemaVersion": 1,
+              "workflow": "V3 Gates",
+              "headSha": os.environ.get("GITHUB_SHA"),
+              "runId": os.environ.get("GITHUB_RUN_ID"),
+              "runAttempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "runScope": run_scope,
+              "status": overall,
+              "gates": gates,
+          }
+          Path("gate-01-to-14-summary.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          lines = [
+              "# Gate 1-14 aggregate",
+              "",
+              f"Scope: `{run_scope}`",
+              f"Overall status: **{overall}**",
+              "",
+              "| Gate | Status | Job result | Reason |",
+              "| --- | --- | --- | --- |",
+          ]
+          lines.extend(
+              f"| {gate['gate']:02d} | {gate['status']} | {gate['jobOutcome']} | {gate['reason']} |"
+              for gate in gates
+          )
+          markdown = "\n".join(lines) + "\n"
+          Path("gate-01-to-14-summary.md").write_text(markdown, encoding="utf-8")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(markdown)
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if overall != "PASS":
+              sys.exit(1)
+          PY
+
+      - name: Upload aggregate status report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-01-to-14-aggregate-results
+          path: |
+            gate-01-to-14-summary.json
+            gate-01-to-14-summary.md
+          if-no-files-found: warn
           retention-days: 14

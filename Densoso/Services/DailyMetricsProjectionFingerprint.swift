@@ -15,7 +15,7 @@ struct DailyMetricsProjectionFingerprintContext: Equatable, Sendable {
         healthKitCursorRevisions: [String] = [],
         profileRevision: String? = nil,
         goalRevision: String? = nil,
-        algorithmVersion: String = AlgorithmVersions.calorieAccounting
+        algorithmVersion: String = AlgorithmVersions.dailyMetricsProjection
     ) {
         self.sourceRecordRevisions = sourceRecordRevisions.sorted()
         self.healthKitCursorRevisions = healthKitCursorRevisions.sorted()
@@ -37,15 +37,17 @@ struct DailyMetricsProjectionFingerprintContext: Equatable, Sendable {
 enum DailyMetricsProjectionFingerprint {
     static func context(
         on date: Date,
+        asOf referenceDate: Date? = nil,
         inputs: DailyMetricsProjectionInputs,
         profileRevision: ProfileRevisionRecord?,
         weightObservations: [WeightObservation],
         in modelContext: ModelContext
     ) throws -> DailyMetricsProjectionFingerprintContext {
         let day = Calendar.current.startOfDay(for: date)
+        let effectiveAt = referenceDate ?? day
         let profileKey = profileRevision?.profileKey ?? "primary"
         let goalPredicate = #Predicate<GoalProfileRecord> {
-            $0.profileKey == profileKey && $0.effectiveFrom <= day
+            $0.profileKey == profileKey && $0.effectiveFrom <= effectiveAt
         }
         var goalDescriptor = FetchDescriptor<GoalProfileRecord>(
             predicate: goalPredicate,
@@ -103,7 +105,7 @@ enum DailyMetricsProjectionFingerprint {
             healthKitCursorRevisions: cursors,
             profileRevision: profileToken,
             goalRevision: goalToken,
-            algorithmVersion: AlgorithmVersions.calorieAccounting
+            algorithmVersion: AlgorithmVersions.dailyMetricsProjection
         )
     }
 
@@ -115,6 +117,21 @@ enum DailyMetricsProjectionFingerprint {
         expectedAlgorithmVersion: String
     ) -> Bool {
         !requiresRecompute
+            && sourceMatches(
+                storedFingerprint: storedFingerprint,
+                storedAlgorithmVersion: storedAlgorithmVersion,
+                expectedFingerprint: expectedFingerprint,
+                expectedAlgorithmVersion: expectedAlgorithmVersion
+            )
+    }
+
+    static func sourceMatches(
+        storedFingerprint: String,
+        storedAlgorithmVersion: String,
+        expectedFingerprint: String,
+        expectedAlgorithmVersion: String
+    ) -> Bool {
+        !storedFingerprint.isEmpty
             && storedAlgorithmVersion == expectedAlgorithmVersion
             && storedFingerprint == expectedFingerprint
     }

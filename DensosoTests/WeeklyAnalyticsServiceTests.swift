@@ -32,7 +32,7 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
         context.insert(profile)
         context.insert(metric(daysBefore: 0, reference: reference, deficit: 600, meals: 3, workouts: 1))
         context.insert(metric(daysBefore: 1, reference: reference, deficit: 400, meals: 2, workouts: 0))
-        context.insert(metric(daysBefore: 3, reference: reference, deficit: 700, meals: 4, workouts: 1))
+        context.insert(metric(daysBefore: 2, reference: reference, deficit: 700, meals: 4, workouts: 1))
         try context.save()
 
         let snapshot = try WeeklyAnalyticsService(calendar: calendar).load(
@@ -43,20 +43,22 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
 
         XCTAssertEqual(snapshot.points.count, 7)
         XCTAssertEqual(snapshot.recordedDays, 3)
-        XCTAssertEqual(snapshot.totalDeficitKcal, 1_700)
-        XCTAssertEqual(snapshot.averageDailyDeficitKcal, 1_700.0 / 3.0, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(snapshot.totalDeficitKcal), 1_700)
+        XCTAssertEqual(try XCTUnwrap(snapshot.averageDailyDeficitKcal), 1_700.0 / 3.0, accuracy: 0.001)
         XCTAssertEqual(snapshot.points.map(\.targetDeficitKcal), Array(repeating: 500, count: 7))
         XCTAssertEqual(snapshot.points.filter(\.hasData).count, 3)
+        XCTAssertEqual(snapshot.energyCoverage.availableDays, 3)
+        XCTAssertEqual(snapshot.energyCoverage.missingDays, 4)
 
         let reports = try context.fetch(FetchDescriptor<WeeklyReport>())
         XCTAssertEqual(reports.count, 1)
-        // July 26 is part of the rolling seven-day snapshot, but it precedes
-        // this Monday-based calendar week and must not enter its report.
+        // The report is persisted only after all elapsed days in the calendar
+        // week have valid energy and nutrient evidence.
         XCTAssertEqual(reports[0].weekStartDate, makeDate(year: 2026, month: 7, day: 27))
-        XCTAssertEqual(reports[0].totalDeficitKcal, 1_000)
-        XCTAssertEqual(reports[0].mealsCount, 5)
-        XCTAssertEqual(reports[0].workoutsCount, 1)
-        XCTAssertEqual(reports[0].compliance, 0.5, accuracy: 0.001)
+        XCTAssertEqual(reports[0].totalDeficitKcal, 1_700)
+        XCTAssertEqual(reports[0].mealsCount, 9)
+        XCTAssertEqual(reports[0].workoutsCount, 2)
+        XCTAssertEqual(reports[0].compliance, 2.0 / 3.0, accuracy: 0.001)
     }
 
     func testMissingDaysRemainExplicitInsteadOfInventingMetrics() throws {
@@ -69,8 +71,12 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
 
         XCTAssertFalse(snapshot.hasData)
         XCTAssertEqual(snapshot.points.count, 7)
-        XCTAssertTrue(snapshot.points.allSatisfy { !$0.hasData && $0.deficitKcal == 0 })
-        XCTAssertEqual(snapshot.totalDeficitKcal, 0)
+        XCTAssertTrue(snapshot.points.allSatisfy { !$0.hasData && $0.deficitKcal == nil })
+        XCTAssertNil(snapshot.totalDeficitKcal)
+        XCTAssertNil(snapshot.averageDailyDeficitKcal)
+        XCTAssertNil(snapshot.projectedWeightLossKg)
+        XCTAssertEqual(snapshot.energyCoverage.missingDays, 7)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<WeeklyReport>()).isEmpty)
     }
 
     func testUnavailableAndLegacyRecomputeDaysAreExcludedFromEnergyTotals() throws {
@@ -92,7 +98,7 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(snapshot.recordedDays, 1)
-        XCTAssertEqual(snapshot.totalDeficitKcal, 300)
+        XCTAssertEqual(try XCTUnwrap(snapshot.totalDeficitKcal), 300)
         let pointsByDay = Dictionary(uniqueKeysWithValues: snapshot.points.map { ($0.date, $0) })
         let today = calendar.startOfDay(for: reference)
         let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
@@ -119,9 +125,12 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
             fatG: 60,
             carbsG: 180,
             mealCount: meals,
-            workoutCount: workouts
+            workoutCount: workouts,
+            energyQuality: "observed",
+            dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true}"#,
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "weekly-test-\(date.timeIntervalSince1970)"
         )
-        metric.energyQuality = "observed"
         // DailyMetrics normalizes with Calendar.current. Pin the stored value to
         // this test's calendar so the assertions remain timezone-independent.
         metric.date = calendar.startOfDay(for: date)

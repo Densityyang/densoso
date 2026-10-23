@@ -28,14 +28,17 @@ sample-index traversal uses stable, bounded 400-row pages; targeted UUID
 membership queries are limited to 64 IDs, and deletion cleanup collects target
 rows before changing the paged result set.
 DailyMetrics fingerprints include source-record revisions, only HealthKit
-cursors covering the projected day, the effective profile and goal revisions,
-and the calorie-accounting algorithm version. Both projection entry points
-share the same fingerprint comparison and skip writes when inputs are unchanged;
-pending legacy rows still run through projection. Daily-brief cache versions
+cursors covering the projected day, profile and goal revisions effective at the
+projection's `asOf` time, and a dedicated daily-projection algorithm version.
+Historical days use their end boundary; the current day uses the current time.
+Both projection entry points share the same fingerprint comparison and skip
+writes when inputs are unchanged; pending legacy rows still run through
+projection. Daily-brief cache versions
 include the recommendation-policy version, while DailyLoop exposes its own
 algorithm version for its on-demand composed snapshot.
-HealthIntelligenceReadModel pages daily meal protein, weight and workout history
-inside its bounded date window.
+HealthIntelligenceReadModel reads intake, deficit and nutrient values through
+the shared DailyMetrics read model; it continues to page weight and workout
+history inside its bounded date window.
 The `Health.StateRefresh` Instruments interval covers the explicit local
 read/compute/cache operation and contains no provider/network request.
 Daily-loop plan loading pages stored plan events and retains only active sessions
@@ -48,18 +51,20 @@ deleted or unknown summaries.
 HealthKit stream failures retain a safe `HealthKitSyncError` diagnostic with
 the stream, descriptor code/reason, and request ID; raw underlying error text
 is omitted.
-Historical DailyMetrics recompute scans only the existing `requiresRecompute`
-rows in the most recent 90 local days. It preflights the effective profile's
-valid DOB and that day's `WeightTimeline` result before calling the sole
-`DailyMetricsProjector`; complete HealthKit basal/active values cannot bypass
-either missing prerequisite. Ineligible rows surface no expenditure estimate;
-the row and `requiresRecompute` flag stay unchanged, so legacy values are not
-shown and no value is invented. The background batch projects at most ten eligible
-days, saves each completed row before continuing, and yields between rows so
-BGAppRefresh cancellation stops later work. Remaining eligible days request an
-earlier retry; a restart can resume from rows whose flag is still set. No schema
-field or migration is needed. Ordinary reproject callers use the same gate for
-pending historical rows while preserving current-day behavior.
+Historical DailyMetrics recompute scans only `requiresRecompute` rows in the
+most recent 90 local days. A shared policy checks the effective profile, the
+algorithm-required demographic fields, and the latest weight at the target
+day's `asOf` time; complete HealthKit basal/active values do not bypass these
+historical prerequisites. Ordinary reprojects also apply the policy to new
+historical days, persisting them as unavailable and pending when inputs are
+missing. Same-source pending rows are not rewritten on every refresh, and a
+later eligible profile/weight change alters the fingerprint so recomputation can
+resume. The current day resolves inputs at the current time, including profile
+or weight entries created after midnight. The background batch projects at most
+ten eligible days, saves each completed row before continuing, and yields
+between rows so BGAppRefresh cancellation stops later work. Remaining eligible
+days request an earlier retry; a restart can resume from rows whose flag is
+still set. No schema field or migration is needed.
 BGAppRefreshTask expiration stops later refresh stages, and its completion box
 reports completion once while preventing a late expiration from cancelling
 subsequent work.

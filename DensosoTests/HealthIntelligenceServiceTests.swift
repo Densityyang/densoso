@@ -53,7 +53,11 @@ final class HealthIntelligenceServiceTests: XCTestCase {
             fatG: 20,
             carbsG: 60,
             mealCount: 1,
-            workoutCount: 0
+            workoutCount: 0,
+            energyQuality: "observed",
+            dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true}"#,
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "health-intelligence-fixture"
         )
         context.insert(metric)
         context.insert(WeightRecord(
@@ -89,7 +93,12 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         XCTAssertEqual(unchanged.payloadData, firstPayload)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyBriefRecord>()), 1)
 
-        metric.deficitKcal = 900
+        metric.totalExpenditureKcal = 2_400
+        metric.expenditureEnergyLowKcal = 2_400
+        metric.expenditureEnergyLikelyKcal = 2_400
+        metric.expenditureEnergyHighKcal = 2_400
+        metric.deficitKcal = 1_900
+        metric.sourceFingerprint = "health-intelligence-fixture-updated"
         try context.save()
         _ = try await service.refresh(asOf: reference)
         let changed = try XCTUnwrap(context.fetch(FetchDescriptor<DailyBriefRecord>()).first(where: { $0.dayKey == key }))
@@ -130,7 +139,11 @@ final class HealthIntelligenceServiceTests: XCTestCase {
                 fatG: 50,
                 carbsG: 180,
                 mealCount: 1,
-                workoutCount: 0
+                workoutCount: 0,
+                energyQuality: "observed",
+                dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true}"#,
+                projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+                sourceFingerprint: "weekly-health-intelligence-\(day.timeIntervalSince1970)"
             ))
         }
         try context.save()

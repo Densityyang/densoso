@@ -22,21 +22,66 @@ final class EnergyAccountingTests: XCTestCase {
     func testMissingHealthKitComponentUsesExplicitProfileEstimate() throws {
         let profile = effectiveProfile()
 
-        let result = try XCTUnwrap(
-            EnergyAccounting.expenditure(
-                observedBasalEnergyKcal: 1_420,
-                observedActiveEnergyKcal: nil,
-                profile: profile,
-                effectiveWeightKg: 60
-            )
+        let result = EnergyAccounting.calculate(
+            observedBasalEnergyKcal: 1_420,
+            observedActiveEnergyKcal: nil,
+            profile: profile,
+            effectiveWeightKg: 60
+        )
+        let total = try XCTUnwrap(result.expenditure)
+        let basal = try XCTUnwrap(result.basalComponent)
+        let active = try XCTUnwrap(result.activeComponent)
+
+        XCTAssertEqual(basal.source, .observed)
+        XCTAssertEqual(basal.likely, 1_420)
+        XCTAssertEqual(active.source, .estimated)
+        XCTAssertEqual(total.source, .estimated)
+        XCTAssertEqual(total.confidence, .low)
+        XCTAssertEqual(total.low, basal.low + active.low, accuracy: 0.001)
+        XCTAssertEqual(total.likely, basal.likely + active.likely, accuracy: 0.001)
+        XCTAssertEqual(total.high, basal.high + active.high, accuracy: 0.001)
+    }
+
+    func testObservedActiveEnergyIsAddedToEstimatedBasalOnlyOnce() throws {
+        let result = EnergyAccounting.calculate(
+            observedBasalEnergyKcal: nil,
+            observedActiveEnergyKcal: 510,
+            profile: effectiveProfile(),
+            effectiveWeightKg: 60
         )
 
-        XCTAssertEqual(result.source, .estimated)
-        XCTAssertEqual(result.confidence, .low)
-        XCTAssertLessThan(result.low, result.likely)
-        XCTAssertGreaterThan(result.high, result.likely)
-        XCTAssertEqual(result.low, result.likely * (1 - EnergyAccounting.fallbackRelativeUncertainty), accuracy: 0.001)
-        XCTAssertEqual(result.high, result.likely * (1 + EnergyAccounting.fallbackRelativeUncertainty), accuracy: 0.001)
+        let total = try XCTUnwrap(result.expenditure)
+        let basal = try XCTUnwrap(result.basalComponent)
+        let active = try XCTUnwrap(result.activeComponent)
+        XCTAssertEqual(basal.source, .estimated)
+        XCTAssertEqual(active.source, .observed)
+        XCTAssertEqual(active.likely, 510)
+        XCTAssertEqual(total.likely, basal.likely + 510, accuracy: 0.001)
+        XCTAssertEqual(total.source, .estimated)
+    }
+
+    func testObservedBasalWithoutEstimateableActiveRemainsPartial() throws {
+        let profile = EffectiveProfile(
+            profileKey: "primary",
+            sourceRevisionID: UUID(),
+            sourceEffectiveFrom: date(2025, 1, 1),
+            effectiveAt: date(2025, 6, 15),
+            dateOfBirth: date(1990, 6, 15),
+            biologicalSex: .female,
+            heightCm: 165,
+            weightKg: 60,
+            activityLevel: .unspecified
+        )
+        let result = EnergyAccounting.calculate(
+            observedBasalEnergyKcal: 1_420,
+            observedActiveEnergyKcal: nil,
+            profile: profile,
+            effectiveWeightKg: 60
+        )
+
+        XCTAssertNil(result.expenditure)
+        XCTAssertEqual(result.basalComponent?.source, .observed)
+        XCTAssertNil(result.activeComponent)
     }
 
     func testMissingProfileOrEffectiveWeightDoesNotInventExpenditure() {

@@ -305,8 +305,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                 try injectFailure(.afterRecord)
 
                 if let affectedDate {
-                    try reprojectDailyHealthSnapshot(on: affectedDate)
                     try reprojectDaily(on: affectedDate)
+                    try reprojectDailyHealthSnapshot(on: affectedDate)
                     try reprojectWeek(containing: affectedDate)
                 }
                 try injectFailure(.afterProjection)
@@ -560,6 +560,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         // DailyMetricsProjector is MainActor-isolated and cannot be awaited here.
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: date)
+        let now = Date()
+        let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
         let projectionInputs = try DailyMetricsProjectionInputReader.read(on: day, in: modelContext)
         let primaryProfileKey = "primary"
         let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
@@ -569,22 +571,22 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let effectiveRevision = try EffectiveProfileRevisionReader.latest(
             in: modelContext,
             profileKey: profileKey,
-            effectiveAt: day
+            effectiveAt: asOf
         )
         let effectiveProfile: EffectiveProfile?
         if let effectiveRevision {
             effectiveProfile = EffectiveProfileResolver(
                 profileKey: profileKey,
                 revisions: [domainRevision(effectiveRevision)]
-            ).profile(at: day)
+            ).profile(at: asOf)
         } else {
             effectiveProfile = nil
         }
-        let localWeight = try LocalWeightObservationReader.latestObservation(in: modelContext, effectiveAt: day)
-        let healthKitWeight = try HealthKitWeightObservationReader.latestObservation(in: modelContext, effectiveAt: day)
+        let localWeight = try LocalWeightObservationReader.latestObservation(in: modelContext, effectiveAt: asOf)
+        let healthKitWeight = try HealthKitWeightObservationReader.latestObservation(in: modelContext, effectiveAt: asOf)
         let weightObservations = [localWeight, healthKitWeight].compactMap { $0 }
         let effectiveWeight = WeightTimeline(observations: weightObservations).effectiveWeight(
-            at: day,
+            at: asOf,
             profileWeightKg: effectiveRevision?.weightKg,
             profileEffectiveFrom: effectiveRevision?.effectiveFrom
         )
@@ -592,17 +594,6 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         var metricsDescriptor = FetchDescriptor<DailyMetrics>(predicate: metricsPredicate)
         metricsDescriptor.fetchLimit = 1
         let existingMetrics = try modelContext.fetch(metricsDescriptor).first
-        if let existingMetrics,
-           existingMetrics.requiresRecompute,
-           day < calendar.startOfDay(for: Date()),
-           !HistoricalMetricsEligibilityPolicy.hasValidInputs(
-               profile: effectiveProfile,
-               weight: effectiveWeight,
-               on: day,
-               calendar: calendar
-           ) {
-            return
-        }
 
         let targetDayKey = dayKey(for: day)
         let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == targetDayKey }
@@ -614,6 +605,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let healthSnapshot = try snapshotRecord.map { try decoder.decode(DailyHealthSnapshot.self, from: $0.payloadData) }
         let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
             on: day,
+            asOf: asOf,
             inputs: projectionInputs,
             profileRevision: effectiveRevision,
             weightObservations: weightObservations,
@@ -631,15 +623,32 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             exerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
             context: fingerprintContext
         )
+        let historicalInputsMissing = day < calendar.startOfDay(for: now)
+            && !HistoricalMetricsEligibilityPolicy.hasValidInputs(
+                profile: effectiveProfile,
+                weight: effectiveWeight,
+                asOf: asOf,
+                calendar: calendar
+            )
         if let existingMetrics,
-           DailyMetricsProjectionFingerprint.isCurrent(
+           DailyMetricsProjectionFingerprint.sourceMatches(
                storedFingerprint: existingMetrics.sourceFingerprint,
                storedAlgorithmVersion: existingMetrics.projectionVersion,
-               requiresRecompute: existingMetrics.requiresRecompute,
                expectedFingerprint: expectedFingerprint,
                expectedAlgorithmVersion: fingerprintContext.algorithmVersion
            ) {
-            return
+            if historicalInputsMissing && existingMetrics.requiresRecompute {
+                HistoricalMetricsEligibilityPolicy.markPendingIfHistoricalInputsAreMissing(
+                    existingMetrics,
+                    on: day,
+                    now: now,
+                    profile: effectiveProfile,
+                    weight: effectiveWeight,
+                    calendar: calendar
+                )
+                return
+            }
+            if !historicalInputsMissing && !existingMetrics.requiresRecompute { return }
         }
         let projected = CaloricEngine.computeDailyMetrics(
             date: day,
@@ -652,6 +661,14 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             healthKitSteps: healthSnapshot?.stepCountForProjection,
             healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
             fingerprintContext: fingerprintContext
+        )
+        HistoricalMetricsEligibilityPolicy.markPendingIfHistoricalInputsAreMissing(
+            projected,
+            on: day,
+            now: now,
+            profile: effectiveProfile,
+            weight: effectiveWeight,
+            calendar: calendar
         )
         if let existingMetrics {
             copyProjectedMetrics(projected, to: existingMetrics)
@@ -722,10 +739,29 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let calendar = Calendar.current
         guard let interval = calendar.dateInterval(of: .weekOfYear, for: date) else { return }
         let weekStart = calendar.startOfDay(for: interval.start)
+        let today = calendar.startOfDay(for: Date())
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) ?? today
+        let reportEnd = min(interval.end, tomorrow)
+        let expectedDays = max(calendar.dateComponents([.day], from: weekStart, to: reportEnd).day ?? 0, 0)
         let metricsPredicate = #Predicate<DailyMetrics> {
             $0.date >= interval.start && $0.date < interval.end
         }
         let metrics = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricsPredicate))
+            .filter { $0.date >= weekStart && $0.date < reportEnd }
+        let readResults = metrics.map(DailyMetricsReadModelMapper.make)
+        let energy = DailyMetricsUsabilityPolicy.aggregateSignedRanges(
+            readResults.map(\.deficit),
+            expectedDays: expectedDays
+        )
+        let protein = DailyMetricsUsabilityPolicy.aggregateNumbers(
+            readResults.map(\.proteinG), expectedDays: expectedDays, average: true
+        )
+        let fat = DailyMetricsUsabilityPolicy.aggregateNumbers(
+            readResults.map(\.fatG), expectedDays: expectedDays, average: true
+        )
+        let carbs = DailyMetricsUsabilityPolicy.aggregateNumbers(
+            readResults.map(\.carbsG), expectedDays: expectedDays, average: true
+        )
         let primaryProfileKey = "primary"
         let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
         var profileDescriptor = FetchDescriptor<UserProfile>(predicate: profilePredicate)
@@ -736,30 +772,50 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         var reportDescriptor = FetchDescriptor<WeeklyReport>(predicate: reportPredicate)
         reportDescriptor.fetchLimit = 1
         let existing = try modelContext.fetch(reportDescriptor).first
+        let complete = expectedDays > 0
+            && energy.coverage.availableDays == expectedDays
+            && protein.coverage.availableDays == expectedDays
+            && fat.coverage.availableDays == expectedDays
+            && carbs.coverage.availableDays == expectedDays
+        guard complete,
+              let totalDeficit = energy.total.value?.likely,
+              totalDeficit.isFinite,
+              totalDeficit > Double(Int.min),
+              totalDeficit < Double(Int.max),
+              let averageProtein = protein.total.value,
+              let averageFat = fat.total.value,
+              let averageCarbs = carbs.total.value else {
+            if let existing { modelContext.delete(existing) }
+            return
+        }
+
         let report = existing
             ?? WeeklyReport(weekStartDate: weekStart, weekEndDate: interval.end.addingTimeInterval(-1))
         if existing == nil { modelContext.insert(report) }
-        let count = metrics.count
-        let totalDeficit = metrics.reduce(0) { $0 + $1.deficitKcal }
+        let validRows = readResults.filter { $0.deficit.value != nil }
         report.weekEndDate = interval.end.addingTimeInterval(-1)
-        report.totalDeficitKcal = totalDeficit
-        report.avgDailyDeficitKcal = count == 0 ? 0 : Double(totalDeficit) / Double(count)
-        report.projectedWeightLossKg = Double(totalDeficit) / 7_700
-        report.avgProteinG = average(metrics.map(\.proteinG))
-        report.avgFatG = average(metrics.map(\.fatG))
-        report.avgCarbsG = average(metrics.map(\.carbsG))
-        report.bestDay = metrics.max(by: { $0.deficitKcal < $1.deficitKcal })?.date
-        report.worstDay = metrics.min(by: { $0.deficitKcal < $1.deficitKcal })?.date
+        report.totalDeficitKcal = Int(totalDeficit.rounded())
+        report.avgDailyDeficitKcal = totalDeficit / Double(expectedDays)
+        report.projectedWeightLossKg = totalDeficit / 7_700
+        report.avgProteinG = averageProtein
+        report.avgFatG = averageFat
+        report.avgCarbsG = averageCarbs
+        report.bestDay = validRows.max {
+            ($0.deficit.value?.likely ?? -Double.infinity) < ($1.deficit.value?.likely ?? -Double.infinity)
+        }?.date
+        report.worstDay = validRows.min {
+            ($0.deficit.value?.likely ?? Double.infinity) < ($1.deficit.value?.likely ?? Double.infinity)
+        }?.date
         report.mealsCount = metrics.reduce(0) { $0 + $1.mealCount }
         report.workoutsCount = metrics.reduce(0) { $0 + $1.workoutCount }
-        report.compliance = count == 0 ? 0 : Double(metrics.filter { $0.deficitKcal >= target }.count) / Double(count)
+        report.compliance = Double(validRows.filter { ($0.deficit.value?.likely ?? -Double.infinity) >= Double(target) }.count)
+            / Double(expectedDays)
         report.generatedAt = Date()
     }
 
     private func reprojectDailyHealthSnapshot(on date: Date) throws {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: date)
-        let meals = try DailyMetricsProjectionInputReader.meals(on: day, in: modelContext)
         let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
         let weightPredicate = #Predicate<WeightRecord> {
             $0.measuredAt >= day && $0.measuredAt < nextDay
@@ -782,19 +838,12 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let existingSnapshot = try existingRecord.map { try decoder.decode(DailyHealthSnapshot.self, from: $0.payloadData) }
 
-        let intakeRange: EstimateRange?
-        if meals.isEmpty {
-            intakeRange = nil
-        } else {
-            intakeRange = try EstimateRange.sum(
-                meals.map {
-                    try EstimateRange(
-                        low: $0.energyLowKcal,
-                        likely: $0.energyLikelyKcal,
-                        high: $0.energyHighKcal
-                    )
-                }
-            )
+        let metricsPredicate = #Predicate<DailyMetrics> { $0.date == day }
+        let projectedMetrics = try modelContext.fetch(
+            FetchDescriptor<DailyMetrics>(predicate: metricsPredicate)
+        ).first
+        let intakeRange = projectedMetrics.flatMap {
+            DailyMetricsReadModelMapper.make($0).intake.value
         }
         let snapshot = DailyHealthSnapshot(
             dayStart: day,
@@ -970,10 +1019,6 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
 
     private func injectFailure(_ point: ConfirmationFaultPoint) throws {
         if faultPoint == point { throw ConfirmationInjectedFailure.fault(point) }
-    }
-
-    private func average(_ values: [Double]) -> Double {
-        values.isEmpty ? 0 : values.reduce(0, +) / Double(values.count)
     }
 
 }
