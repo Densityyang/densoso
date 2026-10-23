@@ -380,7 +380,9 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(result.energyQuality, "unavailable")
         XCTAssertEqual(result.totalExpenditureKcal, 0)
         XCTAssertEqual(result.expenditureEnergyLikelyKcal, 0)
-        XCTAssertEqual(result.sourceFingerprint, "legacy-pending")
+        XCTAssertNotEqual(result.sourceFingerprint, "legacy-pending")
+        XCTAssertFalse(result.sourceFingerprint.isEmpty)
+        XCTAssertEqual(result.projectionVersion, AlgorithmVersions.dailyMetricsProjection)
     }
 
     func testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision() async throws {
@@ -850,7 +852,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyMetrics>()), 1)
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyReport>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyReport>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 1)
         let snapshotRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
         let decoder = JSONDecoder()

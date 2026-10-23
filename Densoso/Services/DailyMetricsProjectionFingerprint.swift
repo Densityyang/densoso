@@ -82,14 +82,9 @@ enum DailyMetricsProjectionFingerprint {
                 ].joined(separator: ":")
             }
 
-        let dayKey = Self.dayKey(for: day)
-        let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == dayKey }
-        var snapshotDescriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: snapshotPredicate)
-        snapshotDescriptor.fetchLimit = 1
-        let snapshot = try modelContext.fetch(snapshotDescriptor).first
-        let snapshotRevision = snapshot.map {
-            "daily-health-snapshot:\($0.dayKey):\($0.algorithmVersion):\($0.snapshotHash)"
-        }
+        // HealthKit energy/steps/exercise values are fingerprinted by CaloricEngine's
+        // canonical inputs. Hashing the entire daily cache would include derived
+        // intake/weight mirrors written after the metric projection transaction.
         let weightRevisions = weightObservations.map {
             "weight:\($0.id.uuidString.lowercased()):\($0.measuredAt.timeIntervalSince1970):\($0.kilograms):\($0.source.rawValue):\($0.healthKitSyncIdentifier ?? "none")"
         }
@@ -101,7 +96,7 @@ enum DailyMetricsProjectionFingerprint {
         }
 
         return DailyMetricsProjectionFingerprintContext(
-            sourceRecordRevisions: inputs.sourceRecordRevisions + weightRevisions + [snapshotRevision].compactMap { $0 },
+            sourceRecordRevisions: inputs.sourceRecordRevisions + weightRevisions,
             healthKitCursorRevisions: cursors,
             profileRevision: profileToken,
             goalRevision: goalToken,

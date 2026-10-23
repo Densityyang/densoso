@@ -1483,7 +1483,11 @@ final class HealthRepositoryTests: XCTestCase {
         )
         XCTAssertEqual(snapshot.activeEnergyKcal, 640)
         XCTAssertEqual(snapshot.healthReadStates?[HealthMetricID.activeEnergy.rawValue], .available)
-        XCTAssertEqual(try context.fetch(FetchDescriptor<DailyMetrics>()).first?.activeCaloriesKcal, 640)
+        let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(metric.activeEnergyKcal, 640)
+        XCTAssertEqual(metric.activeCaloriesKcal, 0)
+        XCTAssertEqual(metric.energyQuality, "unavailable")
+        XCTAssertTrue(metric.requiresRecompute)
     }
 
     func testHealthSnapshotUpsertUpdatesOnlyTheMatchingDayKey() throws {
