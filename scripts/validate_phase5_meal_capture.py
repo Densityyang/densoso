@@ -302,6 +302,11 @@ def main() -> int:
             errors.append("Gate 5 manifest must state protected OCR was not used")
         if manifest.get("fieldMeasurementClaimed") is not False:
             errors.append("synthetic portion fixtures cannot claim field measurements")
+        if manifest.get("fieldBenchmark") != {
+            "status": "BLOCKED",
+            "reason": "MISSING_EVIDENCE",
+        }:
+            errors.append("Gate 5 field benchmark must remain BLOCKED/MISSING_EVIDENCE without field data")
         thresholds = manifest.get("thresholds", {})
         expected = {
             "exactAliasAccuracy": 1.0,
@@ -401,6 +406,7 @@ def main() -> int:
     require_text(
         ROOT / "docs/gates/gate-05-meal-capture.md",
         [
+            "BLOCKED/MISSING_EVIDENCE",
             "qwen3.7-flash-2026-07-15",
             "strict JSON Schema",
             "response contract",
@@ -421,7 +427,8 @@ def main() -> int:
         [
             "meal-capture:", "needs: speech", "gate-05-meal-capture",
             "validate_phase5_meal_capture.py", "Gate05MealCaptureTests.xcresult",
-            "gate-05-meal-capture-results",
+            "gate-05-meal-capture-results", "gate05-execution-summary.json",
+            "continue-on-error: true", "Record Gate 5 execution status",
             "food-catalog.json", "Fixtures/Gate05/Providers/Qwen",
             "swift test --package-path Packages/DensosoDomain 2>&1 | tee gate05-domain.log",
             "-only-testing:DensosoTests/MealCaptureApplicationServiceTests",
@@ -429,23 +436,31 @@ def main() -> int:
         errors,
     )
 
-    if errors:
-        for error in errors:
-            print(f"ERROR: {error}", file=sys.stderr)
-        return 1
-
     report = {
-        "status": "pass",
+        "status": "fail" if errors else "pass",
+        "statusScope": "static contracts and synthetic fixtures only",
+        "failedAssertions": len(errors),
+        "errors": errors,
         "catalogItems": len(catalog),
         "resolutionCases": resolution_count,
         "portionReferences": portion_count,
         "providerFixtures": len(fixture_paths),
         "liveNetworkCalls": 0,
         "fieldMeasurementClaimed": False,
+        "fieldBenchmark": (manifest or {}).get(
+            "fieldBenchmark",
+            {"status": "BLOCKED", "reason": "MISSING_EVIDENCE"},
+        ),
         "protectedOCRRead": False,
     }
     if args.report:
         Path(args.report).write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+
+    if errors:
+        for error in errors:
+            print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+
     print("Phase 5 meal-capture static contracts: PASS")
     return 0
 

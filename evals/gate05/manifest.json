@@ -3,6 +3,10 @@
   "source": "synthetic-public",
   "protectedOCRSourceUsed": false,
   "fieldMeasurementClaimed": false,
+  "fieldBenchmark": {
+    "status": "BLOCKED",
+    "reason": "MISSING_EVIDENCE"
+  },
   "resolutionCaseCount": 100,
   "portionReferenceCount": 50,
   "sha256": {

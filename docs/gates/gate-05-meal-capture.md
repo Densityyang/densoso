@@ -126,6 +126,8 @@ protected OCR source. It contains 100 expanded food-resolution cases and 50
 synthetic calibration references. The latter exercise interval coverage math but
 are not represented as real kitchen-scale measurements. Real photo and scale
 field validation remains an evidence gap and does not remove `blocked-by-signing`.
+The field benchmark status is `BLOCKED/MISSING_EVIDENCE`; passing these
+synthetic checks is only evidence for the deterministic software contracts.
 The current 31-row app seed has only one `raw` and one `cooked` food entry; the
 remaining 29 are `unknown`. Synthetic resolver coverage therefore does not prove
 production-catalog raw/cooked coverage. Open-photo Qwen remains unavailable until
@@ -134,17 +136,20 @@ both real-photo quality and catalog coverage are independently evidenced.
 If any quality threshold fails, open-photo Qwen vision must remain disabled;
 barcode, OCR, voice and text paths may continue.
 
-## Evidence record
+## Historical V3 Gate 5 evidence record
 
-| Evidence | Required result | Current result |
+This table records an earlier V3 review snapshot. It is not evidence for the
+current `codex/ai-native-health-loop` branch or a PR associated with that branch.
+
+| Evidence | Required result | Recorded result |
 | --- | --- | --- |
-| PR head | Phase 5 implementation on Draft PR #14 | `e67a444c30640da34c23becdc1f63f5f4023c5b8` |
-| Dependencies | Gates 1–4 succeed on the same head | [run 38504626897](https://github.com/Densityyang/densoso/actions/runs/38504626897) — Gates 1–5 passed |
+| Historical head | Separate V3 Phase 5 implementation | `e67a444c30640da34c23becdc1f63f5f4023c5b8` |
+| Historical dependencies | Gates 1–4 succeed on that head | [run 38504626897](https://github.com/Densityyang/densoso/actions/runs/38504626897) — Gates 1–5 passed |
 | Resolver | alias/raw-cooked/top-1/top-3 thresholds | Passed in Gate 5 tests |
 | Portion | 50-case coverage/outside thresholds | Passed in Gate 5 tests |
 | Vision | orientation, GPS/EXIF/XMP/MakerNote, GTIN/UPC-E, OCR and Qwen fixture contracts | Passed in Gate 5 tests |
 | Confirmation | zero pre-confirm writes; atomic Meal/receipt/outbox | Passed in Gate 5 tests |
 | Privacy | no raw image or protected OCR source use | Passed in Gate 5 tests; protected local OCR files were not read |
 | Artifact | `.xcresult`, logs, fixture summary and eval manifest | [gate-05-meal-capture-results, artifact 11869028384](https://github.com/Densityyang/densoso/actions/runs/38504626897/artifacts/11869028384) |
-| Field evidence | real photos and kitchen-scale samples | Not claimed |
-| User decision | Approve or reject entry to Phase 6 | Approved by user; Phase 6 may proceed |
+| Field benchmark | real photos and kitchen-scale samples | `BLOCKED/MISSING_EVIDENCE` |
+| Historical V3 decision | Entry to Phase 6 on that separate review | Approved in the V3 review; does not describe this branch |

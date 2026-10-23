@@ -563,23 +563,32 @@ jobs:
           echo "GATE05_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate05MealCaptureTests.xcresult" >> "$GITHUB_ENV"
 
       - name: Validate Phase 5 fixtures and contracts
+        id: validate
+        continue-on-error: true
         run: |
           python3 -m py_compile scripts/validate_phase5_meal_capture.py
           python3 scripts/validate_phase5_meal_capture.py \
             --report gate05-fixture-summary.json
 
       - name: Test cumulative domain contracts
+        id: domain_tests
         run: |
           set -o pipefail
           swift test --package-path Packages/DensosoDomain 2>&1 | tee gate05-domain.log
 
       - name: Install XcodeGen
+        id: install_xcodegen
+        if: always()
         run: brew install xcodegen
 
       - name: Generate Xcode project
+        id: generate_project
+        if: ${{ always() && steps.install_xcodegen.outcome == 'success' }}
         run: xcodegen generate
 
       - name: Prepare iOS 26 Simulator
+        id: prepare_simulator
+        if: ${{ always() && steps.generate_project.outcome == 'success' }}
         run: |
           set -euo pipefail
           SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
@@ -589,6 +598,8 @@ jobs:
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Test meal capture evaluation privacy and confirmation contracts
+        id: xcode_tests
+        if: ${{ always() && steps.prepare_simulator.outcome == 'success' }}
         run: |
           set -o pipefail
           rm -rf "$GATE05_RESULT_BUNDLE"
@@ -612,11 +623,87 @@ jobs:
             test 2>&1 | tee gate05-meal-capture-tests.log
 
       - name: Export Gate 5 test summary
+        id: export_summary
+        if: ${{ always() && steps.xcode_tests.outcome != 'skipped' }}
         run: |
           set -euo pipefail
           xcrun xcresulttool get test-results summary \
             --path "$GATE05_RESULT_BUNDLE" > gate05-test-summary.json
           grep -q '"result" : "Passed"' gate05-test-summary.json
+
+      - name: Record Gate 5 execution status
+        if: always()
+        env:
+          VALIDATOR_OUTCOME: ${{ steps.validate.outcome }}
+          DOMAIN_TESTS_OUTCOME: ${{ steps.domain_tests.outcome }}
+          XCODEGEN_INSTALL_OUTCOME: ${{ steps.install_xcodegen.outcome }}
+          PROJECT_GENERATION_OUTCOME: ${{ steps.generate_project.outcome }}
+          SIMULATOR_SETUP_OUTCOME: ${{ steps.prepare_simulator.outcome }}
+          XCODE_TESTS_OUTCOME: ${{ steps.xcode_tests.outcome }}
+          TEST_SUMMARY_OUTCOME: ${{ steps.export_summary.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          steps = {
+              "static_contracts": os.environ["VALIDATOR_OUTCOME"],
+              "domain_tests": os.environ["DOMAIN_TESTS_OUTCOME"],
+              "xcodegen_install": os.environ["XCODEGEN_INSTALL_OUTCOME"],
+              "project_generation": os.environ["PROJECT_GENERATION_OUTCOME"],
+              "simulator_setup": os.environ["SIMULATOR_SETUP_OUTCOME"],
+              "xcode_tests": os.environ["XCODE_TESTS_OUTCOME"],
+              "test_summary_export": os.environ["TEST_SUMMARY_OUTCOME"],
+          }
+          evidence_paths = [
+              "gate05-fixture-summary.json",
+              "gate05-domain.log",
+              "gate05-meal-capture-tests.log",
+              "gate05-test-summary.json",
+              "Gate05MealCaptureTests.xcresult",
+          ]
+          evidence = {path: Path(path).exists() for path in evidence_paths}
+          results = {
+              name: {
+                  "status": "PASS" if outcome == "success" else "FAIL" if outcome == "failure" else "NOT RUN",
+                  "outcome": outcome,
+              }
+              for name, outcome in steps.items()
+          }
+          failed = [name for name, result in results.items() if result["status"] == "FAIL"]
+          not_run = [name for name, result in results.items() if result["status"] == "NOT RUN"]
+          report = {
+              "schemaVersion": 1,
+              "gate": "gate-05-meal-capture",
+              "headSha": os.environ.get("GITHUB_SHA"),
+              "runId": os.environ.get("GITHUB_RUN_ID"),
+              "runAttempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "status": "FAIL" if failed or not_run else "PASS",
+              "statusScope": "software contracts and synthetic fixtures only",
+              "fieldBenchmark": {
+                  "status": "BLOCKED",
+                  "reason": "MISSING_EVIDENCE",
+              },
+              "steps": results,
+              "evidenceFiles": evidence,
+              "diagnostics": [
+                  f"Step {name} did not run; inspect the first failed prerequisite in the job log."
+                  for name in not_run
+              ] + [
+                  f"Evidence file missing: {path}"
+                  for path, exists in evidence.items()
+                  if not exists
+              ],
+          }
+          Path("gate05-execution-summary.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if report["status"] != "PASS":
+              sys.exit(1)
+          PY
 
       - name: Upload Gate 5 evidence
         if: always()
@@ -629,6 +716,7 @@ jobs:
             gate05-meal-capture-tests.log
             gate05-test-summary.json
             gate05-fixture-summary.json
+            gate05-execution-summary.json
             docs/gates/gate-05-meal-capture.md
             evals/gate05/manifest.json
             evals/gate05/food-catalog.json
