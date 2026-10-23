@@ -35,6 +35,13 @@ struct DailyMetricsProjectionFingerprintContext: Equatable, Sendable {
 }
 
 enum DailyMetricsProjectionFingerprint {
+    private static let dailyMetricsCursorStreams: Set<String> = [
+        HealthMetricID.activeEnergy.rawValue,
+        HealthMetricID.restingEnergy.rawValue,
+        HealthMetricID.stepCount.rawValue,
+        HealthMetricID.exerciseMinutes.rawValue,
+    ]
+
     static func context(
         on date: Date,
         asOf referenceDate: Date? = nil,
@@ -58,13 +65,13 @@ enum DailyMetricsProjectionFingerprint {
 
         let cursors = try modelContext.fetch(FetchDescriptor<HealthKitImportCursor>())
             .filter { cursor in
+                guard dailyMetricsCursorStreams.contains(cursor.stream) else { return false }
                 guard let lastSuccessfulAt = cursor.lastSuccessfulAt,
                       day <= lastSuccessfulAt else { return false }
                 if let lookbackStart = cursor.lookbackStart {
                     return lookbackStart <= day
                 }
-                return cursor.stream == "workouts"
-                    && inputs.workouts.contains { $0.workoutOrigin == "healthKit" }
+                return false
             }
             .sorted { $0.stream < $1.stream }
             .map { cursor in

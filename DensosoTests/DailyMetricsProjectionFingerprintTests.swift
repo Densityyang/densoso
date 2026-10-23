@@ -131,6 +131,28 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         XCTAssertNotEqual(baseVersionFingerprint, changedAlgorithmFingerprint)
     }
 
+    func testUnrelatedHealthKitCursorDoesNotInvalidateDailyMetricsProjection() throws {
+        let (_, context) = try makeContext()
+        let day = Calendar.current.startOfDay(for: Date())
+        try DailyMetricsProjector.reproject(on: day, in: context)
+        let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        let fingerprint = metric.sourceFingerprint
+        let sentinel = Date(timeIntervalSince1970: 1_234_567)
+        metric.computedAt = sentinel
+        context.insert(HealthKitImportCursor(
+            stream: HealthMetricID.heartRateVariabilitySDNN.rawValue,
+            anchorData: Data([4, 5, 6]),
+            lastSuccessfulAt: Date(),
+            lookbackStart: day.addingTimeInterval(-86_400)
+        ))
+        try context.save()
+
+        try DailyMetricsProjector.reproject(on: day, in: context)
+
+        XCTAssertEqual(metric.sourceFingerprint, fingerprint)
+        XCTAssertEqual(metric.computedAt, sentinel)
+    }
+
     func testWorkoutEnergyAndProvenanceChangesProjectionFingerprint() {
         let day = Calendar.current.startOfDay(for: Date())
         let workout = WorkoutRecord(
