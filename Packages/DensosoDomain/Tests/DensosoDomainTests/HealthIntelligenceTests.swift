@@ -298,6 +298,34 @@ final class HealthIntelligenceTests: XCTestCase {
         XCTAssertFalse(json.contains("startDate"))
     }
 
+    func testHealthContextAveragesSignedEnergyBalanceAndReportsItsDenominator() throws {
+        let today = try date(2026, 9, 12)
+        let yesterday = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        let summary = HealthIntelligenceEngine(calendar: calendar).makeContextSummary(
+            days: [
+                HealthIntelligenceDay(dayStart: yesterday, dailyDeficitKcal: -100, proteinGrams: 80),
+                HealthIntelligenceDay(dayStart: today, dailyDeficitKcal: 300, proteinGrams: 100),
+            ],
+            asOf: today,
+            goals: nil,
+            recommendations: []
+        )
+
+        XCTAssertEqual(summary.sevenDay.averageDailyDeficitKcal, 100)
+        XCTAssertEqual(summary.sevenDay.averageProteinGrams, 90)
+        XCTAssertEqual(summary.sevenDay.coverageDays["dailyDeficitKcal"], 2)
+        XCTAssertEqual(summary.sevenDay.coverageDays["proteinGrams"], 2)
+
+        let surplusOnly = HealthIntelligenceEngine(calendar: calendar).makeContextSummary(
+            days: [HealthIntelligenceDay(dayStart: today, dailyDeficitKcal: -250)],
+            asOf: today,
+            goals: nil,
+            recommendations: []
+        )
+        XCTAssertEqual(surplusOnly.sevenDay.averageDailyDeficitKcal, -250)
+        XCTAssertEqual(surplusOnly.sevenDay.coverageDays["dailyDeficitKcal"], 1)
+    }
+
     func testWeightTrendRequiresFourValidDaysInEachSevenDayWindow() throws {
         let engine = HealthIntelligenceEngine(calendar: calendar)
         let today = try date(2026, 8, 30)

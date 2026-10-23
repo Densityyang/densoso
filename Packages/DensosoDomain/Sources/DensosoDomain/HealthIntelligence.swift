@@ -240,7 +240,7 @@ public struct HealthIntelligenceDay: Codable, Equatable, Sendable {
         self.dayStart = dayStart
         self.energyIntakeKcal = Self.valid(energyIntakeKcal)
         self.proteinGrams = Self.valid(proteinGrams)
-        self.dailyDeficitKcal = Self.valid(dailyDeficitKcal)
+        self.dailyDeficitKcal = Self.validSigned(dailyDeficitKcal)
         self.activeEnergyKcal = Self.valid(activeEnergyKcal)
         self.stepCount = Self.valid(stepCount)
         self.exerciseMinutes = Self.valid(exerciseMinutes)
@@ -257,6 +257,10 @@ public struct HealthIntelligenceDay: Codable, Equatable, Sendable {
 
     private static func valid(_ value: Double?) -> Double? {
         value.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+    }
+
+    private static func validSigned(_ value: Double?) -> Double? {
+        value.flatMap { $0.isFinite ? $0 : nil }
     }
 }
 
@@ -977,6 +981,8 @@ public struct HealthIntelligenceEngine: Sendable {
                 "steps": coverage { $0.stepCount != nil },
                 "activeEnergy": coverage { $0.activeEnergyKcal != nil },
                 "energyIntake": coverage { $0.energyIntakeKcal != nil },
+                "dailyDeficitKcal": coverage { $0.dailyDeficitKcal != nil },
+                "proteinGrams": coverage { $0.proteinGrams != nil },
                 "bodyMass": coverage { !$0.weightSamplesKilograms.isEmpty },
             ],
             averageSleepMinutes: Self.average(sleeps),
