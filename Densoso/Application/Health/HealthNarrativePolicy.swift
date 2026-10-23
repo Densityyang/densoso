@@ -70,8 +70,15 @@ enum HealthNarrativePolicy {
     }
 
     static func deterministicFallback(_ context: HealthNarrativeContext?) -> String {
-        guard let context, context.aggregateSummary != nil, let state = context.healthState else {
+        guard let context else {
             return "目前没有可用的本地健康数据；数据空缺不代表零，我不会据此猜测。"
+        }
+        let subjectiveSummary = context.subjectiveContext?.entries.first.map(renderSubjectiveSummary)
+        guard context.aggregateSummary != nil, let state = context.healthState else {
+            guard let subjectiveSummary else {
+                return "目前没有可用的本地健康数据；数据空缺不代表零，我不会据此猜测。"
+            }
+            return "\(subjectiveSummary)\n\n目前缺少足够的客观健康数据来判断恢复情况。"
         }
         guard !context.allowedEvidenceKeys.isEmpty else {
             return "目前缺少可引用的健康证据，暂不生成个性化解读；数据空缺不代表零。"
@@ -91,7 +98,26 @@ enum HealthNarrativePolicy {
             .filter(isNarrativeTextSafe)
             .prefix(2)
             .map { "• \($0)" }
-        return ([summary] + safeTitles).joined(separator: "\n\n")
+        return ([summary] + [subjectiveSummary].compactMap { $0 } + safeTitles).joined(separator: "\n\n")
+    }
+
+    private static func renderSubjectiveSummary(_ entry: SubjectiveHealthEntry) -> String {
+        let energy = switch entry.energy {
+        case .low: "偏低"
+        case .typical: "一般"
+        case .high: "较充足"
+        }
+        let stress = switch entry.stress {
+        case .low: "较轻"
+        case .typical: "一般"
+        case .elevated: "偏高"
+        }
+        let sleep = switch entry.subjectiveSleep {
+        case .poor: "较差"
+        case .fair: "一般"
+        case .good: "较好"
+        }
+        return "根据你最近的自述，精力\(energy)、压力\(stress)、主观睡眠\(sleep)。这是主观报告，不是客观测量或医学判断。"
     }
 
     private static func isNarrativeTextSafe(_ text: String) -> Bool {

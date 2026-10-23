@@ -86,6 +86,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "DailyMetricsProjectionFingerprintTests.testUnrelatedHealthKitCursorDoesNotInvalidateDailyMetricsProjection",
                 "DailyMetricsProjectionFingerprintTests.testHealthKitSnapshotValueChangesProjectionFingerprint",
                 "DailyMetricsProjectionFingerprintTests.testWorkoutEnergyAndProvenanceChangesProjectionFingerprint",
+                "DailyCheckInConfirmationTests.testSameDayCheckInsAppendIdempotentlyAndSubjectiveReadUsesLatest",
+                "HealthNarrativeTests.testSubjectiveCheckInsRemainSeparateAndAddTheirOwnEvidenceKeys",
                 "HealthIntelligenceTests.testHealthContextAveragesSignedEnergyBalanceAndReportsItsDenominator",
                 "DailyLoopSnapshotTests.testMainPRAlgorithmVersionsAreCentralizedAndInvalidateDailyBriefCache",
                 "DailyLoopSnapshotTests.testLegacySnapshotDecodesWithUnknownProvenanceAndRefreshRequiredState",
@@ -256,7 +258,15 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "Packages/DensosoDomain/Sources/DensosoDomain/Health/HealthNarrative.swift",
-            ("struct HealthNarrative:", "struct HealthNarrativeContext:", "let allowedEvidenceKeys:"),
+            (
+                "struct HealthNarrative:",
+                "struct SubjectiveHealthEntry:",
+                "struct SubjectiveHealthContext:",
+                "struct HealthNarrativeContext:",
+                "let subjectiveContext: SubjectiveHealthContext?",
+                "userReportedDailyCheckIn",
+                "let allowedEvidenceKeys:",
+            ),
             errors,
         )
         require(
@@ -264,6 +274,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "testNarrativeCodableContainsOnlyNarrativeFieldsAndEvidenceKeys",
                 "testAllowedEvidenceKeysExcludeRecommendationIDsAndUnknownReferences",
+                "testSubjectiveCheckInsRemainSeparateAndAddTheirOwnEvidenceKeys",
             ),
             errors,
         )
@@ -444,8 +455,28 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "$0.dayKey >= startKey && $0.dayKey <= endKey",
                 "func todayHealthState(asOf date: Date, in context: ModelContext)",
                 "func healthHistory(",
+                "func subjectiveContext(asOf date: Date, in context: ModelContext) throws -> SubjectiveHealthContext?",
+                "static let subjectiveCheckInLookbackDays = 7",
+                "descriptor.fetchLimit = Self.subjectiveCheckInFetchLimit",
+                "$0.sourceRaw == userReportedSource",
+                "userReportedCheckIn.\\(record.id.uuidString.lowercased())",
                 "HealthIntelligenceEngine(calendar: calendar)",
             ),
+            errors,
+        )
+        require(
+            "Densoso/Services/HealthProjectionActor.swift",
+            ("func subjectiveContext(asOf date: Date = Date()) throws -> SubjectiveHealthContext?",),
+            errors,
+        )
+        require(
+            "Densoso/Services/HealthIntelligenceService.swift",
+            ("func subjectiveContext(asOf date: Date = Date()) async throws -> SubjectiveHealthContext?",),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/DailyCheckInConfirmationTests.swift",
+            ("testSameDayCheckInsAppendIdempotentlyAndSubjectiveReadUsesLatest",),
             errors,
         )
         require(
@@ -584,6 +615,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "testPromptUsesStructuredContractOnlyForPersonalHealthQuestions",
                 "testRecoveryWordAloneDoesNotAttachHealthSummaryToCloudPrompt",
                 "testStateWithoutAggregateSummaryDoesNotProduceHealthConclusion",
+                "testPromptKeepsSubjectiveCheckInsSeparateFromObjectiveHealthState",
+                "testDeterministicFallbackCanUseOnlyExplicitSubjectiveContext",
             ),
             errors,
         )
@@ -1449,7 +1482,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Application/Agent/PromptVersions.swift",
             (
                 'static let current = "agent-v2"',
-                'static let current = "health-narrative-v1"',
+                'static let current = "health-narrative-v2"',
                 'static let current = "meal-v2"',
                 'static let current = "meal-vision-v2"',
             ),
@@ -2140,6 +2173,7 @@ def main() -> int:
                 "--filter SharedErrorDescriptorTests",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testProjectionAffectedDaysDeduplicatesAndSortsLocalDays",
+                "-only-testing:DensosoTests/DailyCheckInConfirmationTests/testSameDayCheckInsAppendIdempotentlyAndSubjectiveReadUsesLatest",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion",
                 "-only-testing:DensosoTests/HealthRepositoryTests/testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages",

@@ -18,6 +18,10 @@ read-only data model inside `HealthProjectionActor`; results cross back as
 Sendable domain snapshots, with the UI refresh/cache-write path left separate.
 Agent meal-capture history matching reads persisted meals in stable 128-row
 keyset pages before reducing confirmed ingredient IDs.
+The read-only `subjectiveContext` carries up to seven local days of confirmed
+user-reported energy, stress, and sleep, choosing the latest report per day.
+It adds user-reported evidence keys for narration but never enters HealthState
+or objective DailyMetrics projections; free-form check-in notes are omitted.
 DailyMetrics projection bounds profile revisions, local weights, and HealthKit
 snapshot reads by the effective day and uses a keyed single-row lookup for the
 target snapshot. HealthKit sample values and device metadata are reduced to
@@ -160,6 +164,9 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `HistoricalMetricsRecomputeServiceTests.testCurrentDayReprojectRetainsObservedEnergyBehaviorWithoutProfileOrWeight`,
   `HistoricalMetricsRecomputeServiceTests.testMissingWeightDoesNotLetObservedEnergyClearRecomputeFlag`,
   `HistoricalMetricsRecomputeServiceTests.testCancellationStopsAfterSavedRowAndReportsRetryableWork`,
+  `DailyCheckInConfirmationTests.testSameDayCheckInsAppendIdempotentlyAndSubjectiveReadUsesLatest`,
+  `HealthNarrativePolicyTests.testPromptKeepsSubjectiveCheckInsSeparateFromObjectiveHealthState`,
+  `HealthNarrativePolicyTests.testDeterministicFallbackCanUseOnlyExplicitSubjectiveContext`,
   `ConfirmationCoordinatorTests.testHistoricalConfirmationKeepsPendingMetricsWhenProfileAndWeightAreMissing`,
   `HealthNarrativePolicyTests`,
   `DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState`,

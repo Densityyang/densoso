@@ -18,8 +18,10 @@ def require_text(relative: str, needles: tuple[str, ...], errors: list[str]) -> 
         errors.append(f"missing {relative}")
         return ""
     text = path.read_text(encoding="utf-8")
+    normalized_text = " ".join(text.split())
     for needle in needles:
-        if needle not in text:
+        # Markdown line wrapping is formatting and must not create a false gate failure.
+        if " ".join(needle.split()) not in normalized_text:
             errors.append(f"{relative} is missing {needle}")
     return text
 

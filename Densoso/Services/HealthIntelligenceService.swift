@@ -66,6 +66,11 @@ final class HealthIntelligenceService {
         try await projectionActor.healthNarrativeContext(asOf: date)
     }
 
+    /// A read-only query for recent user-reported feelings; it never changes HealthState.
+    func subjectiveContext(asOf date: Date = Date()) async throws -> SubjectiveHealthContext? {
+        try await projectionActor.subjectiveContext(asOf: date)
+    }
+
     /// Does not refresh or write the daily/weekly brief caches.
     func todayHealthState(asOf date: Date = Date()) async throws -> HealthStateV2? {
         try await projectionActor.todayHealthState(asOf: date)

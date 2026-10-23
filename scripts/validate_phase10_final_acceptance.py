@@ -22,6 +22,13 @@ GATES = (
     "integration",
 )
 
+RESULT_TO_STATUS = {
+    "success": "PASS",
+    "failure": "FAIL",
+    "cancelled": "BLOCKED",
+    "skipped": "NOT RUN",
+}
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -30,8 +37,55 @@ def main() -> int:
     parser.add_argument("--pr-head-sha", default="unavailable")
     parser.add_argument("--run-url", default="unavailable")
     parser.add_argument("--artifact-root", default="")
+    parser.add_argument(
+        "--gate-result",
+        action="append",
+        default=[],
+        metavar="JOB=RESULT",
+        help="Upstream GitHub Actions job result, repeated once for every Gate 1-9 job.",
+    )
     args = parser.parse_args()
     errors: list[str] = []
+
+    gate_results: dict[str, str] = {}
+    for item in args.gate_result:
+        name, separator, result = item.partition("=")
+        name = name.strip()
+        result = result.strip().lower()
+        if not separator or name not in GATES:
+            errors.append(f"invalid Gate result {item!r}; expected JOB=RESULT for Gates 1-9")
+            continue
+        if name in gate_results:
+            errors.append(f"duplicate Gate result for {name}")
+            continue
+        if result not in RESULT_TO_STATUS:
+            errors.append(f"unsupported result {result!r} for Gate job {name}")
+            continue
+        gate_results[name] = result
+
+    gate_statuses = []
+    for number, name in enumerate(GATES, start=1):
+        result = gate_results.get(name, "unknown")
+        status = RESULT_TO_STATUS.get(result, "NOT RUN")
+        if result != "success":
+            if result == "unknown":
+                reason = "upstream GitHub Actions job result was not supplied"
+            elif result == "failure":
+                reason = "upstream GitHub Actions job failed"
+            elif result == "cancelled":
+                reason = "upstream GitHub Actions job was cancelled"
+            else:
+                reason = "upstream GitHub Actions job was skipped"
+            errors.append(f"Gate {number} ({name}) is {status}: {reason}")
+        else:
+            reason = "upstream GitHub Actions job succeeded"
+        gate_statuses.append({
+            "gate": number,
+            "job": name,
+            "jobOutcome": result,
+            "status": status,
+            "reason": reason,
+        })
 
     workflow_path = ROOT / ".github/workflows/build.yml"
     docs_path = ROOT / "docs/gates/gate-10-final-acceptance.md"
@@ -44,8 +98,16 @@ def main() -> int:
 
     if "final-acceptance:" not in workflow or "name: gate-10-final-acceptance" not in workflow:
         errors.append("missing final-acceptance CI job")
-    if "needs: integration" not in workflow:
+    final_acceptance_job = workflow.split("  final-acceptance:", 1)
+    final_acceptance_job = final_acceptance_job[1].split("  gate-11-ai-native-health-loop:", 1)[0] if len(final_acceptance_job) == 2 else ""
+    if "needs:" not in final_acceptance_job or "integration" not in final_acceptance_job:
         errors.append("final acceptance must depend on Gate 9 integration")
+    for gate in GATES:
+        if gate not in final_acceptance_job:
+            errors.append(f"final acceptance must receive the {gate} job result directly")
+    for number in range(1, len(GATES) + 1):
+        if f"GATE_{number:02d}_RESULT" not in final_acceptance_job:
+            errors.append(f"final acceptance is missing the Gate {number} result input")
     for token in (
         "ACCEPTANCE_WORKFLOW_SHA",
         "ACCEPTANCE_PR_HEAD_SHA",
@@ -136,29 +198,43 @@ def main() -> int:
         ),
     }
     expected_artifacts = list(required_artifacts)
+    artifact_statuses: dict[str, dict[str, object]] = {
+        name: {"status": "NOT CHECKED", "missingPaths": []}
+        for name in required_artifacts
+    }
     if artifact_root is not None:
         for name, required_paths in required_artifacts.items():
             artifact_directory = artifact_root / name
             if not artifact_directory.is_dir():
                 errors.append(f"missing downloaded artifact {name}")
+                artifact_statuses[name] = {
+                    "status": "MISSING",
+                    "missingPaths": list(required_paths),
+                }
                 continue
+            missing_paths = []
             for relative in required_paths:
                 if not (artifact_directory / relative).exists():
                     errors.append(f"artifact {name} is missing {relative}")
-
-    if errors:
-        for error in errors:
-            print(f"ERROR: {error}", file=sys.stderr)
-        return 1
+                    missing_paths.append(relative)
+            artifact_statuses[name] = {
+                "status": "MISSING" if missing_paths else "PRESENT",
+                "missingPaths": missing_paths,
+            }
+    else:
+        errors.append("--artifact-root is required to verify Gates 1-9 evidence")
 
     report = {
-        "status": "pass",
+        "status": "PASS" if not errors else "FAIL",
         "scope": "phase-10-final-software-acceptance-rollup",
         "allNineGatesRequired": True,
         "workflowCommitSHA": args.workflow_sha,
         "prHeadSHA": args.pr_head_sha,
         "workflowRun": args.run_url,
-        "artifacts": expected_artifacts if artifact_root is not None else "verified-by-final-CI-job",
+        "gateResults": gate_statuses,
+        "expectedArtifacts": expected_artifacts,
+        "artifacts": artifact_statuses,
+        "errors": errors,
         "signedDeviceAcceptance": "not-claimed",
         "testFlightOrProduction": "not-claimed",
         "prBoundary": "OPEN-Draft-blocked-by-signing",
@@ -166,7 +242,14 @@ def main() -> int:
         "diagnosticsExportPrivacyContract": "required-by-gate-9",
     }
     if args.report:
-        Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if errors:
+        for error in errors:
+            print(f"ERROR: {error}", file=sys.stderr)
+        print("Phase 10 final-acceptance static contracts: FAIL")
+        return 1
     print("Phase 10 final-acceptance static contracts: PASS")
     return 0
 

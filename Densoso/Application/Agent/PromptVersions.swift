@@ -6,7 +6,7 @@ enum AgentPromptVersion {
 }
 
 enum NarrativePromptVersion {
-    static let current = "health-narrative-v1"
+    static let current = "health-narrative-v2"
 }
 
 enum MealPromptVersion {

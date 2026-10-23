@@ -777,6 +777,7 @@ def main() -> int:
             "testSelfReportResolverRejectsUnsupportedDateAndHonorsNegation",
             "testSelfReportResolverRejectsConflictingOrMalformedExplicitDates",
             "testSelfReportResolverRejectsDoubleNegationAndMixedEnergySignals",
+            "testSameDayCheckInsAppendIdempotentlyAndSubjectiveReadUsesLatest",
             "testAgentDoesNotStageInferredStressButStagesAndCommitsExplicitCheckIn",
         ],
         errors,

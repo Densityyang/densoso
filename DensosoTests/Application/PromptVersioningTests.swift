@@ -5,7 +5,7 @@ import XCTest
 final class PromptVersioningTests: XCTestCase {
     func testPromptAndToolSchemaVersionsMatchMainPR111And112() {
         XCTAssertEqual(AgentSystemPrompt.version, "agent-v2")
-        XCTAssertEqual(HealthContextPromptBuilder.promptVersion, "health-narrative-v1")
+        XCTAssertEqual(HealthContextPromptBuilder.promptVersion, "health-narrative-v2")
         XCTAssertEqual(MealCaptureApplicationService.promptVersion, "meal-v2")
         XCTAssertEqual(QwenMealVisionProvider.promptVersion, "meal-vision-v2")
         XCTAssertEqual(ToolRegistry.toolSchemaVersion, 2)

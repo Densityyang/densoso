@@ -72,4 +72,44 @@ final class HealthNarrativeTests: XCTestCase {
         let decoded = try JSONDecoder().decode(HealthNarrativeContext.self, from: forged)
         XCTAssertEqual(decoded.allowedEvidenceKeys, ["body.weight.kg", "sleep.mainSleep.minutes"])
     }
+
+    func testSubjectiveCheckInsRemainSeparateAndAddTheirOwnEvidenceKeys() throws {
+        let day = Date(timeIntervalSince1970: 1_800_000_000)
+        let older = SubjectiveHealthEntry(
+            dayStart: day,
+            occurredAt: day.addingTimeInterval(3_600),
+            energy: .low,
+            stress: .elevated,
+            subjectiveSleep: .poor,
+            evidenceKey: "userReportedCheckIn.older"
+        )
+        let latest = SubjectiveHealthEntry(
+            dayStart: day,
+            occurredAt: day.addingTimeInterval(7_200),
+            energy: .typical,
+            stress: .low,
+            subjectiveSleep: .fair,
+            evidenceKey: "userReportedCheckIn.latest"
+        )
+        let subjective = SubjectiveHealthContext(asOf: day.addingTimeInterval(8_000), entries: [older, latest])
+        let context = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [],
+            recommendationCandidates: [],
+            aggregateSummary: nil,
+            subjectiveContext: subjective
+        )
+
+        XCTAssertEqual(context.subjectiveContext?.entries, [latest])
+        XCTAssertNil(context.healthState)
+        XCTAssertEqual(context.allowedEvidenceKeys, ["userReportedCheckIn.latest"])
+        XCTAssertEqual(context.evidence.first?.source, "userReportedDailyCheckIn")
+
+        let encoded = try JSONEncoder().encode(context)
+        let decoded = try JSONDecoder().decode(HealthNarrativeContext.self, from: encoded)
+        XCTAssertEqual(decoded, context)
+
+        let legacy = #"{"healthState":null,"evidence":[],"recommendationCandidates":[],"aggregateSummary":null}"#.data(using: .utf8)!
+        XCTAssertNil(try JSONDecoder().decode(HealthNarrativeContext.self, from: legacy).subjectiveContext)
+    }
 }

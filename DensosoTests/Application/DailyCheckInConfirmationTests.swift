@@ -53,6 +53,70 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         XCTAssertEqual(receipt.localRecordID, stored.id)
     }
 
+    func testSameDayCheckInsAppendIdempotentlyAndSubjectiveReadUsesLatest() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let day = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 12)))
+        let container = try makeV5Container()
+        let context = ModelContext(container)
+        let repository = SwiftDataConfirmationRepository(modelContainer: container)
+        let coordinator = ConfirmationCoordinator(
+            repository: repository,
+            writeGate: PersistenceWriteGate(state: .writable),
+            now: { day }
+        )
+
+        let first = try await coordinator.stage(
+            payload: .dailyCheckIn(DailyCheckIn(
+                occurredAt: day.addingTimeInterval(3_600),
+                energy: .low,
+                stress: .elevated,
+                subjectiveSleep: .poor,
+                note: "旧备注"
+            )),
+            clientRequestID: UUID()
+        )
+        let firstReceipt = try await coordinator.confirm(id: first.id)
+        let replayedFirstReceipt = try await coordinator.confirm(id: first.id)
+        XCTAssertEqual(replayedFirstReceipt.localRecordID, firstReceipt.localRecordID)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyCheckInRecord>()), 1)
+
+        let latest = try await coordinator.stage(
+            payload: .dailyCheckIn(DailyCheckIn(
+                occurredAt: day.addingTimeInterval(3 * 3_600),
+                energy: .high,
+                stress: .low,
+                subjectiveSleep: .good,
+                note: "最新备注"
+            )),
+            clientRequestID: UUID()
+        )
+        let latestReceipt = try await coordinator.confirm(id: latest.id)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyCheckInRecord>()), 2)
+
+        let subjective = try XCTUnwrap(
+            HealthIntelligenceReadModel(calendar: calendar).subjectiveContext(
+                asOf: day.addingTimeInterval(6 * 3_600),
+                in: context
+            )
+        )
+        let entry = try XCTUnwrap(subjective.entries.first)
+        let latestRecordID = latestReceipt.localRecordID
+        XCTAssertEqual(subjective.entries.count, 1)
+        XCTAssertEqual(entry.energy, .high)
+        XCTAssertEqual(entry.stress, .low)
+        XCTAssertEqual(entry.subjectiveSleep, .good)
+        XCTAssertEqual(
+            entry.evidenceKey,
+            "userReportedCheckIn.\(latestRecordID.uuidString.lowercased())"
+        )
+        let encodedContext = String(data: try JSONEncoder().encode(subjective), encoding: .utf8)
+        XCTAssertFalse(encodedContext?.contains("旧备注") == true)
+        XCTAssertFalse(encodedContext?.contains("最新备注") == true)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyMetrics>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 0)
+    }
+
     func testRejectingCheckInNeverPersistsTheUserReportedFact() async throws {
         let container = try makeV5Container()
         let context = ModelContext(container)

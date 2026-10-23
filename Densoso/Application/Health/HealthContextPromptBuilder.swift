@@ -7,8 +7,8 @@ enum HealthContextPromptBuilder {
     private static let healthTerms = [
         "今日", "今天", "本周", "上周", "趋势", "睡眠", "体重", "活动量", "运动负荷",
         "训练", "运动", "活动", "步数", "心率", "hrv", "疲劳", "状态", "休息",
-        "健康", "缺口", "摄入", "消耗", "heart", "sleep", "weight", "activity", "workout",
-        "training", "fatigue", "trend", "calorie",
+        "健康", "缺口", "摄入", "消耗", "精力", "压力", "heart", "sleep", "weight", "activity", "workout",
+        "training", "fatigue", "trend", "calorie", "energy", "stress",
     ]
     private static let readinessActivityTerms = [
         "跑", "训练", "运动", "锻炼", "健身", "游泳", "骑行", "骑车", "步行", "散步", "举铁", "练",
@@ -56,7 +56,7 @@ enum HealthContextPromptBuilder {
         \(prompt)
 
         ## 健康解读结构（强制）
-        只返回符合 response schema 的 JSON。使用 healthState、evidence 和 recommendationCandidates 中可验证的信息；evidenceKeys 必须引用由本机状态证据或推荐候选证据键组成的 allowedEvidenceKeys，不得引用 recommendation ID。只保留能由引用支撑的判断；无证据支撑的领域应明确说明不足，不作推断。
+        只返回符合 response schema 的 JSON。使用 healthState、subjectiveContext、evidence 和 recommendationCandidates 中可验证的信息；subjectiveContext 只代表用户本人报告的主观感受，不是 HealthKit 测量，不得混入 HealthState。引用时必须明确标为用户自述。evidenceKeys 必须引用由本机状态、自述或推荐候选组成的 allowedEvidenceKeys，不得引用 recommendation ID。只保留能由引用支撑的判断；无证据支撑的领域应明确说明不足，不作推断。
         文本字段只写不含数值的自然语言，不得写数字、百分比、具体指标值或单位；数值和指标由界面从本机确定性 HealthState 渲染。不得诊断或猜测缺失数据。
         \(contextJSON)
         """

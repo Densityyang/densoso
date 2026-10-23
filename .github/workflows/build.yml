@@ -1246,10 +1246,32 @@ jobs:
 
   final-acceptance:
     name: gate-10-final-acceptance
-    needs: integration
+    needs:
+      - foundation
+      - domain-persistence
+      - agent-provider
+      - speech
+      - meal-capture
+      - healthkit
+      - health-intelligence
+      - watch
+      - integration
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
     timeout-minutes: 20
+    env:
+      ACCEPTANCE_WORKFLOW_SHA: ${{ github.sha }}
+      ACCEPTANCE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      ACCEPTANCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      GATE_01_RESULT: ${{ needs.foundation.result }}
+      GATE_02_RESULT: ${{ needs.domain-persistence.result }}
+      GATE_03_RESULT: ${{ needs.agent-provider.result }}
+      GATE_04_RESULT: ${{ needs.speech.result }}
+      GATE_05_RESULT: ${{ needs.meal-capture.result }}
+      GATE_06_RESULT: ${{ needs.healthkit.result }}
+      GATE_07_RESULT: ${{ needs.health-intelligence.result }}
+      GATE_08_RESULT: ${{ needs.watch.result }}
+      GATE_09_RESULT: ${{ needs.integration.result }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -1261,27 +1283,108 @@ jobs:
           path: GateArtifacts
           merge-multiple: false
 
+      - name: Prepare Gate 10 diagnostic files
+        if: always()
+        run: |
+          mkdir -p Gate10Acceptance
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          gate_jobs = [
+              (1, "foundation", "GATE_01_RESULT"),
+              (2, "domain-persistence", "GATE_02_RESULT"),
+              (3, "agent-provider", "GATE_03_RESULT"),
+              (4, "speech", "GATE_04_RESULT"),
+              (5, "meal-capture", "GATE_05_RESULT"),
+              (6, "healthkit", "GATE_06_RESULT"),
+              (7, "health-intelligence", "GATE_07_RESULT"),
+              (8, "watch", "GATE_08_RESULT"),
+              (9, "integration", "GATE_09_RESULT"),
+          ]
+          statuses = []
+          for number, job, env_name in gate_jobs:
+              outcome = os.environ.get(env_name, "unknown")
+              if outcome == "success":
+                  status = "PASS"
+                  reason = "upstream job succeeded"
+              elif outcome == "failure":
+                  status = "FAIL"
+                  reason = "upstream job failed"
+              elif outcome == "cancelled":
+                  status = "BLOCKED"
+                  reason = "upstream job was cancelled"
+              else:
+                  status = "NOT RUN"
+                  reason = "upstream job did not complete successfully"
+              statuses.append({
+                  "gate": number,
+                  "job": job,
+                  "jobOutcome": outcome,
+                  "status": status,
+                  "reason": reason,
+              })
+
+          bootstrap = {
+              "status": "NOT RUN",
+              "scope": "phase-10-final-software-acceptance-rollup",
+              "workflowCommitSHA": os.environ.get("ACCEPTANCE_WORKFLOW_SHA", "unavailable"),
+              "prHeadSHA": os.environ.get("ACCEPTANCE_PR_HEAD_SHA", "unavailable"),
+              "workflowRun": os.environ.get("ACCEPTANCE_RUN_URL", "unavailable"),
+              "gateResults": statuses,
+              "errors": ["validator has not completed; inspect the Gate 10 validation step"],
+              "signedDeviceAcceptance": "not-claimed",
+              "testFlightOrProduction": "not-claimed",
+          }
+          Path("Gate10Acceptance/acceptance-manifest.json").write_text(
+              json.dumps(bootstrap, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+          )
+
+          lines = [
+              "# Gate 10 diagnostic evidence",
+              "",
+              f"Workflow commit: `{bootstrap['workflowCommitSHA']}`",
+              f"PR source head: `{bootstrap['prHeadSHA']}`",
+              f"Run: {bootstrap['workflowRun']}",
+              "",
+              "| Gate | Job result | Status | Reason |",
+              "| --- | --- | --- | --- |",
+          ]
+          lines.extend(
+              f"| {item['gate']:02d} | {item['jobOutcome']} | {item['status']} | {item['reason']} |"
+              for item in statuses
+          )
+          lines.extend([
+              "",
+              "The JSON manifest is initialized before validation so diagnostics survive an interrupted or failed validator step. Its final status is set by the validation step when that script completes.",
+              "",
+              "Apple signing, TestFlight, production use, signed-device HealthKit background delivery, and Watch pairing/offline behavior remain unverified and blocked.",
+          ])
+          Path("Gate10Acceptance/acceptance-summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
       - name: Validate Phase 10 final acceptance roll-up
-        env:
-          ACCEPTANCE_WORKFLOW_SHA: ${{ github.sha }}
-          ACCEPTANCE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          ACCEPTANCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        if: always()
         run: |
           python3 -m py_compile scripts/validate_phase10_final_acceptance.py
           mkdir -p Gate10Acceptance
+          mkdir -p GateArtifacts
           python3 scripts/validate_phase10_final_acceptance.py \
             --artifact-root GateArtifacts \
             --workflow-sha "$ACCEPTANCE_WORKFLOW_SHA" \
             --pr-head-sha "$ACCEPTANCE_PR_HEAD_SHA" \
             --run-url "$ACCEPTANCE_RUN_URL" \
+            --gate-result foundation="$GATE_01_RESULT" \
+            --gate-result domain-persistence="$GATE_02_RESULT" \
+            --gate-result agent-provider="$GATE_03_RESULT" \
+            --gate-result speech="$GATE_04_RESULT" \
+            --gate-result meal-capture="$GATE_05_RESULT" \
+            --gate-result healthkit="$GATE_06_RESULT" \
+            --gate-result health-intelligence="$GATE_07_RESULT" \
+            --gate-result watch="$GATE_08_RESULT" \
+            --gate-result integration="$GATE_09_RESULT" \
             --report Gate10Acceptance/acceptance-manifest.json
-          cat > Gate10Acceptance/acceptance-summary.md <<'EOF'
-          # Phase 10 final software acceptance
-
-          This manifest records the tested workflow commit SHA and PR source head SHA for one run. A pull-request run tests GitHub's generated merge candidate and proves only the defined software CI gates.
-
-          Apple signing, TestFlight, production use, signed-device HealthKit background delivery, and Watch pairing/offline behavior remain unverified and blocked.
-          EOF
 
       - name: Upload Gate 10 acceptance manifest
         if: always()
@@ -1343,6 +1446,7 @@ jobs:
             -derivedDataPath "$GATE11_DERIVED_DATA_PATH" \
             -only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay \
             -only-testing:DensosoTests/HealthRepositoryTests/testProjectionAffectedDaysDeduplicatesAndSortsLocalDays \
+            -only-testing:DensosoTests/DailyCheckInConfirmationTests/testSameDayCheckInsAppendIdempotentlyAndSubjectiveReadUsesLatest \
             -only-testing:DensosoTests/HealthRepositoryTests/testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs \
             -only-testing:DensosoTests/HealthRepositoryTests/testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData \
             -only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion \

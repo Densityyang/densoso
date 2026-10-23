@@ -37,9 +37,14 @@ cannot mark Gate 15 or Gate 16 passed.
 
 ## Required CI summary
 
-The final job downloads the artifacts from Gates 1–9, verifies their expected
-names and writes a machine-readable acceptance manifest. A successful roll-up
-means only that the committed software passed the defined CI contracts.
+The final job directly records all nine upstream job results from the same
+workflow run. It requires every result to be `success` and verifies the
+expected artifact files; artifact presence alone does not turn a failed gate
+into a pass. The machine-readable manifest records each gate outcome, missing
+artifacts, workflow SHA, PR source SHA, and validation errors. A diagnostic
+manifest and summary are initialized before validation and uploaded even when
+artifact download or validation fails. A successful roll-up means only that
+the committed software passed the defined CI contracts.
 
 ## Explicitly not accepted by Gate 10
 

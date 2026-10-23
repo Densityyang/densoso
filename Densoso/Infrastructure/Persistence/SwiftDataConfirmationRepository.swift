@@ -273,6 +273,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                     affectedDate = nil
                     healthSyncState = .notApplicable
                 case .dailyCheckIn(let checkIn):
+                    // Distinct confirmations append to the self-report history; a replay of this action returns its receipt above.
                     let record = DailyCheckInRecord(
                         sourceActionKey: action.idempotencyKey,
                         occurredAt: checkIn.occurredAt,

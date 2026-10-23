@@ -65,6 +65,63 @@ final class HealthNarrativePolicyTests: XCTestCase {
         XCTAssertFalse(capturePrompt.contains("健康解读结构（强制）"))
     }
 
+    func testPromptKeepsSubjectiveCheckInsSeparateFromObjectiveHealthState() throws {
+        let objective = makeContext()
+        let subjective = SubjectiveHealthContext(
+            asOf: Date(timeIntervalSince1970: 1_800_000_000),
+            entries: [SubjectiveHealthEntry(
+                dayStart: Date(timeIntervalSince1970: 1_800_000_000),
+                occurredAt: Date(timeIntervalSince1970: 1_800_000_000),
+                energy: .low,
+                stress: .elevated,
+                subjectiveSleep: .poor,
+                evidenceKey: "userReportedCheckIn.prompt-fixture"
+            )]
+        )
+        let context = HealthNarrativeContext(
+            healthState: objective.healthState,
+            evidence: objective.evidence,
+            recommendationCandidates: objective.recommendationCandidates,
+            aggregateSummary: objective.aggregateSummary,
+            subjectiveContext: subjective
+        )
+
+        let prompt = HealthContextPromptBuilder.prompt(
+            basePrompt: "base",
+            userText: "请分析我今天的状态",
+            summary: context.aggregateSummary,
+            narrativeContext: context,
+            structuredNarrative: true
+        )
+
+        XCTAssertTrue(prompt.contains("subjectiveContext"))
+        XCTAssertTrue(prompt.contains("userReportedCheckIn.prompt-fixture"))
+        XCTAssertTrue(prompt.contains("不是 HealthKit 测量"))
+    }
+
+    func testDeterministicFallbackCanUseOnlyExplicitSubjectiveContext() {
+        let day = Date(timeIntervalSince1970: 1_800_000_000)
+        let context = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [],
+            recommendationCandidates: [],
+            aggregateSummary: nil,
+            subjectiveContext: SubjectiveHealthContext(asOf: day, entries: [SubjectiveHealthEntry(
+                dayStart: day,
+                occurredAt: day,
+                energy: .low,
+                stress: .elevated,
+                subjectiveSleep: .poor,
+                evidenceKey: "userReportedCheckIn.fallback-fixture"
+            )])
+        )
+
+        let fallback = HealthNarrativePolicy.deterministicFallback(context)
+        XCTAssertTrue(fallback.contains("最近的自述"))
+        XCTAssertTrue(fallback.contains("不是客观测量"))
+        XCTAssertTrue(fallback.contains("缺少足够的客观健康数据"))
+    }
+
     func testRecoveryWordAloneDoesNotAttachHealthSummaryToCloudPrompt() {
         let context = makeContext()
         let ordinaryRequest = "恢复预算请求"

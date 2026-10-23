@@ -118,6 +118,11 @@ actor HealthProjectionActor {
             .healthNarrativeContext(asOf: date, in: modelContext)
     }
 
+    func subjectiveContext(asOf date: Date = Date()) throws -> SubjectiveHealthContext? {
+        try HealthIntelligenceReadModel(calendar: calendar)
+            .subjectiveContext(asOf: date, in: modelContext)
+    }
+
     func healthContextSummary(asOf date: Date = Date()) throws -> HealthContextSummary? {
         try HealthIntelligenceReadModel(calendar: calendar)
             .healthContextSummary(asOf: date, in: modelContext)

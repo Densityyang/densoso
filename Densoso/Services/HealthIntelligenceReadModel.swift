@@ -8,6 +8,8 @@ struct HealthIntelligenceReadModel: Sendable {
     static let workoutFetchBatchSize = 64
     static let weightFetchBatchSize = 64
     static let schedulePlanFetchBatchSize = 64
+    static let subjectiveCheckInLookbackDays = 7
+    static let subjectiveCheckInFetchLimit = 128
 
     private let calendar: Calendar
     private let engine: HealthIntelligenceEngine
@@ -28,6 +30,7 @@ struct HealthIntelligenceReadModel: Sendable {
     }
 
     func healthNarrativeContext(asOf date: Date, in context: ModelContext) throws -> HealthNarrativeContext {
+        let subjective = try subjectiveContext(asOf: date, in: context)
         let days = try loadDays(through: date, in: context)
         let result = engine.makeDailyBrief(
             days: days,
@@ -39,7 +42,8 @@ struct HealthIntelligenceReadModel: Sendable {
                 healthState: nil,
                 evidence: [],
                 recommendationCandidates: [],
-                aggregateSummary: nil
+                aggregateSummary: nil,
+                subjectiveContext: subjective
             )
         }
         let state = brief.healthState
@@ -54,8 +58,62 @@ struct HealthIntelligenceReadModel: Sendable {
             healthState: state,
             evidence: stateEvidence,
             recommendationCandidates: brief.recommendations,
-            aggregateSummary: brief.contextSummary
+            aggregateSummary: brief.contextSummary,
+            subjectiveContext: subjective
         )
+    }
+
+    func subjectiveContext(asOf date: Date, in context: ModelContext) throws -> SubjectiveHealthContext? {
+        let referenceDate = min(date, Date())
+        let today = calendar.startOfDay(for: referenceDate)
+        let userReportedSource = "userReported"
+        var entries: [SubjectiveHealthEntry] = []
+        for daysBack in 0..<Self.subjectiveCheckInLookbackDays {
+            guard let dayStart = calendar.date(byAdding: .day, value: -daysBack, to: today),
+                  let nextDayStart = calendar.date(byAdding: .day, value: 1, to: dayStart) else {
+                continue
+            }
+
+            let predicate = #Predicate<DailyCheckInRecord> {
+                $0.occurredAt >= dayStart
+                    && $0.occurredAt < nextDayStart
+                    && $0.occurredAt <= referenceDate
+                    && $0.sourceRaw == userReportedSource
+            }
+            var descriptor = FetchDescriptor<DailyCheckInRecord>(
+                predicate: predicate,
+                sortBy: [
+                    SortDescriptor(\.occurredAt, order: .reverse),
+                    SortDescriptor(\.createdAt, order: .reverse),
+                ]
+            )
+            descriptor.fetchLimit = Self.subjectiveCheckInFetchLimit
+            let candidates = try context.fetch(descriptor).sorted {
+                if $0.occurredAt != $1.occurredAt { return $0.occurredAt > $1.occurredAt }
+                if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+                return $0.id.uuidString > $1.id.uuidString
+            }
+            guard let record = candidates.first(where: {
+                UserReportedEnergy(rawValue: $0.energyRaw) != nil
+                    && UserReportedStress(rawValue: $0.stressRaw) != nil
+                    && SubjectiveSleepQuality(rawValue: $0.subjectiveSleepRaw) != nil
+            }),
+                  let energy = UserReportedEnergy(rawValue: record.energyRaw),
+                  let stress = UserReportedStress(rawValue: record.stressRaw),
+                  let sleep = SubjectiveSleepQuality(rawValue: record.subjectiveSleepRaw) else {
+                continue
+            }
+            entries.append(SubjectiveHealthEntry(
+                dayStart: dayStart,
+                occurredAt: record.occurredAt,
+                energy: energy,
+                stress: stress,
+                subjectiveSleep: sleep,
+                evidenceKey: "userReportedCheckIn.\(record.id.uuidString.lowercased())"
+            ))
+        }
+        guard !entries.isEmpty else { return nil }
+        return SubjectiveHealthContext(asOf: referenceDate, entries: entries)
     }
 
     func todayHealthState(asOf date: Date, in context: ModelContext) throws -> HealthStateV2? {
