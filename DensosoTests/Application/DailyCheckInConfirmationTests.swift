@@ -278,7 +278,6 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
         }
-
         XCTAssertNoThrow(try resolver.validate(
             DailyCheckIn(
                 occurredAt: date,
@@ -290,6 +289,10 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             asOf: date
         ))
 
+        let weekdayCues = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
+        let currentWeekday = Calendar.current.component(.weekday, from: date)
+        let matchingWeekdayCue = weekdayCues[currentWeekday - 1]
+        let mismatchingWeekdayCue = weekdayCues[currentWeekday % weekdayCues.count]
         XCTAssertNoThrow(try resolver.validate(
             DailyCheckIn(
                 occurredAt: date,
@@ -297,9 +300,33 @@ final class DailyCheckInConfirmationTests: XCTestCase {
                 stress: .low,
                 subjectiveSleep: .fair
             ),
-            userText: "今天周一不太累，压力不大，昨晚睡得一般。",
+            userText: "今天\(matchingWeekdayCue)不太累，压力不大，昨晚睡得一般。",
             asOf: date
         ))
+        XCTAssertThrowsError(try resolver.validate(
+            DailyCheckIn(
+                occurredAt: date,
+                energy: .typical,
+                stress: .low,
+                subjectiveSleep: .fair
+            ),
+            userText: "今天\(mismatchingWeekdayCue)不太累，压力不大，昨晚睡得一般。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+        }
+        XCTAssertThrowsError(try resolver.validate(
+            DailyCheckIn(
+                occurredAt: date,
+                energy: .typical,
+                stress: .low,
+                subjectiveSleep: .fair
+            ),
+            userText: "今天\(matchingWeekdayCue)也是\(mismatchingWeekdayCue)，不太累，压力不大，昨晚睡得一般。",
+            asOf: date
+        )) { error in
+            XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+        }
     }
 
     func testSelfReportResolverRejectsConflictingOrMalformedExplicitDates() throws {
@@ -334,6 +361,20 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             asOf: date
         )) { error in
             XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+        }
+        for unsupportedExplicitDateText in [
+            "10/20/2026 I had normal energy, low stress, and fair sleep.",
+            "2026.10.20 I had normal energy, low stress, and fair sleep.",
+            "2026年10月20日我精力一般，压力不大，睡得一般。",
+            "Oct 20, 2026 I had normal energy, low stress, and fair sleep.",
+        ] {
+            XCTAssertThrowsError(try resolver.validate(
+                checkIn,
+                userText: unsupportedExplicitDateText,
+                asOf: date
+            )) { error in
+                XCTAssertEqual(error as? DailyCheckInSelfReportError, .dateNotSupported)
+            }
         }
         let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date)))
         let tomorrowText = formatter.string(from: tomorrow)

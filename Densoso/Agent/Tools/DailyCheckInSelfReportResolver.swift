@@ -94,6 +94,9 @@ struct DailyCheckInSelfReportResolver {
 
     private func validateDate(_ occurredAt: Date, in rawText: String, asOf date: Date) throws {
         let text = Self.normalized(rawText)
+        guard !Self.containsUnsupportedExplicitDate(in: rawText) else {
+            throw DailyCheckInSelfReportError.dateNotSupported
+        }
         guard !Self.containsFutureRelativeDate(in: text) else {
             throw DailyCheckInSelfReportError.dateNotSupported
         }
@@ -116,7 +119,9 @@ struct DailyCheckInSelfReportResolver {
         guard let explicitDates = Self.explicitDays(in: rawText) else {
             throw DailyCheckInSelfReportError.dateNotSupported
         }
-        guard !expectedDays.isEmpty || !explicitDates.isEmpty || !Self.containsWeekday(in: text) else {
+        let reportedWeekdays = Self.weekdays(in: text)
+        guard reportedWeekdays.count <= 1,
+              !expectedDays.isEmpty || !explicitDates.isEmpty || reportedWeekdays.isEmpty else {
             throw DailyCheckInSelfReportError.dateNotSupported
         }
         expectedDays.append(contentsOf: explicitDates)
@@ -125,6 +130,10 @@ struct DailyCheckInSelfReportResolver {
         guard uniqueDays.count == 1,
               let expectedDay = uniqueDays.first,
               calendar.isDate(occurredAt, inSameDayAs: expectedDay) else {
+            throw DailyCheckInSelfReportError.dateNotSupported
+        }
+        if let reportedWeekday = reportedWeekdays.first,
+           calendar.component(.weekday, from: expectedDay) != reportedWeekday {
             throw DailyCheckInSelfReportError.dateNotSupported
         }
     }
@@ -229,9 +238,36 @@ struct DailyCheckInSelfReportResolver {
         return expression.firstMatch(in: text, range: range) != nil
     }
 
-    private static func containsWeekday(in text: String) -> Bool {
-        matches(#"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"#, in: text)
-            || matches(#"(?:周|星期)[一二三四五六日天]"#, in: text)
+    private static func containsUnsupportedExplicitDate(in text: String) -> Bool {
+        let patterns = [
+            #"(?<!\d)(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d{4}[./]\d{1,2}[./]\d{1,2})(?!\d)"#,
+            #"\d{1,2}月\d{1,2}(?:日|号|號)"#,
+            #"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b"#,
+            #"\b\d{1,2}\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+\d{4})?\b"#,
+        ]
+        return patterns.contains { matches($0, in: text) }
+    }
+
+    private static func weekdays(in text: String) -> Set<Int> {
+        let englishWeekdays = [
+            (#"\bsunday\b"#, 1), (#"\bmonday\b"#, 2), (#"\btuesday\b"#, 3),
+            (#"\bwednesday\b"#, 4), (#"\bthursday\b"#, 5), (#"\bfriday\b"#, 6),
+            (#"\bsaturday\b"#, 7),
+        ]
+        var result = Set<Int>()
+        for (pattern, weekday) in englishWeekdays where matches(pattern, in: text) {
+            result.insert(weekday)
+        }
+        let chineseWeekdays = [
+            ("周日", 1), ("周天", 1), ("星期日", 1), ("星期天", 1),
+            ("周一", 2), ("星期一", 2), ("周二", 3), ("星期二", 3),
+            ("周三", 4), ("星期三", 4), ("周四", 5), ("星期四", 5),
+            ("周五", 6), ("星期五", 6), ("周六", 7), ("星期六", 7),
+        ]
+        for (cue, weekday) in chineseWeekdays where text.contains(cue) {
+            result.insert(weekday)
+        }
+        return result
     }
 
     private static func explicitDays(in text: String) -> [Date]? {
