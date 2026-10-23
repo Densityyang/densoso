@@ -68,7 +68,7 @@ final class HistoricalMetricsRecomputeService: HistoricalMetricsRecomputing {
                 }
             } else {
                 do {
-                    if try DailyMetricsProjector.reprojectHistoricalIfInputsAvailable(on: day, now: now, in: queryContext) {
+                    if try await DailyMetricsProjector.reprojectHistoricalIfInputsAvailable(on: day, now: now, in: queryContext) {
                         try queryContext.save()
                         processedCount += 1
                     }

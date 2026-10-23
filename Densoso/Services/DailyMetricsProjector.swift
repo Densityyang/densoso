@@ -126,8 +126,8 @@ enum DailyMetricsProjector {
         on date: Date,
         now: Date = Date(),
         in modelContext: ModelContext
-    ) throws -> Bool {
-        try withProjectionErrorMapping {
+    ) async throws -> Bool {
+        try await withProjectionErrorMapping {
             let calendar = Calendar.current
             let day = calendar.startOfDay(for: date)
             let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
@@ -153,13 +153,39 @@ enum DailyMetricsProjector {
                 weightObservations: effectiveInputs.weightObservations,
                 in: modelContext
             )
-            let projected = makeProjection(
-                on: day,
-                effectiveInputs: effectiveInputs,
-                projectionInputs: projectionInputs,
-                healthSnapshot: healthSnapshot,
+            // Copy all SwiftData-backed input into Sendable values before leaving
+            // this context. Only pure fingerprinting/accounting work runs detached.
+            let calculationInput = CaloricEngine.calculationInput(
+                date: day,
+                meals: projectionInputs.meals,
+                workouts: projectionInputs.workouts,
+                effectiveProfile: effectiveInputs.profile,
+                effectiveWeight: effectiveInputs.weight,
+                healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
+                healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection,
+                healthKitSteps: healthSnapshot?.stepCountForProjection,
+                healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
                 fingerprintContext: fingerprintContext
             )
+            let expectedFingerprint = await Task.detached(priority: .utility) {
+                CaloricEngine.projectionFingerprint(for: calculationInput)
+            }.value
+            if DailyMetricsProjectionFingerprint.sourceMatches(
+                storedFingerprint: existing.sourceFingerprint,
+                storedAlgorithmVersion: existing.projectionVersion,
+                expectedFingerprint: expectedFingerprint,
+                expectedAlgorithmVersion: fingerprintContext.algorithmVersion
+            ), !existing.requiresRecompute {
+                return false
+            }
+
+            let calculationResult = await Task.detached(priority: .utility) {
+                CaloricEngine.computeDailyMetricsResult(
+                    for: calculationInput,
+                    sourceFingerprint: expectedFingerprint
+                )
+            }.value
+            let projected = calculationResult.makeDailyMetrics()
             copy(projected, to: existing)
             return true
         }
@@ -168,6 +194,14 @@ enum DailyMetricsProjector {
     private static func withProjectionErrorMapping<T>(_ operation: () throws -> T) throws -> T {
         do {
             return try operation()
+        } catch {
+            throw DailyMetricsProjectionError.failed
+        }
+    }
+
+    private static func withProjectionErrorMapping<T>(_ operation: () async throws -> T) async throws -> T {
+        do {
+            return try await operation()
         } catch {
             throw DailyMetricsProjectionError.failed
         }

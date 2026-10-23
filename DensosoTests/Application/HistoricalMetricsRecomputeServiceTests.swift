@@ -5,6 +5,65 @@ import XCTest
 
 @MainActor
 final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
+    func testDetachedProjectionCalculationMatchesSynchronousProjection() async throws {
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let profile = EffectiveProfile(
+            profileKey: "primary",
+            sourceRevisionID: UUID(uuidString: "00000000-0000-0000-0000-000000000901")!,
+            sourceEffectiveFrom: day,
+            effectiveAt: day,
+            dateOfBirth: Date(timeIntervalSince1970: 315_532_800),
+            biologicalSex: .female,
+            heightCm: 165,
+            weightKg: 60,
+            activityLevel: .moderate
+        )
+        let weight = EffectiveWeight(
+            measuredAt: day,
+            kilograms: 60,
+            source: .manual,
+            confidence: 0.9
+        )
+        let workout = WorkoutRecord(
+            date: day,
+            type: "walking",
+            durationMinutes: 35,
+            estimatedCaloriesBurned: 120,
+            intensity: "moderate"
+        )
+        let input = CaloricEngine.calculationInput(
+            date: day,
+            meals: [],
+            workouts: [workout],
+            effectiveProfile: profile,
+            effectiveWeight: weight,
+            healthKitActiveEnergyKcal: 420,
+            healthKitRestingEnergyKcal: 1_380
+        )
+        let fingerprint = CaloricEngine.projectionFingerprint(for: input)
+        let detachedResult = await Task.detached(priority: .utility) {
+            CaloricEngine.computeDailyMetricsResult(for: input, sourceFingerprint: fingerprint)
+        }.value
+        let detachedProjection = detachedResult.makeDailyMetrics()
+        let synchronousProjection = CaloricEngine.computeDailyMetrics(
+            date: day,
+            meals: [],
+            workouts: [workout],
+            effectiveProfile: profile,
+            effectiveWeight: weight,
+            healthKitActiveEnergyKcal: 420,
+            healthKitRestingEnergyKcal: 1_380
+        )
+
+        XCTAssertEqual(detachedProjection.sourceFingerprint, synchronousProjection.sourceFingerprint)
+        XCTAssertEqual(detachedProjection.totalExpenditureKcal, synchronousProjection.totalExpenditureKcal)
+        XCTAssertEqual(detachedProjection.activeCaloriesKcal, synchronousProjection.activeCaloriesKcal)
+        XCTAssertEqual(detachedProjection.bmrKcal, synchronousProjection.bmrKcal)
+        XCTAssertEqual(detachedProjection.energyQuality, synchronousProjection.energyQuality)
+        XCTAssertEqual(detachedProjection.dataCoverageJSON, synchronousProjection.dataCoverageJSON)
+        XCTAssertEqual(detachedProjection.workoutCount, 1)
+    }
+
     func testRecomputesOnlyExistingEligiblePendingMetricsWithinBatch() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)

@@ -38,6 +38,12 @@ writes when inputs are unchanged; pending legacy rows still run through
 projection. Daily-brief cache versions
 include the recommendation-policy version, while DailyLoop exposes its own
 algorithm version for its on-demand composed snapshot.
+Historical recompute copies each day's SwiftData inputs into Sendable value
+snapshots on its owning actor. Detached utility tasks perform fingerprinting
+and pure accounting; the result returns to the owning actor for model mutation
+and save. No ModelContext or SwiftData model crosses actors. Synchronous
+transactional write paths remain on their context actor and are not represented
+as off-actor measurements.
 The DailyLoop snapshot also carries the local day key and time zone, a stable
 source fingerprint, per-metric observed/estimated/partial/unavailable/pending
 coverage, and refresh state. A current-day brief is fresh for six hours after
@@ -145,6 +151,7 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `HealthProjectionActorTests.testStateRefreshReportsP50P95ForFortyTwoDayLocalDataWindow`,
   `DailyLoopBackgroundSchedulerTests.testExpirationAndCompletionAreIdempotentAndLateExpirationDoesNotCancelNextWork`,
   `HistoricalMetricsRecomputeServiceTests.testRecomputesOnlyExistingEligiblePendingMetricsWithinBatch`,
+  `HistoricalMetricsRecomputeServiceTests.testDetachedProjectionCalculationMatchesSynchronousProjection`,
   `HistoricalMetricsRecomputeServiceTests.testMissingDOBDoesNotLetObservedEnergyClearRecomputeFlag`,
   `HistoricalMetricsRecomputeServiceTests.testOrdinaryHistoricalReprojectKeepsPendingFlagWhenDOBMissingWithObservedEnergy`,
   `HistoricalMetricsRecomputeServiceTests.testCurrentDayReprojectRetainsObservedEnergyBehaviorWithoutProfileOrWeight`,

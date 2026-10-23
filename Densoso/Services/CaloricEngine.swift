@@ -2,6 +2,151 @@ import Foundation
 import CryptoKit
 import DensosoDomain
 
+struct DailyMetricsCalculationMeal: Sendable {
+    let id: UUID
+    let date: Date
+    let totalCaloriesKcal: Int
+    let proteinG: Double
+    let fatG: Double
+    let carbsG: Double
+    let energyLowKcal: Double
+    let energyLikelyKcal: Double
+    let energyHighKcal: Double
+    let proteinLowG: Double?
+    let proteinLikelyG: Double?
+    let proteinHighG: Double?
+    let fatLowG: Double?
+    let fatLikelyG: Double?
+    let fatHighG: Double?
+    let carbsLowG: Double?
+    let carbsLikelyG: Double?
+    let carbsHighG: Double?
+    let evidenceData: Data?
+
+    init(_ meal: MealRecord) {
+        id = meal.id
+        date = meal.date
+        totalCaloriesKcal = meal.totalCaloriesKcal
+        proteinG = meal.proteinG
+        fatG = meal.fatG
+        carbsG = meal.carbsG
+        energyLowKcal = meal.energyLowKcal
+        energyLikelyKcal = meal.energyLikelyKcal
+        energyHighKcal = meal.energyHighKcal
+        proteinLowG = meal.proteinLowG
+        proteinLikelyG = meal.proteinLikelyG
+        proteinHighG = meal.proteinHighG
+        fatLowG = meal.fatLowG
+        fatLikelyG = meal.fatLikelyG
+        fatHighG = meal.fatHighG
+        carbsLowG = meal.carbsLowG
+        carbsLikelyG = meal.carbsLikelyG
+        carbsHighG = meal.carbsHighG
+        evidenceData = meal.evidenceData
+    }
+}
+
+struct DailyMetricsCalculationWorkout: Sendable {
+    let id: UUID
+    let date: Date
+    let type: String
+    let durationMinutes: Int
+    let estimatedCaloriesBurned: Int
+    let intensity: String
+    let workoutOrigin: String
+    let energySource: String?
+
+    init(_ workout: WorkoutRecord) {
+        id = workout.id
+        date = workout.date
+        type = workout.type
+        durationMinutes = workout.durationMinutes
+        estimatedCaloriesBurned = workout.estimatedCaloriesBurned
+        intensity = workout.intensity
+        workoutOrigin = workout.workoutOrigin
+        energySource = workout.energySource
+    }
+}
+
+struct DailyMetricsCalculationInput: Sendable {
+    let date: Date
+    let meals: [DailyMetricsCalculationMeal]
+    let workouts: [DailyMetricsCalculationWorkout]
+    let effectiveProfile: EffectiveProfile?
+    let effectiveWeight: EffectiveWeight?
+    let healthKitActiveEnergyKcal: Double?
+    let healthKitRestingEnergyKcal: Double?
+    let healthKitSteps: Double?
+    let healthKitExerciseMinutes: Double?
+    let fingerprintContext: DailyMetricsProjectionFingerprintContext
+}
+
+struct DailyMetricsCalculationResult: Sendable {
+    let date: Date
+    let bmrKcal: Int
+    let activeCaloriesKcal: Int
+    let totalExpenditureKcal: Int
+    let totalIntakeKcal: Int
+    let deficitKcal: Int
+    let proteinG: Double
+    let fatG: Double
+    let carbsG: Double
+    let mealCount: Int
+    let workoutCount: Int
+    let intakeEnergyLowKcal: Double
+    let intakeEnergyLikelyKcal: Double
+    let intakeEnergyHighKcal: Double
+    let expenditureEnergyLowKcal: Double
+    let expenditureEnergyLikelyKcal: Double
+    let expenditureEnergyHighKcal: Double
+    let energyBalanceLowKcal: Double
+    let energyBalanceLikelyKcal: Double
+    let energyBalanceHighKcal: Double
+    let activeEnergyKcal: Double?
+    let basalEnergyKcal: Double?
+    let steps: Double?
+    let exerciseMinutes: Double?
+    let weightKg: Double?
+    let energyQuality: String
+    let dataCoverageJSON: String
+    let projectionVersion: String
+    let sourceFingerprint: String
+
+    func makeDailyMetrics() -> DailyMetrics {
+        DailyMetrics(
+            date: date,
+            bmrKcal: bmrKcal,
+            activeCaloriesKcal: activeCaloriesKcal,
+            totalExpenditureKcal: totalExpenditureKcal,
+            totalIntakeKcal: totalIntakeKcal,
+            deficitKcal: deficitKcal,
+            proteinG: proteinG,
+            fatG: fatG,
+            carbsG: carbsG,
+            mealCount: mealCount,
+            workoutCount: workoutCount,
+            intakeEnergyLowKcal: intakeEnergyLowKcal,
+            intakeEnergyLikelyKcal: intakeEnergyLikelyKcal,
+            intakeEnergyHighKcal: intakeEnergyHighKcal,
+            expenditureEnergyLowKcal: expenditureEnergyLowKcal,
+            expenditureEnergyLikelyKcal: expenditureEnergyLikelyKcal,
+            expenditureEnergyHighKcal: expenditureEnergyHighKcal,
+            energyBalanceLowKcal: energyBalanceLowKcal,
+            energyBalanceLikelyKcal: energyBalanceLikelyKcal,
+            energyBalanceHighKcal: energyBalanceHighKcal,
+            activeEnergyKcal: activeEnergyKcal,
+            basalEnergyKcal: basalEnergyKcal,
+            steps: steps,
+            exerciseMinutes: exerciseMinutes,
+            weightKg: weightKg,
+            energyQuality: energyQuality,
+            dataCoverageJSON: dataCoverageJSON,
+            projectionVersion: projectionVersion,
+            sourceFingerprint: sourceFingerprint
+        )
+    }
+}
+
 /// 热量计算引擎 —— 全部纯函数，无副作用
 enum CaloricEngine {
 
@@ -109,11 +254,60 @@ enum CaloricEngine {
         healthKitExerciseMinutes: Double? = nil,
         fingerprintContext: DailyMetricsProjectionFingerprintContext = .init()
     ) -> DailyMetrics {
+        let input = calculationInput(
+            date: date,
+            meals: meals,
+            workouts: workouts,
+            effectiveProfile: effectiveProfile,
+            effectiveWeight: effectiveWeight,
+            healthKitActiveEnergyKcal: healthKitActiveEnergyKcal,
+            healthKitRestingEnergyKcal: healthKitRestingEnergyKcal,
+            healthKitSteps: healthKitSteps,
+            healthKitExerciseMinutes: healthKitExerciseMinutes,
+            fingerprintContext: fingerprintContext
+        )
+        let fingerprint = projectionFingerprint(for: input)
+        return computeDailyMetricsResult(for: input, sourceFingerprint: fingerprint).makeDailyMetrics()
+    }
+
+    static func calculationInput(
+        date: Date,
+        meals: [MealRecord],
+        workouts: [WorkoutRecord],
+        effectiveProfile: EffectiveProfile?,
+        effectiveWeight: EffectiveWeight?,
+        healthKitActiveEnergyKcal: Double? = nil,
+        healthKitRestingEnergyKcal: Double? = nil,
+        healthKitSteps: Double? = nil,
+        healthKitExerciseMinutes: Double? = nil,
+        fingerprintContext: DailyMetricsProjectionFingerprintContext = .init()
+    ) -> DailyMetricsCalculationInput {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
+        return DailyMetricsCalculationInput(
+            date: startOfDay,
+            meals: meals
+                .filter { calendar.isDate($0.date, inSameDayAs: startOfDay) }
+                .map(DailyMetricsCalculationMeal.init),
+            workouts: workouts
+                .filter { calendar.isDate($0.date, inSameDayAs: startOfDay) }
+                .map(DailyMetricsCalculationWorkout.init),
+            effectiveProfile: effectiveProfile,
+            effectiveWeight: effectiveWeight,
+            healthKitActiveEnergyKcal: healthKitActiveEnergyKcal,
+            healthKitRestingEnergyKcal: healthKitRestingEnergyKcal,
+            healthKitSteps: healthKitSteps,
+            healthKitExerciseMinutes: healthKitExerciseMinutes,
+            fingerprintContext: fingerprintContext
+        )
+    }
 
-        let dayMeals = meals.filter { calendar.isDate($0.date, inSameDayAs: startOfDay) }
-        let dayWorkouts = workouts.filter { calendar.isDate($0.date, inSameDayAs: startOfDay) }
+    static func computeDailyMetricsResult(
+        for input: DailyMetricsCalculationInput,
+        sourceFingerprint: String
+    ) -> DailyMetricsCalculationResult {
+        let dayMeals = input.meals
+        let dayWorkouts = input.workouts
 
         let evidenceBackedMeals = dayMeals.filter(hasCurrentMealEvidence)
         let intakeRanges = evidenceBackedMeals.compactMap { meal in
@@ -158,10 +352,10 @@ enum CaloricEngine {
         let totalCarbs = carbsComplete ? carbRanges.reduce(0) { $0 + $1.likely } : 0
 
         let energyAccounting = EnergyAccounting.calculate(
-            observedBasalEnergyKcal: healthKitRestingEnergyKcal,
-            observedActiveEnergyKcal: healthKitActiveEnergyKcal,
-            profile: effectiveProfile,
-            effectiveWeightKg: effectiveWeight?.kilograms
+            observedBasalEnergyKcal: input.healthKitRestingEnergyKcal,
+            observedActiveEnergyKcal: input.healthKitActiveEnergyKcal,
+            profile: input.effectiveProfile,
+            effectiveWeightKg: input.effectiveWeight?.kilograms
         )
         let expenditure = energyAccounting.expenditure
         let basal = energyAccounting.basalComponent?.likely
@@ -178,33 +372,20 @@ enum CaloricEngine {
         let balanceHigh = expenditure.map { $0.high - intake.low } ?? 0
         let coverageJSON = makeCoverageJSON(
             intakePresent: intakeComplete,
-            profileAvailable: effectiveProfile != nil,
-            weightAvailable: effectiveWeight != nil,
-            basalObserved: validEnergy(healthKitRestingEnergyKcal) != nil,
-            activeObserved: validEnergy(healthKitActiveEnergyKcal) != nil,
+            profileAvailable: input.effectiveProfile != nil,
+            weightAvailable: input.effectiveWeight != nil,
+            basalObserved: validEnergy(input.healthKitRestingEnergyKcal) != nil,
+            activeObserved: validEnergy(input.healthKitActiveEnergyKcal) != nil,
             basalEstimated: energyAccounting.basalComponent?.source == .estimated,
             activeEstimated: energyAccounting.activeComponent?.source == .estimated,
-            stepsObserved: validEnergy(healthKitSteps) != nil,
-            exerciseObserved: validEnergy(healthKitExerciseMinutes) != nil,
+            stepsObserved: validEnergy(input.healthKitSteps) != nil,
+            exerciseObserved: validEnergy(input.healthKitExerciseMinutes) != nil,
             proteinPresent: proteinComplete,
             fatPresent: fatComplete,
             carbsPresent: carbsComplete
         )
-        let fingerprint = projectionFingerprint(
-            day: startOfDay,
-            meals: dayMeals,
-            workouts: dayWorkouts,
-            profile: effectiveProfile,
-            weight: effectiveWeight,
-            activeEnergy: healthKitActiveEnergyKcal,
-            basalEnergy: healthKitRestingEnergyKcal,
-            steps: healthKitSteps,
-            exerciseMinutes: healthKitExerciseMinutes,
-            context: fingerprintContext
-        )
-
-        return DailyMetrics(
-            date: startOfDay,
+        return DailyMetricsCalculationResult(
+            date: input.date,
             bmrKcal: roundedInteger(basal ?? 0),
             activeCaloriesKcal: roundedInteger(active ?? 0),
             totalExpenditureKcal: roundedInteger(expenditure?.likely ?? 0),
@@ -224,16 +405,15 @@ enum CaloricEngine {
             energyBalanceLowKcal: balanceLow,
             energyBalanceLikelyKcal: balanceLikely,
             energyBalanceHighKcal: balanceHigh,
-            activeEnergyKcal: validEnergy(healthKitActiveEnergyKcal),
-            basalEnergyKcal: validEnergy(healthKitRestingEnergyKcal),
-            steps: validEnergy(healthKitSteps),
-            exerciseMinutes: validEnergy(healthKitExerciseMinutes),
-            weightKg: effectiveWeight?.kilograms,
+            activeEnergyKcal: validEnergy(input.healthKitActiveEnergyKcal),
+            basalEnergyKcal: validEnergy(input.healthKitRestingEnergyKcal),
+            steps: validEnergy(input.healthKitSteps),
+            exerciseMinutes: validEnergy(input.healthKitExerciseMinutes),
+            weightKg: input.effectiveWeight?.kilograms,
             energyQuality: energyQuality,
             dataCoverageJSON: coverageJSON,
-            projectionVersion: fingerprintContext.algorithmVersion,
-            sourceFingerprint: fingerprint,
-            requiresRecompute: false
+            projectionVersion: input.fingerprintContext.algorithmVersion,
+            sourceFingerprint: sourceFingerprint
         )
     }
 
@@ -251,8 +431,8 @@ enum CaloricEngine {
     ) -> String {
         sourceFingerprint(
             day: day,
-            meals: meals,
-            workouts: workouts,
+            meals: meals.map(DailyMetricsCalculationMeal.init),
+            workouts: workouts.map(DailyMetricsCalculationWorkout.init),
             profile: profile,
             weight: weight,
             activeEnergy: activeEnergy,
@@ -260,6 +440,21 @@ enum CaloricEngine {
             steps: steps,
             exerciseMinutes: exerciseMinutes,
             context: context
+        )
+    }
+
+    static func projectionFingerprint(for input: DailyMetricsCalculationInput) -> String {
+        sourceFingerprint(
+            day: input.date,
+            meals: input.meals,
+            workouts: input.workouts,
+            profile: input.effectiveProfile,
+            weight: input.effectiveWeight,
+            activeEnergy: input.healthKitActiveEnergyKcal,
+            basalEnergy: input.healthKitRestingEnergyKcal,
+            steps: input.healthKitSteps,
+            exerciseMinutes: input.healthKitExerciseMinutes,
+            context: input.fingerprintContext
         )
     }
 
@@ -276,7 +471,7 @@ enum CaloricEngine {
         return try? EstimateRange(low: low, likely: likely, high: high)
     }
 
-    private static func hasCurrentMealEvidence(_ meal: MealRecord) -> Bool {
+    private static func hasCurrentMealEvidence(_ meal: DailyMetricsCalculationMeal) -> Bool {
         guard let evidenceData = meal.evidenceData,
               let evidence = try? JSONDecoder().decode([EvidenceSnapshot].self, from: evidenceData),
               !evidence.isEmpty else {
@@ -333,8 +528,8 @@ enum CaloricEngine {
 
     private static func sourceFingerprint(
         day: Date,
-        meals: [MealRecord],
-        workouts: [WorkoutRecord],
+        meals: [DailyMetricsCalculationMeal],
+        workouts: [DailyMetricsCalculationWorkout],
         profile: EffectiveProfile?,
         weight: EffectiveWeight?,
         activeEnergy: Double?,
