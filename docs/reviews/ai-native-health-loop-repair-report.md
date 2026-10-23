@@ -1,0 +1,118 @@
+# AI-Native Health Loop Repair Report
+
+Date: 2026-10-23  
+Repository: `Densityyang/densoso`  
+Worktree: `E:\howtodo\densoso-ai-native-loop`  
+Branch: `codex/ai-native-health-loop`  
+Code baseline reviewed in this report: `dcc8ecb8a2943cae6fbb8fda754e528d02d7c85b`  
+Associated pull request: none
+
+## Decision
+
+**NOT READY.** The current full Build workflow, run [#39923521840](https://github.com/Densityyang/densoso/actions/runs/39923521840), is pending on this HEAD. The latest completed per-gate evidence is on older SHA `70b248a`, where Gate 1 failed five assertions, Gate 2 passed, and Gate 3 passed; that workflow run has not yet produced its final aggregate. The Gate 1 fixtures and projection expectations have since been corrected, but that repair still needs current-HEAD Actions evidence.
+
+The real-meal field benchmark remains `BLOCKED/MISSING_EVIDENCE`. Gate 15 signed iPhone/Watch evidence and Gate 16 owner acceptance remain unperformed. Provider fixture tests do not establish live DeepSeek multimodal/structured API behavior. Performance targets do not yet have device/data-scale measurements. No local heavy tests were run; tests are assigned to GitHub Actions.
+
+## CI evidence and boundaries
+
+- Run [#39714060743](https://github.com/Densityyang/densoso/actions/runs/39714060743) on `e7d273a` failed in Gate 3 static validation after Gates 1 and 2 passed. The seven failures were static contract/source-location drift involving Provider documentation, pricing, DeepSeek configuration, DailyLoop plan lookup, and DailyCheckIn terminology. The validator exited before writing its fixture report, and the Gate 3 XCTest step did not run.
+- Build IPA [#39716002512](https://github.com/Densityyang/densoso/actions/runs/39716002512) succeeded on the original reviewed SHA. It was an unsigned device-build path; it is not full test CI or signed-device acceptance.
+- Run [#39917725806](https://github.com/Densityyang/densoso/actions/runs/39917725806) on `70b248a` is older than the current HEAD. Gate 1 failed five assertions across two tests; Gate 2 passed; Gate 3 passed static validation, 134/134 domain tests, and 165/165 iOS tests. Its Gate 3 artifact reports no failed assertions and includes all expected evidence files. Do not treat this partial run as a full CI pass.
+- After that Gate 1 failure, the same run proceeded through Gates 2 and 3 and started Gate 4, confirming job-level failure propagation on this older SHA. The run's final Gate 1–14 aggregate is not yet available.
+- Run [#39923521840](https://github.com/Densityyang/densoso/actions/runs/39923521840) targets `dcc8ecb`; it is pending and has no job results or artifacts yet.
+- The last known full Build CI pass before this repair series was `3628d42`, earlier than the reviewed HEAD.
+
+## Findings addressed
+
+### GATE-3-001 — validator drift obscured independent test evidence
+
+- **Classification:** `GATE_DEFECT` / `CONTRACT_DRIFT`; **priority:** P1.
+- **Affected path:** `scripts/validate_phase3_agent_provider.py`, `.github/workflows/build.yml`, Gate 3 source/config/test contracts.
+- **Old behavior:** the static validator could exit before emitting its report, skip Gate 3 XCTest, and leave downstream gates without evidence.
+- **Change:** validate real configuration and interfaces rather than brittle long-form wording; write failure diagnostics; continue independent Gate 3 tests; record step outcomes and upload artifacts with `always()`; retain a final fail-closed job result. The full workflow also records Gate 1–14 aggregate statuses.
+- **Tests/evidence:** Gate 3 contract tests and run #399177 on `70b248a` passed (165 iOS tests, 134 domain tests). Current-HEAD confirmation is pending in #399235.
+- **Residual risk:** no current-HEAD full Build result yet.
+
+### HEALTH-001 — Gate 1 fixtures contradicted the projection contract
+
+- **Classification:** `CODE_DEFECT` in the test fixtures; **priority:** P1.
+- **Affected path:** `DailyMetricsProjectionFingerprintTests` and `HistoricalMetricsRecomputeServiceTests`.
+- **Old behavior:** a “future” goal fixture was only two seconds after midnight, and a supposedly current non-pending row used legacy freshness fields. Both made the test expectations inconsistent with the production projection rules.
+- **Change:** use a calendar-day future goal and mark the non-pending fixture with the current projection version and a nonempty fingerprint. Related read-model assertions now preserve observed expenditure separately from estimated intake/deficit, represent absent values as JSON null, and count missing days from the requested window.
+- **Tests/evidence:** these assertions run in Gate 1; the latest run containing these fixes is still pending.
+- **Residual risk:** the previous Gate 1 run on `70b248a` still failed those five assertions; do not call them fixed by CI until a later SHA passes.
+
+### METRICS-001 — Agent daily breakdown dropped availability evidence
+
+- **Classification:** `CONTRACT_DRIFT`; **priority:** P1.
+- **Affected path:** `GetMetricsTool` response mapping.
+- **Old behavior:** per-day results omitted coverage, energy quality, recompute state, and projection version already present in `DailyMetricsReadResult`.
+- **Change:** daily breakdown now returns those fields. `get_metrics` and `get_weekly_deficit` include an explicit note that the 7,700 kcal/kg conversion is rough and is not a body-weight prediction. Dashboard precision is reduced to one decimal and the derived conversion is visually neutral.
+- **Tests added/changed:** `GetMetricsToolTests`, `GetWeeklyDeficitToolTests`.
+- **CI:** Gate 1 full tests and the Gate 3 tool-test selection on current HEAD are pending.
+- **Residual risk:** real user-facing behavior awaits current-HEAD Actions and simulator UI evidence.
+
+### METRICS-002 — invalid numeric values inflated coverage
+
+- **Classification:** `CODE_DEFECT`; **priority:** P1.
+- **Affected path:** `DailyMetricsUsabilityPolicy.aggregateRanges`, `aggregateSignedRanges`, and `aggregateNumbers`.
+- **Old behavior:** coverage counted availability flags without checking whether a value existed or was valid; `nil`, infinity, or negative nutrient values could enter valid-day counts and distort averages.
+- **Change:** aggregate coverage now normalizes each value against availability and value validity; number aggregation accepts only finite nonnegative values while preserving pending-recompute state.
+- **Tests added:** `DailyMetricsUsabilityTests.testAggregatesDoNotCountMissingOrNonFiniteValuesAsAvailableDays`.
+- **CI:** DensosoDomain tests on current HEAD are pending.
+- **Residual risk:** no current-HEAD Actions result yet.
+
+### HEALTH-002 — signed energy balance lost surplus days in health context
+
+- **Classification:** `CODE_DEFECT`; **priority:** P1.
+- **Affected path:** `HealthIntelligenceDay` → 7/28-day `HealthContextSummary`.
+- **Old behavior:** `HealthIntelligenceDay` applied a nonnegative validator to `dailyDeficitKcal`, dropping valid negative balances. Summary averages therefore excluded surplus days.
+- **Change:** daily deficit input accepts finite signed values, and context coverage now reports valid `dailyDeficitKcal` and `proteinGrams` day counts.
+- **Tests added:** `HealthIntelligenceTests.testHealthContextAveragesSignedEnergyBalanceAndReportsItsDenominator`.
+- **CI:** Gate 1 and Gate 11 domain/app test selections on current HEAD are pending.
+- **Residual risk:** no current-HEAD Actions result yet.
+
+### UI-001 — estimates were displayed as observed values
+
+- **Classification:** `CONTRACT_DRIFT`; **priority:** P1.
+- **Affected path:** `DashboardScreen` and `WeeklyAnalyticsSnapshot`.
+- **Old behavior:** the daily deficit prefix depended only on expenditure quality, so an observed expenditure plus estimated intake could look exact. The weekly chart labeled all values as “actual” and used one color.
+- **Change:** daily intake, expenditure, and deficit use their own availability to show an approximate prefix. Weekly estimates/partial bars have a separate legend/color from observed values; the target line has its own style. Rough energy conversion has no favorable-color implication.
+- **Tests changed:** `WeeklyAnalyticsServiceTests` asserts that a partial week contains estimated daily deficits and a partial aggregate.
+- **CI:** Gate 1 UI screenshots and unit suite on current HEAD are pending.
+- **Residual risk:** simulator verification is pending; no physical-device visual claim is made.
+
+### HEALTH-003 — unrelated HealthKit cursors invalidated energy projections
+
+- **Classification:** `CODE_DEFECT`; **priority:** P1.
+- **Affected path:** `DailyMetricsProjectionFingerprint.context`.
+- **Old behavior:** every HealthKit import cursor covering a day could enter the DailyMetrics fingerprint, including HRV/sleep cursors that do not affect that day's energy projection.
+- **Change:** cursor revisions are limited to active energy, resting energy, step count, and exercise time, the HealthKit streams consumed by DailyMetrics. Meal, workout, profile, weight, and goal values retain their own input revisions.
+- **Tests added:** `DailyMetricsProjectionFingerprintTests.testUnrelatedHealthKitCursorDoesNotInvalidateDailyMetricsProjection`; existing active-energy cursor test still asserts a relevant cursor changes the fingerprint.
+- **CI:** Gate 1 and Gate 11 tests on current HEAD are pending.
+- **Residual risk:** current-HEAD fingerprint and write-suppression evidence is pending.
+
+## Additional implementation already present on this repair branch
+
+- Durable Agent request deadline, rounds/tool/token/cost accounting, resume checks, transient-image reattachment requirements, bounded provider history, and request-scoped reasoning cleanup.
+- Provider usage metadata includes image count; unknown pricing remains non-blocking and is not reported as zero cost.
+- DailyLoop snapshot freshness, coverage, error, and projection provenance are explicit.
+- DailyCheckIn staging validates self-report evidence, third-party cues, conflicting/ambiguous negation, and supported dates.
+- Historical projection uses day-specific profile/weight inputs, current-day `asOf`, pending recompute eligibility, and shared projection/fingerprint behavior.
+- Gate 5 reports synthetic/software evidence separately from the blocked real-meal field benchmark.
+
+These are implementation statements only; final current-HEAD acceptance depends on Actions and the evidence boundaries below.
+
+## Remaining items and acceptance boundary
+
+- **Gate 1–14:** current full Build run #39923521840 is pending. Record its complete same-SHA status and artifacts before making a software-CI claim.
+- **Meal field benchmark:** `BLOCKED/MISSING_EVIDENCE` until real photos and kitchen-scale measurements, dataset composition, annotation method, sample size, confidence intervals/percentiles, and failure cases are provided.
+- **Gate 15:** `NOT RUN`; signed, paired iPhone/Apple Watch acceptance is manual.
+- **Gate 16:** `NOT RUN`; final owner release acceptance is manual.
+- **Provider live behavior:** fixture/contract tests do not prove a live DeepSeek multimodal/structured request path.
+- **Performance:** Today render, health refresh, meal estimation, and latency targets have no current device/data-scale measurements in this report. `DailyMetricsProjector` still performs synchronous work on `MainActor`; moving expensive pure projection math off that actor remains an implementation item, not a passed target.
+- **Pull request:** none is associated with this branch; PR #14 is a separate V3 work line.
+
+## Final status
+
+**NOT READY** at implementation HEAD `dcc8ecb8a2943cae6fbb8fda754e528d02d7c85b`. Gate 3 passed on older SHA `70b248a`; Gate 1 failed on that same SHA. Current-HEAD full CI is pending, and field/device acceptance evidence is missing. Update this report after run #39923521840 completes; do not convert pending or missing evidence to `PASS`.
