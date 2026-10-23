@@ -99,25 +99,30 @@ final class AgentCoordinatorTests: XCTestCase {
         XCTAssertTrue(try ModelContext(harness.container).fetch(FetchDescriptor<MessageRecord>()).isEmpty)
     }
 
-    func testUnpricedProviderRequestStopsBeforeNetworkOrToolCalls() async throws {
-        let provider = ScriptedTextProvider(model: "unpriced-fixture-model", scripts: [])
+    func testUnpricedProviderRequestCompletesWithUnavailableCostAccounting() async throws {
+        let provider = ScriptedTextProvider(
+            model: "unpriced-fixture-model",
+            scripts: [[.textDelta("这是一个离线测试回答。"), .completed(.completed)]]
+        )
         let harness = try await Harness(provider: provider)
         let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000921")!
 
-        do {
-            _ = try await harness.session.send(userText: "给我讲个笑话", requestID: requestID)
-            XCTFail("An unpriced model must not consume an unbounded provider request")
-        } catch {
-            XCTAssertEqual(error as? ProviderError, .budgetUnavailable)
-        }
-
-        XCTAssertTrue(provider.recordedRequests().isEmpty)
+        let response = try await harness.session.send(userText: "给我讲个笑话", requestID: requestID)
+        XCTAssertEqual(response.text, "这是一个离线测试回答。")
+        XCTAssertEqual(provider.recordedRequests().count, 1)
         let record = try XCTUnwrap(
             ModelContext(harness.container).fetch(
                 FetchDescriptor<AgentRequestRecord>(predicate: #Predicate { $0.requestID == requestID })
             ).first
         )
-        XCTAssertEqual(record.stateRaw, AgentRequestState.failed.rawValue)
+        XCTAssertEqual(record.stateRaw, AgentRequestState.completed.rawValue)
+        let costBudget = try XCTUnwrap(
+            ModelContext(harness.container).fetch(
+                FetchDescriptor<AgentRequestCostBudgetRecord>(predicate: #Predicate { $0.requestID == requestID })
+            ).first
+        )
+        XCTAssertEqual(costBudget.costStateRaw, AgentCostBudgetState.unavailable.rawValue)
+        XCTAssertEqual(costBudget.reservedCostMicros, 0)
     }
 
     func testCostCapIsReservedBeforeProviderOrToolInvocation() async throws {

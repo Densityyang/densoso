@@ -575,12 +575,10 @@ final class AgentSession {
                     deadline: tracker.budget.deadline
                 )
                 try tracker.requireTime()
-                guard let costEstimate = await usageLedger.maximumRequestCostEstimate(
+                let costEstimate = await usageLedger.maximumRequestCostEstimate(
                     provider: provider.descriptor,
                     request: request
-                ) else {
-                    throw ProviderError.budgetUnavailable
-                }
+                )
                 let nextProviderRound = tracker.providerRounds == Int.max
                     ? Int.max
                     : tracker.providerRounds + 1
@@ -588,16 +586,18 @@ final class AgentSession {
                     _ = try await conversationRepository.reserveAgentRequestCost(
                         requestID: requestID,
                         conversationID: conversationID,
-                        provider: costEstimate.provider,
-                        model: costEstimate.model,
-                        currency: costEstimate.currency,
-                        pricingVersion: costEstimate.pricingVersion,
+                        provider: costEstimate?.provider ?? provider.descriptor.id,
+                        model: costEstimate?.model ?? provider.descriptor.model,
+                        currency: costEstimate?.currency ?? "unavailable",
+                        pricingVersion: costEstimate?.pricingVersion ?? "unknown",
                         providerRound: nextProviderRound,
-                        estimatedCostMicros: costEstimate.maximumCostMicros
+                        estimatedCostMicros: costEstimate?.maximumCostMicros
                     )
                 } catch let error as AgentRequestPersistenceError {
                     switch error {
-                    case .costBudgetUnavailable, .costBudgetMismatch:
+                    case .costBudgetMismatch:
+                        throw ProviderError.requestModelMismatch
+                    case .costBudgetUnavailable:
                         throw ProviderError.budgetUnavailable
                     case .costBudgetExceeded:
                         throw ProviderError.budgetExceeded
@@ -1135,7 +1135,7 @@ final class AgentSession {
                             requestID: request.requestID,
                             conversationID: request.conversationID
                         )
-                        throw ProviderError.budgetUnavailable
+                        throw ProviderError.requestModelMismatch
                     }
                     let costIsPriced = try await usageLedger.recordWithCostAvailability(
                         usage,
@@ -1147,7 +1147,6 @@ final class AgentSession {
                             requestID: request.requestID,
                             conversationID: request.conversationID
                         )
-                        throw ProviderError.budgetUnavailable
                     }
                     await MainActor.run { emit(.usage(usage)) }
                     let budget = usage.provider == .deepSeek

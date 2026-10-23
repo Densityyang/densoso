@@ -48,8 +48,8 @@ V1–V7 schema identities remain intact. V7-to-V8 renames the sample-index
 tombstone flag while preserving its stored column. V8-to-V9 adds the isolated
 `AgentRequestCostBudgetRecord` sidecar without rewriting V5 request rows. When an
 older interrupted request has already used provider rounds but has no
-recoverable request-cost reservations, restoration marks its cost state
-unavailable and stops before another provider call. Gate 2 CI covers V1/V2 disk
+recoverable cost reservation or provider/model identity, restoration marks its
+cost state unavailable and stops before another provider call. Gate 2 CI covers V1/V2 disk
 fixtures reopened at the current schema, the V5-to-V6 through V8-to-V9
 migrations, and request-budget recovery behavior.
 

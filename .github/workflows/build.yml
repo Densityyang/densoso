@@ -1211,12 +1211,13 @@ jobs:
             -only-testing:DensosoTests/AgentCoordinatorTests/testProviderReasoningContinuesInMemoryButIsNeverPersisted \
             -only-testing:DensosoTests/AgentCoordinatorTests/testCloudProviderRequiresExplicitConsent \
             -only-testing:DensosoTests/AgentCoordinatorTests/testNinthToolCallStopsRequest \
-            -only-testing:DensosoTests/AgentCoordinatorTests/testUnpricedProviderRequestStopsBeforeNetworkOrToolCalls \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testUnpricedProviderRequestCompletesWithUnavailableCostAccounting \
             -only-testing:DensosoTests/AgentCoordinatorTests/testCostCapIsReservedBeforeProviderOrToolInvocation \
             -only-testing:DensosoTests/AgentProviderContextPolicyTests \
             -only-testing:DensosoTests/AgentRequestResumeTests/testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage \
             -only-testing:DensosoTests/AgentRequestResumeTests/testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn \
             -only-testing:DensosoTests/AgentRequestResumeTests/testPerRequestCostReservationPersistsAndCannotResetOnResume \
+            -only-testing:DensosoTests/AgentRequestResumeTests/testLegacyInterruptedRequestWithoutProviderIdentityFailsClosedBeforeCall \
             -only-testing:DensosoTests/ProviderUsageLedgerTests/testPreflightCostUsesInputUpperBoundMaximumOutputAndRetryAttempts \
             -only-testing:DensosoTests/DensosoMigrationTests/testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1 \
             -only-testing:DensosoTests/DensosoMigrationTests/testV7ToV9PreservesHealthKitSampleIndexState \

@@ -79,8 +79,9 @@ PR; older V3 PR evidence below has been replaced with the current run state.
   with a larger factory budget. The default cap is 1,000,000 micros in the
   selected descriptor's currency. A legacy in-flight request that has prior rounds
   but no recoverable cost reservations is terminated before another provider
-  call. Unknown pricing or a model mismatch fails closed; reservations are
-  estimates, not invoice totals.
+  call. Unknown pricing remains unavailable and does not fail an otherwise
+  bounded provider request; a provider/model mismatch fails closed. Reservations
+  are estimates, not invoice totals.
   Estimates resolve through a versioned `PricingDescriptor` matched by exact
   provider, model and capability tuple. DeepSeek uses the model ID and Responses
   endpoint from `ProviderCapabilityCatalog`; its fake-transport contract tests

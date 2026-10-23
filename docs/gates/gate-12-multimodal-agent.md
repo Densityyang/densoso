@@ -86,7 +86,7 @@ history remains readable before new turns use the current v2 tool definitions.
 - `AgentCoordinatorTests.testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages`
 - `AgentCoordinatorTests.testTypedEventStreamPreservesOrderAndRealCounts`
 - `AgentCoordinatorTests.testProviderReasoningContinuesInMemoryButIsNeverPersisted`
-- `AgentCoordinatorTests.testUnpricedProviderRequestStopsBeforeNetworkOrToolCalls`
+- `AgentCoordinatorTests.testUnpricedProviderRequestCompletesWithUnavailableCostAccounting`
 - `AgentCoordinatorTests.testCostCapIsReservedBeforeProviderOrToolInvocation`
 - `AgentProviderContextPolicyTests.testProviderHistoryKeepsRecentWholeTurnsAndTheCurrentTurn`
 - `AgentProviderContextPolicyTests.testCurrentTurnOverBudgetFailsBeforeProviderInvocation`
@@ -95,6 +95,7 @@ history remains readable before new turns use the current v2 tool definitions.
 - `AgentCoordinatorTests.testNinthToolCallStopsRequest`
 - `AgentRequestResumeTests.testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage`
 - `AgentRequestResumeTests.testPerRequestCostReservationPersistsAndCannotResetOnResume`
+- `AgentRequestResumeTests.testLegacyInterruptedRequestWithoutProviderIdentityFailsClosedBeforeCall`
 - `AgentRequestResumeTests.testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn`
 - `DensosoMigrationTests.testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1`
 - `DensosoMigrationTests.testV7ToV9PreservesHealthKitSampleIndexState`

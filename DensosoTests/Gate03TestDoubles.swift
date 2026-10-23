@@ -371,11 +371,16 @@ actor BlockingConversationRepository: ConversationRepository {
         currency: String,
         pricingVersion: String,
         providerRound: Int,
-        estimatedCostMicros: Int64
+        estimatedCostMicros: Int64?
     ) throws -> AgentRequestCostBudget {
         guard let existing = requests[requestID] else { throw AgentRequestPersistenceError.requestNotFound }
         let current = existing.costBudget
-        guard current.state != .unavailable else { throw AgentRequestPersistenceError.costBudgetUnavailable }
+        if current.state == .unavailable {
+            guard current.provider == provider && current.model == model else {
+                throw AgentRequestPersistenceError.costBudgetMismatch
+            }
+            return current
+        }
         if let currentProvider = current.provider,
            (currentProvider != provider
                 || current.model != model
@@ -387,6 +392,31 @@ actor BlockingConversationRepository: ConversationRepository {
         guard current.lastReservedProviderRound < Int.max,
               providerRound == current.lastReservedProviderRound + 1 else {
             throw AgentRequestPersistenceError.costBudgetMismatch
+        }
+        guard let estimatedCostMicros else {
+            let unavailable = AgentRequestCostBudget(
+                maximumCostMicros: current.maximumCostMicros,
+                reservedCostMicros: current.reservedCostMicros,
+                provider: provider,
+                model: model,
+                currency: current.currency ?? "unavailable",
+                pricingVersion: current.pricingVersion ?? "unknown",
+                lastReservedProviderRound: providerRound,
+                lastReservedCostMicros: 0,
+                state: .unavailable
+            )
+            requests[requestID] = AgentRequestSnapshot(
+                requestID: existing.requestID,
+                conversationID: existing.conversationID,
+                startedAt: existing.startedAt,
+                budget: existing.budget,
+                consumption: existing.consumption,
+                costBudget: unavailable,
+                resumeCount: existing.resumeCount,
+                containsTransientImage: existing.containsTransientImage,
+                state: existing.state
+            )
+            return unavailable
         }
         let total = current.reservedCostMicros.addingReportingOverflow(estimatedCostMicros)
         guard !total.overflow, total.partialValue <= current.maximumCostMicros else {

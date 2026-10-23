@@ -35,7 +35,7 @@ final class AgentRequestResumeTests: XCTestCase {
         )
 
         XCTAssertEqual(firstReservation.reservedCostMicros, 3_500)
-        XCTAssertEqual(firstReservation.remainingCostMicros, 1_500)
+        XCTAssertEqual(try XCTUnwrap(firstReservation.remainingCostMicros), 1_500)
         let resumedRepository = SwiftDataAgentRepository(modelContainer: container)
         let resumed = try await resumedRepository.beginAgentRequest(
             requestID: requestID,
@@ -46,7 +46,7 @@ final class AgentRequestResumeTests: XCTestCase {
         )
         XCTAssertEqual(resumed.budget.maximumCostMicros, 5_000)
         XCTAssertEqual(resumed.costBudget.reservedCostMicros, 3_500)
-        XCTAssertEqual(resumed.costBudget.remainingCostMicros, 1_500)
+        XCTAssertEqual(try XCTUnwrap(resumed.costBudget.remainingCostMicros), 1_500)
         let resumedSameRound = try await resumedRepository.reserveAgentRequestCost(
             requestID: requestID,
             conversationID: conversationID,
@@ -79,6 +79,63 @@ final class AgentRequestResumeTests: XCTestCase {
             conversationID: conversationID
         )
         XCTAssertEqual(afterAttempt?.costBudget.reservedCostMicros, 3_500)
+    }
+
+    func testLegacyInterruptedRequestWithoutProviderIdentityFailsClosedBeforeCall() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000929")!
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000930")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let context = ModelContext(container)
+        context.insert(ConversationRecord(id: conversationID))
+        context.insert(MessageRecord(
+            conversationID: conversationID,
+            roleRaw: ModelRole.user.rawValue,
+            contentData: try JSONEncoder().encode(ModelMessage(role: .user, text: "旧请求")),
+            ordinal: 0,
+            requestID: requestID
+        ))
+        context.insert(AgentRequestRecord(
+            requestID: requestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(120),
+            maximumProviderRounds: 3,
+            maximumToolCalls: 2,
+            providerRoundsUsed: 1,
+            inputTokens: 40,
+            outputTokens: 12,
+            stateRaw: AgentRequestState.interrupted.rawValue
+        ))
+        try context.save()
+
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let provider = ScriptedTextProvider(scripts: [[.textDelta("不得发送"), .completed(.completed)]])
+        let session = makeSession(
+            container: container,
+            repository: repository,
+            provider: provider,
+            conversationID: conversationID,
+            budget: AgentBudget(maximumProviderRounds: 20, maximumToolCalls: 20, deadline: .distantFuture)
+        )
+        try await session.restore()
+
+        do {
+            _ = try await session.send(userText: "继续", requestID: requestID)
+            XCTFail("Legacy requests without provider identity must not silently switch on resume")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .requestModelMismatch)
+        }
+
+        XCTAssertTrue(provider.recordedRequests().isEmpty)
+        let requestValue = try await repository.agentRequest(requestID: requestID, conversationID: conversationID)
+        let request = try XCTUnwrap(requestValue)
+        XCTAssertEqual(request.state, .failed)
+        XCTAssertEqual(request.costBudget.state, .unavailable)
     }
 
     func testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage() async throws {

@@ -161,7 +161,7 @@ def main() -> int:
         [
             "configurationMissing", "consentRequired", "unauthorized", "rateLimited",
             "timeout", "network", "server", "malformedResponse", "contentRejected",
-            "cancelled", "budgetExceeded",
+            "cancelled", "budgetExceeded", "budgetUnavailable", "requestModelMismatch",
             "budgetUnavailable",
         ],
         errors,
@@ -477,6 +477,7 @@ def main() -> int:
             "testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage",
             "testV4StoreMigratesToV5AndAddsAnEmptyRequestLedger",
             "testPerRequestCostReservationPersistsAndCannotResetOnResume",
+            "testLegacyInterruptedRequestWithoutProviderIdentityFailsClosedBeforeCall",
             "resumeCount", "cachedInputTokens", "reasoningTokens",
             "containsTransientImage",
         ],
@@ -496,7 +497,7 @@ def main() -> int:
         ROOT / "DensosoTests" / "Application" / "AgentCoordinatorTests.swift",
         (
             "testProviderReasoningContinuesInMemoryButIsNeverPersisted",
-            "testUnpricedProviderRequestStopsBeforeNetworkOrToolCalls",
+            "testUnpricedProviderRequestCompletesWithUnavailableCostAccounting",
             "testCostCapIsReservedBeforeProviderOrToolInvocation",
         ),
         errors,

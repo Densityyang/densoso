@@ -106,30 +106,54 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         currency: String,
         pricingVersion: String,
         providerRound: Int,
-        estimatedCostMicros: Int64
+        estimatedCostMicros: Int64?
     ) throws -> AgentRequestCostBudget {
-        guard providerRound > 0, estimatedCostMicros >= 0 else {
+        guard providerRound > 0, estimatedCostMicros.map({ $0 >= 0 }) ?? true else {
             throw AgentRequestPersistenceError.costBudgetMismatch
         }
         _ = try fetchAgentRequest(requestID: requestID, conversationID: conversationID)
         let record = try fetchCostBudgetRecord(requestID: requestID, conversationID: conversationID)
         let budgetState = AgentCostBudgetState(rawValue: record.costStateRaw) ?? .unavailable
-        guard budgetState != .unavailable else {
-            throw AgentRequestPersistenceError.costBudgetUnavailable
-        }
-        if budgetState == .estimated && record.providerRaw == "unresolved" {
-            throw AgentRequestPersistenceError.costBudgetMismatch
-        }
         if record.providerRaw != "unresolved",
-           (record.providerRaw != provider.rawValue
-                || record.model != model
-                || record.currency != currency
-                || record.pricingVersion != pricingVersion) {
+           (record.providerRaw != provider.rawValue || record.model != model) {
             throw AgentRequestPersistenceError.costBudgetMismatch
         }
-        guard record.reservedCostMicros <= record.maximumCostMicros else {
-            throw AgentRequestPersistenceError.costBudgetExceeded
+        if budgetState == .unavailable {
+            guard record.providerRaw != "unresolved" else {
+                throw AgentRequestPersistenceError.costBudgetMismatch
+            }
+            return costBudgetSnapshot(record)
         }
+        if budgetState == .estimated {
+            guard record.providerRaw != "unresolved" else {
+                throw AgentRequestPersistenceError.costBudgetMismatch
+            }
+            if currency != record.currency || pricingVersion != record.pricingVersion || estimatedCostMicros == nil {
+                record.costStateRaw = AgentCostBudgetState.unavailable.rawValue
+                record.updatedAt = Date()
+                try modelContext.save()
+                return costBudgetSnapshot(record)
+            }
+            guard record.reservedCostMicros <= record.maximumCostMicros else {
+                throw AgentRequestPersistenceError.costBudgetExceeded
+            }
+            if record.lastReservedProviderRound == providerRound {
+                return costBudgetSnapshot(record)
+            }
+        }
+        if estimatedCostMicros == nil {
+            record.providerRaw = provider.rawValue
+            record.model = model
+            record.currency = "unavailable"
+            record.pricingVersion = "unknown"
+            record.lastReservedProviderRound = providerRound
+            record.lastReservedCostMicros = 0
+            record.costStateRaw = AgentCostBudgetState.unavailable.rawValue
+            record.updatedAt = Date()
+            try modelContext.save()
+            return costBudgetSnapshot(record)
+        }
+        let estimatedCostMicros = estimatedCostMicros!
         if record.lastReservedProviderRound == providerRound {
             return costBudgetSnapshot(record)
         }

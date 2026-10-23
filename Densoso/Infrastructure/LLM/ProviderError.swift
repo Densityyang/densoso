@@ -8,6 +8,7 @@ enum ProviderError: Equatable, Sendable, SharedErrorDescribing {
     case quotaExhausted(status: Int)
     case rateLimited(retryAfterSeconds: Double?)
     case requestRejected(status: Int)
+    case requestModelMismatch
     case requestTooLarge(limitBytes: Int)
     case server(status: Int)
     case network(code: Int?)
@@ -66,6 +67,13 @@ enum ProviderError: Equatable, Sendable, SharedErrorDescribing {
                 subsystem: .provider,
                 reason: .requestRejected,
                 numericCode: status
+            )
+        case .requestModelMismatch:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "无法确认这条请求原本使用的 Provider/model，已停止恢复；请重新发起请求。",
+                subsystem: .provider,
+                reason: .requestModelMismatch
             )
         case .requestTooLarge:
             SharedErrorDescriptor(

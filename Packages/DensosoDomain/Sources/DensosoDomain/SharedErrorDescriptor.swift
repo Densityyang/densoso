@@ -37,6 +37,7 @@ public enum SharedErrorReason: String, Codable, CaseIterable, Sendable {
     case quotaExhausted
     case rateLimited
     case requestRejected
+    case requestModelMismatch
     case requestTooLarge
     case serverFailure
     case networkFailure

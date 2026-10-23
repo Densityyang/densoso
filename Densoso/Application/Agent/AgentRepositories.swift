@@ -181,8 +181,9 @@ struct AgentRequestCostBudget: Equatable, Sendable {
     let lastReservedCostMicros: Int64
     let state: AgentCostBudgetState
 
-    var remainingCostMicros: Int64 {
-        max(maximumCostMicros - reservedCostMicros, 0)
+    var remainingCostMicros: Int64? {
+        guard state == .estimated else { return nil }
+        return max(maximumCostMicros - reservedCostMicros, 0)
     }
 }
 
@@ -237,7 +238,7 @@ protocol ConversationRepository: Sendable {
         currency: String,
         pricingVersion: String,
         providerRound: Int,
-        estimatedCostMicros: Int64
+        estimatedCostMicros: Int64?
     ) async throws -> AgentRequestCostBudget
     func markAgentRequestCostUnavailable(requestID: UUID, conversationID: UUID) async throws
     func addAgentRequestUsage(
