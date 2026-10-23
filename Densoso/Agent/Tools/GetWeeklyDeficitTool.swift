@@ -4,7 +4,7 @@ import Foundation
 struct GetWeeklyDeficitTool: AgentTool {
     var definition: ToolSchema { .strictObject(
         name: "get_weekly_deficit",
-        description: "获取本周或指定历史周的热量缺口，返回有效天数、缺失天数、可用状态与覆盖率；本周只统计截至今天的日期。",
+        description: "获取本周或指定历史周的热量缺口，返回有效天数、缺失天数、可用状态与覆盖率；本周只统计截至今天的日期。projectedWeightLossKg 仅为粗略能量折算，并附非体重预测说明。",
         properties: [
             "weekOffset": .integer(minimum: -52, maximum: 0, description: "周偏移: 0=本周, -1=上周")
         ],
@@ -43,6 +43,22 @@ struct GetWeeklyDeficitTool: AgentTool {
             ? (calendar.dateComponents([.day], from: monday, to: today).day ?? 0) + 1
             : 7
         let metrics = try await context.dailyMetrics(from: monday, through: queryEnd)
+        return Self.responseJSON(
+            metrics,
+            weekStart: monday,
+            weekEnd: queryEnd,
+            expectedDays: expectedDays,
+            calendar: calendar
+        )
+    }
+
+    static func responseJSON(
+        _ metrics: [DailyMetricsReadResult],
+        weekStart: Date,
+        weekEnd: Date,
+        expectedDays: Int,
+        calendar: Calendar
+    ) -> String {
         let deficit = DailyMetricsUsabilityPolicy.aggregateSignedRanges(
             metrics.map(\.deficit),
             expectedDays: expectedDays
@@ -60,8 +76,8 @@ struct GetWeeklyDeficitTool: AgentTool {
         let worstDay = validDeficits.min(by: { $0.1 < $1.1 })
         let response = WeeklyDeficitToolResponse(
             status: deficit.coverage.availableDays == 0 ? "insufficient_data" : "available",
-            weekStart: monday,
-            weekEnd: queryEnd,
+            weekStart: weekStart,
+            weekEnd: weekEnd,
             timeZone: calendar.timeZone.identifier,
             requestedDays: expectedDays,
             daysWithData: deficit.coverage.availableDays,
@@ -70,6 +86,7 @@ struct GetWeeklyDeficitTool: AgentTool {
             totalDeficitKcal: Self.likelyValue(from: deficit.total),
             avgDailyDeficitKcal: Self.likelyValue(from: average),
             projectedWeightLossKg: projectedWeightLoss,
+            projectedWeightLossNote: "仅按累计净能量缺口以 7,700 kcal/kg 粗略折算；不代表实际体重预测。",
             bestDay: bestDay.map { DatedDeficit(date: $0.0, deficitKcal: $0.1) },
             worstDay: worstDay.map { DatedDeficit(date: $0.0, deficitKcal: $0.1) },
             totalMeals: metrics.reduce(0) { $0 + $1.mealCount },
@@ -142,6 +159,7 @@ private struct WeeklyDeficitToolResponse: Encodable {
     let totalDeficitKcal: MetricValue<Double>
     let avgDailyDeficitKcal: MetricValue<Double>
     let projectedWeightLossKg: MetricValue<Double>
+    let projectedWeightLossNote: String
     let bestDay: DatedDeficit?
     let worstDay: DatedDeficit?
     let totalMeals: Int

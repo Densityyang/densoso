@@ -136,4 +136,44 @@ final class DailyMetricsUsabilityTests: XCTestCase {
         XCTAssertNil(unknownFat.value)
         XCTAssertEqual(unknownFat.availability, .unavailable)
     }
+
+    func testAggregatesDoNotCountMissingOrNonFiniteValuesAsAvailableDays() throws {
+        let missingObservedNumber = MetricValue<Double>(value: nil, availability: .observed)
+        let infiniteObservedNumber = MetricValue(value: Double.infinity, availability: .observed)
+        let usableNumber = MetricValue(value: 100.0, availability: .estimated)
+
+        let numericAverage = DailyMetricsUsabilityPolicy.aggregateNumbers(
+            [missingObservedNumber, infiniteObservedNumber, usableNumber],
+            expectedDays: 3,
+            average: true
+        )
+        XCTAssertEqual(numericAverage.total.value, 100)
+        XCTAssertEqual(numericAverage.total.availability, .partial)
+        XCTAssertEqual(numericAverage.coverage.availableDays, 1)
+        XCTAssertEqual(numericAverage.coverage.unavailableDays, 2)
+        XCTAssertEqual(numericAverage.coverage.missingDays, 0)
+
+        let missingEstimatedRange = MetricValue<EstimateRange>(value: nil, availability: .estimated)
+        let validRange = MetricValue(
+            value: try EstimateRange(low: 90, likely: 100, high: 110),
+            availability: .observed
+        )
+        let rangeTotal = DailyMetricsUsabilityPolicy.aggregateRanges(
+            [missingEstimatedRange, validRange],
+            expectedDays: 2
+        )
+        XCTAssertEqual(rangeTotal.coverage.availableDays, 1)
+        XCTAssertEqual(rangeTotal.coverage.unavailableDays, 1)
+        XCTAssertEqual(try XCTUnwrap(rangeTotal.total.value), try EstimateRange(low: 90, likely: 100, high: 110))
+
+        let missingObservedDeficit = MetricValue<SignedEstimateRange>(value: nil, availability: .observed)
+        let signedTotal = DailyMetricsUsabilityPolicy.aggregateSignedRanges(
+            [missingObservedDeficit],
+            expectedDays: 1
+        )
+        XCTAssertNil(signedTotal.total.value)
+        XCTAssertEqual(signedTotal.total.availability, .unavailable)
+        XCTAssertEqual(signedTotal.coverage.availableDays, 0)
+        XCTAssertEqual(signedTotal.coverage.unavailableDays, 1)
+    }
 }

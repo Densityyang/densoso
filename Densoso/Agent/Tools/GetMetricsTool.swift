@@ -7,7 +7,7 @@ struct GetMetricsTool: AgentTool {
 
     var definition: ToolSchema { .strictObject(
         name: "get_metrics",
-        description: "获取最多 90 天的热量与营养汇总；每项结果包含可用状态和覆盖率。日期按用户本地日历日闭区间处理。dailyBreakdown 最多返回 4 天，并包含每日覆盖率、能量质量、待重算状态和投影版本；truncated=true 时可从 nextStartDate 继续查询。",
+        description: "获取最多 90 天的热量与营养汇总；每项结果包含可用状态和覆盖率。日期按用户本地日历日闭区间处理。dailyBreakdown 最多返回 4 天，并包含每日覆盖率、能量质量、待重算状态和投影版本；projectedWeightLossKg 仅为粗略能量折算，并附非体重预测说明；truncated=true 时可从 nextStartDate 继续查询。",
         properties: [
             "startDate": .string(format: "date-time", description: "开始日期 ISO8601，按本地日历日包含"),
             "endDate": .string(format: "date-time", description: "结束日期 ISO8601，按本地日历日包含"),
@@ -81,6 +81,7 @@ struct GetMetricsTool: AgentTool {
             deficit: deficit,
             averageDailyDeficit: averageDeficit,
             projectedWeightLossKg: projectedWeightLoss,
+            projectedWeightLossNote: "仅按累计净能量缺口以 7,700 kcal/kg 粗略折算；不代表实际体重预测。",
             proteinG: NutrientAggregate(total: proteinTotal, average: proteinAverage),
             fatG: NutrientAggregate(total: fatTotal, average: fatAverage),
             carbsG: NutrientAggregate(total: carbsTotal, average: carbsAverage),
@@ -184,6 +185,7 @@ private struct GetMetricsToolResponse: Encodable {
     let deficit: MetricAggregate<SignedEstimateRange>
     let averageDailyDeficit: MetricValue<SignedEstimateRange>
     let projectedWeightLossKg: MetricValue<Double>
+    let projectedWeightLossNote: String
     let proteinG: NutrientAggregate
     let fatG: NutrientAggregate
     let carbsG: NutrientAggregate

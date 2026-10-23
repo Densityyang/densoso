@@ -300,7 +300,10 @@ public enum DailyMetricsUsabilityPolicy {
         expectedDays: Int
     ) -> MetricAggregate<EstimateRange> {
         let valid = metrics.filter { isUsable($0.availability) && $0.value != nil }
-        let coverage = MetricCoverage(availability: metrics.map(\.availability), expectedDays: expectedDays)
+        let coverage = MetricCoverage(
+            availability: metrics.map { normalizedAvailability($0, hasValidValue: $0.value != nil) },
+            expectedDays: expectedDays
+        )
         guard let total = try? EstimateRange.sum(valid.compactMap(\.value)), !valid.isEmpty else {
             return MetricAggregate(
                 total: MetricValue(value: nil, availability: emptyAggregateAvailability(metrics)),
@@ -323,7 +326,10 @@ public enum DailyMetricsUsabilityPolicy {
         expectedDays: Int
     ) -> MetricAggregate<SignedEstimateRange> {
         let valid = metrics.filter { isUsable($0.availability) && $0.value != nil }
-        let coverage = MetricCoverage(availability: metrics.map(\.availability), expectedDays: expectedDays)
+        let coverage = MetricCoverage(
+            availability: metrics.map { normalizedAvailability($0, hasValidValue: $0.value != nil) },
+            expectedDays: expectedDays
+        )
         guard let total = SignedEstimateRange.sum(valid.compactMap(\.value)) else {
             return MetricAggregate(
                 total: MetricValue(value: nil, availability: emptyAggregateAvailability(metrics)),
@@ -347,7 +353,10 @@ public enum DailyMetricsUsabilityPolicy {
         average: Bool = false
     ) -> MetricAggregate<Double> {
         let valid = metrics.filter { isUsable($0.availability) && $0.value?.isFinite == true }
-        let coverage = MetricCoverage(availability: metrics.map(\.availability), expectedDays: expectedDays)
+        let coverage = MetricCoverage(
+            availability: metrics.map { normalizedAvailability($0, hasValidValue: $0.value?.isFinite == true) },
+            expectedDays: expectedDays
+        )
         guard !valid.isEmpty else {
             return MetricAggregate(
                 total: MetricValue(value: nil, availability: emptyAggregateAvailability(metrics)),
@@ -372,6 +381,15 @@ public enum DailyMetricsUsabilityPolicy {
 
     private static func isUsable(_ availability: MetricAvailability) -> Bool {
         availability == .observed || availability == .estimated || availability == .partial
+    }
+
+    private static func normalizedAvailability<Value: Codable & Equatable & Sendable>(
+        _ metric: MetricValue<Value>,
+        hasValidValue: Bool
+    ) -> MetricAvailability {
+        if metric.availability == .pendingRecompute { return .pendingRecompute }
+        guard isUsable(metric.availability), hasValidValue else { return .unavailable }
+        return metric.availability
     }
 
     private static func combinedAvailability(

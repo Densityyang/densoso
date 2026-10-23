@@ -18,6 +18,10 @@ final class GetMetricsToolTests: XCTestCase {
         let response = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
 
         XCTAssertEqual(response["status"] as? String, "available")
+        XCTAssertEqual(
+            response["projectedWeightLossNote"] as? String,
+            "仅按累计净能量缺口以 7,700 kcal/kg 粗略折算；不代表实际体重预测。"
+        )
         XCTAssertEqual(response["requestedDays"] as? Int, 7)
         XCTAssertEqual(response["validEnergyDays"] as? Int, 6)
         XCTAssertEqual(response["missingEnergyDays"] as? Int, 1)

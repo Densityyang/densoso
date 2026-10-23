@@ -202,7 +202,7 @@ struct DashboardScreen: View {
                 )
                 OrbitMetric(
                     value: weekly.projectedWeightLossKg.map { String(format: "%.2f", $0) } ?? "暂无",
-                    label: "按当前七日缺口折算 kg",
+                    label: "能量粗略折算（非体重预测）kg",
                     tint: OrbitPalette.green
                 )
             }
