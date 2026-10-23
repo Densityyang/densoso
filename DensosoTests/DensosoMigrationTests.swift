@@ -203,8 +203,8 @@ final class DensosoMigrationTests: XCTestCase {
         let day = Date(timeIntervalSince1970: 1_700_000_000)
         context!.insert(DensosoSchemaV4.DailyMetrics(
             date: day,
-            totalIntakeKcal: 1_500,
             totalExpenditureKcal: 2_000,
+            totalIntakeKcal: 1_500,
             deficitKcal: 500,
             energyQuality: "estimated",
             projectionVersion: AlgorithmVersions.calorieAccounting,
