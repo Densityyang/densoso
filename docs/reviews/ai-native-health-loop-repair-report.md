@@ -4,12 +4,12 @@ Date: 2026-10-23
 Repository: `Densityyang/densoso`  
 Worktree: `E:\howtodo\densoso-ai-native-loop`  
 Branch: `codex/ai-native-health-loop`  
-Code baseline reviewed in this report: `6c1b9dde73e551174de0fe27dbbe1177eda10161`
+Code baseline reviewed in this report: `c581ba6c3631f2c88186844c11829cef1a40c176`
 Associated pull request: none
 
 ## Decision
 
-**NOT READY.** The current full Build workflow, run [#39928118439](https://github.com/Densityyang/densoso/actions/runs/39928118439), is pending on this code baseline with no jobs or artifacts yet. The latest per-gate evidence is from older SHA `70b248a`: Gate 1 failed five assertions, Gates 2–5 passed, Gate 6 stopped at static validation, and Gate 7 started. That older run is not full-CI acceptance. Gate 1 fixtures and the Gate 6 static check have since been corrected; current-HEAD Actions evidence is pending.
+**NOT READY.** The current full Build workflow, run [#39929313020](https://github.com/Densityyang/densoso/actions/runs/39929313020), is pending on this code baseline with no jobs or artifacts yet. The latest per-gate evidence is from older SHA `70b248a`: Gate 1 failed five assertions, Gates 2–5 passed, Gate 6 stopped at static validation, Gate 7 passed, and Gate 8 is running. That older run is not full-CI acceptance. Gate 1 fixtures, Gate 6 validation, and additional DailyCheckIn subject/date cases have since been addressed; current-HEAD Actions evidence is pending.
 
 The real-meal field benchmark remains `BLOCKED/MISSING_EVIDENCE`. Gate 15 signed iPhone/Watch evidence and Gate 16 owner acceptance remain unperformed. Provider fixture tests do not establish live DeepSeek multimodal/structured API behavior. Gate 11/13 now contain p50/p95 performance measurements for a 42-day health refresh and a 12-ingredient meal estimate; current-code results are pending. No local heavy tests were run; tests are assigned to GitHub Actions.
 
@@ -17,10 +17,11 @@ The real-meal field benchmark remains `BLOCKED/MISSING_EVIDENCE`. Gate 15 signed
 
 - Run [#39714060743](https://github.com/Densityyang/densoso/actions/runs/39714060743) on `e7d273a` failed in Gate 3 static validation after Gates 1 and 2 passed. The seven failures were static contract/source-location drift involving Provider documentation, pricing, DeepSeek configuration, DailyLoop plan lookup, and DailyCheckIn terminology. The validator exited before writing its fixture report, and the Gate 3 XCTest step did not run.
 - Build IPA [#39716002512](https://github.com/Densityyang/densoso/actions/runs/39716002512) succeeded on the original reviewed SHA. It was an unsigned device-build path; it is not full test CI or signed-device acceptance.
-- Run [#39917725806](https://github.com/Densityyang/densoso/actions/runs/39917725806) on `70b248a` is older than the current HEAD. Gate 1 failed five assertions across two tests; Gates 2–5 passed; Gate 3 reported 134/134 domain tests and 165/165 iOS tests. Gate 6's static validator then failed because it required a sentence absent from the gate document, so Gate 6 XCTest/domain steps did not run. Gate 7 started afterward; no Gate 8–14 evidence or final aggregate is available yet. This is partial, older-SHA evidence, not a full CI pass.
+- Run [#39917725806](https://github.com/Densityyang/densoso/actions/runs/39917725806) on `70b248a` is older than the current HEAD. Gate 1 failed five assertions across two tests; Gates 2–5 passed; Gate 3 reported 134/134 domain tests and 165/165 iOS tests. Gate 6's static validator failed because it required a sentence absent from the gate document, so Gate 6 XCTest/domain steps did not run. Gate 7 passed and uploaded its artifact. Gate 8 has passed static validation, domain tests, scheme builds, and simulator preparation; its message/scheduling idempotency test is in progress. No Gate 9–14 evidence or final aggregate is available yet. This is partial, older-SHA evidence, not a full CI pass.
 - Run [#39925916390](https://github.com/Densityyang/densoso/actions/runs/39925916390) on `92612ec` and run [#39926774913](https://github.com/Densityyang/densoso/actions/runs/39926774913) on `1ec9cb3` were superseded and cancelled before any jobs started.
 - Run [#39927223905](https://github.com/Densityyang/densoso/actions/runs/39927223905) targeted `e3daa44`; it was superseded and cancelled before any jobs started.
-- Run [#39928118439](https://github.com/Densityyang/densoso/actions/runs/39928118439) targets `6c1b9dd`; it is pending and has no job results or artifacts yet.
+- Runs [#39928118439](https://github.com/Densityyang/densoso/actions/runs/39928118439) (`6c1b9dd`), [#39928521018](https://github.com/Densityyang/densoso/actions/runs/39928521018) (`9621491`), and [#39928746526](https://github.com/Densityyang/densoso/actions/runs/39928746526) (`59b5376`) were superseded and cancelled before jobs started.
+- Run [#39929313020](https://github.com/Densityyang/densoso/actions/runs/39929313020) targets `c581ba6`; it is pending with no jobs or artifacts yet.
 - The last known full Build CI pass before this repair series was `3628d42`, earlier than the reviewed HEAD.
 
 ## Findings addressed
@@ -31,7 +32,7 @@ The real-meal field benchmark remains `BLOCKED/MISSING_EVIDENCE`. Gate 15 signed
 - **Affected path:** `scripts/validate_phase3_agent_provider.py`, `.github/workflows/build.yml`, Gate 3 source/config/test contracts.
 - **Old behavior:** the static validator could exit before emitting its report, skip Gate 3 XCTest, and leave downstream gates without evidence.
 - **Change:** validate real configuration and interfaces rather than brittle long-form wording; write failure diagnostics; continue independent Gate 3 tests; record step outcomes and upload artifacts with `always()`; retain a final fail-closed job result. The full workflow also records Gate 1–14 aggregate statuses.
-- **Tests/evidence:** Gate 3 contract tests and run #399177 on `70b248a` passed (165 iOS tests, 134 domain tests). Current-HEAD confirmation is pending in #399281.
+- **Tests/evidence:** Gate 3 contract tests and run #399177 on `70b248a` passed (165 iOS tests, 134 domain tests). Current-HEAD confirmation is pending in #399293.
 - **Residual risk:** no current-HEAD full Build result yet.
 
 ### HEALTH-001 — Gate 1 fixtures contradicted the projection contract
@@ -90,7 +91,7 @@ The real-meal field benchmark remains `BLOCKED/MISSING_EVIDENCE`. Gate 15 signed
 - **Old behavior:** HealthKit cursor anchors and lookback metadata could enter the DailyMetrics fingerprint even when the canonical daily snapshot values were unchanged, causing unnecessary recomputation.
 - **Change:** remove cursor progress from fingerprint context. `CaloricEngine` fingerprints the actual HealthKit values consumed by DailyMetrics; a cursor advance alone no longer invalidates the projection.
 - **Tests added/changed:** `testSourceProfileAndGoalRevisionsChangeProjectionFingerprint` asserts cursor insertion and anchor/time movement preserve both fingerprint and `computedAt`; `testHealthKitSnapshotValueChangesProjectionFingerprint` asserts a real active-energy snapshot change updates the projection; the unrelated-cursor regression remains.
-- **CI:** Gate 1 and Gate 11 selections on the current code baseline are pending in #399281.
+- **CI:** Gate 1 and Gate 11 selections on the current code baseline are pending in #399293.
 - **Residual risk:** current-HEAD fingerprint and write-suppression evidence is pending.
 
 ### GATE-6-001 — HealthKit gate approval wording drift
@@ -99,7 +100,7 @@ The real-meal field benchmark remains `BLOCKED/MISSING_EVIDENCE`. Gate 15 signed
 - **Affected path:** `scripts/validate_phase6_healthkit.py` and the Gate 5 approval/Phase 6 scope statements.
 - **Old behavior:** the validator required the literal sentence `Approved by user; Phase 6 may proceed`, while the gate document records `Status: approved by user after successful macOS CI` and says HealthKit delivery workers remain Phase 6. Gate 6 stopped before its domain and iOS tests on older SHA `70b248a`.
 - **Change:** validate the approval status and the documented Phase 6 placement that actually exist, without adding an unsupported PR association or inventing a new approval claim.
-- **CI:** the corrected validator is included in #399281; its Gate 6 result is pending.
+- **CI:** the corrected validator is included in #399293; its Gate 6 result is pending.
 - **Residual risk:** no Gate 6 XCTest evidence exists yet on the current code baseline.
 
 ### PERF-HEALTH-001 — historical recompute blocked the main actor with pure math
@@ -109,8 +110,28 @@ The real-meal field benchmark remains `BLOCKED/MISSING_EVIDENCE`. Gate 15 signed
 - **Old behavior:** historical projection fingerprinting and deterministic accounting ran synchronously on the main actor after SwiftData reads.
 - **Change:** copy the day's meal, workout, profile, weight, HealthKit, and fingerprint inputs into Sendable values on the owning actor; detached utility tasks compute the fingerprint and accounting result. Only the value result returns for `DailyMetrics` construction, context mutation, and save. No SwiftData model or `ModelContext` crosses actors.
 - **Tests added:** `HistoricalMetricsRecomputeServiceTests.testDetachedProjectionCalculationMatchesSynchronousProjection`; existing recompute tests exercise the async persistence path.
-- **CI:** Gate 11 and full Build run #399281 are pending.
+- **CI:** Gate 11 and full Build run #399293 are pending.
 - **Residual risk:** ordinary synchronous transactional projection paths still run on their context actor. Today initial-render latency and the end-to-end 300 ms / 1 s performance targets remain unmeasured.
+
+### HEALTH-004 — sibling shorthand escaped third-party subject detection
+
+- **Classification:** `CODE_DEFECT`; **priority:** P1.
+- **Affected path:** `DailyCheckInSelfReportResolver.otherPersonCues`.
+- **Old behavior:** full sibling terms such as `我哥哥` were rejected, but short forms `我哥/我姐/我弟/我妹` could pass as the user's own status.
+- **Change:** add the common shorthand forms to the third-party cue set; mixed self/relative text remains rejected for clarification.
+- **Tests added:** third-party golden cases cover all four sibling shorthands.
+- **CI:** Gate 3 and full Build run #399293 are pending.
+- **Residual risk:** the resolver remains intentionally conservative when a message mentions another person.
+
+### HEALTH-005 — unsupported future and weekday expressions defaulted to today
+
+- **Classification:** `CODE_DEFECT` / `CONTRACT_DRIFT`; **priority:** P1.
+- **Affected path:** `DailyCheckInSelfReportResolver.validateDate`.
+- **Old behavior:** phrases such as `in a few days`, `next few days`, unanchored weekday names, or unsupported slash/Chinese/month-name dates could miss the cue lists and fall through to today's date.
+- **Change:** recognize common future-relative English patterns; reject weekday-only dates without a supported day/ISO date; verify weekday consistency when a day is anchored; reject unsupported explicit date formats instead of treating them as today.
+- **Tests added:** future phrase, weekday mismatch/conflict, and unsupported explicit-format cases.
+- **CI:** Gate 3 and full Build run #399293 are pending.
+- **Residual risk:** supported explicit dates remain ISO `YYYY-MM-DD`; other formats ask for clarification.
 
 ## Additional implementation already present on this repair branch
 
@@ -126,14 +147,14 @@ These are implementation statements only; final current-HEAD acceptance depends 
 
 ## Remaining items and acceptance boundary
 
-- **Gate 1–14:** current full Build run #39928118439 is pending. Record its complete same-SHA status and artifacts before making a software-CI claim.
+- **Gate 1–14:** current full Build run #39929313020 is pending. Record its complete same-SHA status and artifacts before making a software-CI claim.
 - **Meal field benchmark:** `BLOCKED/MISSING_EVIDENCE` until real photos and kitchen-scale measurements, dataset composition, annotation method, sample size, confidence intervals/percentiles, and failure cases are provided.
 - **Gate 15:** `NOT RUN`; signed, paired iPhone/Apple Watch acceptance is manual.
 - **Gate 16:** `NOT RUN`; final owner release acceptance is manual.
 - **Provider live behavior:** fixture/contract tests do not prove a live DeepSeek multimodal/structured request path.
-- **Performance:** Gate 11/13 p50/p95 results are pending in #399281. Historical recompute now offloads fingerprinting/accounting from Sendable inputs; ordinary synchronous projection transactions remain on their context actor. Today initial render and end-to-end render/refresh targets are not yet measured.
+- **Performance:** Gate 11/13 p50/p95 results are pending in #399293. Historical recompute now offloads fingerprinting/accounting from Sendable inputs; ordinary synchronous projection transactions remain on their context actor. Today initial render and end-to-end render/refresh targets are not yet measured.
 - **Pull request:** none is associated with this branch; PR #14 is a separate V3 work line.
 
 ## Final status
 
-**NOT READY** at code baseline `6c1b9dde73e551174de0fe27dbbe1177eda10161`. Gate 3 passed on older SHA `70b248a`; Gate 1 failed on that same SHA. Current-baseline full CI and performance measurements are pending in #399281; field/device acceptance evidence is missing. Update this report after run #39928118439 completes; do not convert pending or missing evidence to `PASS`.
+**NOT READY** at code baseline `c581ba6c3631f2c88186844c11829cef1a40c176`. Gate 3 passed on older SHA `70b248a`; Gate 1 failed on that same SHA. Current-baseline full CI and performance measurements are pending in #399293; field/device acceptance evidence is missing. Update this report after run #39929313020 completes; do not convert pending or missing evidence to `PASS`.
