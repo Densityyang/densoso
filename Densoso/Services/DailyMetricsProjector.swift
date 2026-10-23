@@ -132,7 +132,7 @@ enum DailyMetricsProjector {
             let day = calendar.startOfDay(for: date)
             let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
             guard let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first,
-                  existing.requiresRecompute else { return false }
+                  isHistoricalRecomputeCandidate(existing) else { return false }
 
             let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
             let effectiveInputs = try resolveEffectiveInputs(on: day, asOf: asOf, in: modelContext)
@@ -181,10 +181,23 @@ enum DailyMetricsProjector {
     }
 
     private static func hasPendingMetric(on day: Date, in modelContext: ModelContext) throws -> Bool {
-        let predicate = #Predicate<DailyMetrics> { $0.date == day && $0.requiresRecompute }
+        let currentProjectionVersion = AlgorithmVersions.dailyMetricsProjection
+        let emptyFingerprint = ""
+        let predicate = #Predicate<DailyMetrics> {
+            $0.date == day
+                && ($0.requiresRecompute
+                    || $0.projectionVersion != currentProjectionVersion
+                    || $0.sourceFingerprint == emptyFingerprint)
+        }
         var descriptor = FetchDescriptor<DailyMetrics>(predicate: predicate)
         descriptor.fetchLimit = 1
         return try modelContext.fetch(descriptor).first != nil
+    }
+
+    private static func isHistoricalRecomputeCandidate(_ metrics: DailyMetrics) -> Bool {
+        metrics.requiresRecompute
+            || metrics.projectionVersion != AlgorithmVersions.dailyMetricsProjection
+            || metrics.sourceFingerprint.isEmpty
     }
 
     private static func resolveEffectiveInputs(

@@ -39,6 +39,25 @@ public struct MetricValue<Value: Codable & Equatable & Sendable>: Codable, Equat
         self.sourceReferencesTruncated = sourceReferencesTruncated
             || uniqueReferences.count > MetricValueLimits.sourceReferences
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case value
+        case availability
+        case sourceReferences
+        case sourceReferencesTruncated
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let value {
+            try container.encode(value, forKey: .value)
+        } else {
+            try container.encodeNil(forKey: .value)
+        }
+        try container.encode(availability, forKey: .availability)
+        try container.encode(sourceReferences, forKey: .sourceReferences)
+        try container.encode(sourceReferencesTruncated, forKey: .sourceReferencesTruncated)
+    }
 }
 
 public struct SignedEstimateRange: Codable, Equatable, Sendable {

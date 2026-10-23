@@ -46,19 +46,15 @@ enum DailyMetricsProjectionFingerprint {
         let day = Calendar.current.startOfDay(for: date)
         let effectiveAt = referenceDate ?? day
         let profileKey = profileRevision?.profileKey ?? "primary"
-        let goalPredicate = #Predicate<GoalProfileRecord> {
-            $0.profileKey == profileKey && $0.effectiveFrom <= effectiveAt
-        }
-        var goalDescriptor = FetchDescriptor<GoalProfileRecord>(
-            predicate: goalPredicate,
-            sortBy: [
-                SortDescriptor(\GoalProfileRecord.effectiveFrom, order: .reverse),
-                SortDescriptor(\GoalProfileRecord.updatedAt, order: .reverse),
-                SortDescriptor(\GoalProfileRecord.id, order: .reverse),
-            ]
-        )
-        goalDescriptor.fetchLimit = 1
-        let goal = try modelContext.fetch(goalDescriptor).first
+        let goalPredicate = #Predicate<GoalProfileRecord> { $0.profileKey == profileKey }
+        let goal = try modelContext.fetch(FetchDescriptor<GoalProfileRecord>(predicate: goalPredicate))
+            .filter { $0.effectiveFrom <= effectiveAt }
+            .sorted {
+                if $0.effectiveFrom != $1.effectiveFrom { return $0.effectiveFrom > $1.effectiveFrom }
+                if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+                return $0.id.uuidString > $1.id.uuidString
+            }
+            .first
 
         let cursors = try modelContext.fetch(FetchDescriptor<HealthKitImportCursor>())
             .filter { cursor in

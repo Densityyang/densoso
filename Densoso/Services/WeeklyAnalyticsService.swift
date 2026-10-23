@@ -70,8 +70,9 @@ struct WeeklyAnalyticsService {
                 targetDeficitKcal: target
             )
         }
+        let recordedDeficits = points.compactMap { metricsByDay[$0.date]?.deficit }
         let aggregate = DailyMetricsUsabilityPolicy.aggregateSignedRanges(
-            points.map(\.deficit),
+            recordedDeficits,
             expectedDays: 7
         )
         let total = aggregate.total.value?.likely

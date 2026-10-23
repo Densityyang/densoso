@@ -97,7 +97,8 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let report = try await coordinator.syncAvailableData(using: HealthRepository(modelContext: context), now: now)
 
         let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
-        XCTAssertEqual(metrics.activeCaloriesKcal, 640)
+        XCTAssertEqual(metrics.activeCaloriesKcal, 0)
+        XCTAssertEqual(try XCTUnwrap(metrics.activeEnergyKcal), 640)
         XCTAssertEqual(metrics.workoutCount, 1)
         XCTAssertEqual(metrics.totalExpenditureKcal, 0)
         XCTAssertEqual(metrics.energyQuality, "unavailable")
@@ -155,7 +156,8 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertTrue(failure.diagnosticSafeDetail.contains("requestID=\(requestID.uuidString.lowercased())"))
         XCTAssertFalse(failure.diagnosticSafeDetail.contains("fake aggregate failure"))
         let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
-        XCTAssertEqual(metrics.activeCaloriesKcal, 610)
+        XCTAssertEqual(metrics.activeCaloriesKcal, 0)
+        XCTAssertEqual(try XCTUnwrap(metrics.activeEnergyKcal), 610)
     }
 
     func testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor() async throws {

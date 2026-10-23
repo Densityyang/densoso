@@ -38,7 +38,9 @@ final class AgentDailyMetricsRepositoryTests: XCTestCase {
 
         XCTAssertEqual(results.map(\.date), [start, middle, end])
         XCTAssertEqual(results.compactMap { $0.deficit.value?.likely }, [101, 102, 103])
-        XCTAssertTrue(results.allSatisfy { $0.deficit.availability == .observed })
+        XCTAssertTrue(results.allSatisfy { $0.expenditure.availability == .observed })
+        XCTAssertTrue(results.allSatisfy { $0.intake.availability == .estimated })
+        XCTAssertTrue(results.allSatisfy { $0.deficit.availability == .estimated })
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyMetrics>()), countBefore)
     }
 

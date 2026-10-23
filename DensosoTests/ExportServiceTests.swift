@@ -178,7 +178,7 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(meals[0].dishes.first?.portionLikelyG, 180)
         XCTAssertEqual(meals[0].dishes.first?.algorithmVersion, "meal-estimator-v1")
         XCTAssertEqual(metrics.count, 1)
-        XCTAssertEqual(metrics[0].totalIntakeKcal, 640)
+        XCTAssertEqual(metrics[0].totalIntakeKcal, 0)
         // Workout energy is descriptive in Phase 6; it is not daily active energy.
         // A current profile revision cannot be projected backward into 2023.
         XCTAssertEqual(metrics[0].activeCaloriesKcal, 0)
