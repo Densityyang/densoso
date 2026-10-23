@@ -102,6 +102,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
                 proteinG: 1,
                 fatG: 2,
                 carbsG: 3,
+                sourceActionKey: "projection-parity-meal-\(index)",
                 proteinLowG: 1,
                 proteinLikelyG: 1,
                 proteinHighG: 1,
@@ -111,8 +112,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
                 carbsLowG: 3,
                 carbsLikelyG: 3,
                 carbsHighG: 3,
-                evidenceData: evidenceData,
-                sourceActionKey: "projection-parity-meal-\(index)"
+                evidenceData: evidenceData
             ))
             context.insert(WorkoutRecord(
                 date: date,
@@ -170,8 +170,8 @@ final class ConfirmationCoordinatorTests: XCTestCase {
             context.insert(MealRecord(
                 date: date,
                 totalCaloriesKcal: 10,
-                evidenceData: evidenceData,
-                sourceActionKey: "daily-snapshot-page-meal-\(index)"
+                sourceActionKey: "daily-snapshot-page-meal-\(index)",
+                evidenceData: evidenceData
             ))
             context.insert(WeightRecord(
                 sourceActionKey: "daily-snapshot-page-weight-\(index)",
@@ -515,7 +515,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         }
         let weekStart = calendar.startOfDay(for: interval.start)
         let reportPredicate = #Predicate<WeeklyReport> { $0.weekStartDate == weekStart }
-        let report = verificationContext.fetch(
+        let report = try verificationContext.fetch(
             FetchDescriptor<WeeklyReport>(predicate: reportPredicate)
         ).first
         XCTAssertNil(report)
