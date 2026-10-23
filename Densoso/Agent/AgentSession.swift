@@ -1140,7 +1140,7 @@ final class AgentSession {
                         )
                         throw ProviderError.requestModelMismatch
                     }
-                    guard costIsPriced else {
+                    if !costIsPriced {
                         try await conversationRepository.markAgentRequestCostUnavailable(
                             requestID: request.requestID,
                             conversationID: request.conversationID

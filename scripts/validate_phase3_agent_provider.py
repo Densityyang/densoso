@@ -493,6 +493,7 @@ def main() -> int:
             "maximumRequestCostEstimate(",
             "reserveAgentRequestCost(",
             "recordWithCostAvailability(",
+            "if !costIsPriced",
             "usage.capability == .text",
             "reportedModel == selectedModel",
             "markAgentRequestCostUnavailable(",
