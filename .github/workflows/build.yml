@@ -511,6 +511,7 @@ jobs:
             -only-testing:DensosoTests/SwiftDataProviderGovernanceQueryTests \
             -only-testing:DensosoTests/AgentDailyMetricsRepositoryTests \
             -only-testing:DensosoTests/GetMetricsToolTests \
+            -only-testing:DensosoTests/GetWeeklyDeficitToolTests \
             -only-testing:DensosoTests/AgentToolOutputLimiterTests \
             -resultBundlePath "$GATE03_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \

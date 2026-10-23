@@ -140,17 +140,18 @@ final class DailyMetricsUsabilityTests: XCTestCase {
     func testAggregatesDoNotCountMissingOrNonFiniteValuesAsAvailableDays() throws {
         let missingObservedNumber = MetricValue<Double>(value: nil, availability: .observed)
         let infiniteObservedNumber = MetricValue(value: Double.infinity, availability: .observed)
+        let negativeEstimatedNumber = MetricValue(value: -10.0, availability: .estimated)
         let usableNumber = MetricValue(value: 100.0, availability: .estimated)
 
         let numericAverage = DailyMetricsUsabilityPolicy.aggregateNumbers(
-            [missingObservedNumber, infiniteObservedNumber, usableNumber],
-            expectedDays: 3,
+            [missingObservedNumber, infiniteObservedNumber, negativeEstimatedNumber, usableNumber],
+            expectedDays: 4,
             average: true
         )
         XCTAssertEqual(numericAverage.total.value, 100)
         XCTAssertEqual(numericAverage.total.availability, .partial)
         XCTAssertEqual(numericAverage.coverage.availableDays, 1)
-        XCTAssertEqual(numericAverage.coverage.unavailableDays, 2)
+        XCTAssertEqual(numericAverage.coverage.unavailableDays, 3)
         XCTAssertEqual(numericAverage.coverage.missingDays, 0)
 
         let missingEstimatedRange = MetricValue<EstimateRange>(value: nil, availability: .estimated)

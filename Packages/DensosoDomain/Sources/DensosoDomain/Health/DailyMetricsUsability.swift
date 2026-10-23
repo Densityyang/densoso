@@ -352,9 +352,13 @@ public enum DailyMetricsUsabilityPolicy {
         expectedDays: Int,
         average: Bool = false
     ) -> MetricAggregate<Double> {
-        let valid = metrics.filter { isUsable($0.availability) && $0.value?.isFinite == true }
+        let valid = metrics.filter {
+            isUsable($0.availability) && $0.value.map { $0.isFinite && $0 >= 0 } == true
+        }
         let coverage = MetricCoverage(
-            availability: metrics.map { normalizedAvailability($0, hasValidValue: $0.value?.isFinite == true) },
+            availability: metrics.map {
+                normalizedAvailability($0, hasValidValue: $0.value.map { $0.isFinite && $0 >= 0 } == true)
+            },
             expectedDays: expectedDays
         )
         guard !valid.isEmpty else {
