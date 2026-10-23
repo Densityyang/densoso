@@ -6,7 +6,7 @@ struct DailyCheckInSelfReportResolver {
     private static let otherPersonCues = [
         "我朋友", "我的朋友", "我妈妈", "我妈", "我爸爸", "我爸", "我孩子", "我儿子", "我女儿", "我闺女",
         "我同事", "我伴侣", "我对象", "我男朋友", "我女朋友", "我男友", "我女友", "我丈夫", "我妻子", "我老公", "我老婆",
-        "我爷爷", "我奶奶", "我哥哥", "我姐姐",
+        "我爷爷", "我奶奶", "我哥", "我姐", "我弟", "我妹", "我哥哥", "我姐姐",
         "我弟弟", "我妹妹", "我家人", "我和朋友", "朋友说", "他说", "她说",
         "myfriend", "friendofmine", "mymother", "mymom", "myfather", "mydad", "mymum", "mychild", "myson",
         "mydaughter", "mycoworker", "mycolleague", "mypartner", "myspouse", "myhusband", "mywife", "myboyfriend",
