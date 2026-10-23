@@ -193,6 +193,39 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(snapshot.weightKilograms), 66.4, accuracy: 0.000_001)
     }
 
+    func testConfirmationSnapshotDoesNotExposeLegacyPointMealAsCurrentIntake() async throws {
+        let harness = try Harness()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let legacyEvidence = try JSONEncoder().encode([
+            EvidenceSnapshot(
+                grade: .legacyPointEstimate,
+                sourceID: "legacy-fixture",
+                summary: "Historical point estimate without recalculation."
+            ),
+        ])
+        let context = ModelContext(harness.container)
+        context.insert(MealRecord(
+            date: date,
+            totalCaloriesKcal: 640,
+            energyLowKcal: 640,
+            energyLikelyKcal: 640,
+            energyHighKcal: 640,
+            evidenceData: legacyEvidence
+        ))
+        try context.save()
+
+        let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
+        _ = try await harness.coordinator.confirm(id: action.id)
+
+        let snapshotRecord = try XCTUnwrap(
+            ModelContext(harness.container).fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: snapshotRecord.payloadData)
+        XCTAssertNil(snapshot.energyIntakeKcal)
+    }
+
     func testMealConfirmationPreservesMeasuredHealthKitEnergyProjection() async throws {
         let harness = try Harness()
         let date = Date(timeIntervalSince1970: 1_700_000_000)

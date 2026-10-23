@@ -5,6 +5,10 @@ Status: approved by user on 2026-08-18; Phase 2 authorized
 This is the first gate in the single staged V3 core Draft PR. A green Gate 1
 does not authorize Phase 2; the user must review the recorded CI evidence first.
 
+Historical provenance note: PR #14 references in Gates 1–9 describe the earlier
+V3-core implementation only. They are not an association for
+`codex/ai-native-health-loop`; that branch currently has no pull request.
+
 ## Recorded implementation and CI evidence
 
 - Implementation commit: `b970ab9dabc23fb44d6cb9ca36f984ff4c21aa24`

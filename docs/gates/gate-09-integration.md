@@ -88,4 +88,5 @@ acceptance.
 The simulator gate can show that the software paths execute against fakes and
 the seeded store. It does not establish real provider credentials, real
 HealthKit delivery, real Watch pairing, signed distribution or production use.
-PR #14 remains Draft and `blocked-by-signing`.
+Signed-device acceptance remains `blocked-by-signing` until Gate 15 and Gate 16
+have their separate device and signing evidence.

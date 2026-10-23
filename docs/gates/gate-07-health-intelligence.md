@@ -63,4 +63,5 @@ model training.
 All calculations and UI are software behavior tested with deterministic local
 fixtures. The gate does not establish clinical validity, HealthKit data
 completeness, signed-device background delivery, or production readiness.
-PR #14 remains Draft and `blocked-by-signing`.
+Gate 15/16 signed-device acceptance remains blocked until its separate device
+and signing evidence is captured.

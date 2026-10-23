@@ -33,7 +33,8 @@ def main() -> int:
     contracts = require_text(
         "Packages/DensosoDomain/Sources/DensosoDomain/HealthKitContracts.swift",
         (
-            "public enum HealthStoreClientError: LocalizedError, Equatable, Sendable",
+            "public enum HealthStoreClientError: Equatable, Sendable, SharedErrorDescribing",
+            "public var sharedErrorDescriptor: SharedErrorDescriptor",
             "protocol HealthStoreClient: Sendable",
             "func aggregate(_ request: HealthAggregateRequest)",
             "func samples(_ request: HealthSampleRequest)",
@@ -286,16 +287,17 @@ def main() -> int:
             "static let outboxBatchSize = 64",
             "descriptor.fetchLimit = Self.outboxBatchSize",
             "cursorIdempotencyKey",
-            "let expectedOperations: (upsert: String, delete: String)?",
-            "versionDescriptor.fetchLimit = 1",
-            "receiptDescriptor.fetchLimit = 1",
-            "$0.receiptID != nil",
+            "if entry.operation == \"upsertMeal\"",
+            "if entry.operation == \"upsertWeight\"",
+            "entry.operation == \"deleteMeal\" || entry.operation == \"deleteWeight\"",
+            "HealthRepository.canonicalSyncIdentifier(",
             r"SortDescriptor(\HealthSyncOutboxEntry.createdAt)",
             "private func isSuperseded(_ entry: HealthSyncOutboxEntry, in modelContext: ModelContext) throws -> Bool",
             "candidate.syncVersion > minimumSyncVersion",
-            "descriptor.fetchLimit = Self.outboxBatchSize",
             "candidate.createdAt > cursorCreatedAt",
             "candidate.idempotencyKey > cursorIdempotencyKey",
+            "private func updateActionReceipt(for entry: HealthSyncOutboxEntry",
+            "predicate: #Predicate { $0.id == receiptID }",
             "descriptor.fetchLimit = 1",
             "HealthWritePayload.nutrition",
             ".confirmedWeight(kilograms:",
@@ -313,8 +315,9 @@ def main() -> int:
         (
             "healthKitActiveEnergyKcal",
             "healthKitRestingEnergyKcal",
-            "EnergyAccounting.expenditure(",
-            "max($0.likely - (basal ?? 0), 0)",
+            "EnergyAccounting.calculate(",
+            "let expenditure = energyAccounting.expenditure",
+            "let active = energyAccounting.activeComponent?.likely",
             "workoutCount: dayWorkouts.count",
         ),
         errors,
@@ -343,6 +346,11 @@ def main() -> int:
             "testOneFailedStreamDoesNotBlockOtherHealthMetrics",
             "testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder",
         ),
+        errors,
+    )
+    require_text(
+        "DensosoTests/HealthRepositoryTests.swift",
+        ("testMeasuredDailyActivityAggregateFeedsProjectionWithoutWorkoutEnergy",),
         errors,
     )
     require_text(

@@ -52,7 +52,8 @@ def main() -> int:
             "descriptor.fetchLimit = Self.pendingReceiptFetchBatchSize",
             "receipt.messageID > lastMessageID",
             "message.ordinal > cursorOrdinal",
-            "messages.sorted { $0.ordinal < $1.ordinal }",
+            "messages.sorted {",
+            "$0.ordinal == $1.ordinal ? $0.id < $1.id : $0.ordinal < $1.ordinal",
         ),
         errors,
     )
@@ -60,7 +61,7 @@ def main() -> int:
         "Densoso/Infrastructure/WatchConnectivity/PhoneWatchConnectivityCoordinator.swift",
         (
             "session.updateApplicationContext", "didReceiveUserInfo", "didReceiveMessage",
-            "pendingTranscriptRevision", "recentReceivedMessageIDs()",
+            "pendingTranscriptRevision", "inboxStore.recentProcessedMessageIDs()",
             "resumePendingCommands()",
         ),
         errors,
@@ -153,7 +154,11 @@ def main() -> int:
     )
     require_text(
         "Densoso/Views/ChatScreen.swift",
-        ("displayedWatchTranscriptIDs", "hasPersistedRequestHistory(for: agentRequestID)", "guard !isProcessing else { return }"),
+        (
+            "displayedWatchTranscriptIDs",
+            "hasPersistedRequestHistory(for: agentRequestID)",
+            "guard !agentUIState.isBusy else { return }",
+        ),
         errors,
     )
     require_text(

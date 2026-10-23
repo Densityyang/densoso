@@ -20,8 +20,9 @@ cannot mark Gate 15 or Gate 16 passed.
   head SHA.
 - All required gate artifacts are present: test result bundles, build/test
   logs, contract reports, integration screenshots and coverage summary.
-- Privacy-focused diagnostics export is covered by the Gate 9 whitelist tests
-  and static contract; Gate 10 requires that contract in its final roll-up.
+- Privacy-focused diagnostics export is covered by
+  `DiagnosticsExportPrivacyTests` and the Gate 9 whitelist static contract;
+  Gate 10 requires that contract in its final roll-up.
 - No model, photo, speech or Watch path bypasses an explicit confirmation
   before creating user health data.
 - HealthKit projections and writes remain idempotent; WorkoutKit scheduling
@@ -50,6 +51,7 @@ means only that the committed software passed the defined CI contracts.
 - Visual certification of a physical device based solely on simulator
   screenshots.
 
-PR #14 must remain OPEN, Draft and `blocked-by-signing`. Those device/signing
-checks require a paid Apple development team and a later separately approved
-hardware validation matrix.
+Hardware and signing acceptance remains `blocked-by-signing` until a signed
+iPhone/Watch run supplies the evidence listed by Gates 15 and 16. Gate 10 does
+not assign this branch to another pull request or turn a simulator result into
+device acceptance.

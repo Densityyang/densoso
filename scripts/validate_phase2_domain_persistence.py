@@ -253,6 +253,13 @@ def main() -> int:
         ),
         errors,
     )
+    confirmation_repository = (
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataConfirmationRepository.swift"
+    ).read_text(encoding="utf-8")
+    daily_projection_index = confirmation_repository.find("try reprojectDaily(on: affectedDate)")
+    snapshot_projection_index = confirmation_repository.find("try reprojectDailyHealthSnapshot(on: affectedDate)")
+    if daily_projection_index < 0 or snapshot_projection_index < 0 or daily_projection_index > snapshot_projection_index:
+        errors.append("confirmation must refresh DailyMetrics before deriving the DailyHealthSnapshot intake")
 
     require_text(
         ROOT / "Densoso" / "Services" / "DailyMetricsProjectionInputReader.swift",
@@ -270,17 +277,12 @@ def main() -> int:
         errors,
     )
     require_text(
-        ROOT / "Densoso" / "Services" / "DailyMetricsProjectionInputReader.swift",
-        ("static func meals(on date: Date, in modelContext: ModelContext) throws -> [MealRecord]",),
-        errors,
-    )
-    require_text(
         ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataConfirmationRepository.swift",
         (
             "DailyMetricsProjectionInputReader.read",
             "projectionInputs.meals",
             "projectionInputs.workouts",
-            "DailyMetricsProjectionInputReader.meals(on: day, in: modelContext)",
+            "DailyMetricsReadModelMapper.make($0).intake.value",
             "weightDescriptor.fetchLimit = 1",
             "SortDescriptor(\\WeightRecord.id, order: .reverse)",
             "static let scheduleEventFetchBatchSize = 64",

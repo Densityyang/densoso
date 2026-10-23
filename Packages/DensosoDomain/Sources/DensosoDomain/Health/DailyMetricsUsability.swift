@@ -233,9 +233,9 @@ public enum DailyMetricsUsabilityPolicy {
         if requiresRecompute { return .pendingRecompute }
         guard hasCurrentProjectionEvidence else { return .unavailable }
         switch quality {
-        case .observed: .observed
-        case .estimated: .estimated
-        case .unavailable, .legacy: .unavailable
+        case .observed: return .observed
+        case .estimated: return .estimated
+        case .unavailable, .legacy: return .unavailable
         }
     }
 

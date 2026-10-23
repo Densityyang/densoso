@@ -168,10 +168,9 @@ def main() -> int:
     chat_screen = require_text(
         "Densoso/Views/ChatScreen.swift",
         (
-            "DailyLoopSnapshotCard(snapshot: dailyLoopSnapshot)",
+            "DailyLoopSnapshotCard(",
+            "snapshot: dailyLoopSnapshot",
             "dailyLoopSnapshotService.snapshot()",
-            "开始说话",
-            "停止录音",
             "照片记餐",
             "today-voice-primary",
             "today-photo-secondary",
@@ -180,6 +179,11 @@ def main() -> int:
             "today-send",
             "发送",
         ),
+        errors,
+    )
+    require_text(
+        "Densoso/Application/Agent/AgentUIStateMachine.swift",
+        ("var buttonTitle: String", "isRecording ? \"停止录音\" : \"开始说话\""),
         errors,
     )
     quick_action_handler = chat_screen.split("private func promptButton(for action:", 1)[-1].split(
@@ -195,17 +199,33 @@ def main() -> int:
     daily_loop = require_text(
         "Densoso/Application/DailyLoop/DailyLoopSnapshotService.swift",
         (
-            "healthIntelligenceService.dailyBrief",
-            "agentSession.pendingActions",
-            "workoutPlanSchedulingService.confirmedPlans()",
-            "plansThroughTomorrow",
-            "scheduledAt >= dayStart",
-            "DailyLoopSnapshot(",
+            "healthProjectionActor.dailyLoopSnapshot(",
+            "dailyBrief: healthIntelligenceService.dailyBrief",
+            "pendingActions: agentSession.pendingActions",
+            "DailyLoopSnapshot",
         ),
         errors,
     )
     if "healthIntelligenceService.refresh()" in daily_loop or "todayHealthState(" in daily_loop:
         errors.append("DailyLoop composition must not refresh or recalculate health state")
+    require_text(
+        "Densoso/Services/HealthProjectionActor.swift",
+        (
+            "func dailyLoopSnapshot(",
+            "loadConfirmedPlanEntries(asOf: date)",
+            "ConfirmedWorkoutPlanEntry.decode(notes: event.notes)",
+            "ConfirmedTrainingPlanEntry.decode(notes: event.notes)",
+            "planWindow.contains(scheduledAt)",
+            "planWindow.contains(session.date)",
+            "entry.state != .terminal",
+        ),
+        errors,
+    )
+    require_text(
+        "Densoso/Application/DailyLoop/DailyLoopSnapshotService.swift",
+        ("scheduledAt >= dayStart", "scheduledAt < plansThroughTomorrow"),
+        errors,
+    )
     require_text(
         "Densoso/Views/Components/DailyLoopSnapshotCard.swift",
         (
@@ -317,7 +337,6 @@ def main() -> int:
             "workoutPlanDraftBeingPresented",
             "workoutPlanEditorAppliedDraft",
             "AppIntentInbox.clearWorkoutPlan()",
-            "AppIntentInbox.clearQueuedWorkoutPlans()",
             "AppIntentInbox.clearMealText()",
             "guard !isPresentingWorkoutPlanDraft else { return }",
             "else if let inboxDraft = AppIntentInbox.consumeWorkoutPlan()",
@@ -468,7 +487,7 @@ def main() -> int:
     require_text(
         "Densoso/Views/ChatScreen.swift",
         (
-            r"ForEach(dailyLoopSnapshot?.quickActions ?? [], id: \.rawValue)",
+            r"ForEach(dailyLoopSnapshot?.quickActions ?? DailyLoopQuickAction.allCases, id: \.rawValue)",
             "case .logWeight",
             "case .dailyCheckIn",
             "inputText = details.prompt",
@@ -572,8 +591,13 @@ def main() -> int:
             "Restore likewise pages request/message history in batches",
             "meal text and workout-plan handoffs arrive on cold launch and scene",
             "Records history queries only the selected record kind and optional day",
-            "while preserving the current page, it shows a \"记录已更新，刷新列表\" action",
-            "after model-context saves and supports pull-to-refresh",
+            "stable 64-row pages",
+            "explicit load-older action",
+            "reloads the selected records after relevant saves",
+            "while older rows remain",
+            "preserve the reader position",
+            "记录已更新，刷新列表",
+            "Refresh and filter changes clear the action",
         ),
         errors,
     )

@@ -48,6 +48,7 @@ final class AgentCoordinatorTests: XCTestCase {
                     .completed(.toolUse),
                 ],
                 [.textDelta("草稿已经准备好，请确认。"), .completed(.completed)],
+                [.textDelta("继续刚才的话题。"), .completed(.completed)],
             ]
         )
         let harness = try await Harness(provider: provider)
@@ -66,6 +67,36 @@ final class AgentCoordinatorTests: XCTestCase {
         let persistedMessages = try ModelContext(harness.container).fetch(FetchDescriptor<MessageRecord>())
         let persistedText = persistedMessages.compactMap { String(data: $0.contentData, encoding: .utf8) }.joined()
         XCTAssertFalse(persistedText.contains("same-process-private-reasoning"))
+
+        _ = try await harness.session.send(userText: "继续刚才的话题")
+        let independentRequest = try XCTUnwrap(provider.recordedRequests().last)
+        XCTAssertFalse(independentRequest.messages.contains { message in
+            message.content.contains { content in
+                if case .reasoning(let item) = content {
+                    return item.objectValue?["encrypted_content"]?.stringValue == "same-process-private-reasoning"
+                }
+                return false
+            }
+        })
+    }
+
+    func testOversizedCurrentTurnIsRejectedBeforePersistenceOrProviderInvocation() async throws {
+        let provider = ScriptedTextProvider(scripts: [])
+        let harness = try await Harness(provider: provider)
+        let oversizedText = String(
+            repeating: "x",
+            count: AgentProviderContextPolicy.maximumEstimatedInputBytes
+        )
+
+        do {
+            _ = try await harness.session.send(userText: oversizedText)
+            XCTFail("Oversized current input must be rejected before the request is started")
+        } catch {
+            XCTAssertEqual(error as? AgentError, .contextWindowExceeded)
+        }
+
+        XCTAssertTrue(provider.recordedRequests().isEmpty)
+        XCTAssertTrue(try ModelContext(harness.container).fetch(FetchDescriptor<MessageRecord>()).isEmpty)
     }
 
     func testHealthContextLoadsOnlyForRelevantHealthQuestions() async throws {

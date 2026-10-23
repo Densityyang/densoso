@@ -88,17 +88,24 @@ def main() -> int:
         (
             "DailyHealthSnapshotRecord",
             "WeightRecord",
-            "MealRecord",
             "WorkoutRecord",
             "let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord>",
             "let metricsPredicate = #Predicate<DailyMetrics>",
             "let weightPredicate = #Predicate<WeightRecord>",
-            "let mealPredicate = #Predicate<MealRecord>",
             "let workoutPredicate = #Predicate<WorkoutRecord>",
+            "let metricReadResult = metric.map(DailyMetricsReadModelMapper.make)",
+            "let proteinGrams = metricReadResult?.proteinG.value",
+            "let energyIntake = metricReadResult?.intake.value?.likely",
+            "let dailyDeficit = metricReadResult?.deficit.value?.likely",
             "descriptor.fetchLimit = 1",
         ),
         errors,
     )
+    read_model = (ROOT / "Densoso" / "Services" / "HealthIntelligenceReadModel.swift").read_text(
+        encoding="utf-8"
+    )
+    if "MealRecord" in read_model or "mealPredicate" in read_model:
+        errors.append("HealthIntelligence must consume canonical DailyMetrics instead of summing meals again")
     prompt = require_text(
         "Densoso/Application/Health/HealthContextPromptBuilder.swift",
         (
@@ -196,7 +203,7 @@ def main() -> int:
             "Status:",
             "`<7`, `7–27`, and `>=28`",
             "Provider context contains only aggregate",
-            "PR #14 remains Draft and `blocked-by-signing`",
+            "Gate 15/16 signed-device acceptance remains blocked",
         ),
         errors,
     )

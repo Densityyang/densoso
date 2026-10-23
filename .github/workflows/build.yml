@@ -344,6 +344,7 @@ jobs:
             -only-testing:DensosoTests/LocalIntelligenceSuggestionTests \
             -only-testing:DensosoTests/PromptInjectionEvalTests \
             -only-testing:DensosoTests/AgentBudgetTests \
+            -only-testing:DensosoTests/AgentProviderContextPolicyTests \
             -only-testing:DensosoTests/AgentRequestResumeTests \
             -only-testing:DensosoTests/AgentReasoningPolicyTests \
             -only-testing:DensosoTests/ToolSchemaTests \

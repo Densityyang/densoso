@@ -265,6 +265,14 @@ final class AgentSession {
               multimodalRequest.inputEnvelope.imageAttachments.isEmpty == (multimodalRequest.image == nil) else {
             throw AgentError.invalidInputEnvelope
         }
+        let fixedContextBytes = AgentProviderContextPolicy.fixedContextBytes(
+            systemPrompt: systemPrompt.text,
+            tools: registry.toolDefinitions
+        )
+        guard multimodalRequest.userText.utf8.count + fixedContextBytes + 48
+                <= AgentProviderContextPolicy.maximumEstimatedInputBytes else {
+            throw AgentError.contextWindowExceeded
+        }
         let requestID = requestedID ?? UUID()
         let task = Task<AgentResponse, Error> {
             try await run(multimodalRequest: multimodalRequest, requestID: requestID)
@@ -324,7 +332,7 @@ final class AgentSession {
             transientMealUserText = nil
             didIssueMealClarification = false
             transientMealClarificationWasAnswered = false
-            conversationHistory = conversationHistory.map(Self.withoutTransientImages)
+            conversationHistory = conversationHistory.map(Self.withoutSensitiveTransientContent)
         }
         streamedText = ""
         emit(.accepted(requestID: requestID))
@@ -554,7 +562,7 @@ final class AgentSession {
                         narrativeContext: narrativeContext,
                         structuredNarrative: useStructuredHealthNarrative
                     ),
-                    messages: providerMessagesIncludingTransientMealEvidence(),
+                    messages: try providerMessagesIncludingTransientMealEvidence(),
                     tools: registry.toolDefinitions,
                     maxOutputTokens: 2_048,
                     thinking: provider.descriptor.capabilities.contains(.reasoning)
@@ -671,7 +679,12 @@ final class AgentSession {
             )))
             throw error
         } catch {
-            if requestRecordStarted { await persist(state: .interrupted, requestID: requestID) }
+            if requestRecordStarted {
+                let state: AgentRequestState = (error as? AgentError) == .contextWindowExceeded
+                    ? .failed
+                    : .interrupted
+                await persist(state: state, requestID: requestID)
+            }
             emit(.failed(SharedErrorDescriptor.mapped(
                 from: error,
                 fallback: .providerUnavailableFallback
@@ -911,17 +924,25 @@ final class AgentSession {
         transientMealHasImage
     }
 
-    private func providerMessagesIncludingTransientMealEvidence() -> [ModelMessage] {
+    private func providerMessagesIncludingTransientMealEvidence() throws -> [ModelMessage] {
         let messagesWithoutLocalMetadata = conversationHistory.map { message in
             ModelMessage(role: message.role, content: message.content)
         }
-        guard let evidenceMessage = Self.transientMealEvidenceMessage(transientMealImageEvidence),
-              let userIndex = messagesWithoutLocalMetadata.lastIndex(where: { $0.role == .user }) else {
-            return messagesWithoutLocalMetadata
+        guard let userIndex = messagesWithoutLocalMetadata.lastIndex(where: { $0.role == .user }) else {
+            throw AgentError.contextWindowExceeded
         }
         var providerMessages = messagesWithoutLocalMetadata
-        providerMessages.insert(evidenceMessage, at: userIndex + 1)
-        return providerMessages
+        if let evidenceMessage = Self.transientMealEvidenceMessage(transientMealImageEvidence) {
+            providerMessages.insert(evidenceMessage, at: userIndex + 1)
+        }
+        return try AgentProviderContextPolicy.boundedMessages(
+            providerMessages,
+            currentTurnStartIndex: userIndex,
+            additionalContextBytes: AgentProviderContextPolicy.fixedContextBytes(
+                systemPrompt: systemPrompt.text,
+                tools: registry.toolDefinitions
+            )
+        )
     }
 
     private static func transientMealEvidenceMessage(_ evidence: [MealEvidence]) -> ModelMessage? {
@@ -1150,12 +1171,16 @@ final class AgentSession {
         conversationHistory.append(message)
     }
 
-    private static func withoutTransientImages(_ message: ModelMessage) -> ModelMessage {
+    private static func withoutSensitiveTransientContent(_ message: ModelMessage) -> ModelMessage {
         ModelMessage(
             role: message.role,
             content: message.content.filter { content in
-                if case .image = content { return false }
-                return true
+                switch content {
+                case .image, .reasoning:
+                    return false
+                case .text, .toolCall, .toolResult:
+                    return true
+                }
             },
             inputEnvelope: message.inputEnvelope
         )
@@ -1266,6 +1291,7 @@ enum AgentError: Equatable, Sendable, SharedErrorDescribing {
     case requestAlreadyCompleted
     case transientImageRequired
     case invalidInputEnvelope
+    case contextWindowExceeded
     case unsupportedToolSchemaVersion(Int)
 
     var sharedErrorDescriptor: SharedErrorDescriptor {
@@ -1304,6 +1330,13 @@ enum AgentError: Equatable, Sendable, SharedErrorDescribing {
                 userMessage: "输入草稿的文字、来源和临时附件不匹配，请检查后重新发送。",
                 subsystem: .agent,
                 reason: .invalidInputEnvelope
+            )
+        case .contextWindowExceeded:
+            SharedErrorDescriptor(
+                code: .requestTooLarge,
+                userMessage: "这条请求的当前内容超过了发送上限，请缩短问题或移除部分信息后重试。",
+                subsystem: .agent,
+                reason: .requestTooLarge
             )
         case .unsupportedToolSchemaVersion(let version):
             SharedErrorDescriptor(
