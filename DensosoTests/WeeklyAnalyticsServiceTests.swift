@@ -50,6 +50,8 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.points.filter(\.hasData).count, 3)
         XCTAssertEqual(snapshot.energyCoverage.availableDays, 3)
         XCTAssertEqual(snapshot.energyCoverage.missingDays, 4)
+        XCTAssertEqual(snapshot.deficitAvailability, .partial)
+        XCTAssertTrue(snapshot.points.filter(\.hasData).allSatisfy { $0.deficit.availability == .estimated })
 
         let reports = try context.fetch(FetchDescriptor<WeeklyReport>())
         XCTAssertEqual(reports.count, 1)

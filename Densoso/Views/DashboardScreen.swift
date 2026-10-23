@@ -103,10 +103,13 @@ struct DashboardScreen: View {
         let intake = result.intake.value?.likely
         let deficit = result.deficit.value?.likely
         let hasEnergyEstimate = expenditure != nil
-        let energyPrefix = result.energyQuality == .estimated ? "约 " : ""
-        let intakeValue = intake.map { String(format: "%.0f", $0) } ?? (metrics.mealCount == 0 ? "未记录" : "暂无")
-        let expenditureValue = expenditure.map { "\(energyPrefix)\(String(format: "%.0f", $0))" } ?? "暂无"
-        let balanceValue = deficit.map { "\(energyPrefix)\(String(format: "%.0f", $0))" } ?? "暂无"
+        let intakePrefix = approximatePrefix(for: result.intake.availability)
+        let expenditurePrefix = approximatePrefix(for: result.expenditure.availability)
+        let deficitPrefix = approximatePrefix(for: result.deficit.availability)
+        let intakeValue = intake.map { "\(intakePrefix)\(String(format: "%.0f", $0))" }
+            ?? (metrics.mealCount == 0 ? "未记录" : "暂无")
+        let expenditureValue = expenditure.map { "\(expenditurePrefix)\(String(format: "%.0f", $0))" } ?? "暂无"
+        let balanceValue = deficit.map { "\(deficitPrefix)\(String(format: "%.0f", $0))" } ?? "暂无"
         return VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Text("今日热量")
@@ -160,7 +163,9 @@ struct DashboardScreen: View {
                 }
                 Spacer()
                 OrbitStatusBadge(
-                    text: weekly.totalDeficitKcal.map { "总缺口 \($0)" } ?? "缺口数据不足",
+                    text: weekly.totalDeficitKcal.map {
+                        "总缺口 \(approximatePrefix(for: weekly.deficitAvailability))\($0)"
+                    } ?? "缺口数据不足",
                     tone: .gold
                 )
             }
@@ -170,16 +175,20 @@ struct DashboardScreen: View {
                     if let deficit = point.deficitKcal {
                         BarMark(
                             x: .value("日期", point.date, unit: .day),
-                            y: .value("实际缺口", deficit)
+                            y: .value("能量缺口", deficit)
                         )
-                        .foregroundStyle(OrbitPalette.blue.gradient)
+                        .foregroundStyle(
+                            point.deficit.availability == .observed
+                                ? OrbitPalette.blue.gradient
+                                : OrbitPalette.gold.gradient
+                        )
                         .cornerRadius(4)
                     }
                 }
 
                 if let target = weekly.points.first?.targetDeficitKcal {
                     RuleMark(y: .value("每日目标", target))
-                        .foregroundStyle(OrbitPalette.gold)
+                        .foregroundStyle(OrbitPalette.coral)
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 4]))
                 }
             }
@@ -193,25 +202,29 @@ struct DashboardScreen: View {
             .chartYAxis {
                 AxisMarks(position: .leading)
             }
-            .accessibilityLabel("过去七天实际热量缺口与每日目标")
+            .accessibilityLabel("过去七天观察值或估算热量缺口与每日目标")
 
             HStack(spacing: 12) {
                 OrbitMetric(
-                    value: weekly.averageDailyDeficitKcal.map { String(format: "%.0f", $0) } ?? "暂无",
+                    value: weekly.averageDailyDeficitKcal.map {
+                        "\(approximatePrefix(for: weekly.deficitAvailability))\(String(format: "%.0f", $0))"
+                    } ?? "暂无",
                     label: "记录日均缺口"
                 )
                 OrbitMetric(
-                    value: weekly.projectedWeightLossKg.map { String(format: "%.2f", $0) } ?? "暂无",
+                    value: weekly.projectedWeightLossKg.map { String(format: "%.1f", $0) } ?? "暂无",
                     label: "能量粗略折算（非体重预测）kg",
                     tint: OrbitPalette.green
                 )
             }
 
             HStack(spacing: 16) {
-                Label("实际缺口", systemImage: "square.fill")
+                Label("观察值缺口", systemImage: "square.fill")
                     .foregroundStyle(OrbitPalette.blue)
-                Label("每日目标", systemImage: "line.diagonal")
+                Label("估算/部分缺口", systemImage: "square.fill")
                     .foregroundStyle(OrbitPalette.gold)
+                Label("每日目标", systemImage: "line.diagonal")
+                    .foregroundStyle(OrbitPalette.coral)
             }
             .font(.caption)
         }
@@ -238,6 +251,10 @@ struct DashboardScreen: View {
                 fallback: .projectionFailedFallback
             ).userMessage
         }
+    }
+
+    private func approximatePrefix(for availability: MetricAvailability) -> String {
+        availability == .observed ? "" : "约 "
     }
 
     private func domainLabel(_ domain: HealthDomain) -> String {

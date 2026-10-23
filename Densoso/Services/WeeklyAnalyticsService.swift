@@ -27,6 +27,17 @@ struct WeeklyAnalyticsSnapshot: Equatable {
     let energyCoverage: MetricCoverage
 
     var hasData: Bool { recordedDays > 0 }
+
+    var deficitAvailability: MetricAvailability {
+        guard energyCoverage.availableDays > 0 else {
+            return energyCoverage.pendingRecomputeDays > 0 ? .pendingRecompute : .unavailable
+        }
+        if energyCoverage.availableDays < energyCoverage.expectedDays || energyCoverage.partialDays > 0 {
+            return .partial
+        }
+        if energyCoverage.estimatedDays > 0 { return .estimated }
+        return .observed
+    }
 }
 
 /// Produces the dashboard's rolling seven-day series and keeps a fully covered
