@@ -1319,6 +1319,7 @@ jobs:
           swift test --package-path Packages/DensosoDomain --filter DailyLoopSnapshotTests 2>&1 | tee -a gate11-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter HealthNarrativeTests 2>&1 | tee -a gate11-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter SharedErrorDescriptorTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter HealthIntelligenceTests 2>&1 | tee -a gate11-domain-contracts.log
 
       - name: Generate Xcode project and select iPhone Simulator
         run: |
@@ -1363,6 +1364,7 @@ jobs:
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics \
             -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected \
             -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testSourceCursorProfileAndGoalRevisionsChangeProjectionFingerprint \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testUnrelatedHealthKitCursorDoesNotInvalidateDailyMetricsProjection \
             -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testWorkoutEnergyAndProvenanceChangesProjectionFingerprint \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \
