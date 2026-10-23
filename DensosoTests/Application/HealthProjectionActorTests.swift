@@ -48,14 +48,18 @@ final class HealthProjectionActorTests: XCTestCase {
                 snapshotHash: "health-refresh-perf-\(offset)",
                 algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
             ))
-            context.insert(DailyMetrics(
+            let metric = DailyMetrics(
                 date: day,
                 totalExpenditureKcal: 1_880,
                 mealCount: 0,
                 energyQuality: "observed",
                 projectionVersion: AlgorithmVersions.dailyMetricsProjection,
                 sourceFingerprint: "health-refresh-perf-metrics-\(offset)"
-            ))
+            )
+            // DailyMetrics normalizes using Calendar.current; align it to this
+            // fixture's UTC key before inserting so the query window is stable.
+            metric.date = day
+            context.insert(metric)
         }
         try context.save()
 
