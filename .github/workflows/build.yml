@@ -1363,8 +1363,9 @@ jobs:
             -only-testing:DensosoTests/ConfirmationCoordinatorTests/testHistoricalConfirmationKeepsPendingMetricsWhenProfileAndWeightAreMissing \
             -only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics \
             -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected \
-            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testSourceCursorProfileAndGoalRevisionsChangeProjectionFingerprint \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testSourceProfileAndGoalRevisionsChangeProjectionFingerprint \
             -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testUnrelatedHealthKitCursorDoesNotInvalidateDailyMetricsProjection \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testHealthKitSnapshotValueChangesProjectionFingerprint \
             -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testWorkoutEnergyAndProvenanceChangesProjectionFingerprint \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \

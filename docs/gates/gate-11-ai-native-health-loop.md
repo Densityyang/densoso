@@ -27,9 +27,11 @@ full-day reads retain history but suppress it from the live projection. Pending
 sample-index traversal uses stable, bounded 400-row pages; targeted UUID
 membership queries are limited to 64 IDs, and deletion cleanup collects target
 rows before changing the paged result set.
-DailyMetrics fingerprints include source-record revisions, only HealthKit
-cursors covering the projected day, profile and goal revisions effective at the
-projection's `asOf` time, and a dedicated daily-projection algorithm version.
+DailyMetrics fingerprints include source-record revisions, canonical daily
+HealthKit snapshot values consumed by the projection, profile and goal revisions
+effective at the projection's `asOf` time, and a dedicated daily-projection
+algorithm version. HealthKit cursor anchors record query progress; advancing a
+cursor without changing the daily snapshot does not invalidate the projection.
 Historical days use their end boundary; the current day uses the current time.
 Both projection entry points share the same fingerprint comparison and skip
 writes when inputs are unchanged; pending legacy rows still run through
@@ -119,8 +121,9 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `ConfirmationCoordinatorTests.testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision`,
   `CaloricEnergySemanticsTests.testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics`,
   `DailyMetricsProjectionFingerprintTests.testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected`,
-  `DailyMetricsProjectionFingerprintTests.testSourceCursorProfileAndGoalRevisionsChangeProjectionFingerprint`,
+  `DailyMetricsProjectionFingerprintTests.testSourceProfileAndGoalRevisionsChangeProjectionFingerprint`,
   `DailyMetricsProjectionFingerprintTests.testUnrelatedHealthKitCursorDoesNotInvalidateDailyMetricsProjection`,
+  `DailyMetricsProjectionFingerprintTests.testHealthKitSnapshotValueChangesProjectionFingerprint`,
   `DailyMetricsProjectionFingerprintTests.testWorkoutEnergyAndProvenanceChangesProjectionFingerprint`,
   `HealthIntelligenceServiceTests.testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash`,
   `HealthIntelligenceServiceTests.testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches`,

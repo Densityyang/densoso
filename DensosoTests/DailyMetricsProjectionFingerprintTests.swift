@@ -29,7 +29,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         XCTAssertFalse(metric.requiresRecompute)
     }
 
-    func testSourceCursorProfileAndGoalRevisionsChangeProjectionFingerprint() throws {
+    func testSourceProfileAndGoalRevisionsChangeProjectionFingerprint() throws {
         let (_, context) = try makeContext()
         let day = Calendar.current.startOfDay(for: Date())
 
@@ -54,11 +54,18 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
             lookbackStart: day.addingTimeInterval(-86_400)
         )
         context.insert(cursor)
-        try reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
-
-        cursor.lastSuccessfulAt = Date().addingTimeInterval(60)
-        cursor.updatedAt = Date().addingTimeInterval(120)
         try reprojectAndAssertFingerprintUnchanged(day: day, metric: metric, in: context)
+
+        let fingerprintAfterCursorInsert = metric.sourceFingerprint
+        let sentinel = Date(timeIntervalSince1970: 1_234_567)
+        metric.computedAt = sentinel
+        cursor.lastSuccessfulAt = Date().addingTimeInterval(60)
+        cursor.anchorData = Data([9, 8, 7])
+        cursor.updatedAt = Date().addingTimeInterval(120)
+        try context.save()
+        try DailyMetricsProjector.reproject(on: day, in: context)
+        XCTAssertEqual(metric.sourceFingerprint, fingerprintAfterCursorInsert)
+        XCTAssertEqual(metric.computedAt, sentinel)
 
         context.insert(ProfileRevisionRecord(
             profileKey: "primary",
@@ -121,7 +128,6 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
             weight: nil,
             context: DailyMetricsProjectionFingerprintContext(
                 sourceRecordRevisions: fingerprintContext.sourceRecordRevisions,
-                healthKitCursorRevisions: fingerprintContext.healthKitCursorRevisions,
                 profileRevision: fingerprintContext.profileRevision,
                 goalRevision: fingerprintContext.goalRevision,
                 algorithmVersion: "calorie-accounting-next"
@@ -129,6 +135,38 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         )
 
         XCTAssertNotEqual(baseVersionFingerprint, changedAlgorithmFingerprint)
+    }
+
+    func testHealthKitSnapshotValueChangesProjectionFingerprint() throws {
+        let (_, context) = try makeContext()
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: Date())
+        try DailyMetricsProjector.reproject(on: day, in: context)
+        let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        let originalFingerprint = metric.sourceFingerprint
+
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            activeEnergyKcal: 475,
+            healthReadStates: [HealthMetricID.activeEnergy.rawValue: .available],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey(day, calendar: calendar),
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "daily-metrics-fingerprint-fixture",
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        ))
+        try context.save()
+
+        try DailyMetricsProjector.reproject(on: day, in: context)
+
+        XCTAssertNotEqual(metric.sourceFingerprint, originalFingerprint)
+        XCTAssertEqual(metric.activeEnergyKcal, 475)
     }
 
     func testUnrelatedHealthKitCursorDoesNotInvalidateDailyMetricsProjection() throws {
@@ -221,5 +259,10 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         context.insert(UserProfile())
         try context.save()
         return (container, context)
+    }
+
+    private func dayKey(_ day: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 }
