@@ -203,6 +203,10 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let result = try await coordinator.syncAvailableData(using: repository, now: now)
 
         XCTAssertNotNil(result.failedStreams[.bodyMass])
+        XCTAssertEqual(
+            result.failedStreams[.bodyMass]?.descriptor.reason,
+            .healthKitAuthorizationBoundaryUnavailable
+        )
         let cursor = try XCTUnwrap(repository.cursor(for: HealthMetricID.bodyMass.rawValue))
         XCTAssertNil(cursor.anchorData)
         XCTAssertNil(cursor.lookbackStart)

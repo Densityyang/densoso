@@ -279,7 +279,8 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
             switch healthError {
             case .authorizationDenied, .healthDataRestricted, .unsupportedMetric:
                 return true
-            case .unavailable, .authorizationNotDetermined, .dataStoreLocked, .invalidAnchor, .queryFailed:
+            case .unavailable, .authorizationBoundaryUnavailable, .authorizationNotDetermined,
+                 .dataStoreLocked, .invalidAnchor, .queryFailed:
                 return false
             }
         }

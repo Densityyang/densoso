@@ -47,7 +47,7 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
 
     func earliestAuthorizedSampleDate(for metric: HealthMetricID) async throws -> Date? {
         if authorizationBoundaryFailures.contains(metric) {
-            throw HealthStoreClientError.queryFailed("fake authorization boundary failure")
+            throw HealthStoreClientError.authorizationBoundaryUnavailable
         }
         return authorizedSampleStarts[metric]
     }

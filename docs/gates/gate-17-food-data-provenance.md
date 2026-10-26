@@ -4,6 +4,11 @@ Status: NOT RUN — evaluated by GitHub Actions on the implementation SHA.
 
 The gate builds temporary development and production SQLite catalogs with the
 real importer and verifies the shipped row set against pinned manifests.
+It also fetches the exact HowToCook commit from the recipe source manifest,
+regenerates both `recipe_priors.json` and its import report with the production
+importer, and byte-compares the generated artifacts to the shipped files. A
+network/fetch/import error or any mismatch fails Gate 17 and uploads a report
+with both artifact hashes.
 
 Required evidence:
 
@@ -13,6 +18,9 @@ Required evidence:
 - the verified food bundle contains exactly the pinned USDA records;
 - missing, null, empty, dash, and trace energy values are rejected, while an
   explicitly recorded numeric zero remains distinct;
+- every input row must declare an energy unit and per-100 g nutrient basis;
+  verified food rows must have consistent preparation/mass-basis semantics,
+  and duplicate source-record identities are rejected;
 - IDs and production aliases are unique, and each row preserves raw source
   metadata, energy units, edible/cooked mass basis, and per-100 g basis;
 - the recipe catalog has at least 100 unique canonical records from the pinned

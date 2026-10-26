@@ -39,6 +39,15 @@ below without changing V1–V5 schema identities.
   for that metric is marked unknown and anchored cursors are reset. This avoids
   consuming cached values while scope is unresolved and makes the next successful
   sync perform a fresh bounded read.
+- The Xcode 26.6 CI SDK does not expose Apple's documented authorization-boundary
+  method in its stable HealthKit interface; Apple currently marks that method
+  Beta. The adapter therefore emits the typed
+  `healthKitAuthorizationBoundaryUnavailable` failure instead of calling a
+  missing member or substituting the system-wide `earliestPermittedSampleDate`.
+  On this SDK, affected HealthKit streams remain unknown until a supported
+  per-type boundary source is available. This is a fail-closed compatibility
+  fallback, not evidence that production limited-history synchronization is
+  complete.
 - Observer updates are only wakeups. The coordinator drains the relevant query
   before calling HealthKit's completion handler, guarded to complete once; an
   observer error completes without starting a sync or advancing a cursor.

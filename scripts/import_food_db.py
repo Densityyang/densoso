@@ -120,8 +120,12 @@ def _energy_value(item: dict[str, Any], *, record: str) -> tuple[int, str, str]:
             label = "trace" if marker in {"tr", "trace"} else "unavailable/empty"
             raise ValueError(f"{record}: energy is {label} ({raw!r}), not zero")
 
-    unit = item.get("energyUnit", "kcal/100g")
-    basis = item.get("nutrientBasis", "per100g")
+    unit = item.get("energyUnit")
+    if not isinstance(unit, str) or not unit.strip():
+        raise ValueError(f"{record}: energyUnit is required; expected an explicit per-100g unit")
+    basis = item.get("nutrientBasis")
+    if not isinstance(basis, str) or not basis.strip():
+        raise ValueError(f"{record}: nutrientBasis is required; expected explicit 'per100g'")
     if basis != "per100g":
         raise ValueError(f"{record}: nutrientBasis {basis!r} is unsupported; expected 'per100g'")
     parsed = _number(raw, field=energy_key, record=record)
@@ -174,6 +178,7 @@ def _prepare_items(
     alias_owners: dict[str, set[int]] = defaultdict(set)
     skipped_unverified = 0
     warnings: list[str] = []
+    source_record_owners: dict[tuple[str, str], int] = {}
 
     for index, item in enumerate(items):
         if not isinstance(item, dict):
@@ -248,6 +253,15 @@ def _prepare_items(
                 f"{record}: sourceVersion {source_version!r} does not match "
                 f"manifest version {source.get('sourceVersion')!r}"
             )
+        if isinstance(source_record_id, str):
+            record_key = (source_id, source_record_id)
+            previous_owner = source_record_owners.get(record_key)
+            if previous_owner is not None:
+                raise ValueError(
+                    f"{record}: duplicate source record {source_id!r}/{source_record_id!r} "
+                    f"is already assigned to food ID {previous_owner}"
+                )
+            source_record_owners[record_key] = identifier
         if license_status not in {"verified", "unverified"}:
             raise ValueError(f"{record}: licenseStatus must be 'verified' or 'unverified'")
         if license_status == "verified" and not (
@@ -271,10 +285,22 @@ def _prepare_items(
                     f"{record}: sourceDataType {item.get('sourceDataType')!r} does not match "
                     f"manifest dataType {source.get('dataType')!r}"
                 )
+            if preparation not in {"raw", "cooked", "unknown"}:
+                raise ValueError(
+                    f"{record}: verified records must declare preparation as raw, cooked, or unknown"
+                )
+            if mass_basis not in {"edibleRaw", "cooked", "asPurchased"}:
+                raise ValueError(
+                    f"{record}: verified records must declare an explicit massBasis; 'unknown' is not distributable"
+                )
             if preparation == "raw" and mass_basis != "edibleRaw":
                 raise ValueError(f"{record}: raw source records require massBasis 'edibleRaw'")
             if preparation == "cooked" and mass_basis != "cooked":
                 raise ValueError(f"{record}: cooked source records require massBasis 'cooked'")
+            if preparation == "unknown" and mass_basis != "asPurchased":
+                raise ValueError(
+                    f"{record}: unknown preparation requires massBasis 'asPurchased'"
+                )
 
         source_is_redistributable = (
             source.get("verificationStatus") == "verified"

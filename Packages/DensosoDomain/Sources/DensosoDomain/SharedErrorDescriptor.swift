@@ -50,6 +50,7 @@ public enum SharedErrorReason: String, Codable, CaseIterable, Sendable {
     case budgetExceeded
     case healthKitAuthorizationDenied
     case healthKitAuthorizationUndetermined
+    case healthKitAuthorizationBoundaryUnavailable
     case healthKitUnavailable
     case healthDataRestricted
     case healthDataLocked

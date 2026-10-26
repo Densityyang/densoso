@@ -372,6 +372,83 @@ def probe_unavailable_energy(temp: Path, seed_row: dict[str, Any]) -> dict[str, 
     return {"rejectedUnavailableMarkers": rejected, "explicitNumericZeroPreserved": True}
 
 
+def probe_food_basis_and_record_identity(
+    temp: Path, seed_row: dict[str, Any]
+) -> dict[str, Any]:
+    rejected: list[str] = []
+
+    def expect_rejected(label: str, rows: list[dict[str, Any]]) -> None:
+        input_path = temp / f"food-contract-{label}.json"
+        output_path = temp / f"food-contract-{label}.db"
+        input_path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+        result = invoke_importer(input_path, output_path, production=False)
+        if result.returncode == 0:
+            raise GateFailure(f"importer accepted invalid food composition contract {label}")
+        rejected.append(label)
+
+    missing_unit = dict(seed_row)
+    missing_unit["id"] = 80003
+    missing_unit.pop("energyUnit", None)
+    expect_rejected("missing-energy-unit", [missing_unit])
+
+    missing_basis = dict(seed_row)
+    missing_basis["id"] = 80004
+    missing_basis.pop("nutrientBasis", None)
+    expect_rejected("missing-nutrient-basis", [missing_basis])
+
+    per_serving = dict(seed_row)
+    per_serving["id"] = 80005
+    per_serving["energyUnit"] = "kcal/serving"
+    per_serving["nutrientBasis"] = "perServing"
+    expect_rejected("per-serving-energy", [per_serving])
+
+    unknown_mass_basis = dict(seed_row)
+    unknown_mass_basis["id"] = 80006
+    unknown_mass_basis["preparation"] = "unknown"
+    unknown_mass_basis["massBasis"] = "unknown"
+    expect_rejected("verified-unknown-mass-basis", [unknown_mass_basis])
+
+    missing_mass_basis = dict(seed_row)
+    missing_mass_basis["id"] = 80007
+    missing_mass_basis.pop("massBasis", None)
+    expect_rejected("verified-missing-mass-basis", [missing_mass_basis])
+
+    mismatched_raw_cooked = dict(seed_row)
+    mismatched_raw_cooked["id"] = 80008
+    mismatched_raw_cooked["preparation"] = "raw"
+    mismatched_raw_cooked["massBasis"] = "cooked"
+    expect_rejected("raw-cooked-basis-mismatch", [mismatched_raw_cooked])
+
+    duplicate_first = dict(seed_row)
+    duplicate_first["id"] = 80009
+    duplicate_second = dict(seed_row)
+    duplicate_second["id"] = 80010
+    expect_rejected("duplicate-source-record", [duplicate_first, duplicate_second])
+
+    kj_item = dict(seed_row)
+    kj_item["id"] = 80011
+    kj_item["energyKcal"] = 418.4
+    kj_item["energyUnit"] = "kJ/100g"
+    input_path = temp / "food-contract-kj-conversion.json"
+    output_path = temp / "food-contract-kj-conversion.db"
+    input_path.write_text(json.dumps([kj_item], ensure_ascii=False), encoding="utf-8")
+    result = invoke_importer(input_path, output_path, production=False)
+    if result.returncode != 0:
+        raise GateFailure(f"importer rejected supported kJ/100g input: {result.stderr.strip()}")
+    with sqlite3.connect(output_path) as connection:
+        converted = connection.execute(
+            "SELECT energyKcal, energyRaw, energyUnit FROM food_items WHERE id = 80011"
+        ).fetchone()
+    if converted != (100, "418.4", "kJ/100g"):
+        raise GateFailure(f"importer did not preserve and normalize kJ/100g input: {converted!r}")
+
+    return {
+        "rejectedInvalidBasisOrProvenance": rejected,
+        "convertedKJPer100g": converted[0],
+        "retainedRawEnergyUnit": converted[2],
+    }
+
+
 def validate_recipe_priors() -> dict[str, Any]:
     catalog = read_json(RECIPE_CATALOG)
     manifest = read_json(RECIPE_MANIFEST)
@@ -502,6 +579,7 @@ def main() -> int:
                 prod_db, production, registry, production=True
             )
             energy_summary = probe_unavailable_energy(temporary, production[0])
+            basis_summary = probe_food_basis_and_record_identity(temporary, production[0])
 
         recipe_summary = validate_recipe_priors()
         print(json.dumps({
@@ -515,6 +593,7 @@ def main() -> int:
                 "uniqueFoodIDs": identity_summary["foodIDs"],
                 "uniqueProductionAliases": identity_summary["productionAliases"],
                 **energy_summary,
+                **basis_summary,
             },
             "recipePriors": recipe_summary,
             "proofBoundary": (

@@ -314,16 +314,33 @@ def main() -> int:
     )
     if repository_affected_day_union not in normalized_repository:
         errors.append("affected HealthKit sample days must include both changed and pending index days")
-    require_text(
+    health_store_client = require_text(
         "Densoso/Infrastructure/HealthKit/HealthKitHealthStoreClient.swift",
         (
             "HealthAuthorizationBoundaryProviding",
             "func earliestAuthorizedSampleDate(for metric: HealthMetricID)",
-            "getEarliestAuthorizedSampleDate(for:",
-            "dates?.values.min()",
         ),
         errors,
     )
+    boundary_start = health_store_client.find(
+        "func earliestAuthorizedSampleDate(for metric: HealthMetricID)"
+    )
+    boundary_end = health_store_client.find("\n    func aggregate(", boundary_start)
+    boundary_body = (
+        health_store_client[boundary_start:boundary_end]
+        if boundary_start >= 0 and boundary_end >= 0
+        else ""
+    )
+    if "throw HealthStoreClientError.authorizationBoundaryUnavailable" not in boundary_body:
+        errors.append("unsupported HealthKit authorization-boundary lookup must fail closed")
+    if (
+        "getEarliestAuthorizedSampleDate" in boundary_body
+        or "earliestPermittedSampleDate" in boundary_body
+    ):
+        errors.append(
+            "stable HealthKit boundary fallback must not call a missing beta API "
+            "or substitute a systemwide date"
+        )
     if "import SwiftData" in sync_coordinator:
         errors.append("application HealthKit coordinator must depend on a persistence protocol, not SwiftData")
 
@@ -732,6 +749,7 @@ def main() -> int:
             "analysisLookbackDays": 42,
             "initialBackfillDays": 42,
             "authorizationBoundaryContractPresent": True,
+            "stableSDKAuthorizationBoundaryFallback": "FAIL_CLOSED_UNKNOWN_WITH_TYPED_ERROR",
             "anchoredIncrementalContractPresent": True,
             "runtimeTestExecution": "NOT_MEASURED",
             "liveHealthKitAuthorizationBoundary": "NOT_MEASURED",

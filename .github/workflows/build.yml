@@ -1852,6 +1852,7 @@ jobs:
             scripts/validate_food_db.py \
             scripts/import_recipe_priors.py \
             scripts/validate_recipe_priors.py \
+            scripts/validate_recipe_prior_reproducibility.py \
             scripts/validate_gate17_food_data.py
 
       - name: Validate packaged food database
@@ -1868,6 +1869,15 @@ jobs:
           set -o pipefail
           python3 scripts/validate_recipe_priors.py 2>&1 | tee gate17-recipe-priors.log
 
+      - name: Rebuild recipe priors from the pinned upstream commit
+        id: gate17_recipe_reproducibility
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_recipe_prior_reproducibility.py \
+            --report gate17-recipe-reproducibility.json 2>&1 \
+            | tee gate17-recipe-reproducibility.log
+
       - name: Validate production import provenance and energy semantics
         id: gate17_provenance
         if: always()
@@ -1882,11 +1892,13 @@ jobs:
           COMPILE_OUTCOME: ${{ steps.gate17_compile.outcome }}
           FOOD_DB_OUTCOME: ${{ steps.gate17_food_db.outcome }}
           RECIPE_PRIORS_OUTCOME: ${{ steps.gate17_recipe_priors.outcome }}
+          RECIPE_REPRODUCIBILITY_OUTCOME: ${{ steps.gate17_recipe_reproducibility.outcome }}
           PROVENANCE_OUTCOME: ${{ steps.gate17_provenance.outcome }}
         run: |
           if [ "$COMPILE_OUTCOME" = "success" ] \
             && [ "$FOOD_DB_OUTCOME" = "success" ] \
             && [ "$RECIPE_PRIORS_OUTCOME" = "success" ] \
+            && [ "$RECIPE_REPRODUCIBILITY_OUTCOME" = "success" ] \
             && [ "$PROVENANCE_OUTCOME" = "success" ]; then
             GATE_STATUS=PASS
           else
@@ -1903,6 +1915,8 @@ jobs:
           path: |
             gate17-food-db.log
             gate17-recipe-priors.log
+            gate17-recipe-reproducibility.log
+            gate17-recipe-reproducibility.json
             gate17-food-data-report.json
             docs/gates/gate-17-food-data-provenance.md
           if-no-files-found: warn

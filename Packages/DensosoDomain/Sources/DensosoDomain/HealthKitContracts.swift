@@ -200,6 +200,7 @@ public enum HealthReadState: String, Codable, Equatable, Sendable {
 
 public enum HealthStoreClientError: Equatable, Sendable, SharedErrorDescribing {
     case unavailable
+    case authorizationBoundaryUnavailable
     case authorizationDenied
     case authorizationNotDetermined
     case healthDataRestricted
@@ -230,6 +231,13 @@ public enum HealthStoreClientError: Equatable, Sendable, SharedErrorDescribing {
                 userMessage: "暂时没能更新今天的状态。",
                 subsystem: .healthKit,
                 reason: .healthKitUnavailable
+            )
+        case .authorizationBoundaryUnavailable:
+            SharedErrorDescriptor(
+                code: .healthKitUnavailable,
+                userMessage: "暂时无法确认健康数据的可访问历史范围；相关数据会按未知处理。",
+                subsystem: .healthKit,
+                reason: .healthKitAuthorizationBoundaryUnavailable
             )
         case .healthDataRestricted:
             SharedErrorDescriptor(

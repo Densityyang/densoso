@@ -33,6 +33,15 @@ final class SharedErrorDescriptorTests: XCTestCase {
         XCTAssertFalse(error.localizedDescription.contains(privateDetail))
     }
 
+    func testUnavailableAuthorizationBoundaryHasSpecificSafeDescriptor() {
+        let descriptor = HealthStoreClientError.authorizationBoundaryUnavailable.sharedErrorDescriptor
+
+        XCTAssertEqual(descriptor.code, .healthKitUnavailable)
+        XCTAssertEqual(descriptor.subsystem, .healthKit)
+        XCTAssertEqual(descriptor.reason, .healthKitAuthorizationBoundaryUnavailable)
+        XCTAssertTrue(descriptor.userMessage.contains("按未知处理"))
+    }
+
     func testWatchDescriptorHidesCollidingMessageIdentifier() {
         let privateMessageID = UUID(uuidString: "2cf2f913-0a56-41cb-a694-1209acafde83")!
         let error = WatchMessageError.messageIDCollision(privateMessageID)
