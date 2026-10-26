@@ -71,6 +71,7 @@ struct GetRecipePriorTool: AgentTool {
             status: "available",
             results: matches.map { match in
                 Result(
+                    id: match.record.id,
                     matchType: match.kind.rawValue,
                     canonicalDishName: match.record.canonicalDishName,
                     category: match.record.category,
@@ -78,9 +79,14 @@ struct GetRecipePriorTool: AgentTool {
                     cookingMethodEvidence: match.record.cookingMethodEvidence,
                     ingredients: Array(match.record.ingredients.prefix(RecipePriorCatalog.maximumIngredientsPerResult)),
                     servingsSourceText: match.record.servingsSourceText,
+                    cookedYieldEvidence: match.record.cookedYieldEvidence,
+                    householdMeasures: match.record.householdMeasures,
+                    oilRetention: match.record.oilRetention,
                     sourceID: match.record.sourceID,
                     sourceRecordID: match.record.sourceRecordID,
                     sourceVersion: match.record.sourceVersion,
+                    sourceRecordSHA256: match.record.sourceRecordSHA256,
+                    licenseStatus: match.record.licenseStatus,
                     licenseSPDX: match.record.licenseSPDX,
                     confidenceGrade: match.record.confidenceGrade,
                     isNutritionAuthority: match.record.isNutritionAuthority
@@ -107,6 +113,7 @@ struct GetRecipePriorTool: AgentTool {
     }
 
     private struct Result: Encodable {
+        let id: String
         let matchType: String
         let canonicalDishName: String
         let category: String
@@ -114,9 +121,14 @@ struct GetRecipePriorTool: AgentTool {
         let cookingMethodEvidence: String
         let ingredients: [RecipeIngredientPrior]
         let servingsSourceText: String?
+        let cookedYieldEvidence: RecipePriorQuantityEvidence
+        let householdMeasures: [String]
+        let oilRetention: RecipePriorQuantityEvidence
         let sourceID: String
         let sourceRecordID: String
         let sourceVersion: String
+        let sourceRecordSHA256: String
+        let licenseStatus: String
         let licenseSPDX: String
         let confidenceGrade: String
         let isNutritionAuthority: Bool

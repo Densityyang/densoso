@@ -114,6 +114,59 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         XCTAssertNotEqual(changed.snapshotHash, firstHash)
     }
 
+    func testReadModelReportsPerMetricCoverageAcrossTheFortyTwoDayHealthWindow() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let reference = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 12)))
+        let today = calendar.startOfDay(for: reference)
+        let authorizationStart = try XCTUnwrap(calendar.date(byAdding: .day, value: -29, to: today))
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+
+        for offset in -41...0 {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: today))
+            let isAuthorized = day >= authorizationStart
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                stepCount: isAuthorized ? 5_000 : nil,
+                healthReadStates: [
+                    HealthMetricID.stepCount.rawValue: isAuthorized
+                        ? .available
+                        : .dataUnavailableOrReadScopeUnknown,
+                ],
+                algorithmVersion: "metric-coverage-fixture"
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: dayKey(day),
+                timezoneID: snapshot.timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "metric-coverage-\(offset)",
+                algorithmVersion: snapshot.algorithmVersion
+            ))
+        }
+        context.insert(HealthKitImportCursor(
+            stream: HealthMetricID.stepCount.rawValue,
+            lastSuccessfulAt: reference,
+            lookbackStart: authorizationStart
+        ))
+        try context.save()
+
+        let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
+        let refreshed = try await service.refresh(asOf: reference)
+        let result = try XCTUnwrap(refreshed)
+        let coverage = try XCTUnwrap(result.contextSummary.analysisWindowCoverage["steps"])
+
+        XCTAssertEqual(coverage.expectedCalendarDays, 42)
+        XCTAssertEqual(coverage.actualEarliestDate, authorizationStart)
+        XCTAssertEqual(coverage.validCalendarDays, 30)
+        XCTAssertEqual(coverage.missingCalendarDays, 12)
+        XCTAssertEqual(coverage.authorizationLimited, true)
+        XCTAssertEqual(coverage.dataAvailabilityLimited, false)
+    }
+
     func testSavingGoalUpdatesTheSinglePrimaryProfile() async throws {
         let container = try makeContainer()
         let service = HealthIntelligenceService(modelContainer: container)

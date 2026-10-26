@@ -16,7 +16,10 @@ public struct ExplicitUserGramsParser: Sendable {
 
         let number = "([0-9]+(?:\\.[0-9]+)?)"
         let units = "(?:grams?|g|公克|克)"
-        let connectorsAfterTerm = "(?:\\s|[:：=，,]|的|重|重量|是|为|称重|准确){0,8}"
+        let householdCount = "(?:[0-9]+(?:\\.[0-9]+)?|one|a|an|一|两|二|三|半)"
+        let householdUnit = "(?:(?:small\\s*|large\\s*)?bowls?|fists?|palms?|cups?|slices?|eggs?|dumplings?|bananas?|apples?|小碗|大碗|碗|拳头|拳|掌心|掌|杯|片|鸡蛋|蛋|饺子|香蕉|苹果)"
+        let householdQuantity = "\(householdCount)\\s*(?:个|枚|根|只)?\\s*\(householdUnit)(?:半)?"
+        let connectorsAfterTerm = "(?:(?:\\s|[:：=，,]|的|重|重量|是|为|称重|准确)|\(householdQuantity)){0,8}"
         let connectorsBeforeTerm = "(?:\\s|的|净重|为|是){0,6}"
         var parsedValues: [(value: Double, numberRange: NSRange)] = []
 

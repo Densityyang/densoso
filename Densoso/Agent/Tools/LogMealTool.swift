@@ -3,9 +3,14 @@ import Foundation
 
 struct LogMealTool: ConfirmationRequiredTool {
     let mealPortionPriorRepository: (any MealPortionPriorRepository)?
+    private let recipePriorCatalogOverride: RecipePriorCatalog?
 
-    init(mealPortionPriorRepository: (any MealPortionPriorRepository)? = nil) {
+    init(
+        mealPortionPriorRepository: (any MealPortionPriorRepository)? = nil,
+        recipePriorCatalog: RecipePriorCatalog? = nil
+    ) {
         self.mealPortionPriorRepository = mealPortionPriorRepository
+        self.recipePriorCatalogOverride = recipePriorCatalog
     }
 
     var definition: ToolSchema {
@@ -75,6 +80,9 @@ struct LogMealTool: ConfirmationRequiredTool {
                                 maximumItems: 20
                             ),
                             "lowConfidence": .boolean(),
+                            "recipePriorID": .anyOf([
+                                .string(minimumLength: 1, maximumLength: 240), .null,
+                            ]),
                         ],
                         required: [
                             "dishName", "cookingMethod", "ingredients", "lowConfidence",
@@ -126,6 +134,16 @@ struct LogMealTool: ConfirmationRequiredTool {
             .filter { $0.kind == .nutritionLabel }
             .map(\.value)
         let allIngredientNames = arguments.dishes.flatMap { $0.ingredients.map(\.name) }
+        let recipeCatalog: RecipePriorCatalog?
+        if arguments.dishes.contains(where: { $0.recipePriorID != nil }) {
+            do {
+                recipeCatalog = try recipePriorCatalogOverride ?? RecipePriorCatalog.bundled()
+            } catch {
+                throw DraftError.invalidMeal
+            }
+        } else {
+            recipeCatalog = nil
+        }
         var firstOccurrenceByFoodIdentity: [String: (dishIndex: Int, dishName: String)] = [:]
         var drafts: [MealDishDraft] = []
         for (dishIndex, rawDish) in arguments.dishes.enumerated() {
@@ -140,7 +158,24 @@ struct LogMealTool: ConfirmationRequiredTool {
                 throw DraftError.invalidMeal
             }
 
+            let recipePrior: RecipePriorRecord?
+            if let recipePriorID = rawDish.recipePriorID {
+                guard let recipeCatalog,
+                      let record = recipeCatalog.exactRecord(dishName: name, id: recipePriorID) else {
+                    throw DraftError.invalidMeal
+                }
+                recipePrior = record
+            } else {
+                recipePrior = nil
+            }
+            let resolvedCookingMethod = resolvedCookingMethod(
+                modelMethod: rawDish.cookingMethod,
+                recipePrior: recipePrior
+            )
+            let recipeEvidence = recipePrior.map { [recipePriorEvidence($0)] } ?? []
+
             var ingredients: [MealIngredientEstimationInput] = []
+            var hasExplicitOilIngredient = false
             for (ingredientIndex, ingredient) in rawDish.ingredients.enumerated() {
                 let preparation = FoodPreparation(rawValue: ingredient.preparation ?? "") ?? .unknown
                 let massBasis = FoodMassBasis(rawValue: ingredient.massBasis ?? "")
@@ -168,6 +203,10 @@ struct LogMealTool: ConfirmationRequiredTool {
                         name: ingredient.name,
                         candidates: resolution.candidates.map { $0.entry.name }
                     )
+                }
+                if FoodResolver.normalize(selectedFood.entry.category).contains("oil")
+                    || selectedFood.entry.name.contains("油") {
+                    hasExplicitOilIngredient = true
                 }
                 let ingredientTerms = [ingredient.name, selectedFood.entry.name] + selectedFood.entry.aliases
                 let localFoodIDKeys = selectedFood.entry.localFoodID.map { ["id:\($0)"] } ?? []
@@ -211,6 +250,9 @@ struct LogMealTool: ConfirmationRequiredTool {
                     matching: ingredientTerms,
                     gramsParser: explicitGramsParser
                 )
+                let recipeIngredient = recipePrior.flatMap {
+                    matchingRecipeIngredient(named: ingredient.name, in: $0)
+                }
                 let quantityEvidence: MealQuantityEvidence
                 if ingredient.quantityEvidence.kind == .photoEstimate,
                    !context.currentMealHasImage(),
@@ -226,6 +268,20 @@ struct LogMealTool: ConfirmationRequiredTool {
                         kind: .unknown,
                         value: ingredient.quantityEvidence.value,
                         unit: ingredient.quantityEvidence.unit
+                    )
+                } else if ingredient.quantityEvidence.kind == .unknown,
+                          ingredient.quantityEvidence.value == nil,
+                          let recipeIngredient,
+                          !recipeIngredient.isOptional,
+                          !recipeIngredient.isAlternative,
+                          let sourceQuantity = recipePriorGramQuantity(recipeIngredient) {
+                    // Recipe source quantities describe a source recipe batch. The
+                    // quantity resolver deliberately converts this fallback into a
+                    // wide model estimate; it is never a measured or exact meal amount.
+                    quantityEvidence = MealQuantityEvidence(
+                        kind: .exactGrams,
+                        value: sourceQuantity.likelyGrams,
+                        unit: "g"
                     )
                 } else {
                     quantityEvidence = ingredient.quantityEvidence
@@ -295,6 +351,14 @@ struct LogMealTool: ConfirmationRequiredTool {
                 if let personalPriorUsageEvidence {
                     imageEvidence.append(personalPriorUsageEvidence)
                 }
+                if let recipeIngredient, let recipePrior {
+                    imageEvidence.append(recipeIngredientEvidence(
+                        recipeIngredient,
+                        record: recipePrior,
+                        preparation: ingredient.preparation,
+                        massBasis: ingredient.massBasis
+                    ))
+                }
                 ingredients.append(
                     MealIngredientEstimationInput(
                         label: ingredient.name,
@@ -310,7 +374,7 @@ struct LogMealTool: ConfirmationRequiredTool {
                 matching: ["食用油", "炒菜油", "橄榄油", "菜籽油", "油"]
             )
             let oilRange = try userReportedOilGrams.map(EstimateRange.point)
-                ?? oilPriors.range(for: rawDish.cookingMethod)
+                ?? oilPriors.range(for: resolvedCookingMethod)
             let oilEvidence = userReportedOilGrams.map { grams in
                 EvidenceSnapshot(
                     grade: .userReported,
@@ -320,15 +384,48 @@ struct LogMealTool: ConfirmationRequiredTool {
                     confidence: nil
                 )
             }
+            var recipeOilRetention: EstimateRange?
+            var recipeOilRetentionEvidence: EvidenceSnapshot?
+            if !hasExplicitOilIngredient,
+               let recipePrior,
+               let sourceQuantity = recipePriorGramQuantity(recipePrior.oilRetention) {
+                let sourcePortionEvidence = try? quantityResolver.resolve(
+                    MealQuantityEvidence(
+                        kind: .exactGrams,
+                        value: sourceQuantity.likelyGrams,
+                        unit: "g"
+                    )
+                )
+                if let sourcePortionEvidence,
+                   let portion = try? portionEstimator.estimate(evidence: [sourcePortionEvidence]),
+                   let range = try? EstimateRange(
+                       low: portion.lowGrams,
+                       likely: portion.likelyGrams,
+                       high: portion.highGrams
+                   ) {
+                    recipeOilRetention = range
+                    recipeOilRetentionEvidence = EvidenceSnapshot(
+                        grade: .moderate,
+                        sourceID: "recipe-prior:\(recipePrior.id):oil-retention",
+                        sourceVersion: recipePrior.sourceVersion,
+                        summary: "菜谱来源的油保留量作为宽区间估算先验：\(quantitySummary(recipePrior.oilRetention))；未当作本餐实测油量",
+                        confidence: nil
+                    )
+                }
+            }
             drafts.append(
                 try PerformanceSignposts.measure("Meal.DeterministicEstimate") {
                     try mealEstimator.estimateDish(
                         MealDishEstimationInput(
                             name: name,
-                            cookingMethod: rawDish.cookingMethod,
+                            cookingMethod: resolvedCookingMethod,
                             ingredients: ingredients,
                             inferredOilGrams: oilRange,
-                            inferredOilEvidence: oilEvidence
+                            inferredOilEvidence: oilEvidence,
+                            recipeOilRetentionGrams: recipeOilRetention,
+                            recipeOilRetentionEvidence: recipeOilRetentionEvidence,
+                            recipePriorEvidence: recipeEvidence,
+                            suppressInferredOil: recipeOilRetention != nil
                         )
                     )
                 }
@@ -425,6 +522,107 @@ struct LogMealTool: ConfirmationRequiredTool {
             let normalized = term.trimmingCharacters(in: .whitespacesAndNewlines)
             return !normalized.isEmpty && text.localizedCaseInsensitiveContains(normalized)
         }
+    }
+
+    private func resolvedCookingMethod(
+        modelMethod: String,
+        recipePrior: RecipePriorRecord?
+    ) -> String {
+        guard modelMethod == "unknown",
+              let recipeMethod = recipePrior?.cookingMethod,
+              ["steam", "boil", "coldDress", "stirFry", "braise", "dryFry", "deepFry", "roast", "stew"]
+                .contains(recipeMethod) else {
+            return modelMethod
+        }
+        return recipeMethod
+    }
+
+    private func matchingRecipeIngredient(
+        named name: String,
+        in recipe: RecipePriorRecord
+    ) -> RecipeIngredientPrior? {
+        let normalizedName = FoodResolver.normalize(name)
+        guard normalizedName.count >= 2 else { return nil }
+        let candidates = recipe.ingredients.filter { ingredient in
+            let sourceName = FoodResolver.normalize(ingredient.sourceName)
+            return sourceName == normalizedName
+                || sourceName.contains(normalizedName)
+                || normalizedName.contains(sourceName)
+        }
+        return candidates.count == 1 ? candidates.first : nil
+    }
+
+    private func recipePriorGramQuantity(
+        _ ingredient: RecipeIngredientPrior
+    ) -> RecipeGramQuantity? {
+        recipePriorGramQuantity(ingredient.quantityEvidence)
+    }
+
+    private func recipePriorGramQuantity(
+        _ quantity: RecipePriorQuantityEvidence
+    ) -> RecipeGramQuantity? {
+        guard ["sourceQuantity", "sourceRange", "formula"].contains(quantity.kind),
+              let unit = quantity.unit?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              ["g", "gram", "grams", "克", "公克"].contains(unit),
+              let low = quantity.value,
+              low.isFinite, low > 0, low <= 5_000 else {
+            return nil
+        }
+        let high = quantity.upperValue ?? low
+        guard high.isFinite, high >= low, high <= 5_000 else { return nil }
+        return RecipeGramQuantity(
+            lowGrams: low,
+            likelyGrams: (low + high) / 2,
+            highGrams: high
+        )
+    }
+
+    private func recipePriorEvidence(_ record: RecipePriorRecord) -> EvidenceSnapshot {
+        let grade: EvidenceGrade
+        switch record.confidenceGrade.lowercased() {
+        case "strong": grade = .strong
+        case "moderate": grade = .moderate
+        case "weak": grade = .weak
+        default: grade = .estimated
+        }
+        let households = record.householdMeasures.isEmpty
+            ? "none"
+            : record.householdMeasures.joined(separator: ",")
+        return EvidenceSnapshot(
+            grade: grade,
+            sourceID: "recipe-prior:\(record.sourceID):\(record.sourceRecordID)",
+            sourceVersion: record.sourceVersion,
+            summary: "Recipe prior id=\(record.id); category=\(record.category); cookingMethod=\(record.cookingMethod); cookingMethodEvidence=\(record.cookingMethodEvidence); recordSHA256=\(record.sourceRecordSHA256); license=\(record.licenseSPDX); licenseStatus=\(record.licenseStatus); confidence=\(record.confidenceGrade); servings=\(record.servingsSourceText ?? "not specified"); cookedYield=\(quantitySummary(record.cookedYieldEvidence)); householdMeasures=\(households); oilRetention=\(quantitySummary(record.oilRetention)); dataRole=recipe-prior; nutritionAuthority=false; not a user-measured portion"
+        )
+    }
+
+    private func recipeIngredientEvidence(
+        _ ingredient: RecipeIngredientPrior,
+        record: RecipePriorRecord,
+        preparation: String?,
+        massBasis: String?
+    ) -> EvidenceSnapshot {
+        let quantity = ingredient.quantityEvidence
+        let amount = quantitySummary(quantity)
+        return EvidenceSnapshot(
+            grade: .moderate,
+            sourceID: "recipe-prior:\(record.id):ingredient:\(FoodResolver.normalize(ingredient.sourceName))",
+            sourceVersion: record.sourceVersion,
+            summary: "Source ingredient \(ingredient.sourceName); quantity=\(amount); optional=\(ingredient.isOptional); alternative=\(ingredient.isAlternative); model preparation=\(preparation ?? "unknown"); model massBasis=\(massBasis ?? "unknown"); source quantity is a recipe prior, not this meal's measured grams"
+        )
+    }
+
+    private func quantitySummary(_ quantity: RecipePriorQuantityEvidence) -> String {
+        let sourceText = quantity.sourceText ?? "not specified"
+        let range: String
+        if let value = quantity.value, let upperValue = quantity.upperValue {
+            range = "; values=\(value)-\(upperValue) \(quantity.unit ?? "")"
+        } else if let value = quantity.value {
+            range = "; value=\(value) \(quantity.unit ?? "")"
+        } else {
+            range = ""
+        }
+        return "\(quantity.kind): \(sourceText)\(range)"
     }
 
     private enum ConsumedFractionResolution {
@@ -674,6 +872,7 @@ private struct LogMealArguments: Decodable {
         let cookingMethod: String
         let ingredients: [Ingredient]
         let lowConfidence: Bool
+        let recipePriorID: String?
     }
 
     struct Ingredient: Decodable {
@@ -682,4 +881,10 @@ private struct LogMealArguments: Decodable {
         let preparation: String?
         let massBasis: String?
     }
+}
+
+private struct RecipeGramQuantity {
+    let lowGrams: Double
+    let likelyGrams: Double
+    let highGrams: Double
 }

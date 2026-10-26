@@ -225,6 +225,68 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertTrue(projectedDay.weightSamplesKilograms.isEmpty)
     }
 
+    func testBoundaryAndAggregateLookupFailuresResetOnlyTheAffectedAnchoredStream() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let targetStart = try XCTUnwrap(
+            HealthDataWindowPolicy.initialBackfillStart(through: now, calendar: calendar)
+        )
+        let repository = HealthRepository(modelContext: context)
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [], nextAnchorData: Data([21]), readState: .available),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: now,
+            lookbackStart: targetStart,
+            replacements: []
+        )
+        try repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [], nextAnchorData: Data([22]), readState: .available),
+            stream: HealthMetricID.heartRate.rawValue,
+            lastSuccessfulAt: now,
+            lookbackStart: targetStart,
+            replacements: []
+        )
+        try repository.applyImportedWorkouts(
+            [],
+            deletedHealthKitUUIDs: [],
+            nextAnchorData: Data([23]),
+            lookbackStart: targetStart
+        )
+        try repository.applyHealthAggregates(
+            [HealthAggregateBucket(
+                startDate: targetStart,
+                endDate: try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: targetStart)),
+                value: 500
+            )],
+            metric: .activeEnergy,
+            stream: HealthMetricID.activeEnergy.rawValue,
+            lookbackStart: targetStart,
+            lastSuccessfulAt: now
+        )
+        let fake = FakeHealthStoreClient()
+        await fake.failAuthorizationBoundaryLookup(for: .bodyMass)
+        await fake.failAuthorizationBoundaryLookup(for: .activeEnergy)
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+
+        let result = try await coordinator.syncAvailableData(using: repository, now: now)
+
+        XCTAssertNotNil(result.failedStreams[.bodyMass])
+        XCTAssertNotNil(result.failedStreams[.activeEnergy])
+        let failedMetricCursor = try XCTUnwrap(repository.cursor(for: HealthMetricID.bodyMass.rawValue))
+        XCTAssertNil(failedMetricCursor.anchorData)
+        XCTAssertNil(failedMetricCursor.lookbackStart)
+        XCTAssertEqual(try repository.cursor(for: HealthMetricID.heartRate.rawValue)?.anchorData, Data([22]))
+        XCTAssertEqual(try repository.cursor(for: "workouts")?.anchorData, Data([23]))
+        XCTAssertEqual(try repository.cursor(for: HealthMetricID.activeEnergy.rawValue)?.lookbackStart, targetStart)
+
+        _ = try await coordinator.syncAvailableData(using: repository, now: now, forceRebaseline: true)
+
+        let heartRateRequests = await fake.sampleRequests(for: .heartRate)
+        XCTAssertNil(heartRateRequests.last?.anchorData)
+        XCTAssertEqual(try repository.cursor(for: "workouts")?.anchorData, Data([0]))
+        XCTAssertNil(try repository.cursor(for: HealthMetricID.activeEnergy.rawValue)?.lookbackStart)
+    }
+
     func testObserverBoundaryLookupFailureMasksWindowAndResetsAnchoredCursor() async throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let calendar = Calendar.current

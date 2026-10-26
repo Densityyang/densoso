@@ -49,8 +49,8 @@ def main() -> int:
     export = require_text(
         "Densoso/Services/ExportService.swift",
         (
-            "private static let formatVersion = 5",
-            "private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5]",
+            "private static let formatVersion = 6",
+            "private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5, 6]",
             "weightRecords: [WeightRecordExport]?",
             "goalProfiles: [GoalProfileExport]?",
             "dailyHealthSnapshots: [DailyHealthSnapshotExport]?",
@@ -91,7 +91,7 @@ def main() -> int:
             "summary.userPreferences",
             "未确认的偏好",
             "not-part-of-backup",
-            "XCTAssertEqual(exported.formatVersion, 5)",
+            "XCTAssertEqual(exported.formatVersion, 6)",
             "energyIntakeKcal: try EstimateRange(low: 450, likely: 500, high: 600)",
             "testBackupExportPagesMealHistoryAcross64RowBoundary",
             "testRestorePagesInterruptedRequestHistoryAcross64RowBoundary",

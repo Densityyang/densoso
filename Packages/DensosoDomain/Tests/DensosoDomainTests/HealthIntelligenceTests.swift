@@ -351,6 +351,12 @@ final class HealthIntelligenceTests: XCTestCase {
         XCTAssertEqual(unknownResult.dailyBrief.contextSummary.sevenDay.dataCoverage["steps"], .unknown)
         XCTAssertNil(unknownResult.dailyBrief.contextSummary.sevenDay.coverageDays["steps"])
         XCTAssertNil(unknownResult.dailyBrief.contextSummary.sevenDay.averageStepCount)
+        let unknownWindowCoverage = try XCTUnwrap(unknownResult.dailyBrief.contextSummary.analysisWindowCoverage["steps"])
+        XCTAssertNil(unknownWindowCoverage.actualEarliestDate)
+        XCTAssertNil(unknownWindowCoverage.validCalendarDays)
+        XCTAssertNil(unknownWindowCoverage.missingCalendarDays)
+        XCTAssertNil(unknownWindowCoverage.authorizationLimited)
+        XCTAssertNil(unknownWindowCoverage.dataAvailabilityLimited)
         let weekly = engine.makeWeeklyBrief(days: [unknownDay], weekStart: today)
         XCTAssertEqual(weekly.domainStatuses.first(where: { $0.domain == .activity })?.status, .unknown)
         XCTAssertTrue(weekly.summary.contains("覆盖未知"))
@@ -374,6 +380,83 @@ final class HealthIntelligenceTests: XCTestCase {
         XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .body })?.status, .partial)
         XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .sleep })?.status, .noData)
         XCTAssertEqual(partialResult.dailyBrief.trainingLoad.dataCoverage, .unknown)
+    }
+
+    func testMetricWindowCoverageReportsThirtyAuthorizedDaysWithinFortyTwoDayTarget() throws {
+        let today = try date(2026, 10, 20)
+        let todayStart = calendar.startOfDay(for: today)
+        let authorizationStart = try XCTUnwrap(calendar.date(byAdding: .day, value: -29, to: todayStart))
+        let days = (0..<42).compactMap { offset -> HealthIntelligenceDay? in
+            guard let dayStart = calendar.date(byAdding: .day, value: offset - 41, to: todayStart) else { return nil }
+            let readState: HealthReadState = dayStart < authorizationStart
+                ? .dataUnavailableOrReadScopeUnknown
+                : .available
+            return HealthIntelligenceDay(
+                dayStart: dayStart,
+                stepCount: readState == .available ? 5_000 : nil,
+                healthReadStates: [HealthMetricID.stepCount.rawValue: readState],
+                healthQueryStartByMetric: [HealthMetricID.stepCount.rawValue: authorizationStart]
+            )
+        }
+        let summary = HealthIntelligenceEngine(calendar: calendar).makeContextSummary(
+            days: days,
+            asOf: today,
+            goals: nil,
+            recommendations: []
+        )
+        let analysisCoverage = try XCTUnwrap(summary.analysisWindowCoverage["steps"])
+        let twentyEightDayCoverage = try XCTUnwrap(summary.twentyEightDay.metricWindowCoverage["steps"])
+
+        XCTAssertEqual(analysisCoverage.targetWindowStart, calendar.date(byAdding: .day, value: -41, to: todayStart))
+        XCTAssertEqual(analysisCoverage.expectedCalendarDays, 42)
+        XCTAssertEqual(analysisCoverage.actualEarliestDate, authorizationStart)
+        XCTAssertEqual(analysisCoverage.validCalendarDays, 30)
+        XCTAssertEqual(analysisCoverage.missingCalendarDays, 12)
+        XCTAssertEqual(analysisCoverage.authorizationLimited, true)
+        XCTAssertEqual(analysisCoverage.dataAvailabilityLimited, false)
+        XCTAssertEqual(twentyEightDayCoverage.expectedCalendarDays, 28)
+        XCTAssertEqual(twentyEightDayCoverage.validCalendarDays, 28)
+        XCTAssertEqual(twentyEightDayCoverage.authorizationLimited, false)
+    }
+
+    func testSleepWindowCoverageUsesFirstFullyAuthorizedWakeDay() throws {
+        let today = try date(2026, 10, 20)
+        let todayStart = calendar.startOfDay(for: today)
+        let authorizationDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -21, to: todayStart))
+        let authorizationStart = try XCTUnwrap(calendar.date(bySettingHour: 19, minute: 0, second: 0, of: authorizationDay))
+        let firstFullyAuthorizedWakeDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 2, to: authorizationDay))
+        let days = (0..<42).compactMap { offset -> HealthIntelligenceDay? in
+            guard let dayStart = calendar.date(byAdding: .day, value: offset - 41, to: todayStart) else { return nil }
+            let isAuthorized = dayStart >= firstFullyAuthorizedWakeDay
+            return HealthIntelligenceDay(
+                dayStart: dayStart,
+                sleepSummary: isAuthorized ? SleepSummary(
+                    wakeDate: dayStart,
+                    totalAsleepMinutes: 420,
+                    mainSleepMinutes: 420,
+                    napMinutes: 0,
+                    stageCoverage: nil,
+                    stages: nil,
+                    selectedSourceBundleIdentifier: nil
+                ) : nil,
+                healthReadStates: [HealthMetricID.sleepAnalysis.rawValue: isAuthorized ? .available : .dataUnavailableOrReadScopeUnknown],
+                healthQueryStartByMetric: [HealthMetricID.sleepAnalysis.rawValue: authorizationStart]
+            )
+        }
+        let summary = HealthIntelligenceEngine(calendar: calendar).makeContextSummary(
+            days: days,
+            asOf: today,
+            goals: nil,
+            recommendations: []
+        )
+        let coverage = try XCTUnwrap(summary.analysisWindowCoverage["sleep"])
+
+        XCTAssertEqual(coverage.expectedCalendarDays, 42)
+        XCTAssertEqual(coverage.actualEarliestDate, firstFullyAuthorizedWakeDay)
+        XCTAssertEqual(coverage.validCalendarDays, 20)
+        XCTAssertEqual(coverage.missingCalendarDays, 22)
+        XCTAssertEqual(coverage.authorizationLimited, true)
+        XCTAssertEqual(coverage.dataAvailabilityLimited, false)
     }
 
     func testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders() throws {
@@ -408,6 +491,7 @@ final class HealthIntelligenceTests: XCTestCase {
 
         let contextJSON = #"{"windowDays":7,"coverageDays":{"sleep":3,"steps":2,"energyIntake":4,"proteinGrams":4},"averageSleepMinutes":420,"averageStepCount":5200,"averageActiveEnergyKcal":450,"averageEnergyIntakeKcal":1800,"averageDailyDeficitKcal":300,"averageProteinGrams":80,"medianWeightKilograms":71}"#.data(using: .utf8)!
         let context = try JSONDecoder().decode(HealthContextWindowSummary.self, from: contextJSON)
+        XCTAssertEqual(context.metricWindowCoverage, [:])
         XCTAssertEqual(context.dataCoverage["sleep"], .unknown)
         XCTAssertNil(context.coverageDays["sleep"])
         XCTAssertNil(context.averageSleepMinutes)
@@ -416,6 +500,16 @@ final class HealthIntelligenceTests: XCTestCase {
         XCTAssertEqual(context.averageProteinGrams, 80)
         XCTAssertNil(context.averageDailyDeficitKcal)
         XCTAssertNil(context.medianWeightKilograms)
+
+        let legacyWindowObject = try XCTUnwrap(JSONSerialization.jsonObject(with: contextJSON) as? [String: Any])
+        let legacySummaryData = try JSONSerialization.data(withJSONObject: [
+            "sevenDay": legacyWindowObject,
+            "twentyEightDay": legacyWindowObject,
+            "recommendationReferences": [String](),
+        ])
+        let legacySummary = try JSONDecoder().decode(HealthContextSummary.self, from: legacySummaryData)
+        XCTAssertEqual(legacySummary.analysisWindowCoverage, [:])
+        XCTAssertEqual(legacySummary.sevenDay.metricWindowCoverage, [:])
     }
 
     func testWeightTrendRequiresFourValidDaysInEachSevenDayWindow() throws {

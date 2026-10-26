@@ -355,6 +355,12 @@ struct HealthIntelligenceReadModel: Sendable {
             workoutCursor = WorkoutCursor(date: last.date, id: last.id)
         }
         let workoutsByDay = Dictionary(grouping: workoutRecords, by: { calendar.startOfDay(for: $0.date) })
+        var queryStartByMetric: [String: Date] = [:]
+        for cursor in try context.fetch(FetchDescriptor<HealthKitImportCursor>()) {
+            if let lookbackStart = cursor.lookbackStart {
+                queryStartByMetric[cursor.stream] = lookbackStart
+            }
+        }
         var days: [HealthIntelligenceDay] = []
         for offset in 0...dayCount {
             guard let day = calendar.date(byAdding: .day, value: offset, to: start) else { continue }
@@ -445,7 +451,8 @@ struct HealthIntelligenceReadModel: Sendable {
                 respiratoryRateSamples: dailyAverage(.respiratoryRate),
                 wristTemperatureSamples: dailyAverage(.wristTemperature),
                 workouts: workouts,
-                healthReadStates: projectionReadStates
+                healthReadStates: projectionReadStates,
+                healthQueryStartByMetric: queryStartByMetric
             ))
         }
         return days

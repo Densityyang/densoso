@@ -5,6 +5,7 @@ import DensosoDomain
 protocol HealthSyncRepository {
     func cursorSnapshot(for stream: String) throws -> HealthKitCursorSnapshot?
     func resetHealthKitCursors() throws
+    func resetHealthKitCursor(for stream: String) throws
     func setHealthReadState(_ state: HealthReadState, metric: HealthMetricID, days: [Date]) throws
     func maskCachedHealthDataBeforeAuthorizationBoundary(
         for metric: HealthMetricID,
@@ -128,7 +129,7 @@ final class HealthKitSyncCoordinator {
         if forceRebaseline { maskedAuthorizationBoundaryByMetric.removeAll() }
         var windowPlans: [HealthMetricID: WindowPlan] = [:]
         var windowErrors: [HealthMetricID: Error] = [:]
-        var shouldResetAnchors = forceRebaseline
+        var streamsToReset = Set<String>()
         let windowedMetrics = Self.aggregateStreams.union(Self.sampleStreams).union([.workout])
         for metric in windowedMetrics.sorted(by: { $0.rawValue < $1.rawValue }) {
             do {
@@ -142,12 +143,14 @@ final class HealthKitSyncCoordinator {
                         policyStart: anchorPolicyStart(for: metric, targetStart: plan.targetStart),
                         authorizationStart: plan.authorizationStart
                     ) {
-                        shouldResetAnchors = true
+                        streamsToReset.insert(stream)
                     }
                 }
             } catch {
                 windowErrors[metric] = error
-                shouldResetAnchors = true
+                if Self.sampleStreams.contains(metric) || metric == .workout {
+                    streamsToReset.insert(metric == .workout ? "workouts" : metric.rawValue)
+                }
                 // A failed authorization-boundary lookup cannot prove that cached
                 // HealthKit values are still in scope. Hide this metric's current
                 // analysis window and reset anchored cursors so a later successful
@@ -165,7 +168,13 @@ final class HealthKitSyncCoordinator {
                 }
             }
         }
-        if shouldResetAnchors { try repository.resetHealthKitCursors() }
+        if forceRebaseline {
+            try repository.resetHealthKitCursors()
+        } else {
+            for stream in streamsToReset.sorted() {
+                try repository.resetHealthKitCursor(for: stream)
+            }
+        }
         var completedStreams = Set<HealthMetricID>()
         var failedStreams: [HealthMetricID: HealthSyncFailure] = [:]
         do {
@@ -258,7 +267,7 @@ final class HealthKitSyncCoordinator {
                 if let analysisStart = HealthDataWindowPolicy.analysisStart(through: now, calendar: Calendar.current) {
                     try? markHealthWindowUnknown(metric, from: analysisStart, through: now, using: repository)
                 }
-                try repository.resetHealthKitCursors()
+                try repository.resetHealthKitCursor(for: "workouts")
                 throw error
             }
             try maskCachedHealthDataIfNeeded(for: metric, plan: plan, through: now, using: repository)
@@ -267,7 +276,7 @@ final class HealthKitSyncCoordinator {
                 policyStart: plan.targetStart,
                 authorizationStart: plan.authorizationStart
             ) {
-                try repository.resetHealthKitCursors()
+                try repository.resetHealthKitCursor(for: "workouts")
             }
             try await syncWorkouts(repository: repository, now: now, plan: plan)
         } else if Self.aggregateStreams.contains(metric) {
@@ -278,7 +287,6 @@ final class HealthKitSyncCoordinator {
                 if let analysisStart = HealthDataWindowPolicy.analysisStart(through: now, calendar: Calendar.current) {
                     try? markHealthWindowUnknown(metric, from: analysisStart, through: now, using: repository)
                 }
-                try repository.resetHealthKitCursors()
                 throw error
             }
             try maskCachedHealthDataIfNeeded(for: metric, plan: plan, through: now, using: repository)
@@ -291,7 +299,7 @@ final class HealthKitSyncCoordinator {
                 if let analysisStart = HealthDataWindowPolicy.analysisStart(through: now, calendar: Calendar.current) {
                     try? markHealthWindowUnknown(metric, from: analysisStart, through: now, using: repository)
                 }
-                try repository.resetHealthKitCursors()
+                try repository.resetHealthKitCursor(for: metric.rawValue)
                 throw error
             }
             try maskCachedHealthDataIfNeeded(for: metric, plan: plan, through: now, using: repository)
@@ -300,7 +308,7 @@ final class HealthKitSyncCoordinator {
                 policyStart: anchorPolicyStart(for: metric, targetStart: plan.targetStart),
                 authorizationStart: plan.authorizationStart
             ) {
-                try repository.resetHealthKitCursors()
+                try repository.resetHealthKitCursor(for: metric.rawValue)
             }
             try await syncSamples(metric, repository: repository, now: now, plan: plan)
         }
@@ -365,9 +373,17 @@ final class HealthKitSyncCoordinator {
             metric: .workout,
             days: workoutDaysBeforeAuthorization(plan: plan, through: now)
         )
+        var isFirstPage = true
         while true {
             let page = try await healthStore.workoutChanges(from: start, after: anchor)
             guard let nextAnchor = page.nextAnchorData else { throw HealthStoreClientError.invalidAnchor }
+            if isFirstPage, anchor == nil, page.readState != .dataUnavailableOrReadScopeUnknown {
+                try repository.setHealthReadState(
+                    page.readState,
+                    metric: .workout,
+                    days: fullyAuthorizedDays(for: .workout, plan: plan, through: now)
+                )
+            }
             let allowedStart = HealthDataWindowPolicy.effectiveStart(
                 policyStart: start,
                 authorizationStart: plan.authorizationStart
@@ -380,6 +396,7 @@ final class HealthKitSyncCoordinator {
                 lookbackStart: start,
                 stream: "workouts"
             )
+            isFirstPage = false
             try repository.setHealthReadState(
                 .available,
                 metric: .workout,
@@ -459,6 +476,13 @@ final class HealthKitSyncCoordinator {
                 hasMore: page.hasMore,
                 readState: page.readState
             )
+            if isFirstPage, anchor == nil, page.readState != .dataUnavailableOrReadScopeUnknown {
+                try repository.setHealthReadState(
+                    page.readState,
+                    metric: metric,
+                    days: fullyAuthorizedDays(for: metric, plan: plan, through: now)
+                )
+            }
             let affectedDays = try repository.affectedHealthSampleDays(for: allowedPage, stream: stream)
                 .filter { $0 >= plan.targetStart }
             let replacements = try await requerySampleDays(
@@ -546,6 +570,26 @@ final class HealthKitSyncCoordinator {
             through: calendar.startOfDay(for: date),
             calendar: calendar
         ).filter { $0 < authorizationStart }
+    }
+
+    private func fullyAuthorizedDays(
+        for metric: HealthMetricID,
+        plan: WindowPlan,
+        through date: Date
+    ) -> [Date] {
+        let calendar = Calendar.current
+        let firstDay = plan.authorizationStart.map {
+            HealthDataWindowPolicy.firstFullyAuthorizedDay(
+                for: metric,
+                authorizationStart: $0,
+                calendar: calendar
+            )
+        } ?? plan.targetStart
+        return HealthDataWindowPolicy.days(
+            from: plan.targetStart,
+            through: calendar.startOfDay(for: date),
+            calendar: calendar
+        ).filter { $0 >= firstDay }
     }
 
     private func mergeDaySnapshots(

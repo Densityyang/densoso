@@ -38,12 +38,29 @@ final class RecipePriorCatalogTests: XCTestCase {
         let results = try XCTUnwrap(object["results"] as? [[String: Any]])
         let recipe = try XCTUnwrap(results.first)
         XCTAssertEqual(recipe["matchType"] as? String, "exact")
+        XCTAssertEqual(recipe["id"] as? String, "anduin-howtocook:dishes/vegetable_dish/番茄炒蛋.md")
         XCTAssertEqual(recipe["sourceRecordID"] as? String, "dishes/vegetable_dish/番茄炒蛋.md")
+        XCTAssertEqual(recipe["sourceVersion"] as? String, "5fb3140c20b2a713296696dc6fdd3b83ccc617a6")
+        XCTAssertEqual(recipe["sourceRecordSHA256"] as? String, String(repeating: "a", count: 64))
+        XCTAssertEqual(recipe["licenseStatus"] as? String, "verified")
+        XCTAssertNotNil(recipe["cookedYieldEvidence"] as? [String: Any])
+        XCTAssertNotNil(recipe["householdMeasures"] as? [String])
+        XCTAssertNotNil(recipe["oilRetention"] as? [String: Any])
         let ingredients = try XCTUnwrap(recipe["ingredients"] as? [[String: Any]])
         let tomatoQuantity = try XCTUnwrap(ingredients.first?["quantityEvidence"] as? [String: Any])
         XCTAssertEqual(tomatoQuantity["sourceText"] as? String, "1个（约180g）*份数")
         XCTAssertFalse(result.localizedCaseInsensitiveContains("kcal"))
         XCTAssertFalse(result.contains("energyKcal"))
+    }
+
+    func testRecipeIDMustResolveToAnExactLocalDishMatch() throws {
+        let catalog = try RecipePriorCatalog(data: fixtureData())
+        let recipeID = "anduin-howtocook:dishes/vegetable_dish/番茄炒蛋.md"
+
+        XCTAssertEqual(catalog.source.sourceVersion, RecipePriorCatalog.pinnedSourceVersion)
+        XCTAssertEqual(catalog.exactRecord(dishName: "番茄炒蛋", id: recipeID)?.id, recipeID)
+        XCTAssertNil(catalog.exactRecord(dishName: "番茄炒蛋盖饭", id: recipeID))
+        XCTAssertNil(catalog.exactRecord(dishName: "番茄炒蛋", id: "unbundled:recipe"))
     }
 
     func testRecipePriorToolIsRegisteredAsReadOnlyWithStrictArguments() throws {

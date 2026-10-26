@@ -28,19 +28,56 @@ public struct MealDishEstimationInput: Codable, Equatable, Sendable {
     public let ingredients: [MealIngredientEstimationInput]
     public let inferredOilGrams: EstimateRange?
     public let inferredOilEvidence: EvidenceSnapshot?
+    public let recipeOilRetentionGrams: EstimateRange?
+    public let recipeOilRetentionEvidence: EvidenceSnapshot?
+    public let recipePriorEvidence: [EvidenceSnapshot]
+    public let suppressInferredOil: Bool
 
     public init(
         name: String,
         cookingMethod: String? = nil,
         ingredients: [MealIngredientEstimationInput],
         inferredOilGrams: EstimateRange? = nil,
-        inferredOilEvidence: EvidenceSnapshot? = nil
+        inferredOilEvidence: EvidenceSnapshot? = nil,
+        recipeOilRetentionGrams: EstimateRange? = nil,
+        recipeOilRetentionEvidence: EvidenceSnapshot? = nil,
+        recipePriorEvidence: [EvidenceSnapshot] = [],
+        suppressInferredOil: Bool = false
     ) {
         self.name = name
         self.cookingMethod = cookingMethod
         self.ingredients = ingredients
         self.inferredOilGrams = inferredOilGrams
         self.inferredOilEvidence = inferredOilEvidence
+        self.recipeOilRetentionGrams = recipeOilRetentionGrams
+        self.recipeOilRetentionEvidence = recipeOilRetentionEvidence
+        self.recipePriorEvidence = recipePriorEvidence
+        self.suppressInferredOil = suppressInferredOil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case cookingMethod
+        case ingredients
+        case inferredOilGrams
+        case inferredOilEvidence
+        case recipeOilRetentionGrams
+        case recipeOilRetentionEvidence
+        case recipePriorEvidence
+        case suppressInferredOil
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        cookingMethod = try container.decodeIfPresent(String.self, forKey: .cookingMethod)
+        ingredients = try container.decode([MealIngredientEstimationInput].self, forKey: .ingredients)
+        inferredOilGrams = try container.decodeIfPresent(EstimateRange.self, forKey: .inferredOilGrams)
+        inferredOilEvidence = try container.decodeIfPresent(EvidenceSnapshot.self, forKey: .inferredOilEvidence)
+        recipeOilRetentionGrams = try container.decodeIfPresent(EstimateRange.self, forKey: .recipeOilRetentionGrams)
+        recipeOilRetentionEvidence = try container.decodeIfPresent(EvidenceSnapshot.self, forKey: .recipeOilRetentionEvidence)
+        recipePriorEvidence = try container.decodeIfPresent([EvidenceSnapshot].self, forKey: .recipePriorEvidence) ?? []
+        suppressInferredOil = try container.decodeIfPresent(Bool.self, forKey: .suppressInferredOil) ?? false
     }
 }
 
@@ -78,6 +115,16 @@ public struct MealEstimator: Sendable {
         guard !input.ingredients.isEmpty else { throw MealEstimationError.emptyDish }
         var ingredients = try input.ingredients.map(estimateIngredient)
 
+        if let retainedOil = input.recipeOilRetentionGrams {
+            ingredients.append(
+                try oilIngredient(
+                    retainedOil,
+                    cookingMethod: input.cookingMethod,
+                    evidence: input.recipeOilRetentionEvidence
+                )
+            )
+        }
+
         let selectedEntries = input.ingredients.compactMap { $0.resolution.autoPreselect?.entry }
         let allIngredientsResolved = selectedEntries.count == input.ingredients.count
         let hasExplicitOil = selectedEntries.contains {
@@ -87,6 +134,8 @@ public struct MealEstimator: Sendable {
         if allIngredientsResolved,
            !hasExplicitOil,
            !isCookedComposite,
+           !input.suppressInferredOil,
+           input.recipeOilRetentionGrams == nil,
            let oil = input.inferredOilGrams {
             ingredients.append(
                 try oilIngredient(
@@ -113,7 +162,7 @@ public struct MealEstimator: Sendable {
             summary: "约 \(caloriePresentation.likelyKcal) kcal，可信度\(caloriePresentation.confidence.displayName)",
             confidence: nil
         )
-        let evidence = ingredients.flatMap(\.evidence) + [calorieEvidence]
+        let evidence = input.recipePriorEvidence + ingredients.flatMap(\.evidence) + [calorieEvidence]
         return MealDishDraft(
             name: input.name,
             cookingMethod: input.cookingMethod,

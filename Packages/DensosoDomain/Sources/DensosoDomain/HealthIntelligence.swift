@@ -185,6 +185,49 @@ public enum HealthDataCoverage: String, Codable, CaseIterable, Sendable {
     case unknown
 }
 
+/// Coverage of one metric within a requested calendar window.
+/// Nil counts and limitation flags mean the read scope or target dates are not fully known.
+public struct HealthMetricWindowCoverage: Codable, Equatable, Sendable {
+    public let targetWindowStart: Date
+    public let targetWindowEnd: Date
+    public let expectedCalendarDays: Int
+    public let actualEarliestDate: Date?
+    public let validCalendarDays: Int?
+    public let missingCalendarDays: Int?
+    /// True when the successful HealthKit query began after this window's required lower bound,
+    /// false when a complete read confirms it did not, and nil when the read scope is unknown.
+    public let authorizationLimited: Bool?
+    public let dataAvailabilityLimited: Bool?
+
+    public init(
+        targetWindowStart: Date,
+        targetWindowEnd: Date,
+        expectedCalendarDays: Int,
+        actualEarliestDate: Date?,
+        validCalendarDays: Int?,
+        missingCalendarDays: Int?,
+        authorizationLimited: Bool?,
+        dataAvailabilityLimited: Bool?
+    ) {
+        self.targetWindowStart = targetWindowStart
+        self.targetWindowEnd = targetWindowEnd
+        let expected = max(expectedCalendarDays, 0)
+        self.expectedCalendarDays = expected
+        if let validCalendarDays, let missingCalendarDays,
+           validCalendarDays >= 0, missingCalendarDays >= 0,
+           validCalendarDays + missingCalendarDays == expected {
+            self.validCalendarDays = validCalendarDays
+            self.missingCalendarDays = missingCalendarDays
+        } else {
+            self.validCalendarDays = nil
+            self.missingCalendarDays = nil
+        }
+        self.actualEarliestDate = actualEarliestDate
+        self.authorizationLimited = authorizationLimited
+        self.dataAvailabilityLimited = dataAvailabilityLimited
+    }
+}
+
 public struct TrainingLoadSummary: Codable, Equatable, Sendable {
     public let recentSevenDayLoad: Double
     public let priorTwentyEightDayAverage: Double?
@@ -284,6 +327,9 @@ public struct HealthIntelligenceDay: Codable, Equatable, Sendable {
     /// Per-metric HealthKit read state for projection. Missing keys are unknown
     /// when supplied; nil preserves the complete-coverage assumption of legacy callers.
     public let healthReadStates: [String: HealthReadState]?
+    /// Persisted lower bounds of successful HealthKit queries, keyed by metric raw value.
+    /// A missing key means the query lower bound is not known to this read model.
+    public let healthQueryStartByMetric: [String: Date]?
 
     public init(
         dayStart: Date,
@@ -302,7 +348,8 @@ public struct HealthIntelligenceDay: Codable, Equatable, Sendable {
         respiratoryRateSamples: [Double] = [],
         wristTemperatureSamples: [Double] = [],
         workouts: [TrainingWorkoutInput] = [],
-        healthReadStates: [String: HealthReadState]? = nil
+        healthReadStates: [String: HealthReadState]? = nil,
+        healthQueryStartByMetric: [String: Date]? = nil
     ) {
         self.dayStart = dayStart
         self.energyIntakeKcal = Self.valid(energyIntakeKcal)
@@ -321,6 +368,7 @@ public struct HealthIntelligenceDay: Codable, Equatable, Sendable {
         self.wristTemperatureSamples = wristTemperatureSamples.filter(\.isFinite)
         self.workouts = workouts
         self.healthReadStates = healthReadStates
+        self.healthQueryStartByMetric = healthQueryStartByMetric
     }
 
     private static func valid(_ value: Double?) -> Double? {
@@ -433,6 +481,8 @@ public struct HealthContextWindowSummary: Codable, Equatable, Sendable {
     public let coverageDays: [String: Int]
     /// Per-metric read coverage. Legacy cached summaries decode as unknown.
     public let dataCoverage: [String: HealthDataCoverage]
+    /// Detailed per-metric window coverage. Legacy cached summaries omit this map.
+    public let metricWindowCoverage: [String: HealthMetricWindowCoverage]
     public let averageSleepMinutes: Double?
     public let averageStepCount: Double?
     public let averageActiveEnergyKcal: Double?
@@ -451,11 +501,13 @@ public struct HealthContextWindowSummary: Codable, Equatable, Sendable {
         averageDailyDeficitKcal: Double?,
         averageProteinGrams: Double?,
         medianWeightKilograms: Double?,
-        dataCoverage: [String: HealthDataCoverage]? = nil
+        dataCoverage: [String: HealthDataCoverage]? = nil,
+        metricWindowCoverage: [String: HealthMetricWindowCoverage] = [:]
     ) {
         self.windowDays = min(max(windowDays, 1), 28)
         let resolvedCoverage = dataCoverage ?? Self.completeCoverage
         self.dataCoverage = resolvedCoverage
+        self.metricWindowCoverage = metricWindowCoverage
         self.coverageDays = coverageDays
             .filter { resolvedCoverage[$0.key] != .unknown }
             .mapValues { max($0, 0) }
@@ -474,6 +526,7 @@ public struct HealthContextWindowSummary: Codable, Equatable, Sendable {
         case windowDays
         case coverageDays
         case dataCoverage
+        case metricWindowCoverage
         case averageSleepMinutes
         case averageStepCount
         case averageActiveEnergyKcal
@@ -497,7 +550,11 @@ public struct HealthContextWindowSummary: Codable, Equatable, Sendable {
             averageDailyDeficitKcal: try container.decodeIfPresent(Double.self, forKey: .averageDailyDeficitKcal),
             averageProteinGrams: try container.decodeIfPresent(Double.self, forKey: .averageProteinGrams),
             medianWeightKilograms: try container.decodeIfPresent(Double.self, forKey: .medianWeightKilograms),
-            dataCoverage: decodedCoverage
+            dataCoverage: decodedCoverage,
+            metricWindowCoverage: try container.decodeIfPresent(
+                [String: HealthMetricWindowCoverage].self,
+                forKey: .metricWindowCoverage
+            ) ?? [:]
         )
     }
 
@@ -521,10 +578,12 @@ public struct HealthContextWindowSummary: Codable, Equatable, Sendable {
 }
 
 /// This summary is the only health-context shape intended for a cloud provider.
-/// It contains 7/28-day aggregates, coverage and references, never raw samples or daily rows.
+/// It contains bounded aggregates, window coverage and references, never raw samples or daily rows.
 public struct HealthContextSummary: Codable, Equatable, Sendable {
     public let sevenDay: HealthContextWindowSummary
     public let twentyEightDay: HealthContextWindowSummary
+    /// Per-metric coverage of the full bounded analysis history window.
+    public let analysisWindowCoverage: [String: HealthMetricWindowCoverage]
     public let targetWeightKilograms: Double?
     public let dailyDeficitGoalKcal: Int?
     public let dailyProteinGoalGrams: Double?
@@ -536,14 +595,42 @@ public struct HealthContextSummary: Codable, Equatable, Sendable {
         targetWeightKilograms: Double?,
         dailyDeficitGoalKcal: Int?,
         dailyProteinGoalGrams: Double?,
-        recommendationReferences: [String]
+        recommendationReferences: [String],
+        analysisWindowCoverage: [String: HealthMetricWindowCoverage] = [:]
     ) {
         self.sevenDay = sevenDay
         self.twentyEightDay = twentyEightDay
+        self.analysisWindowCoverage = analysisWindowCoverage
         self.targetWeightKilograms = targetWeightKilograms.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
         self.dailyDeficitGoalKcal = dailyDeficitGoalKcal.map { max($0, 0) }
         self.dailyProteinGoalGrams = dailyProteinGoalGrams.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
         self.recommendationReferences = Array(Set(recommendationReferences)).sorted()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sevenDay
+        case twentyEightDay
+        case analysisWindowCoverage
+        case targetWeightKilograms
+        case dailyDeficitGoalKcal
+        case dailyProteinGoalGrams
+        case recommendationReferences
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            sevenDay: try container.decode(HealthContextWindowSummary.self, forKey: .sevenDay),
+            twentyEightDay: try container.decode(HealthContextWindowSummary.self, forKey: .twentyEightDay),
+            targetWeightKilograms: try container.decodeIfPresent(Double.self, forKey: .targetWeightKilograms),
+            dailyDeficitGoalKcal: try container.decodeIfPresent(Int.self, forKey: .dailyDeficitGoalKcal),
+            dailyProteinGoalGrams: try container.decodeIfPresent(Double.self, forKey: .dailyProteinGoalGrams),
+            recommendationReferences: try container.decodeIfPresent([String].self, forKey: .recommendationReferences) ?? [],
+            analysisWindowCoverage: try container.decodeIfPresent(
+                [String: HealthMetricWindowCoverage].self,
+                forKey: .analysisWindowCoverage
+            ) ?? [:]
+        )
     }
 }
 
@@ -710,6 +797,7 @@ public struct HealthIntelligenceEngine: Sendable {
     public static let dailyBriefCacheAlgorithmVersion = [
         AlgorithmVersions.healthIntelligence,
         RecommendationEngine.algorithmVersion,
+        "metric-window-coverage-v1",
     ].joined(separator: "+")
     private let calendar: Calendar
 
@@ -1202,21 +1290,37 @@ public struct HealthIntelligenceEngine: Sendable {
             let day = calendar.startOfDay(for: $0.dayStart)
             return day >= sevenDayStart
         }
+        let analysisWindowDays = 42
+        let analysisStart = calendar.date(byAdding: .day, value: -(analysisWindowDays - 1), to: end) ?? end
+        let analysisDays = days.filter {
+            let day = calendar.startOfDay(for: $0.dayStart)
+            return day >= analysisStart && day <= end
+        }
+        let analysisCoverage = metricWindowCoverage(
+            days: analysisDays,
+            allDays: days,
+            targetStart: analysisStart,
+            targetEnd: end,
+            expectedDays: analysisWindowDays
+        )
         return HealthContextSummary(
-            sevenDay: contextWindow(days: sevenDays, windowDays: 7, allDays: days),
-            twentyEightDay: contextWindow(days: windowDays, windowDays: 28, allDays: days),
+            sevenDay: contextWindow(days: sevenDays, windowDays: 7, through: end, allDays: days),
+            twentyEightDay: contextWindow(days: windowDays, windowDays: 28, through: end, allDays: days),
             targetWeightKilograms: goals?.targetWeightKilograms,
             dailyDeficitGoalKcal: goals?.dailyDeficitKcal,
             dailyProteinGoalGrams: goals?.dailyProteinGrams,
-            recommendationReferences: recommendations.flatMap { [$0.id, $0.evidenceKey] }
+            recommendationReferences: recommendations.flatMap { [$0.id, $0.evidenceKey] },
+            analysisWindowCoverage: analysisCoverage
         )
     }
 
     private func contextWindow(
         days: [HealthIntelligenceDay],
         windowDays: Int,
+        through end: Date,
         allDays: [HealthIntelligenceDay]
     ) -> HealthContextWindowSummary {
+        let targetStart = calendar.date(byAdding: .day, value: -(windowDays - 1), to: end) ?? end
         let sleeps = days.compactMap {
             ($0.sleepSummary ?? sleepSummary(for: $0.dayStart, samples: allDays.flatMap(\.sleepSamples)))?.mainSleepMinutes
         }
@@ -1243,6 +1347,13 @@ public struct HealthIntelligenceEngine: Sendable {
             "proteinGrams": coverage { $0.proteinGrams != nil },
             "bodyMass": dataCoverage["bodyMass"] == .unknown ? nil : coverage { !$0.weightSamplesKilograms.isEmpty },
         ].compactMapValues { $0 }
+        let detailedCoverage = metricWindowCoverage(
+            days: days,
+            allDays: allDays,
+            targetStart: targetStart,
+            targetEnd: end,
+            expectedDays: windowDays
+        )
         return HealthContextWindowSummary(
             windowDays: windowDays,
             coverageDays: coverageDays,
@@ -1253,8 +1364,163 @@ public struct HealthIntelligenceEngine: Sendable {
             averageDailyDeficitKcal: Self.average(days.compactMap(\.dailyDeficitKcal)),
             averageProteinGrams: Self.average(days.compactMap(\.proteinGrams)),
             medianWeightKilograms: weights.isEmpty ? nil : Self.median(weights),
-            dataCoverage: dataCoverage
+            dataCoverage: dataCoverage,
+            metricWindowCoverage: detailedCoverage
         )
+    }
+
+    private func metricWindowCoverage(
+        days: [HealthIntelligenceDay],
+        allDays: [HealthIntelligenceDay],
+        targetStart: Date,
+        targetEnd: Date,
+        expectedDays: Int
+    ) -> [String: HealthMetricWindowCoverage] {
+        Dictionary(uniqueKeysWithValues: [
+            "sleep", "steps", "activeEnergy", "energyIntake", "dailyDeficitKcal", "proteinGrams", "bodyMass",
+        ].map { key in
+            (key, windowCoverage(
+                for: key,
+                days: days,
+                allDays: allDays,
+                targetStart: targetStart,
+                targetEnd: targetEnd,
+                expectedDays: expectedDays
+            ))
+        })
+    }
+
+    private func windowCoverage(
+        for key: String,
+        days: [HealthIntelligenceDay],
+        allDays: [HealthIntelligenceDay],
+        targetStart: Date,
+        targetEnd: Date,
+        expectedDays: Int
+    ) -> HealthMetricWindowCoverage {
+        let daysByStart = Dictionary(
+            days.map { (calendar.startOfDay(for: $0.dayStart), $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        let expectedDates = (0..<expectedDays).compactMap {
+            calendar.date(byAdding: .day, value: $0, to: targetStart)
+        }
+        let timelineIsComplete = expectedDates.count == expectedDays
+            && expectedDates.allSatisfy { daysByStart[$0] != nil }
+        let healthMetric = healthMetricID(for: key)
+        let queryStartDates: [Date] = healthMetric.map { metric in
+            days.compactMap { $0.healthQueryStartByMetric?[metric.rawValue] }
+        } ?? []
+        let knownQueryStart = healthMetric != nil && timelineIsComplete
+            && queryStartDates.count == days.count ? queryStartDates.max() : nil
+        let firstAuthorizedDay = healthMetric.flatMap { metric in
+            knownQueryStart.map { firstFullyAuthorizedDay(for: metric, authorizationStart: $0) }
+        }
+        var unknownAccessibleReadState = false
+        var validDates: [Date] = []
+        for date in expectedDates {
+            guard let day = daysByStart[date] else { continue }
+            if let healthMetric, let states = day.healthReadStates {
+                switch states[healthMetric.rawValue] {
+                case .some(.available), .some(.healthDataUnavailable):
+                    break
+                case .some(.dataUnavailableOrReadScopeUnknown), .none:
+                    if firstAuthorizedDay.map({ date >= $0 }) ?? true {
+                        unknownAccessibleReadState = true
+                    }
+                }
+            }
+            if metricHasValue(key, day: day, allDays: allDays) { validDates.append(date) }
+        }
+        let countsAreKnown = timelineIsComplete && !unknownAccessibleReadState
+        let authorizationLimited: Bool?
+        if let healthMetric, let knownQueryStart {
+            let requiredQueryStart = authorizationQueryStart(for: healthMetric, targetStart: targetStart)
+            if knownQueryStart > requiredQueryStart {
+                authorizationLimited = true
+            } else {
+                authorizationLimited = countsAreKnown ? false : nil
+            }
+        } else if healthMetric == nil {
+            authorizationLimited = false
+        } else {
+            authorizationLimited = nil
+        }
+        let validCount = countsAreKnown ? validDates.count : nil
+        let missingCount = countsAreKnown ? expectedDays - validDates.count : nil
+        let earliestDate = countsAreKnown ? validDates.min() : nil
+        let hasKnownDataAvailabilityGap = expectedDates.contains { date in
+            guard let day = daysByStart[date] else { return false }
+            if let healthMetric, let firstAuthorizedDay, date < firstAuthorizedDay { return false }
+            return !metricHasValue(key, day: day, allDays: allDays)
+        }
+        let dataAvailabilityLimited = countsAreKnown ? hasKnownDataAvailabilityGap : nil
+        return HealthMetricWindowCoverage(
+            targetWindowStart: targetStart,
+            targetWindowEnd: targetEnd,
+            expectedCalendarDays: expectedDays,
+            actualEarliestDate: earliestDate,
+            validCalendarDays: validCount,
+            missingCalendarDays: missingCount,
+            authorizationLimited: authorizationLimited,
+            dataAvailabilityLimited: dataAvailabilityLimited
+        )
+    }
+
+    private func healthMetricID(for key: String) -> HealthMetricID? {
+        switch key {
+        case "sleep": return .sleepAnalysis
+        case "steps": return .stepCount
+        case "activeEnergy", "dailyDeficitKcal": return .activeEnergy
+        case "bodyMass": return .bodyMass
+        default: return nil
+        }
+    }
+
+    private func authorizationQueryStart(for metric: HealthMetricID, targetStart: Date) -> Date {
+        guard metric == .sleepAnalysis,
+              let previousDay = calendar.date(byAdding: .day, value: -1, to: targetStart),
+              let sleepWindowStart = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: previousDay) else {
+            return targetStart
+        }
+        return sleepWindowStart
+    }
+
+    private func firstFullyAuthorizedDay(for metric: HealthMetricID, authorizationStart: Date) -> Date {
+        let boundaryDay = calendar.startOfDay(for: authorizationStart)
+        if metric == .sleepAnalysis {
+            guard let sleepWindowStart = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: boundaryDay),
+                  let firstWakeDay = calendar.date(byAdding: .day, value: 1, to: boundaryDay) else {
+                return calendar.date(byAdding: .day, value: 2, to: boundaryDay) ?? boundaryDay
+            }
+            if authorizationStart <= sleepWindowStart { return firstWakeDay }
+            return calendar.date(byAdding: .day, value: 2, to: boundaryDay) ?? firstWakeDay
+        }
+        guard authorizationStart == boundaryDay else {
+            return calendar.date(byAdding: .day, value: 1, to: boundaryDay) ?? boundaryDay
+        }
+        return boundaryDay
+    }
+
+    private func metricHasValue(
+        _ key: String,
+        day: HealthIntelligenceDay,
+        allDays: [HealthIntelligenceDay]
+    ) -> Bool {
+        switch key {
+        case "sleep":
+            return (day.sleepSummary ?? sleepSummary(
+                for: day.dayStart,
+                samples: allDays.flatMap(\.sleepSamples)
+            )) != nil || !day.sleepSamples.isEmpty
+        case "steps": return day.stepCount != nil
+        case "activeEnergy": return day.activeEnergyKcal != nil
+        case "energyIntake": return day.energyIntakeKcal != nil
+        case "dailyDeficitKcal": return day.dailyDeficitKcal != nil
+        case "proteinGrams": return day.proteinGrams != nil
+        case "bodyMass": return !day.weightSamplesKilograms.isEmpty
+        default: return false
+        }
     }
 
     private func dailyWeightMedians(_ days: [HealthIntelligenceDay]) -> [(date: Date, value: Double)] {

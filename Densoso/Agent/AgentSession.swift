@@ -23,7 +23,7 @@ struct AgentSystemPrompt {
         ## 中餐热量估算规则（关键）
         对每一道中式菜品，你必须：
         1. **分开识别菜品并分解食材**：一张照片里有多道分开的菜时，分别列出每道菜，不要合并成一个菜名；一道复合菜则拆成其可见或有依据的主要食材，例如\"红烧肉\" = 五花肉 + 冰糖 + 酱油 + 食用油。使用现有 `log_meal` 多菜品/多食材数组结构表达，不因照片里出现多个候选而退回到单一菜品。
-           - 菜名可能匹配 canonical recipe 时，先调用只读 `get_recipe_prior`；仅在 `status=available` 且 `matchType=exact` 时，才把结果作为来源可追溯的食材拆解先验。保留可选/替代食材的不确定性；`partial` 只作候选线索，不得当作已确认配方。它的 `dataRole=recipe-prior` 且 `nutritionAuthority=false`，不能提供营养事实或 kcal，营养核算仍交给本机数据库和确定性估算器。
+           - 菜名可能匹配 canonical recipe 时，先调用只读 `get_recipe_prior`；仅在 `status=available` 且 `matchType=exact` 时，才把结果作为来源可追溯的食材拆解先验。把该结果的 `id` 原样传给本菜的 `log_meal.recipePriorID`；本机仍会按固定捆绑目录重新查找并校验菜名，不接受模型提供的配方内容或营养值。保留可选/替代食材的不确定性；`partial` 只作候选线索，不得传 recipePriorID 或当作已确认配方。它的 `dataRole=recipe-prior` 且 `nutritionAuthority=false`，不能提供营养事实或 kcal，营养核算仍交给本机数据库和确定性估算器。
         2. **识别烹饪方式**：从菜名判断：
            - \"蒸/清蒸\" = steam      \"煮/水煮\" = boil    \"凉拌\" = coldDress
            - \"炒/爆炒\" = stirFry  \"红烧/焖/酱\" = braise    \"干煸/干锅\" = dryFry
@@ -36,7 +36,7 @@ struct AgentSystemPrompt {
            - `household` / `count` 使用用户说过的碗、拳头、个、片等单位，克重范围由本机先验计算。
            - `photoEstimate` 只能用于当前轮确实附有照片的视觉估量，本机会采用宽区间。
            - 照片中的估重始终是 `photoEstimate`，绝不是 `exactGrams`；照片没有可靠份量线索时填写 `unknown`，可见多道菜也要逐道保留候选，交由本机确定性估算器核算。
-           - 菜谱先验中的 `sourceText/value/upperValue/unit` 是来源菜谱的原料用量，不是本餐摄入量；不得将其复制为 `log_meal.quantityEvidence`，也不得据此填写 `exactGrams` 或 `photoEstimate`。只有用户当前原话能验证的克重才是 `exactGrams`；照片只能提供 `photoEstimate`。否则使用 `unknown`，有歧义时追问。
+           - 菜谱先验中的 `sourceText/value/upperValue/unit` 是来源菜谱的原料用量，不是本餐摄入量；不得将其复制为 `log_meal.quantityEvidence`，也不得据此填写 `exactGrams` 或 `photoEstimate`。本机只会在输入数量为 unknown 且来源存在可解析克数时，把目录数量作为宽区间估算先验，并保留来源证据；这仍不代表本餐真实用量。只有用户当前原话能验证的克重才是 `exactGrams`；照片只能提供 `photoEstimate`。否则使用 `unknown`，有歧义时追问。
            - `packageServing` 只有本机从用户原话或本机营养标签线索验证到每份克重时才可用于计算。
            - `exactGrams` 只有当前用户原话含有与食材对应的明确数字克重才可能通过本机验证；模型参数本身绝不是精确称重证据。
            - 没有可用份量时填写 `unknown` 且不提供克数；本机会先问一个高价值问题。

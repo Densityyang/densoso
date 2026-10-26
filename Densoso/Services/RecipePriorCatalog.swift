@@ -76,6 +76,8 @@ struct RecipePriorCatalog: Sendable {
     static let resourceName = "recipe_priors"
     static let maximumResults = 2
     static let maximumIngredientsPerResult = 16
+    static let pinnedSourceID = "anduin-howtocook"
+    static let pinnedSourceVersion = "5fb3140c20b2a713296696dc6fdd3b83ccc617a6"
 
     let source: RecipePriorSource
     private let recipes: [RecipePriorRecord]
@@ -85,15 +87,21 @@ struct RecipePriorCatalog: Sendable {
               file.schemaVersion == 1,
               file.dataRole == "recipe-prior",
               file.source.dataRole == "recipe-prior",
+              file.source.sourceID == Self.pinnedSourceID,
+              file.source.sourceVersion == Self.pinnedSourceVersion,
               file.source.verificationStatus == "verified",
               file.source.redistributionAllowed,
               !file.recipes.isEmpty,
+              Set(file.recipes.map(\.id)).count == file.recipes.count,
               file.recipes.allSatisfy({
                   $0.sourceID == file.source.sourceID
                       && $0.sourceVersion == file.source.sourceVersion
                       && $0.licenseStatus == "verified"
                       && $0.licenseSPDX == file.source.licenseSPDX
                       && !$0.isNutritionAuthority
+                      && !$0.id.isEmpty
+                      && !$0.sourceRecordID.isEmpty
+                      && Self.isSHA256($0.sourceRecordSHA256)
                       && !$0.ingredients.isEmpty
               }) else {
             throw RecipePriorCatalogError.malformedCatalog
@@ -133,6 +141,28 @@ struct RecipePriorCatalog: Sendable {
             }
             .prefix(boundedLimit)
             .map { $0.0 }
+    }
+
+    func record(id: String) -> RecipePriorRecord? {
+        recipes.first { $0.id == id }
+    }
+
+    /// A model-supplied identifier is usable only when the local pinned row
+    /// exists and the dish name is an exact canonical-name or alias match.
+    func exactRecord(dishName: String, id: String) -> RecipePriorRecord? {
+        guard let record = record(id: id) else { return nil }
+        let key = Self.normalized(dishName)
+        guard key.count >= 2 else { return nil }
+        let canonical = Self.normalized(record.canonicalDishName)
+        let aliases = record.aliases.map(Self.normalized)
+        guard key == canonical || aliases.contains(key) else { return nil }
+        return record
+    }
+
+    private static func isSHA256(_ value: String) -> Bool {
+        value.count == 64 && value.unicodeScalars.allSatisfy {
+            CharacterSet(charactersIn: "0123456789abcdefABCDEF").contains($0)
+        }
     }
 
     private static func normalized(_ value: String) -> String {

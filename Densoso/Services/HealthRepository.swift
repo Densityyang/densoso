@@ -247,6 +247,16 @@ final class HealthRepository: HealthSyncRepository {
         }
     }
 
+    func resetHealthKitCursor(for stream: String) throws {
+        try write(affecting: []) { _ in
+            guard let cursor = try cursorRecord(stream: stream) else { return }
+            cursor.anchorData = nil
+            cursor.lastSuccessfulAt = nil
+            cursor.lookbackStart = nil
+            cursor.updatedAt = Date()
+        }
+    }
+
     func setHealthReadState(_ state: HealthReadState, metric: HealthMetricID, days: [Date]) throws {
         let calendar = Calendar.current
         let normalizedDays = Array(Set(days.map { calendar.startOfDay(for: $0) })).sorted()

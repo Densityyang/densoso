@@ -64,18 +64,18 @@ enum MealPortionPriorPresentation {
             return unit
         }
         switch canonicalUnit {
-        case "bowl": "碗"
-        case "smallbowl": "小碗"
-        case "largebowl": "大碗"
-        case "fist": "拳头"
-        case "palm": "掌心"
-        case "cup": "杯"
-        case "slice": "片"
-        case "egg": "个鸡蛋"
-        case "dumpling": "个饺子"
-        case "banana": "根香蕉"
-        case "apple": "个苹果"
-        default: unit
+        case "bowl": return "碗"
+        case "smallbowl": return "小碗"
+        case "largebowl": return "大碗"
+        case "fist": return "拳头"
+        case "palm": return "掌心"
+        case "cup": return "杯"
+        case "slice": return "片"
+        case "egg": return "个鸡蛋"
+        case "dumpling": return "个饺子"
+        case "banana": return "根香蕉"
+        case "apple": return "个苹果"
+        default: return unit
         }
     }
 }
