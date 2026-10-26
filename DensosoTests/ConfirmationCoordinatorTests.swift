@@ -162,6 +162,18 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let context = ModelContext(harness.container)
         let existingMealCount = DailyMetricsProjectionInputReader.fetchBatchSize + 1
+        let profileEffectiveFrom = date.addingTimeInterval(-365 * 86_400)
+        context.insert(ProfileRevisionRecord(
+            profileKey: "primary",
+            effectiveFrom: profileEffectiveFrom,
+            dateOfBirth: Date(timeIntervalSince1970: 315_532_800),
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 60,
+            activityLevel: "moderate",
+            source: "userEdited",
+            createdAt: profileEffectiveFrom
+        ))
         let evidenceData = try JSONEncoder().encode([
             EvidenceSnapshot(grade: .userReported, sourceID: "test-current-meal", summary: "Explicit fixture evidence."),
         ])
