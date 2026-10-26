@@ -119,7 +119,7 @@ struct DailyCheckInSelfReportResolver {
         guard let explicitDates = Self.explicitDays(in: rawText) else {
             throw DailyCheckInSelfReportError.dateNotSupported
         }
-        let reportedWeekdays = Self.weekdays(in: text)
+        let reportedWeekdays = Self.weekdays(in: rawText)
         guard reportedWeekdays.count <= 1,
               !expectedDays.isEmpty || !explicitDates.isEmpty || reportedWeekdays.isEmpty else {
             throw DailyCheckInSelfReportError.dateNotSupported
@@ -248,23 +248,24 @@ struct DailyCheckInSelfReportResolver {
         return patterns.contains { matches($0, in: text) }
     }
 
-    private static func weekdays(in text: String) -> Set<Int> {
+    private static func weekdays(in rawText: String) -> Set<Int> {
         let englishWeekdays = [
             (#"\bsunday\b"#, 1), (#"\bmonday\b"#, 2), (#"\btuesday\b"#, 3),
             (#"\bwednesday\b"#, 4), (#"\bthursday\b"#, 5), (#"\bfriday\b"#, 6),
             (#"\bsaturday\b"#, 7),
         ]
         var result = Set<Int>()
-        for (pattern, weekday) in englishWeekdays where matches(pattern, in: text) {
+        for (pattern, weekday) in englishWeekdays where matches(pattern, in: rawText) {
             result.insert(weekday)
         }
+        let normalizedText = normalized(rawText)
         let chineseWeekdays = [
             ("周日", 1), ("周天", 1), ("星期日", 1), ("星期天", 1),
             ("周一", 2), ("星期一", 2), ("周二", 3), ("星期二", 3),
             ("周三", 4), ("星期三", 4), ("周四", 5), ("星期四", 5),
             ("周五", 6), ("星期五", 6), ("周六", 7), ("星期六", 7),
         ]
-        for (cue, weekday) in chineseWeekdays where text.contains(cue) {
+        for (cue, weekday) in chineseWeekdays where normalizedText.contains(cue) {
             result.insert(weekday)
         }
         return result
