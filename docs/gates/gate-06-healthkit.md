@@ -59,7 +59,10 @@ below without changing V1–V5 schema identities.
   The Watch workout recorder and iPhone session-mirroring listener are removed,
   and the Watch extension no longer requests HealthKit entitlement. Old schema
   fields remain untouched for V1–V3 compatibility, but are no longer active
-  data paths. The remaining Watch companion experience is deferred to Phase 8.
+  data paths. The Watch provides a read-only daily companion and forwards
+  transcript/snapshot commands to iPhone. Pending actions can be reviewed on
+  Watch, but confirm/reject controls are absent; iPhone rejects any legacy or
+  malformed Watch command that attempts either action.
 - `DailyMetrics` uses measured HealthKit resting/active energy when present.
   Otherwise it uses the existing BMR/TDEE estimate. Workout count remains
   descriptive; Workout energy is never added to daily active energy.
