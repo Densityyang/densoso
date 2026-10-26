@@ -119,7 +119,7 @@ struct MealCaptureSheet: View {
                             guard canSendPhotoToAgent else { return }
                             transitionImageState(
                                 .uploadStarted,
-                                preparedRequestExists: preparedRequest != nil,
+                                preparedRequestExists: self.preparedRequest != nil,
                                 consentGranted: imageConsentGranted && selectedProviderSupportsVision
                             )
                             onSendToAgent(preparedRequest)
