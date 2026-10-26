@@ -28,6 +28,27 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         XCTAssertEqual(inputs.meals.map(\.totalCaloriesKcal).reduce(0, +), 500)
     }
 
+    func testProjectionInputReaderUsesCalendarDayAcrossDSTTransition() throws {
+        let (_, context) = try makeContext()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let dayStart = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 3, day: 8)))
+        let nextDayStart = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: dayStart))
+        XCTAssertEqual(nextDayStart.timeIntervalSince(dayStart), 23 * 60 * 60)
+        let lastMinuteOfDay = nextDayStart.addingTimeInterval(-60)
+        let firstMinuteOfNextDay = nextDayStart.addingTimeInterval(60)
+        context.insert(MealRecord(date: lastMinuteOfDay, totalCaloriesKcal: 200, proteinG: 10, fatG: 5, carbsG: 25))
+        context.insert(MealRecord(date: firstMinuteOfNextDay, totalCaloriesKcal: 300, proteinG: 15, fatG: 8, carbsG: 35))
+
+        let inputs = try DailyMetricsProjectionInputReader.read(
+            on: dayStart,
+            calendar: calendar,
+            in: context
+        )
+
+        XCTAssertEqual(inputs.meals.map(\.totalCaloriesKcal), [200])
+    }
+
     func testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected() throws {
         let (_, context) = try makeContext()
         let day = Calendar.current.startOfDay(for: Date())

@@ -242,6 +242,7 @@ enum CaloricEngine {
     // MARK: - 每日结算
 
     /// 根据某天的所有餐和运动，计算 DailyMetrics
+    /// `calendar` must match the calendar used to load the day's persistence inputs.
     static func computeDailyMetrics(
         date: Date,
         calendar: Calendar,
