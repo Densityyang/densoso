@@ -394,10 +394,31 @@ final class MealCaptureApplicationService {
                 evidence: localEvidence + visionEvidence
             )
         ).mealEstimatorResolution
+        guard let likelyGrams = Self.grams(from: observation.portionHint) else {
+            // An absent vision quantity is unknown, not a generic 180 g portion.
+            // Keep the recognized candidate, but require the user to supply the
+            // consumed grams before this optional route can stage a meal draft.
+            return MealCaptureReview(
+                id: UUID(),
+                route: .qwenVision,
+                evidence: localEvidence + visionEvidence,
+                label: label,
+                resolution: resolution,
+                portion: nil,
+                cookingMethod: observation.cookingMethod,
+                inferredOilGrams: nil,
+                clarification: ClarificationQuestion(
+                    kind: .portion,
+                    prompt: "没有可靠的份量提示，请填写这次实际食用的克数。"
+                ),
+                attribution: nil,
+                rawPhotoRetained: false
+            )
+        }
         let portion = try portionEstimator.estimate(
             evidence: [
                 .photo(
-                    likelyGrams: Self.grams(from: observation.portionHint) ?? 180,
+                    likelyGrams: likelyGrams,
                     hasScale: false,
                     isMixedDish: observation.labels.count > 1,
                     isOccluded: observation.isOccluded,
@@ -496,6 +517,7 @@ final class MealCaptureApplicationService {
         review: MealCaptureReview,
         selectedFoodID: String?,
         correctedPortion: PortionEstimate? = nil,
+        personalPortionUnitText: String? = nil,
         oilAnswer: MealCaptureOilAnswer? = nil,
         userNote: String? = nil,
         mealType: String = "lunch",
@@ -581,6 +603,16 @@ final class MealCaptureApplicationService {
                     confidence: 1
                 )
             )
+        }
+        if correctedPortion?.source == .userCorrection,
+           let personalPortionUnitText,
+           let unitQuantity = MealPortionPriorCorrection.explicitHouseholdQuantity(in: personalPortionUnitText),
+           let correction = MealPortionPriorCorrection(
+                unit: unitQuantity.unit,
+                unitCount: unitQuantity.count,
+                totalGrams: portion.likelyGrams
+           ) {
+            captureEvidence.append(correction.evidenceSnapshot)
         }
         if let oilAnswer {
             captureEvidence.append(

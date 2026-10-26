@@ -413,6 +413,8 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
 
         XCTAssertEqual(review.route, .qwenVision)
         XCTAssertNil(review.resolution?.autoPreselect)
+        XCTAssertNil(review.portion)
+        XCTAssertEqual(review.clarification?.kind, .portion)
         XCTAssertGreaterThanOrEqual(review.candidateNames.count, 2)
         do {
             _ = try await harness.service.stageMeal(review: review, selectedFoodID: nil)
@@ -422,9 +424,14 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
         }
 
         let selectedCandidate = try XCTUnwrap(review.resolution?.candidates.first)
+        let correctedPortion = try PortionEstimator().estimate(
+            evidence: [.userCorrection(low: 100, likely: 100, high: 100)],
+            food: selectedCandidate
+        )
         let action = try await harness.service.stageMeal(
             review: review,
-            selectedFoodID: selectedCandidate.id
+            selectedFoodID: selectedCandidate.id,
+            correctedPortion: correctedPortion
         )
         guard case .meal(let draft) = action.payload else {
             return XCTFail("Expected meal payload")

@@ -26,3 +26,4 @@ typealias UserPreferenceRecord = DensosoSchemaV5.UserPreferenceRecord
 typealias HealthKitSampleIndexRecord = DensosoSchemaV8.HealthKitSampleIndexRecord
 typealias ConversationToolSchemaVersionRecord = DensosoSchemaV7.ConversationToolSchemaVersionRecord
 typealias AgentRequestCostBudgetRecord = DensosoSchemaV9.AgentRequestCostBudgetRecord
+typealias PersonalMealPortionPriorRecord = DensosoSchemaV10.PersonalMealPortionPriorRecord

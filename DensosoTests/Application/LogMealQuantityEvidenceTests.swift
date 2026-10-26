@@ -29,7 +29,7 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         XCTAssertEqual(portionEvidence.grade, .strong)
         XCTAssertEqual(portionEvidence.sourceVersion, "portion-estimator-v2")
         XCTAssertTrue(draft.dishes.first?.evidence.contains {
-            $0.sourceID == "calorie-accounting" && $0.sourceVersion == "calorie-accounting-v2"
+            $0.sourceID == "calorie-accounting" && $0.sourceVersion == "calorie-accounting-v3"
         } == true)
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 0)
     }

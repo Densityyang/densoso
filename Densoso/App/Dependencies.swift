@@ -33,6 +33,7 @@ final class Dependencies {
     let persistenceWriteGate: PersistenceWriteGate
     let confirmationRepository: SwiftDataConfirmationRepository
     let confirmationCoordinator: ConfirmationCoordinator
+    let mealPortionPriorRepository: SwiftDataMealPortionPriorRepository
     let agentRepository: SwiftDataAgentRepository
     let confirmedFoodHistoryRepository: SwiftDataConfirmedFoodHistoryRepository
     let providerGovernanceRepository: SwiftDataProviderGovernanceRepository
@@ -50,6 +51,7 @@ final class Dependencies {
         let modelContainer = modelContainer ?? PersistenceBootstrap.make(inMemory: true).container
         self.modelContainer = modelContainer
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: modelContainer)
+        let mealPortionPriorRepository = SwiftDataMealPortionPriorRepository(modelContainer: modelContainer)
         let agentRepository = SwiftDataAgentRepository(modelContainer: modelContainer)
         let confirmedFoodHistory = SwiftDataConfirmedFoodHistoryRepository(modelContainer: modelContainer)
         let governanceRepository = SwiftDataProviderGovernanceRepository(modelContainer: modelContainer)
@@ -100,7 +102,8 @@ final class Dependencies {
             },
             goalProfileProvider: { date in
                 try await healthProjectionActor.goalProfile(asOf: date)
-            }
+            },
+            mealPortionPriorRepository: mealPortionPriorRepository
         )
         self.intelligencePreferences = intelligencePreferences
         self.providerConfiguration = providerConfiguration
@@ -116,6 +119,7 @@ final class Dependencies {
         self.persistenceWriteGate = writeGate
         self.confirmationRepository = confirmationRepository
         self.confirmationCoordinator = confirmationCoordinator
+        self.mealPortionPriorRepository = mealPortionPriorRepository
         self.agentRepository = agentRepository
         self.confirmedFoodHistoryRepository = confirmedFoodHistory
         self.providerGovernanceRepository = governanceRepository

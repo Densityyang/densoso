@@ -113,7 +113,7 @@ def main() -> int:
     require_text(
         ROOT / "Packages/DensosoDomain/Sources/DensosoDomain/AlgorithmVersions.swift",
         [
-            'public static let calorieAccounting = "calorie-accounting-v2"',
+            'public static let calorieAccounting = "calorie-accounting-v3"',
             'public static let mealEstimator = "meal-estimator-v2"',
             'public static let portionEstimator = "portion-estimator-v2"',
         ],

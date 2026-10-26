@@ -46,6 +46,7 @@ public struct MealQuantityEvidenceResolver: Sendable {
         _ evidence: MealQuantityEvidence,
         validatedUserReportedGrams: Double? = nil,
         validatedPackageGramsPerServing: Double? = nil,
+        personalPrior: HouseholdPortionPrior? = nil,
         allowLowConfidenceModelEstimate: Bool = false
     ) throws -> PortionEvidence {
         if let validatedUserReportedGrams {
@@ -68,7 +69,9 @@ public struct MealQuantityEvidenceResolver: Sendable {
             let count = try requirePositive(evidence.value)
             guard count <= 100,
                   let unit = normalizeUnit(evidence.unit),
-                  let prior = prior(for: unit, kind: evidence.kind) else {
+                  isCompatibleUnit(unit, kind: evidence.kind),
+                  let prior = applicablePersonalPrior(personalPrior, unit: unit)
+                    ?? prior(for: unit, kind: evidence.kind) else {
                 throw MealQuantityEvidenceResolutionError.missingPortionEvidence
             }
             guard prior.p90Grams * count <= 5_000 else {
@@ -156,42 +159,81 @@ public struct MealQuantityEvidenceResolver: Sendable {
         return normalized.isEmpty ? nil : normalized
     }
 
+    private func isCompatibleUnit(_ unit: String, kind: MealQuantityEvidence.Kind) -> Bool {
+        guard let canonicalUnit = MealPortionPriorCorrection.normalizeSupportedUnit(unit) else {
+            return false
+        }
+        switch kind {
+        case .household:
+            return ["bowl", "smallbowl", "largebowl", "fist", "palm", "cup", "slice"]
+                .contains(canonicalUnit)
+        case .count:
+            return ["egg", "dumpling", "slice", "banana", "apple"].contains(canonicalUnit)
+        default:
+            return false
+        }
+    }
+
+    private func applicablePersonalPrior(
+        _ prior: HouseholdPortionPrior?,
+        unit: String
+    ) -> HouseholdPortionPrior? {
+        guard let canonicalUnit = MealPortionPriorCorrection.normalizeSupportedUnit(unit) else {
+            return nil
+        }
+        guard let prior,
+              MealPortionPriorCorrection.normalizeSupportedUnit(prior.unit) == canonicalUnit,
+              prior.p10Grams.isFinite,
+              prior.p50Grams.isFinite,
+              prior.p90Grams.isFinite,
+              prior.p10Grams > 0,
+              prior.p10Grams <= prior.p50Grams,
+              prior.p50Grams <= prior.p90Grams,
+              prior.p90Grams <= 5_000 else {
+            return nil
+        }
+        return prior
+    }
+
     private func prior(
         for unit: String,
         kind: MealQuantityEvidence.Kind
     ) -> HouseholdPortionPrior? {
+        guard let canonicalUnit = MealPortionPriorCorrection.normalizeSupportedUnit(unit) else {
+            return nil
+        }
         let range: (Double, Double, Double)?
-        switch (kind, unit) {
-        case (.household, "bowl"), (.household, "碗"):
+        switch (kind, canonicalUnit) {
+        case (.household, "bowl"):
             range = (100, 160, 240)
-        case (.household, "smallbowl"), (.household, "小碗"):
+        case (.household, "smallbowl"):
             range = (70, 120, 180)
-        case (.household, "largebowl"), (.household, "大碗"):
+        case (.household, "largebowl"):
             range = (150, 230, 340)
-        case (.household, "fist"), (.household, "拳"), (.household, "拳头"):
+        case (.household, "fist"):
             range = (90, 150, 220)
-        case (.household, "palm"), (.household, "掌心"), (.household, "掌"):
+        case (.household, "palm"):
             range = (70, 100, 145)
-        case (.household, "cup"), (.household, "杯"):
+        case (.household, "cup"):
             range = (180, 240, 320)
-        case (.household, "slice"), (.household, "片"):
+        case (.household, "slice"):
             range = (20, 30, 45)
-        case (.count, "egg"), (.count, "鸡蛋"), (.count, "蛋"):
+        case (.count, "egg"):
             range = (40, 52, 68)
-        case (.count, "dumpling"), (.count, "饺子"):
+        case (.count, "dumpling"):
             range = (14, 22, 32)
-        case (.count, "slice"), (.count, "片"):
+        case (.count, "slice"):
             range = (20, 30, 45)
-        case (.count, "banana"), (.count, "香蕉"):
+        case (.count, "banana"):
             range = (75, 120, 190)
-        case (.count, "apple"), (.count, "苹果"):
+        case (.count, "apple"):
             range = (100, 180, 280)
         default:
             range = nil
         }
         guard let range else { return nil }
         return HouseholdPortionPrior(
-            unit: unit,
+            unit: canonicalUnit,
             p10Grams: range.0,
             p50Grams: range.1,
             p90Grams: range.2,

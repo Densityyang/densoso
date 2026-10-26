@@ -142,9 +142,24 @@ struct PendingActionConfirmationCard: View {
                                     }
                                     ForEach(dish.evidence.indices, id: \.self) { index in
                                         let evidence = dish.evidence[index]
-                                        Text("\(evidence.grade.rawValue)：\(evidence.summary)")
+                                        if let correction = MealPortionPriorCorrection.correction(from: evidence) {
+                                            Text("确认后保存个人份量先验：\(correction.unitCount.formatted(.number.precision(.fractionLength(0...2)))) \(MealPortionPriorPresentation.unitLabel(correction.unit)) ≈ \(Int(correction.totalGrams.rounded()))g")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        } else if let usage = MealPortionPriorUsage.usage(from: evidence) {
+                                            Text("估算采用个人份量先验：\(usage.count.formatted(.number.precision(.fractionLength(0...2)))) \(MealPortionPriorPresentation.unitLabel(usage.unit))（每单位 \(Int(usage.p10Grams.rounded()))–\(Int(usage.p90Grams.rounded()))g，中值 \(Int(usage.p50Grams.rounded()))g）")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        } else if evidence.sourceID == MealPortionPriorCorrection.evidenceSourceID
+                                            || evidence.sourceID == MealPortionPriorUsage.evidenceSourceID {
+                                            Text("无法验证的份量先验")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        } else {
+                                            Text("\(evidence.grade.rawValue)：\(evidence.summary)")
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
+                                        }
                                     }
                                 }
                                 .padding(.top, 4)

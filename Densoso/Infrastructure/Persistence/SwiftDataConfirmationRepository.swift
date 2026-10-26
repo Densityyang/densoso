@@ -210,6 +210,12 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                 case .meal(let draft):
                     let meal = try makeMeal(from: draft, sourceActionKey: action.idempotencyKey)
                     modelContext.insert(meal)
+                    try SwiftDataMealPortionPriorRepository.recordConfirmedCorrections(
+                        in: modelContext,
+                        ingredients: draft.dishes.flatMap(\.ingredients),
+                        sourceActionKey: action.idempotencyKey,
+                        now: now
+                    )
                     localRecordID = meal.id
                     affectedDate = meal.date
                     healthSyncState = .pending

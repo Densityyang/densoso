@@ -853,13 +853,45 @@ final class DensosoMigrationTests: XCTestCase {
     }
 
     private func openCurrentStore(at url: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV10.self)
         let configuration = ModelConfiguration("Densoso", schema: schema, url: url)
         return try ModelContainer(
             for: schema,
             migrationPlan: DensosoMigrationPlan.self,
             configurations: [configuration]
         )
+    }
+
+    func testV9StoreMigratesToV10WithPreMigrationBackupAndRetrySafeOpen() throws {
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        let sourceSchema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let sourceConfiguration = ModelConfiguration("Densoso", schema: sourceSchema, url: location.storeURL)
+        var sourceContainer: ModelContainer? = try ModelContainer(
+            for: sourceSchema,
+            configurations: [sourceConfiguration]
+        )
+        var sourceContext: ModelContext? = ModelContext(sourceContainer!)
+        sourceContext?.insert(MealRecord(
+            date: Date(timeIntervalSince1970: 1_750_000_000),
+            totalCaloriesKcal: 420
+        ))
+        try sourceContext?.save()
+        sourceContext = nil
+        sourceContainer = nil
+
+        let migrated = PersistenceBootstrap.make(storeURL: location.storeURL)
+        XCTAssertEqual(migrated.state, .writable)
+        XCTAssertNotNil(migrated.backupManifest)
+        let context = ModelContext(migrated.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MealRecord>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<PersonalMealPortionPriorRecord>()), 0)
+
+        let reopened = PersistenceBootstrap.make(storeURL: location.storeURL)
+        XCTAssertEqual(reopened.state, .writable)
+        let reopenedContext = ModelContext(reopened.container)
+        XCTAssertEqual(try reopenedContext.fetchCount(FetchDescriptor<MealRecord>()), 1)
+        XCTAssertEqual(try reopenedContext.fetchCount(FetchDescriptor<PersonalMealPortionPriorRecord>()), 0)
     }
 
     private static func dayKey(_ date: Date) -> String {

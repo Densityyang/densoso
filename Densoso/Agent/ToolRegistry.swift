@@ -8,22 +8,25 @@ final class ToolRegistry {
     private let todayHealthStateProvider: TodayHealthStateProvider
     private let healthHistoryProvider: HealthHistoryProvider
     private let goalProfileProvider: GoalProfileProvider
+    private let mealPortionPriorRepository: (any MealPortionPriorRepository)?
 
     init(
         todayHealthStateProvider: @escaping TodayHealthStateProvider = { _ in nil },
         healthHistoryProvider: @escaping HealthHistoryProvider = { _, _ in [] },
-        goalProfileProvider: @escaping GoalProfileProvider = { _ in nil }
+        goalProfileProvider: @escaping GoalProfileProvider = { _ in nil },
+        mealPortionPriorRepository: (any MealPortionPriorRepository)? = nil
     ) {
         self.todayHealthStateProvider = todayHealthStateProvider
         self.healthHistoryProvider = healthHistoryProvider
         self.goalProfileProvider = goalProfileProvider
+        self.mealPortionPriorRepository = mealPortionPriorRepository
     }
 
     var toolDefinitions: [ToolSchema] { allTools.map(\.definition) }
 
     private var allTools: [any AgentTool] {
         [
-            LogMealTool(),
+            LogMealTool(mealPortionPriorRepository: mealPortionPriorRepository),
             LogWeightTool(),
             CreateWorkoutPlanTool(),
             CreateTrainingPlanTool(),

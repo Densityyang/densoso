@@ -8,7 +8,7 @@ struct DiagnosticsRuntimeInfo: Codable, Equatable, Sendable {
     let appBuild: String
     let schemaVersion: String
 
-    static func current(bundle: Bundle = .main, schemaVersion: String = "9.0.0") -> Self {
+    static func current(bundle: Bundle = .main, schemaVersion: String = "10.0.0") -> Self {
         let version = ProcessInfo.processInfo.operatingSystemVersion
         return Self(
             osVersion: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)",

@@ -10,8 +10,8 @@ final class ExportService {
     var isExporting = false
     var lastError: String?
 
-    private static let formatVersion = 5
-    private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5]
+    private static let formatVersion = 6
+    private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5, 6]
     private static let backupReadBatchSize = 64
 
     struct BackupDocument: Codable {
@@ -36,6 +36,7 @@ final class ExportService {
         let dailyMetricsProjection: [DailyMetricsProjectionExport]?
         let dailyCheckIns: [DailyCheckInExport]?
         let userPreferences: [UserPreferenceExport]?
+        let mealPortionPriors: [MealPortionPriorExport]?
 
         struct UserProfileExport: Codable {
             let name: String
@@ -378,6 +379,20 @@ final class ExportService {
             let createdAt: Date
         }
 
+        struct MealPortionPriorExport: Codable {
+            let id: UUID
+            let priorKey: String
+            let foodID: String?
+            let foodName: String
+            let unit: String
+            let p10Grams: Double
+            let p50Grams: Double
+            let p90Grams: Double
+            let sourceActionKey: String?
+            let createdAt: Date
+            let updatedAt: Date
+        }
+
         struct DailyMetricsProjectionExport: Codable {
             let date: Date
             let projectionVersion: String
@@ -458,6 +473,7 @@ final class ExportService {
         case checksumMismatch
         case invalidDailyCheckIn
         case invalidUserPreference
+        case invalidMealPortionPrior
         case invalidTrainingPlan
 
         var errorDescription: String? {
@@ -466,6 +482,7 @@ final class ExportService {
             case .checksumMismatch: "The backup file did not pass its integrity check."
             case .invalidDailyCheckIn: "The backup contains an invalid user-reported daily check-in."
             case .invalidUserPreference: "The backup contains an invalid user-reported preference."
+            case .invalidMealPortionPrior: "The backup contains an invalid personal meal portion prior."
             case .invalidTrainingPlan: "The backup contains an invalid confirmed training plan."
             }
         }
@@ -565,6 +582,44 @@ final class ExportService {
                 createdAt: source.createdAt
             )
         }
+        var priorKeys = Set<String>()
+        var priorIDs = Set<UUID>()
+        let mealPortionPriors = try (document.payload.mealPortionPriors ?? []).map { source in
+            let foodName = source.foodName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !foodName.isEmpty,
+                  foodName.count <= 120,
+                  let unit = MealPortionPriorCorrection.normalizeSupportedUnit(source.unit),
+                  let expectedKey = MealPortionPriorStorageKey.make(
+                    foodID: source.foodID,
+                    foodName: foodName,
+                    unit: unit
+                  ),
+                  source.priorKey == expectedKey,
+                  source.p10Grams.isFinite,
+                  source.p50Grams.isFinite,
+                  source.p90Grams.isFinite,
+                  (0.1...5_000).contains(source.p10Grams),
+                  source.p10Grams <= source.p50Grams,
+                  source.p50Grams <= source.p90Grams,
+                  source.p90Grams <= 5_000,
+                  priorKeys.insert(source.priorKey).inserted,
+                  priorIDs.insert(source.id).inserted else {
+                throw BackupError.invalidMealPortionPrior
+            }
+            return BackupPayload.MealPortionPriorExport(
+                id: source.id,
+                priorKey: expectedKey,
+                foodID: source.foodID,
+                foodName: foodName,
+                unit: unit,
+                p10Grams: source.p10Grams,
+                p50Grams: source.p50Grams,
+                p90Grams: source.p90Grams,
+                sourceActionKey: source.sourceActionKey,
+                createdAt: source.createdAt,
+                updatedAt: source.updatedAt
+            )
+        }
         let legacyWeightEntries: [UserProfile.WeightEntry] = profileSource.flatMap { source in
             guard let data = source.weightHistoryJSON.data(using: .utf8) else { return nil }
             return try? JSONDecoder().decode([UserProfile.WeightEntry].self, from: data)
@@ -609,6 +664,7 @@ final class ExportService {
             try context.delete(model: GoalProfileRecord.self)
             try context.delete(model: DailyCheckInRecord.self)
             try context.delete(model: UserPreferenceRecord.self)
+            try context.delete(model: PersonalMealPortionPriorRecord.self)
             try context.delete(model: DailyHealthSnapshotRecord.self)
             try context.delete(model: DailyBriefRecord.self)
             try context.delete(model: WeeklyBriefRecord.self)
@@ -674,6 +730,21 @@ final class ExportService {
                     statement: source.statement,
                     sourceRaw: source.sourceRaw,
                     createdAt: source.createdAt
+                ))
+            }
+            for source in mealPortionPriors {
+                context.insert(PersonalMealPortionPriorRecord(
+                    id: source.id,
+                    priorKey: source.priorKey,
+                    foodID: source.foodID,
+                    foodName: source.foodName,
+                    unit: source.unit,
+                    p10Grams: source.p10Grams,
+                    p50Grams: source.p50Grams,
+                    p90Grams: source.p90Grams,
+                    sourceActionKey: source.sourceActionKey,
+                    createdAt: source.createdAt,
+                    updatedAt: source.updatedAt
                 ))
             }
             if sourceRevisions.isEmpty, let source = profileSource {
@@ -927,6 +998,7 @@ final class ExportService {
                 healthDays: snapshots.count,
                 dailyCheckIns: dailyCheckIns.count,
                 userPreferences: userPreferences.count,
+                mealPortionPriors: mealPortionPriors.count,
                 scheduledPlans: (document.payload.scheduleEvents ?? []).filter {
                     ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) != nil
                         || ConfirmedTrainingPlanEntry.decode(notes: $0.notes) != nil
@@ -946,6 +1018,7 @@ final class ExportService {
         let healthDays: Int
         let dailyCheckIns: Int
         let userPreferences: Int
+        let mealPortionPriors: Int
         let scheduledPlans: Int
     }
 
@@ -1019,6 +1092,16 @@ final class ExportService {
                     ? $0.id.uuidString < $1.id.uuidString
                     : $0.createdAt < $1.createdAt
             }
+        let mealPortionPriors = try fetchAllRecords(
+            of: PersonalMealPortionPriorRecord.self,
+            in: context,
+            sortedBy: [
+                SortDescriptor(\PersonalMealPortionPriorRecord.foodName),
+                SortDescriptor(\PersonalMealPortionPriorRecord.unit),
+            ]
+        ).sorted {
+            $0.priorKey < $1.priorKey
+        }
         let healthSnapshots = try fetchAllRecords(
             of: DailyHealthSnapshotRecord.self,
             in: context,
@@ -1294,6 +1377,21 @@ final class ExportService {
                     statement: source.statement,
                     sourceRaw: source.sourceRaw,
                     createdAt: source.createdAt
+                )
+            },
+            mealPortionPriors: mealPortionPriors.map { source in
+                .init(
+                    id: source.id,
+                    priorKey: source.priorKey,
+                    foodID: source.foodID,
+                    foodName: source.foodName,
+                    unit: source.unit,
+                    p10Grams: source.p10Grams,
+                    p50Grams: source.p50Grams,
+                    p90Grams: source.p90Grams,
+                    sourceActionKey: source.sourceActionKey,
+                    createdAt: source.createdAt,
+                    updatedAt: source.updatedAt
                 )
             }
         )

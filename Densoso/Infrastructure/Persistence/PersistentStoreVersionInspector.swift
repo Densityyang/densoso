@@ -11,6 +11,10 @@ enum PersistentStoreVersionInspector {
         guard let sourceHashes = try? modelVersionHashesFromIsolatedCopy(of: storeURL) else {
             return nil
         }
+        if let v10Hashes = referenceHashes(for: DensosoSchemaV10.self),
+           sourceHashes == v10Hashes {
+            return "10.0.0"
+        }
         if let v9Hashes = referenceHashes(for: DensosoSchemaV9.self),
            sourceHashes == v9Hashes {
             return "9.0.0"

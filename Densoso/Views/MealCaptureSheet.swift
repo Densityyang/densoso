@@ -21,6 +21,7 @@ struct MealCaptureSheet: View {
     @State private var textOnlyFallback: String?
     @State private var selectedLocalFoodID: String?
     @State private var portionAnswerText = ""
+    @State private var personalPortionUnitText = ""
     @State private var isPreparing = false
     @State private var isStagingLocal = false
     @State private var errorMessage: String?
@@ -78,6 +79,10 @@ struct MealCaptureSheet: View {
                                 .font(.footnote)
                         }
                         TextField(portionAnswerPrompt, text: $portionAnswerText)
+                        TextField("校准关系的单位数量（可选，例如 1 碗）", text: $personalPortionUnitText)
+                        Text("上方本次克重 ÷ 这里的单位数量 = 每单位克重。例如本次 180g、这里填 1 碗，就保存“1 碗≈180g”。只有确认这餐后才会写入。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                         Text("图片和 OCR 原文只在本机处理；这里仅创建待确认草稿，确认前不会写入健康记录。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -508,6 +513,7 @@ struct MealCaptureSheet: View {
                 review: review,
                 selectedFoodID: explicitSelection,
                 correctedPortion: correction,
+                personalPortionUnitText: personalPortionUnitText,
                 userNote: supplementalText
             )
             transitionImageState(.resolved)

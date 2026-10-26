@@ -139,7 +139,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "Packages/DensosoDomain/Sources/DensosoDomain/AlgorithmVersions.swift",
             (
-                'public static let calorieAccounting = "calorie-accounting-v2"',
+                'public static let calorieAccounting = "calorie-accounting-v3"',
                 'public static let dailyMetricsProjection = "daily-metrics-projection-v1"',
                 'public static let mealEstimator = "meal-estimator-v2"',
                 'public static let portionEstimator = "portion-estimator-v2"',
@@ -1534,6 +1534,16 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "Densoso/Persistence/Schemas/DensosoSchemaV10.swift",
+            (
+                "enum DensosoSchemaV10: VersionedSchema",
+                "DensosoSchemaV9.models + [PersonalMealPortionPriorRecord.self]",
+                "@Attribute(.unique) var priorKey: String",
+                "var p50Grams: Double",
+            ),
+            errors,
+        )
+        require(
             "Densoso/Persistence/DensosoMigrationPlan.swift",
             (
                 "DensosoSchemaV7.self",
@@ -1542,6 +1552,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 ".lightweight(fromVersion: DensosoSchemaV7.self, toVersion: DensosoSchemaV8.self)",
                 "DensosoSchemaV9.self",
                 ".lightweight(fromVersion: DensosoSchemaV8.self, toVersion: DensosoSchemaV9.self)",
+                "DensosoSchemaV10.self",
+                ".lightweight(fromVersion: DensosoSchemaV9.self, toVersion: DensosoSchemaV10.self)",
             ),
             errors,
         )

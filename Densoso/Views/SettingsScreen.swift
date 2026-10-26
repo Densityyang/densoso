@@ -52,6 +52,7 @@ struct SettingsScreen: View {
 
                     intelligenceSection
                     profileSection
+                    MealPortionPriorSettingsSection()
                     goalsSection
                     capabilitySections
                     notificationSection
@@ -1086,7 +1087,8 @@ struct ShareSheet: UIViewControllerRepresentable {
 }
 
 #Preview {
+    let persistence = PersistenceBootstrap.make(inMemory: true)
     SettingsScreen()
-        .modelContainer(for: [UserProfile.self, HealthKitImportCursor.self], inMemory: true)
-        .environment(Dependencies())
+        .modelContainer(persistence.container)
+        .environment(Dependencies(modelContainer: persistence.container))
 }

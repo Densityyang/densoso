@@ -56,7 +56,7 @@ meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
 - Broad energy ranges retain their likely point estimate with a weak evidence
   grade. The app asks at most one high-value question for each meal capture.
 - V2 estimates record `meal-estimator-v2`, `portion-estimator-v2`, and
-  `calorie-accounting-v2` in meal/evidence version fields for exports and review.
+  `calorie-accounting-v3` in meal/evidence version fields for exports and review.
 - `MealEstimator` propagates ingredient intervals, keeps raw/cooked distinct,
   treats oil/sugar/sauce as explicit ingredients, avoids duplicate oil for cooked
   composite entries, and preserves unknown macros as nil in the canonical range

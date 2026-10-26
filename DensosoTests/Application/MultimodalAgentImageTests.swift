@@ -165,7 +165,7 @@ final class MultimodalAgentImageTests: XCTestCase {
         }
         let totalEnergy = try XCTUnwrap(meal.totalNutrients?.energyKcal)
         XCTAssertEqual(totalEnergy.likely, 581.9, accuracy: 0.001)
-        XCTAssertEqual(meal.caloriePresentation, .needsClarification(likelyKcal: 582))
+        XCTAssertEqual(meal.caloriePresentation, .needsClarification(likelyKcal: 575))
         XCTAssertEqual(
             totalEnergy.likely,
             meal.dishes.reduce(0) { $0 + $1.nutrients.energyKcal.likely },
@@ -173,9 +173,9 @@ final class MultimodalAgentImageTests: XCTestCase {
         )
         XCTAssertEqual(meal.dishes.flatMap(\.evidence).filter {
             $0.sourceID == "calorie-accounting"
-                && $0.sourceVersion == "calorie-accounting-v2"
+                && $0.sourceVersion == "calorie-accounting-v3"
         }.count, 3)
-        XCTAssertTrue(action.payload.summary.contains("约 582 kcal，可信度低"))
+        XCTAssertTrue(action.payload.summary.contains("约 575 kcal，可信度低"))
         XCTAssertFalse(action.payload.summary.contains("–"))
         let toolResults = Self.toolResultContents(in: provider.recordedRequests())
         XCTAssertEqual(toolResults.filter { $0.contains("clarification_required") }.count, 1)

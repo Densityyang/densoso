@@ -38,7 +38,7 @@ does not authorize Phase 3 without explicit user approval.
 ## Cumulative schema extension
 
 The original Gate 2 acceptance remains the historical V1/V2-to-V3 migration
-record. The current cumulative main-PR branch extends the schema through V9;
+record. The current cumulative main-PR branch extends the schema through V10;
 V5-to-V6 adds a HealthKit sample-ID/day index with pending projection-day and
 deletion state, and rewrites legacy daily snapshot payloads to compact
 summaries. The migration groups workouts by local day and uses a single
@@ -49,10 +49,14 @@ tombstone flag while preserving its stored column. V8-to-V9 adds the isolated
 `AgentRequestCostBudgetRecord` sidecar without rewriting V5 request rows. When an
 older interrupted request has prior provider rounds but no provider/model
 identity in its V5 ledger, the sidecar is marked unavailable and recovery stops
-before another provider call rather than risking a silent model switch. Unknown
+before another provider call rather than risking a silent model switch. V9-to-V10
+adds an isolated personal meal portion-prior table. It stores a user-entered
+unit-to-grams relation only when the matching meal confirmation transaction
+commits; retries are idempotent, and bootstrap retains the verified
+pre-migration backup and restore path. Unknown
 pricing on a new request is recorded as unavailable and does not block a
 request that remains within its durable round, tool and time limits. Gate 2 CI covers V1/V2 disk
-fixtures reopened at the current schema, the V5-to-V6 through V8-to-V9
+fixtures reopened at the current schema, the V5-to-V6 through V9-to-V10
 migrations, and request-budget recovery behavior.
 
 ## Non-goals
@@ -128,6 +132,11 @@ to domain/persistence behavior and have a dedicated evidence artifact.
     conservative estimate across resume, covered by
     `DensosoMigrationTests.testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity` and
     `AgentRequestResumeTests.testPerRequestCostReservationPersistsAndCannotResetOnResume`.
+
+18. V9-to-V10 creates the personal meal portion-prior table without rewriting
+    earlier meal or preference rows. Bootstrap backs up the V9 store before
+    migration and safely reopens the migrated store on retry, covered by
+    `DensosoMigrationTests.testV9StoreMigratesToV10WithPreMigrationBackupAndRetrySafeOpen`.
 
 The restore routine verifies store/WAL/SHM checksums, stages replacement files,
 and rolls back ordinary file-operation errors. The immutable migration backup is

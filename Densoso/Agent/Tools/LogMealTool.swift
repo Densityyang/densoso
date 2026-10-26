@@ -2,6 +2,12 @@ import DensosoDomain
 import Foundation
 
 struct LogMealTool: ConfirmationRequiredTool {
+    let mealPortionPriorRepository: (any MealPortionPriorRepository)?
+
+    init(mealPortionPriorRepository: (any MealPortionPriorRepository)? = nil) {
+        self.mealPortionPriorRepository = mealPortionPriorRepository
+    }
+
     var definition: ToolSchema {
         .strictObject(
             name: "log_meal",
@@ -200,6 +206,11 @@ struct LogMealTool: ConfirmationRequiredTool {
                     in: userText,
                     matching: ingredientTerms
                 )
+                let correctionPriorEvidence = MealPortionPriorCorrection.parse(
+                    userText: userText,
+                    matching: ingredientTerms,
+                    gramsParser: explicitGramsParser
+                )
                 let quantityEvidence: MealQuantityEvidence
                 if ingredient.quantityEvidence.kind == .photoEstimate,
                    !context.currentMealHasImage(),
@@ -219,12 +230,25 @@ struct LogMealTool: ConfirmationRequiredTool {
                 } else {
                     quantityEvidence = ingredient.quantityEvidence
                 }
+                let personalPrior: HouseholdPortionPrior?
+                if (quantityEvidence.kind == .household || quantityEvidence.kind == .count),
+                   let quantityUnit = quantityEvidence.unit,
+                   MealPortionPriorCorrection.normalizeSupportedUnit(quantityUnit) != nil {
+                    personalPrior = try await mealPortionPriorRepository?.prior(
+                        foodID: selectedFood.entry.localFoodID,
+                        foodName: selectedFood.entry.name,
+                        unit: quantityUnit
+                    )
+                } else {
+                    personalPrior = nil
+                }
                 let portionEvidence: PortionEvidence
                 do {
                     portionEvidence = try quantityResolver.resolve(
                         quantityEvidence,
                         validatedUserReportedGrams: userReportedGrams,
                         validatedPackageGramsPerServing: validatedPackageServingGrams,
+                        personalPrior: personalPrior,
                         allowLowConfidenceModelEstimate: context.currentMealClarificationWasAnswered()
                     )
                 } catch MealQuantityEvidenceResolutionError.missingPortionEvidence {
@@ -239,11 +263,20 @@ struct LogMealTool: ConfirmationRequiredTool {
                 } catch {
                     throw DraftError.invalidMeal
                 }
+                let personalPriorUsageEvidence: EvidenceSnapshot?
+                if let personalPrior,
+                   case .household(let resolvedPrior, let count) = portionEvidence,
+                   resolvedPrior == personalPrior,
+                   let usage = MealPortionPriorUsage(prior: resolvedPrior, count: count) {
+                    personalPriorUsageEvidence = usage.evidenceSnapshot
+                } else {
+                    personalPriorUsageEvidence = nil
+                }
                 let portion = try portionEstimator.estimate(
                     evidence: [portionEvidence],
                     food: selectedFood
                 )
-                let imageEvidence: [EvidenceSnapshot] = ingredientIndex == 0
+                var imageEvidence: [EvidenceSnapshot] = ingredientIndex == 0
                     ? agentImageEvidence.map { evidence in
                         EvidenceSnapshot(
                             grade: evidence.kind == .barcode || evidence.kind == .nutritionLabel
@@ -256,6 +289,12 @@ struct LogMealTool: ConfirmationRequiredTool {
                         )
                     }
                     : []
+                if let correctionPriorEvidence {
+                    imageEvidence.append(correctionPriorEvidence.evidenceSnapshot)
+                }
+                if let personalPriorUsageEvidence {
+                    imageEvidence.append(personalPriorUsageEvidence)
+                }
                 ingredients.append(
                     MealIngredientEstimationInput(
                         label: ingredient.name,

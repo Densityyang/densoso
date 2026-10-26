@@ -6,7 +6,7 @@ final class MealQuantityEvidenceTests: XCTestCase {
     func testV2MealAlgorithmVersionsAreExplicit() {
         XCTAssertEqual(MealEstimator.algorithmVersion, "meal-estimator-v2")
         XCTAssertEqual(PortionEstimator.algorithmVersion, "portion-estimator-v2")
-        XCTAssertEqual(CaloriePresentationPolicy.algorithmVersion, "calorie-accounting-v2")
+        XCTAssertEqual(CaloriePresentationPolicy.algorithmVersion, "calorie-accounting-v3")
     }
 
     func testCaloriePresentationUsesLikelyPointAndRelativeWidthThresholds() throws {

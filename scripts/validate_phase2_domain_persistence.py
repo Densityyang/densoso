@@ -54,6 +54,7 @@ def main() -> int:
         "DensosoSchemaV7.swift",
         "DensosoSchemaV8.swift",
         "DensosoSchemaV9.swift",
+        "DensosoSchemaV10.swift",
     ):
         if not (schemas / name).is_file():
             errors.append(f"missing Densoso/Persistence/Schemas/{name}")
@@ -69,6 +70,7 @@ def main() -> int:
             "DensosoSchemaV6.self",
             "DensosoSchemaV8.self",
             "DensosoSchemaV9.self",
+            "DensosoSchemaV10.self",
             "var sleepSamplesByWakeDay: [Date: [HealthSampleSnapshot]] = [:]",
             "sleepSamplesByWakeDay[wakeDay, default: []].append(sample)",
             "for wakeDay in sleepSamplesByWakeDay.keys.sorted()",
@@ -77,6 +79,7 @@ def main() -> int:
             "let dayWorkouts = workoutsByDay[day] ?? []",
             "for (sampleID, location) in locationsBySampleID {",
             ".lightweight(fromVersion: DensosoSchemaV8.self, toVersion: DensosoSchemaV9.self)",
+            ".lightweight(fromVersion: DensosoSchemaV9.self, toVersion: DensosoSchemaV10.self)",
         ],
         errors,
     )
@@ -171,7 +174,7 @@ def main() -> int:
             "backupProvider",
             "DensosoDiagnostic",
             "isStoredInMemoryOnly: true",
-            "Schema(versionedSchema: DensosoSchemaV9.self)",
+            "Schema(versionedSchema: DensosoSchemaV10.self)",
         ],
         errors,
     )
@@ -190,6 +193,7 @@ def main() -> int:
             "DensosoSchemaV6.self",
             "DensosoSchemaV8.self",
             "DensosoSchemaV9.self",
+            "DensosoSchemaV10.self",
             "DensosoSchemaV2.self",
         ],
         errors,
@@ -252,6 +256,7 @@ def main() -> int:
             "testV5MigrationMovesRawSamplesIntoIndexAndDailySummary",
             "testV5MigrationIndexesSleepSamplesAcrossMidnightAndAdjacentWindows",
             "testV7ToV9PreservesHealthKitSampleIndexState",
+            "testV9StoreMigratesToV10WithPreMigrationBackupAndRetrySafeOpen",
             "testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity",
             "existingDaySnapshot.healthKitSampleSummary?.workoutEffort.first?.score",
         ],

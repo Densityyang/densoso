@@ -74,7 +74,7 @@ final class ExportServiceTests: XCTestCase {
     }
 
     func testRestorePagesInterruptedRequestHistoryAcross64RowBoundary() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV5.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV10.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -197,7 +197,7 @@ final class ExportServiceTests: XCTestCase {
             ExportService.BackupDocument.self,
             from: Data(contentsOf: url)
         )
-        XCTAssertEqual(exportedDocument.formatVersion, 5)
+        XCTAssertEqual(exportedDocument.formatVersion, 6)
 
         let (targetContainer, target) = try makeContext()
         _ = targetContainer
@@ -514,6 +514,23 @@ final class ExportServiceTests: XCTestCase {
             sourceRaw: UserPreferenceSource.userReported.rawValue,
             createdAt: date
         ))
+        let priorKey = try XCTUnwrap(MealPortionPriorStorageKey.make(
+            foodID: "rice-id",
+            foodName: "米饭",
+            unit: "碗"
+        ))
+        source.insert(PersonalMealPortionPriorRecord(
+            priorKey: priorKey,
+            foodID: "rice-id",
+            foodName: "米饭",
+            unit: "碗",
+            p10Grams: 150,
+            p50Grams: 180,
+            p90Grams: 210,
+            sourceActionKey: "confirmed-meal-action",
+            createdAt: date,
+            updatedAt: date
+        ))
         let unconfirmedPreference = ActionPayload.userPreference(UserPreference(
             category: .communication,
             statement: "未确认的偏好",
@@ -585,7 +602,7 @@ final class ExportServiceTests: XCTestCase {
             ExportService.BackupDocument.self,
             from: Data(contentsOf: url)
         )
-        XCTAssertEqual(exported.formatVersion, 5)
+        XCTAssertEqual(exported.formatVersion, 6)
         XCTAssertEqual(exported.payload.weightRecords?.count, 1)
         XCTAssertEqual(exported.payload.profileRevisions?.count, 1)
         XCTAssertEqual(exported.payload.dailyMetricsProjection?.first?.sourceFingerprint, "fixture-fingerprint")
@@ -593,6 +610,7 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(exported.payload.goalProfiles?.count, 1)
         XCTAssertEqual(exported.payload.dailyCheckIns?.count, 1)
         XCTAssertEqual(exported.payload.userPreferences?.count, 1)
+        XCTAssertEqual(exported.payload.mealPortionPriors?.count, 1)
         XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("未确认的偏好"))
         XCTAssertEqual(exported.payload.dailyBriefs?.count, 1)
         XCTAssertEqual(exported.payload.weeklyBriefs?.count, 1)
@@ -628,6 +646,10 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(summary.weights, 1)
         XCTAssertEqual(summary.healthDays, 1)
         XCTAssertEqual(summary.dailyCheckIns, 1)
+        XCTAssertEqual(summary.mealPortionPriors, 1)
+        let restoredPrior = try XCTUnwrap(target.fetch(FetchDescriptor<PersonalMealPortionPriorRecord>()).first)
+        XCTAssertEqual(restoredPrior.foodName, "米饭")
+        XCTAssertEqual(restoredPrior.p50Grams, 180, accuracy: 0.001)
         XCTAssertEqual(summary.userPreferences, 1)
         XCTAssertEqual(summary.scheduledPlans, 0)
         XCTAssertEqual(try target.fetch(FetchDescriptor<WeightRecord>()).first?.kilograms, 70.5)
@@ -763,6 +785,7 @@ final class ExportServiceTests: XCTestCase {
             ScheduleEvent.self, WeightRecord.self, ProfileRevisionRecord.self, GoalProfileRecord.self, DailyHealthSnapshotRecord.self,
             DailyBriefRecord.self, WeeklyBriefRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
             AgentRequestRecord.self, DailyCheckInRecord.self, UserPreferenceRecord.self,
+            PersonalMealPortionPriorRecord.self,
             ConsentRecord.self,
             PendingActionRecord.self, CommittedActionReceiptRecord.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)

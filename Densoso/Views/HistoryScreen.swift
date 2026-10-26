@@ -163,6 +163,22 @@ struct HistoryScreen: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
+                            if let sourceVersions = MealRecordAuditPresentation.sourceVersionSummary(
+                                evidenceData: meal.evidenceData
+                            ) {
+                                Text(sourceVersions)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(2)
+                            }
+                            if let portionCalibration = MealRecordAuditPresentation.portionCalibrationSummary(
+                                evidenceData: meal.evidenceData
+                            ) {
+                                Label(portionCalibration, systemImage: "checkmark.circle")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
                         }
 
                         Spacer()
