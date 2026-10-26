@@ -1,4 +1,5 @@
 import Foundation
+import DensosoDomain
 import XCTest
 @testable import Densoso
 
