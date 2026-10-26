@@ -57,7 +57,13 @@ final class GetMetricsToolTests: XCTestCase {
         let day = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
         let pending = DailyMetrics(
             date: day,
+            totalIntakeKcal: 1_750,
+            intakeEnergyLowKcal: 1_700,
+            intakeEnergyLikelyKcal: 1_750,
+            intakeEnergyHighKcal: 1_800,
+            mealCount: 1,
             energyQuality: EnergyQuality.unavailable.rawValue,
+            dataCoverageJSON: #"{"intake":true,"protein":false,"fat":false,"carbs":false}"#,
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
             sourceFingerprint: "pending-get-metrics",
             requiresRecompute: true
@@ -72,13 +78,23 @@ final class GetMetricsToolTests: XCTestCase {
         let response = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
         let firstDay = try XCTUnwrap((response["dailyBreakdown"] as? [[String: Any]])?.first)
         let coverage = try XCTUnwrap(firstDay["coverage"] as? [String: Any])
+        let intakeResponse = try XCTUnwrap(response["intake"] as? [String: Any])
+        let intakeTotal = try XCTUnwrap(intakeResponse["total"] as? [String: Any])
+        let intakeCoverage = try XCTUnwrap(intakeResponse["coverage"] as? [String: Any])
         let expenditureCoverage = try XCTUnwrap(coverage["expenditure"] as? [String: Any])
+        let dailyIntakeCoverage = try XCTUnwrap(coverage["intake"] as? [String: Any])
 
         XCTAssertEqual(firstDay["energyQuality"] as? String, EnergyQuality.unavailable.rawValue)
         XCTAssertEqual(firstDay["requiresRecompute"] as? Bool, true)
         XCTAssertEqual(firstDay["projectionVersion"] as? String, AlgorithmVersions.dailyMetricsProjection)
         XCTAssertEqual(expenditureCoverage["pendingRecomputeDays"] as? Int, 1)
         XCTAssertEqual(expenditureCoverage["availableDays"] as? Int, 0)
+        XCTAssertEqual(dailyIntakeCoverage["pendingRecomputeDays"] as? Int, 1)
+        XCTAssertEqual(dailyIntakeCoverage["availableDays"] as? Int, 0)
+        XCTAssertEqual(intakeCoverage["pendingRecomputeDays"] as? Int, 1)
+        XCTAssertEqual(intakeCoverage["availableDays"] as? Int, 0)
+        XCTAssertTrue(intakeTotal["value"] is NSNull)
+        XCTAssertEqual(intakeTotal["availability"] as? String, "pendingRecompute")
     }
 
     func testNoValidDaysReturnsInsufficientDataWithoutZeroTotals() throws {

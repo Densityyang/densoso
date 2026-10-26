@@ -46,7 +46,7 @@ enum DailyMetricsReadModelMapper {
         let nutrition = decodeNutritionCoverage(metric.dataCoverageJSON)
         let intake = DailyMetricsUsabilityPolicy.value(
             intakeRange,
-            availability: .estimated,
+            availability: metric.requiresRecompute ? .pendingRecompute : .estimated,
             hasEvidence: hasCurrentProjectionEvidence && metric.mealCount > 0 && nutrition.intake == true,
             sourceReferences: references
         )
