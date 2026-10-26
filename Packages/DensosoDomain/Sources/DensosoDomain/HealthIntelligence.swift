@@ -979,6 +979,7 @@ public struct HealthIntelligenceEngine: Sendable {
             asOf: currentDay,
             dataCoverage: workoutCoverage == .unknown && !workouts.isEmpty ? .partial : workoutCoverage
         )
+        let bodyMassCoverage = healthReadCoverage(for: [.bodyMass], in: days)
 
         let historical = days.filter { calendar.startOfDay(for: $0.dayStart) < currentDay }
         let domainInputs: [(HealthDomain, Double?, String, HealthDataCoverage)] = [
@@ -989,7 +990,9 @@ public struct HealthIntelligenceEngine: Sendable {
                 current.stepCount != nil ? "activity.steps" : (current.exerciseMinutes != nil ? "activity.exerciseMinutes" : "activity.activeEnergy.kcal"),
                 healthReadCoverage(for: [.stepCount, .exerciseMinutes, .activeEnergy], in: days)),
             (.body, current.weightSamplesKilograms.last, "body.weight.kg",
-                healthReadCoverage(for: [.bodyMass], in: days)),
+                bodyMassCoverage == .unknown && !current.weightSamplesKilograms.isEmpty
+                    ? .partial
+                    : bodyMassCoverage),
         ]
         let domains = domainInputs.map { domain, value, evidenceKey, dataCoverage -> HealthDomainResult in
             let historicValues = historical.compactMap { day -> (date: Date, value: Double)? in
