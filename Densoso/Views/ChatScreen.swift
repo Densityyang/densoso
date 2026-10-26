@@ -27,7 +27,7 @@ struct ChatScreen: View {
     @State private var dailyLoopSnapshot: DailyLoopSnapshot?
     @State private var dailyLoopSnapshotReadError: String?
     @State private var isLoadingDailyLoopSnapshot = true
-    @State private var isRefreshingDailyLoopSnapshot = false
+    @State private var dailyLoopSnapshotRefreshQueue = DailyLoopSnapshotRefreshQueue()
     @State private var didRecordInitialTodayContent = false
 
     var body: some View {
@@ -453,36 +453,41 @@ struct ChatScreen: View {
     }
 
     private func refreshDailyLoopSnapshot(refreshHealth: Bool = false) async {
-        guard !isRefreshingDailyLoopSnapshot else { return }
-        isRefreshingDailyLoopSnapshot = true
+        guard case .start(var passRefreshesHealth) = dailyLoopSnapshotRefreshQueue.request(
+            refreshHealth: refreshHealth
+        ) else { return }
         isLoadingDailyLoopSnapshot = true
         defer {
-            isRefreshingDailyLoopSnapshot = false
             isLoadingDailyLoopSnapshot = false
         }
 
-        do {
-            let snapshot: DailyLoopSnapshot
-            if refreshHealth {
-                snapshot = try await dependencies.dailyLoopSnapshotService.refreshSnapshot()
-            } else {
-                snapshot = try await dependencies.dailyLoopSnapshotService.snapshot()
+        while true {
+            do {
+                let snapshot: DailyLoopSnapshot
+                if passRefreshesHealth {
+                    snapshot = try await dependencies.dailyLoopSnapshotService.refreshSnapshot()
+                } else {
+                    snapshot = try await dependencies.dailyLoopSnapshotService.snapshot()
+                }
+                dailyLoopSnapshot = snapshot
+                dailyLoopSnapshotReadError = nil
+            } catch {
+                let descriptor = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .projectionFailedFallback
+                )
+                dailyLoopSnapshot = DailyLoopSnapshotComposer(calendar: .current).compose(
+                    asOf: Date(),
+                    dailyBrief: nil,
+                    errorCode: descriptor.code.rawValue,
+                    pendingActions: [],
+                    workoutPlans: []
+                )
+                dailyLoopSnapshotReadError = "读取今日概览失败：\(descriptor.userMessage)"
             }
-            dailyLoopSnapshot = snapshot
-            dailyLoopSnapshotReadError = nil
-        } catch {
-            let descriptor = SharedErrorDescriptor.mapped(
-                from: error,
-                fallback: .projectionFailedFallback
-            )
-            dailyLoopSnapshot = DailyLoopSnapshotComposer(calendar: .current).compose(
-                asOf: Date(),
-                dailyBrief: nil,
-                errorCode: descriptor.code.rawValue,
-                pendingActions: [],
-                workoutPlans: []
-            )
-            dailyLoopSnapshotReadError = "读取今日概览失败：\(descriptor.userMessage)"
+
+            guard let nextPassRefreshesHealth = dailyLoopSnapshotRefreshQueue.finishPass() else { break }
+            passRefreshesHealth = nextPassRefreshesHealth
         }
     }
 
