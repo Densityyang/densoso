@@ -1,7 +1,28 @@
 {
   "acceptedCount": 366,
+  "edibleFractionEvidenceCounts": {
+    "foodCompositionRecord": 188,
+    "unknown": 3074
+  },
+  "foodDataSHA256": "30bcee17a689cd6af91c4cafb328faa7585487370110731b5c99a7c48279c2c3",
+  "foodMatchCounts": {
+    "ambiguous": 1,
+    "exact": 188,
+    "unmapped": 3073
+  },
+  "foodSourceManifestSHA256": "8aa9a50625e0ec7c29509e07598e7762a4b91abc269e7b34d6955f3282465635",
+  "ingredientRoleCounts": {
+    "ingredient": 1911,
+    "oil": 204,
+    "seasoning": 1147
+  },
   "ingredientRowCount": 3262,
   "licenseSPDX": "Unlicense",
+  "massBasisCounts": {
+    "cooked": 2,
+    "raw": 1,
+    "unknown": 3259
+  },
   "quantityEvidenceCounts": {
     "formula": 133,
     "notSpecifiedInSource": 1264,
@@ -2344,5 +2365,6 @@
   "schemaVersion": 1,
   "sourceID": "anduin-howtocook",
   "sourceVersion": "5fb3140c20b2a713296696dc6fdd3b83ccc617a6",
-  "status": "PASS"
+  "status": "PASS",
+  "verifiedFoodIDCount": 1003
 }

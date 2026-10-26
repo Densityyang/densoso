@@ -3,6 +3,30 @@ import XCTest
 
 @MainActor
 final class DeepSeekProviderContractTests: XCTestCase {
+    func testPreSerializationConsentCheckStopsBeforeDeepSeekRequestIsSent() async throws {
+        let transport = ScriptedProviderHTTPTransport(steps: [])
+        let clock = TestProviderRetryClock()
+        let provider = DeepSeekProvider(
+            credentialSource: TestCredentialSource(values: [.deepSeek: "fixture"]),
+            transport: transport,
+            clock: clock,
+            jitter: { _ in 0 }
+        )
+        var request = request(deadline: clock.now().addingTimeInterval(45))
+        request.preSerializationGate = { _ in
+            throw ProviderError.consentPolicyChanged(provider: .deepSeek)
+        }
+
+        do {
+            _ = try await collect(provider.stream(request))
+            XCTFail("A failed pre-serialization consent check must stop the provider request")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .deepSeek))
+        }
+        let recorded = await transport.recordedRequests()
+        XCTAssertTrue(recorded.isEmpty)
+    }
+
     func testMissingKeyFailsBeforeNetworkOrUserContentIsSent() async throws {
         let transport = ScriptedProviderHTTPTransport(steps: [])
         let clock = TestProviderRetryClock()

@@ -10,6 +10,7 @@ source quantity-evidence counts.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import sqlite3
 import subprocess
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import unicodedata
 from collections import Counter
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
@@ -27,12 +29,23 @@ RESOURCES = ROOT / "Densoso" / "Resources"
 FOOD_SEED = RESOURCES / "seed_foods.json"
 FOOD_MANIFEST = RESOURCES / "FoodData" / "sources.json"
 FOOD_IMPORTER = SCRIPTS / "import_food_db.py"
+TAIWAN_IMPORTER = SCRIPTS / "import_taiwan_fda_foods.py"
+TAIWAN_ARCHIVE = ROOT / "FoodDataSources" / "taiwan-fda-nutrition-2026-10-05.zip"
+TAIWAN_IMPORT_REPORT = RESOURCES / "FoodData" / "taiwan_food_import_report.json"
+TAIWAN_ALIAS_REVIEW = RESOURCES / "FoodData" / "taiwan_food_alias_review.json"
+TAIWAN_OPENCC_WHEEL = ROOT / "FoodDataSources" / "wheels" / "opencc_python_reimplemented-0.1.7-py2.py3-none-any.whl"
 RECIPE_CATALOG = RESOURCES / "FoodData" / "recipe_priors.json"
 RECIPE_MANIFEST = RESOURCES / "FoodData" / "recipe_sources.json"
 RECIPE_REPORT = RESOURCES / "FoodData" / "recipe_prior_import_report.json"
 RECIPE_VALIDATOR = SCRIPTS / "validate_recipe_priors.py"
 
-EXPECTED_FOOD_PRODUCTION_COUNT = 24
+EXPECTED_TAIWAN_FDA_RECORD_COUNT = 979
+EXPECTED_FOOD_PRODUCTION_COUNT = 24 + EXPECTED_TAIWAN_FDA_RECORD_COUNT
+TAIWAN_FDA_SOURCE_ID = "taiwan-fda-nutrition-information"
+TAIWAN_FDA_SOURCE_VERSION = "2026-10-05"
+TAIWAN_FDA_ARCHIVE_SHA256 = "755d2f0e4a7c1fe80ac0636863117e376773c9342cfd68e7b05e67d81e3c6064"
+TAIWAN_OPENCC_VERSION = "0.1.7"
+TAIWAN_OPENCC_WHEEL_SHA256 = "41b3b92943c7bed291f448e9c7fad4b577c8c2eae30fcfe5a74edf8818493aa6"
 EXPECTED_FDC_RECORDS = {
     "169757": ("usda-fdc-sr-legacy", "Rice, white, long-grain, regular, unenriched, cooked without salt"),
     "2512381": ("usda-fdc-foundation-foods", "Rice, white, long grain, unenriched, raw"),
@@ -157,6 +170,32 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
         if not re.fullmatch(r"[0-9a-f]{64}", str(source.get("archiveSHA256", ""))):
             raise GateFailure(f"{source_id} manifest archiveSHA256 is invalid")
 
+    taiwan_source = registry.get(TAIWAN_FDA_SOURCE_ID)
+    expected_taiwan_fields = {
+        "sourceURL": "https://data.fda.gov.tw/data/opendata/export/20/json",
+        "catalogURL": "https://data.gov.tw/en/datasets/8543",
+        "sourceVersion": TAIWAN_FDA_SOURCE_VERSION,
+        "retrievedAt": "2026-10-26",
+        "archivePath": "FoodDataSources/taiwan-fda-nutrition-2026-10-05.zip",
+        "archiveSHA256": TAIWAN_FDA_ARCHIVE_SHA256,
+        "archiveMember": "20_5.json",
+        "licenseSPDX": "OGDL-Taiwan-1.0",
+        "licenseURL": "https://data.gov.tw/license",
+        "dataType": "Taiwan FDA Nutrition Information Database",
+        "dataRole": "food-composition",
+        "redistributionAllowed": True,
+        "verificationStatus": "verified",
+    }
+    if taiwan_source is None:
+        raise GateFailure(f"food source manifest is missing {TAIWAN_FDA_SOURCE_ID}")
+    for key, value in expected_taiwan_fields.items():
+        if taiwan_source.get(key) != value:
+            raise GateFailure(f"Taiwan FDA manifest {key} is not pinned to {value!r}")
+    if "Taiwan Food and Drug Administration" not in str(taiwan_source.get("attribution", "")):
+        raise GateFailure("Taiwan FDA manifest is missing the required attribution text")
+    if "Open Government Data License, version 1.0" not in str(taiwan_source.get("attribution", "")):
+        raise GateFailure("Taiwan FDA manifest does not identify the OGDL version in its attribution")
+
     legacy = registry.get("legacy-china-food-seed")
     if legacy is None or (
         legacy.get("verificationStatus") != "unverified"
@@ -190,21 +229,72 @@ def validate_seed(
         raise GateFailure(
             f"expected {EXPECTED_FOOD_PRODUCTION_COUNT} verified production rows, found {len(production)}"
         )
-    actual_records = {item.get("sourceRecordID") for item in production}
-    if actual_records != set(EXPECTED_FDC_RECORDS):
-        missing = sorted(set(EXPECTED_FDC_RECORDS) - actual_records)
-        extra = sorted(actual_records - set(EXPECTED_FDC_RECORDS))
+    fdc_rows = [item for item in production if item.get("sourceID") in EXPECTED_FOOD_SOURCES]
+    actual_fdc_records = {item.get("sourceRecordID") for item in fdc_rows}
+    if actual_fdc_records != set(EXPECTED_FDC_RECORDS):
+        missing = sorted(set(EXPECTED_FDC_RECORDS) - actual_fdc_records)
+        extra = sorted(actual_fdc_records - set(EXPECTED_FDC_RECORDS))
         raise GateFailure(f"production FDC record set changed: missing={missing}, extra={extra}")
+    taiwan_rows = [item for item in production if item.get("sourceID") == TAIWAN_FDA_SOURCE_ID]
+    if len(taiwan_rows) != EXPECTED_TAIWAN_FDA_RECORD_COUNT:
+        raise GateFailure(
+            f"expected {EXPECTED_TAIWAN_FDA_RECORD_COUNT} Taiwan FDA records, found {len(taiwan_rows)}"
+        )
+    taiwan_record_ids = {item.get("sourceRecordID") for item in taiwan_rows}
+    if len(taiwan_record_ids) != EXPECTED_TAIWAN_FDA_RECORD_COUNT:
+        raise GateFailure("Taiwan FDA production records contain duplicate Integration numbers")
 
     record_keys: set[tuple[str, str]] = set()
     aliases: dict[str, set[int]] = {}
     for item in production:
         row_id = item["id"]
         source_id, record_id = item.get("sourceID"), item.get("sourceRecordID")
-        expected_source, expected_name = EXPECTED_FDC_RECORDS[record_id]
-        source = registry[expected_source]
-        if source_id != expected_source or item.get("sourceName") != expected_name:
-            raise GateFailure(f"FDC {record_id} source mapping/name does not match its pinned record")
+        source = registry[source_id]
+        if source_id in EXPECTED_FOOD_SOURCES:
+            expected_source, expected_name = EXPECTED_FDC_RECORDS[record_id]
+            if source_id != expected_source or item.get("sourceName") != expected_name:
+                raise GateFailure(f"FDC {record_id} source mapping/name does not match its pinned record")
+        elif source_id == TAIWAN_FDA_SOURCE_ID:
+            source_record = item.get("sourceRecord")
+            simplified_aliases = item.get("simplifiedAliases")
+            searchable_aliases = str(item.get("alias") or "").split("|")
+            if (
+                not isinstance(record_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9]+", record_id)
+                or item["id"] != int(record_id, 36)
+                or not isinstance(source_record, dict)
+                or not isinstance(source_record.get("valuesPer100gEdiblePortion"), dict)
+                or item.get("sourceName") != source_record.get("sourceName")
+                or source_record.get("sourceName") != item.get("sourceName")
+                or not isinstance(simplified_aliases, list)
+                or any(not isinstance(alias, str) for alias in simplified_aliases)
+                or len(set(simplified_aliases)) != len(simplified_aliases)
+                or any(alias not in searchable_aliases for alias in simplified_aliases)
+            ):
+                raise GateFailure(f"Taiwan FDA row {row_id} is not tied to its upstream Integration number")
+            try:
+                waste = Decimal(str(source_record.get("wasteRatePercent")))
+            except InvalidOperation as error:
+                raise GateFailure(f"Taiwan FDA row {row_id} has an invalid waste rate") from error
+            if not waste.is_finite() or waste < 0 or waste > 100:
+                raise GateFailure(f"Taiwan FDA row {row_id} has an out-of-range waste rate")
+            expected_edible = int((Decimal(100) - waste).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            if item.get("edible") != expected_edible:
+                raise GateFailure(f"Taiwan FDA row {row_id} does not preserve the source waste rate")
+            source_values = source_record["valuesPer100gEdiblePortion"]
+            raw_energy = source_values.get("energyKcal")
+            if raw_energy is None or Decimal(str(raw_energy)) != Decimal(str(item.get("energyKcal"))):
+                raise GateFailure(f"Taiwan FDA row {row_id} energy differs from its per-edible-100g source value")
+            for nutrient in ("proteinG", "fatG", "carbohydrateG", "fiberG"):
+                raw_value = source_values.get(nutrient)
+                normalized_value = item.get(nutrient)
+                if raw_value is None:
+                    if normalized_value is not None:
+                        raise GateFailure(f"Taiwan FDA row {row_id} fills missing {nutrient} with a value")
+                elif normalized_value is None or Decimal(str(raw_value)) != Decimal(str(normalized_value)):
+                    raise GateFailure(f"Taiwan FDA row {row_id} {nutrient} differs from its source value")
+        else:
+            raise GateFailure(f"verified food row {row_id} references unsupported source {source_id!r}")
         if item.get("sourceVersion") != source.get("sourceVersion"):
             raise GateFailure(f"food row {row_id} sourceVersion differs from its manifest release")
         if (
@@ -223,6 +313,8 @@ def validate_seed(
             raise GateFailure(f"raw food row {row_id} is not marked as edibleRaw")
         if preparation == "cooked" and item.get("massBasis") != "cooked":
             raise GateFailure(f"cooked food row {row_id} is not marked as cooked")
+        if preparation == "unknown" and item.get("massBasis") != "asPurchased":
+            raise GateFailure(f"unknown-preparation food row {row_id} must preserve as-purchased basis")
 
         aliases_for_row = [item.get("name", "")]
         if item.get("alias"):
@@ -325,6 +417,98 @@ def validate_imported_database(
         ):
             raise GateFailure(f"production database contains unverified row {row_id}")
     return int(food_count)
+
+
+def validate_taiwan_archive_reproducibility(items: list[dict[str, Any]]) -> dict[str, Any]:
+    if not TAIWAN_ARCHIVE.is_file():
+        raise GateFailure("pinned Taiwan FDA archive is missing from FoodDataSources")
+    digest = hashlib.sha256()
+    with TAIWAN_ARCHIVE.open("rb") as archive_file:
+        for chunk in iter(lambda: archive_file.read(1_048_576), b""):
+            digest.update(chunk)
+    actual_digest = digest.hexdigest()
+    if actual_digest != TAIWAN_FDA_ARCHIVE_SHA256:
+        raise GateFailure(f"Taiwan FDA archive SHA-256 mismatch: {actual_digest}")
+
+    if not TAIWAN_OPENCC_WHEEL.is_file():
+        raise GateFailure("pinned OpenCC wheel is missing from FoodDataSources/wheels")
+    wheel_digest = hashlib.sha256()
+    with TAIWAN_OPENCC_WHEEL.open("rb") as wheel_file:
+        for chunk in iter(lambda: wheel_file.read(1_048_576), b""):
+            wheel_digest.update(chunk)
+    actual_wheel_digest = wheel_digest.hexdigest()
+    if actual_wheel_digest != TAIWAN_OPENCC_WHEEL_SHA256:
+        raise GateFailure(f"pinned OpenCC wheel SHA-256 mismatch: {actual_wheel_digest}")
+
+    taiwan_rows = [item for item in items if item.get("sourceID") == TAIWAN_FDA_SOURCE_ID]
+    report = read_json(TAIWAN_IMPORT_REPORT)
+    alias_review = read_json(TAIWAN_ALIAS_REVIEW)
+    if not isinstance(report, dict) or not isinstance(alias_review, list):
+        raise GateFailure("Taiwan FDA import and alias review reports have invalid shapes")
+    report_source = report.get("source")
+    alias_review_summary = report.get("aliasReview")
+    alias_conversion = report.get("aliasConversion")
+    simplified_alias_count = sum(
+        len(item.get("simplifiedAliases", [])) for item in taiwan_rows
+    )
+    ambiguous_simplified_count = sum(
+        "opencc-t2s" in entry.get("aliasOrigins", [])
+        for entry in alias_review
+        if isinstance(entry, dict)
+    )
+    if (
+        len(taiwan_rows) != EXPECTED_TAIWAN_FDA_RECORD_COUNT
+        or report.get("recordCount") != EXPECTED_TAIWAN_FDA_RECORD_COUNT
+        or not isinstance(report_source, dict)
+        or report_source.get("archiveSHA256") != TAIWAN_FDA_ARCHIVE_SHA256
+        or not isinstance(alias_review_summary, dict)
+        or alias_review_summary.get("ambiguousAliasCount") != len(alias_review)
+        or not isinstance(alias_conversion, dict)
+        or alias_conversion.get("tool") != "opencc-python-reimplemented"
+        or alias_conversion.get("version") != TAIWAN_OPENCC_VERSION
+        or alias_conversion.get("config") != "t2s"
+        or alias_conversion.get("wheelSHA256") != TAIWAN_OPENCC_WHEEL_SHA256
+        or alias_conversion.get("canonicalNamesRemainTraditional") is not True
+        or alias_conversion.get("simplifiedAliasesAttached") != simplified_alias_count
+        or alias_conversion.get("ambiguousSimplifiedAliasesReviewed") != ambiguous_simplified_count
+    ):
+        raise GateFailure("Taiwan FDA checked-in report does not match the pinned production record counts")
+
+    rows_by_record_id = {row["sourceRecordID"]: row for row in taiwan_rows}
+    for entry in alias_review:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("sourceRecordID"), str)
+            or not isinstance(entry.get("aliasOrigins"), list)
+            or any(origin not in {"source-common-or-english-name", "opencc-t2s", "source-canonical-name"} for origin in entry["aliasOrigins"])
+        ):
+            raise GateFailure("Taiwan FDA alias review contains a malformed entry")
+        row = rows_by_record_id.get(entry["sourceRecordID"])
+        if row is None:
+            raise GateFailure("Taiwan FDA alias review references a record outside the production dataset")
+        row_aliases = [row.get("name", ""), *str(row.get("alias") or "").split("|")]
+        if normalize_alias(str(entry.get("alias", ""))) in {normalize_alias(alias) for alias in row_aliases}:
+            raise GateFailure("Taiwan FDA alias review contains a name that was still attached to that record")
+
+    result = subprocess.run(
+        [sys.executable, str(TAIWAN_IMPORTER), "--check"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise GateFailure(f"Taiwan FDA archive does not reproduce checked-in food rows: {result.stderr.strip()}")
+    return {
+        "archiveSHA256": actual_digest,
+        "openccWheelSHA256": actual_wheel_digest,
+        "sourceVersion": TAIWAN_FDA_SOURCE_VERSION,
+        "productionRecordCount": len(taiwan_rows),
+        "excludedRecords": report.get("excludedRecords", {}),
+        "missingNutrientValues": report.get("missingNutrientValues", {}),
+        "ambiguousAliasEntriesReviewed": len(alias_review),
+        "simplifiedAliasesAttached": simplified_alias_count,
+        "ambiguousSimplifiedAliasesReviewed": ambiguous_simplified_count,
+    }
 
 
 def probe_unavailable_energy(temp: Path, seed_row: dict[str, Any]) -> dict[str, Any]:
@@ -475,7 +659,7 @@ def validate_recipe_priors() -> dict[str, Any]:
     manifest_source = manifest.get("source")
     recipes = catalog.get("recipes")
     if (
-        catalog.get("schemaVersion") != 1
+        catalog.get("schemaVersion") != 2
         or not isinstance(source, dict)
         or not isinstance(manifest_source, dict)
         or not isinstance(recipes, list)
@@ -553,13 +737,14 @@ def validate_recipe_priors() -> dict[str, Any]:
 def main() -> int:
     try:
         items = read_json(FOOD_SEED)
+        if not isinstance(items, list):
+            raise GateFailure("food seed must be an array")
         manifest = read_json(FOOD_MANIFEST)
         if not isinstance(manifest, dict):
             raise GateFailure("food source manifest must be an object")
         registry = validate_manifest(manifest)
         production, identity_summary = validate_seed(items, registry)
-        if not isinstance(items, list):
-            raise GateFailure("food seed must be an array")
+        taiwan_summary = validate_taiwan_archive_reproducibility(items)
 
         with tempfile.TemporaryDirectory(prefix="densoso-gate17-food-") as directory:
             temporary = Path(directory)
@@ -588,18 +773,21 @@ def main() -> int:
                 "developmentRows": dev_count,
                 "productionRows": prod_count,
                 "expectedProductionRows": EXPECTED_FOOD_PRODUCTION_COUNT,
-                "verifiedSourceRecordIDs": len(EXPECTED_FDC_RECORDS),
-                "sourceIDs": sorted(EXPECTED_FOOD_SOURCES),
+                "verifiedSourceRecordIDs": len(EXPECTED_FDC_RECORDS) + EXPECTED_TAIWAN_FDA_RECORD_COUNT,
+                "sourceIDs": sorted([*EXPECTED_FOOD_SOURCES, TAIWAN_FDA_SOURCE_ID]),
                 "uniqueFoodIDs": identity_summary["foodIDs"],
                 "uniqueProductionAliases": identity_summary["productionAliases"],
                 **energy_summary,
                 **basis_summary,
             },
+            "taiwanFDA": taiwan_summary,
             "recipePriors": recipe_summary,
             "proofBoundary": (
-                "Validates the checked-in rows against pinned IDs, names, manifests, "
-                "and importer output. The full upstream USDA archives are not bundled, "
-                "so this gate does not independently recompute nutrient values from those archives."
+                "Taiwan FDA production rows are regenerated from a bundled, SHA-256-pinned "
+                "official archive and checked against source IDs, values, and the checked-in seed. "
+                "USDA rows are validated against pinned record IDs/names and importer provenance; "
+                "the full USDA archives are not bundled, so this gate does not independently "
+                "recompute USDA nutrient values from those archives."
             ),
         }, ensure_ascii=False, sort_keys=True))
         return 0

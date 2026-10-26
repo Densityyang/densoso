@@ -1,6 +1,23 @@
 import SwiftUI
 import DensosoDomain
 
+struct MealCalorieSummaryPresentation: Equatable {
+    let likelyText: String
+    let confidence: CalorieConfidence
+    let confidenceText: String
+    let detailsTitle: String
+    let rangeDetailsText: String
+
+    init(energyRange: EstimateRange) {
+        let presentation = CaloriePresentationPolicy().presentation(for: energyRange)
+        likelyText = "约 \(presentation.likelyKcal) kcal"
+        confidence = presentation.confidence
+        confidenceText = "估算可信度：\(presentation.confidence.displayName)"
+        detailsTitle = "估算区间详情"
+        rangeDetailsText = "热量范围：\(Int(energyRange.low.rounded()))–\(Int(energyRange.high.rounded())) kcal"
+    }
+}
+
 /// 食物热量估算确认卡片
 struct FoodConfirmationCard: View {
     let summary: String
@@ -23,18 +40,25 @@ struct FoodConfirmationCard: View {
                 .font(.subheadline)
                 .lineLimit(5)
 
-            if let presentation = caloriePresentation,
-               let adjustedEnergyRange {
-                Text("约 \(presentation.likelyKcal) kcal")
+            if let calorieSummary {
+                Text(calorieSummary.likelyText)
                     .font(.title3.weight(.semibold))
+                Text(calorieSummary.confidenceText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 DisclosureGroup {
-                    Text("基于当前份量调整后的估算范围")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("基于当前份量调整后的估算范围")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(calorieSummary.rangeDetailsText)
+                            .font(.subheadline)
+                    }
                 } label: {
-                    Text("区间详情：\(rangeText(adjustedEnergyRange, unit: "kcal"))")
+                    Text(calorieSummary.detailsTitle)
                         .font(.subheadline)
                 }
+                .accessibilityIdentifier("food-calorie-estimate-details")
             } else {
                 Text("热量暂不可用")
                     .font(.subheadline)
@@ -60,7 +84,7 @@ struct FoodConfirmationCard: View {
     }
 
     private var confidenceBadge: some View {
-        let confidence = caloriePresentation?.confidence ?? .low
+        let confidence = calorieSummary?.confidence ?? .low
         let color: Color
         switch confidence {
         case .low: color = .red
@@ -80,13 +104,8 @@ struct FoodConfirmationCard: View {
         return try? energyRange.scaled(by: selectedFactor)
     }
 
-    private var caloriePresentation: CaloriePresentation? {
-        guard let adjustedEnergyRange else { return nil }
-        return CaloriePresentationPolicy().presentation(for: adjustedEnergyRange)
-    }
-
-    private func rangeText(_ range: EstimateRange, unit: String) -> String {
-        "\(Int(range.low.rounded()))–\(Int(range.high.rounded())) \(unit)"
+    private var calorieSummary: MealCalorieSummaryPresentation? {
+        adjustedEnergyRange.map { MealCalorieSummaryPresentation(energyRange: $0) }
     }
 }
 
@@ -113,16 +132,16 @@ struct PendingActionConfirmationCard: View {
                         .foregroundStyle(.secondary)
                 }
                 if let energyRange = meal.totalNutrients?.energyKcal {
-                    let presentation = CaloriePresentationPolicy().presentation(for: energyRange)
+                    let presentation = MealCalorieSummaryPresentation(energyRange: energyRange)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("约 \(presentation.likelyKcal) kcal")
+                        Text(presentation.likelyText)
                             .font(.title3.weight(.semibold))
-                        Text("估算可信度：\(presentation.confidence.displayName)")
+                        Text(presentation.confidenceText)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("区间详情：\(rangeText(energyRange, unit: "kcal"))")
-                            .font(.subheadline)
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("pending-meal-calorie-summary")
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     DisclosureGroup("营养素与估算详情") {
@@ -166,6 +185,7 @@ struct PendingActionConfirmationCard: View {
                             }
                         }
                     }
+                    .accessibilityIdentifier("pending-meal-estimate-details")
                 }
             }
             if case .trainingPlan(let plan) = action.payload {

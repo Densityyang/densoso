@@ -17,6 +17,8 @@ targets:
       - path: Densoso/Resources/cooking_coefficients.json
       - path: Densoso/Resources/exercise_catalog.license.json
       - path: Densoso/Resources/FoodData/sources.json
+      - path: Densoso/Resources/FoodData/verified_food_ids.json
+      - path: Densoso/Resources/FoodData/verified_food_records.json
       - path: Densoso/Resources/FoodData/recipe_sources.json
       - path: Densoso/Resources/FoodData/recipe_priors.json
       - path: Densoso/Resources/food_composition.db

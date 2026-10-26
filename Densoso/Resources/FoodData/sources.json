@@ -41,6 +41,24 @@
       "redistributionAllowed": true,
       "verificationStatus": "verified",
       "notes": "Official USDA FoodData Central SR Legacy final release dated April 2018. USDA describes SR Legacy as a final, non-updating release. Nutrient values are per 100 g edible portion. Source names and FDC IDs are retained on each row; Energy nutrient ID 1008 is recorded directly."
+    },
+    {
+      "sourceID": "taiwan-fda-nutrition-information",
+      "sourceURL": "https://data.fda.gov.tw/data/opendata/export/20/json",
+      "catalogURL": "https://data.gov.tw/en/datasets/8543",
+      "sourceVersion": "2026-10-05",
+      "retrievedAt": "2026-10-26",
+      "archivePath": "FoodDataSources/taiwan-fda-nutrition-2026-10-05.zip",
+      "archiveSHA256": "755d2f0e4a7c1fe80ac0636863117e376773c9342cfd68e7b05e67d81e3c6064",
+      "archiveMember": "20_5.json",
+      "licenseSPDX": "OGDL-Taiwan-1.0",
+      "licenseURL": "https://data.gov.tw/license",
+      "dataType": "Taiwan FDA Nutrition Information Database",
+      "dataRole": "food-composition",
+      "redistributionAllowed": true,
+      "verificationStatus": "verified",
+      "attribution": "Taiwan Food and Drug Administration, Nutrition Information Database, release metadata updated 2026-10-05, under the Open Government Data License, version 1.0.",
+      "notes": "Official Taiwan FDA nutrition composition data. The per-100g values are analyzed for the edible portion; waste rate is retained as edible percentage and is applied only when a meal portion is measured as-purchased. The source archive and its SHA-256 are pinned in FoodDataSources/; record IDs are the upstream Integration numbers. Attribution is required by the license."
     }
   ]
 }

@@ -4,6 +4,16 @@ import UIKit
 import DensosoDomain
 
 struct SettingsScreen: View {
+    private struct PendingHealthPolicyExpansion: Equatable {
+        let provider: ProviderID
+        let dataClass: ProviderDataClass
+    }
+
+    private enum PendingCloudPolicyExpansion {
+        case health(PendingHealthPolicyExpansion)
+        case conversationHistory(ProviderID)
+    }
+
     @Environment(Dependencies.self) private var dependencies
     @Environment(\.modelContext) private var modelContext
 
@@ -15,12 +25,16 @@ struct SettingsScreen: View {
     @State private var qwenAPIKey = ""
     @State private var hasSavedQwenAPIKey = false
     @State private var deepSeekTextConsent = false
+    @State private var deepSeekConversationHistoryConsent = false
     @State private var deepSeekMealImageConsent = false
     @State private var deepSeekHealthContextClasses: Set<ProviderDataClass> = []
     @State private var qwenTextConsent = false
+    @State private var qwenConversationHistoryConsent = false
     @State private var qwenSpeechConsent = false
     @State private var qwenMealImageConsent = false
     @State private var qwenHealthContextClasses: Set<ProviderDataClass> = []
+    @State private var pendingCloudPolicyExpansion: PendingCloudPolicyExpansion?
+    @State private var isConfirmingCloudPolicyExpansion = false
     @State private var deepSeekUsage = "尚无用量"
     @State private var qwenUsage = "尚无用量"
     @State private var statusMessage: String?
@@ -84,6 +98,42 @@ struct SettingsScreen: View {
             .orbitScrollBackground()
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
+            .confirmationDialog(
+                "确认云端数据授权变更？",
+                isPresented: $isConfirmingCloudPolicyExpansion,
+                titleVisibility: .visible
+            ) {
+                switch pendingCloudPolicyExpansion {
+                case .some(.health(let pending)):
+                    Button("允许上传\(pending.dataClass.healthContextTitle ?? "健康")历史汇总") {
+                        Task { await confirmHealthPolicyExpansion(pending) }
+                    }
+                case .some(.conversationHistory(let provider)):
+                    Button("允许向\(provider == .deepSeek ? "DeepSeek" : "Qwen")发送此前聊天记录") {
+                        Task {
+                            await saveConversationHistoryConsent(
+                                provider: provider,
+                                granted: true,
+                                confirmedAt: Date()
+                            )
+                        }
+                    }
+                case nil:
+                    EmptyView()
+                }
+                Button("取消", role: .cancel) {
+                    pendingCloudPolicyExpansion = nil
+                }
+            } message: {
+                switch pendingCloudPolicyExpansion {
+                case .health(let pending)?:
+                    Text("仅允许所选的\(pending.dataClass.healthContextTitle ?? "健康")类别用于\(pending.provider == .deepSeek ? "DeepSeek" : "Qwen")后续请求。扩权会保存新的本地 policy revision；你可以随时撤销。")
+                case .some(.conversationHistory(_)):
+                    Text("此前聊天记录与本轮你主动提交的文字是两项独立权限。确认后，后续请求只会包含仍符合当前云端健康类别策略且 policy revision 一致的完整对话轮次。")
+                case nil:
+                    Text("确认后会保存新的本地云端授权 policy revision。")
+                }
+            }
             .task {
                 await loadGoalFields()
                 if !AppLaunchConfiguration.current.isUITesting {
@@ -149,7 +199,8 @@ struct SettingsScreen: View {
                         Task { await saveConsent(provider: .deepSeek, granted: value) }
                 }
                 healthContextConsentControls(provider: .deepSeek, selection: $deepSeekHealthContextClasses)
-                Text("历史健康汇总按类别单独授权。未配置类别时不会自动附加历史健康上下文；撤销后立即从后续请求与续轮中移除。")
+                conversationHistoryConsentControl(provider: .deepSeek, selection: $deepSeekConversationHistoryConsent)
+                Text("本轮主动提交的文字由上方单独授权；此前聊天记录与历史健康汇总使用独立权限。未配置健康类别时不会自动附加健康上下文；撤销后立即从后续请求与续轮中移除。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Toggle("同意向 DeepSeek 上传处理后的餐食照片", isOn: $deepSeekMealImageConsent)
@@ -203,7 +254,8 @@ struct SettingsScreen: View {
                         Task { await saveConsent(provider: .qwen, granted: value) }
                 }
                 healthContextConsentControls(provider: .qwen, selection: $qwenHealthContextClasses)
-                Text("历史健康汇总按类别单独授权。未配置类别时不会自动附加历史健康上下文；撤销后立即从后续请求与续轮中移除。")
+                conversationHistoryConsentControl(provider: .qwen, selection: $qwenConversationHistoryConsent)
+                Text("本轮主动提交的文字由上方单独授权；此前聊天记录与历史健康汇总使用独立权限。未配置健康类别时不会自动附加健康上下文；撤销后立即从后续请求与续轮中移除。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Toggle(
@@ -664,8 +716,18 @@ struct SettingsScreen: View {
             provider: .qwen,
             dataClass: .mealImage
         )) == true
-        deepSeekHealthContextClasses = await grantedHealthContextClasses(provider: .deepSeek)
-        qwenHealthContextClasses = await grantedHealthContextClasses(provider: .qwen)
+        let deepSeekPolicy = try? await CloudHealthContextPolicy.load(
+            from: dependencies.providerGovernanceRepository,
+            provider: .deepSeek
+        )
+        let qwenPolicy = try? await CloudHealthContextPolicy.load(
+            from: dependencies.providerGovernanceRepository,
+            provider: .qwen
+        )
+        deepSeekHealthContextClasses = deepSeekPolicy?.allowedClasses ?? []
+        deepSeekConversationHistoryConsent = deepSeekPolicy?.allowsConversationHistory == true
+        qwenHealthContextClasses = qwenPolicy?.allowedClasses ?? []
+        qwenConversationHistoryConsent = qwenPolicy?.allowsConversationHistory == true
         deepSeekUsage = await usageText(provider: .deepSeek)
         qwenUsage = await usageText(provider: .qwen)
     }
@@ -682,26 +744,124 @@ struct SettingsScreen: View {
                     get: { selection.wrappedValue.contains(dataClass) },
                     set: { granted in
                         var updated = selection.wrappedValue
-                        if granted { updated.insert(dataClass) } else { updated.remove(dataClass) }
-                        selection.wrappedValue = updated
-                        Task { await saveConsent(provider: provider, dataClass: dataClass, granted: granted) }
+                        if granted {
+                            pendingCloudPolicyExpansion = .health(PendingHealthPolicyExpansion(
+                                provider: provider,
+                                dataClass: dataClass
+                            ))
+                            isConfirmingCloudPolicyExpansion = true
+                        } else {
+                            updated.remove(dataClass)
+                            selection.wrappedValue = updated
+                            Task {
+                                await saveHealthContextPolicy(
+                                    provider: provider,
+                                    allowedClasses: updated,
+                                    source: .settings
+                                )
+                            }
+                        }
                     }
                 )
             )
         }
     }
 
-    private func grantedHealthContextClasses(provider: ProviderID) async -> Set<ProviderDataClass> {
-        var granted = Set<ProviderDataClass>()
-        for dataClass in CloudHealthContextPolicy.dataClasses {
-            if (try? await dependencies.providerGovernanceRepository.isConsentGranted(
-                provider: provider,
-                dataClass: dataClass
-            )) == true {
-                granted.insert(dataClass)
+    private func confirmHealthPolicyExpansion(_ pending: PendingHealthPolicyExpansion) async {
+        var updated = pending.provider == .deepSeek
+            ? deepSeekHealthContextClasses
+            : qwenHealthContextClasses
+        updated.insert(pending.dataClass)
+        await saveHealthContextPolicy(
+            provider: pending.provider,
+            allowedClasses: updated,
+            source: .settings,
+            confirmedAt: Date()
+        )
+        pendingCloudPolicyExpansion = nil
+    }
+
+    private func saveHealthContextPolicy(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        source: CloudHealthPolicyChangeSource,
+        confirmedAt: Date? = nil
+    ) async {
+        do {
+            if let confirmedAt {
+                _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+                    provider: provider,
+                    allowedClasses: allowedClasses,
+                    repository: dependencies.providerGovernanceRepository,
+                    confirmedAt: confirmedAt,
+                    changeSource: source
+                )
+            } else {
+                _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+                    provider: provider,
+                    allowedClasses: allowedClasses,
+                    repository: dependencies.providerGovernanceRepository,
+                    changeSource: source
+                )
             }
+            if provider == .deepSeek {
+                deepSeekHealthContextClasses = allowedClasses
+            } else {
+                qwenHealthContextClasses = allowedClasses
+            }
+        } catch {
+            healthAuthorizationError = "无法保存云端健康授权策略：\(safeErrorMessage(error))"
+            await refreshProviderGovernance()
         }
-        return granted
+    }
+
+    @ViewBuilder
+    private func conversationHistoryConsentControl(
+        provider: ProviderID,
+        selection: Binding<Bool>
+    ) -> some View {
+        Toggle(
+            "允许向\(provider == .deepSeek ? "DeepSeek" : "Qwen")发送此前聊天记录",
+            isOn: Binding(
+                get: { selection.wrappedValue },
+                set: { granted in
+                    if granted {
+                        pendingCloudPolicyExpansion = .conversationHistory(provider)
+                        isConfirmingCloudPolicyExpansion = true
+                    } else {
+                        selection.wrappedValue = false
+                        Task {
+                            await saveConversationHistoryConsent(provider: provider, granted: false)
+                        }
+                    }
+                }
+            )
+        )
+    }
+
+    private func saveConversationHistoryConsent(
+        provider: ProviderID,
+        granted: Bool,
+        confirmedAt: Date? = nil
+    ) async {
+        do {
+            _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+                provider: provider,
+                allowed: granted,
+                repository: dependencies.providerGovernanceRepository,
+                confirmedAt: confirmedAt,
+                changeSource: .settings
+            )
+            if provider == .deepSeek {
+                deepSeekConversationHistoryConsent = granted
+            } else {
+                qwenConversationHistoryConsent = granted
+            }
+            pendingCloudPolicyExpansion = nil
+        } catch {
+            healthAuthorizationError = "无法保存聊天记录云端授权：\(safeErrorMessage(error))"
+            await refreshProviderGovernance()
+        }
     }
 
     private func usageText(provider: ProviderID) async -> String {

@@ -1,5 +1,129 @@
 import DensosoDomain
+import CryptoKit
 import Foundation
+
+enum CloudHealthPolicyState: String, Codable, Sendable {
+    case notConfigured
+    case draft
+    case active
+    case revoked
+    case needsReconfirmation
+}
+
+enum CloudHealthPolicyChangeSource: String, Codable, Sendable {
+    case onboarding
+    case settings
+    case agentConversation
+    case legacyConsent
+    case backupRestore
+}
+
+struct CloudHealthContextPolicySnapshot: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    let policyID: UUID
+    let provider: ProviderID
+    let revision: Int
+    let state: CloudHealthPolicyState
+    let allowedClasses: Set<ProviderDataClass>
+    let createdAt: Date
+    let updatedAt: Date
+    let confirmedAt: Date?
+    let policyHash: String
+    let changeSource: CloudHealthPolicyChangeSource
+
+    static func make(
+        provider: ProviderID,
+        policyID: UUID,
+        revision: Int,
+        state: CloudHealthPolicyState,
+        allowedClasses: Set<ProviderDataClass>,
+        createdAt: Date,
+        updatedAt: Date,
+        confirmedAt: Date?,
+        changeSource: CloudHealthPolicyChangeSource
+    ) -> Self {
+        let canonical = [
+            String(currentSchemaVersion),
+            provider.rawValue,
+            policyID.uuidString.lowercased(),
+            String(max(revision, 0)),
+            state.rawValue,
+            allowedClasses.map(\.rawValue).sorted().joined(separator: ","),
+            String(createdAt.timeIntervalSince1970),
+            String(updatedAt.timeIntervalSince1970),
+            confirmedAt.map { String($0.timeIntervalSince1970) } ?? "",
+            changeSource.rawValue,
+        ].joined(separator: "|")
+        let hash = SHA256.hash(data: Data(canonical.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return Self(
+            schemaVersion: currentSchemaVersion,
+            policyID: policyID,
+            provider: provider,
+            revision: max(revision, 0),
+            state: state,
+            allowedClasses: allowedClasses,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            confirmedAt: confirmedAt,
+            policyHash: hash,
+            changeSource: changeSource
+        )
+    }
+
+    static func unconfigured(provider: ProviderID) -> Self {
+        let policyID = stablePolicyID(for: provider)
+        return make(
+            provider: provider,
+            policyID: policyID,
+            revision: 0,
+            state: .notConfigured,
+            allowedClasses: [],
+            createdAt: .distantPast,
+            updatedAt: .distantPast,
+            confirmedAt: nil,
+            changeSource: .legacyConsent
+        )
+    }
+
+    private static func stablePolicyID(for provider: ProviderID) -> UUID {
+        let bytes = Array(SHA256.hash(data: Data("cloud-health-policy|\(provider.rawValue)".utf8)).prefix(16))
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+}
+
+protocol CloudHealthContextPolicySnapshotRepository: Sendable {
+    func currentCloudHealthContextPolicySnapshot(provider: ProviderID) async throws -> CloudHealthContextPolicySnapshot
+    func withCurrentSendAuthorization<Result: Sendable>(
+        provider: ProviderID,
+        expectedSnapshot: CloudHealthContextPolicySnapshot,
+        requiredClasses: Set<ProviderDataClass>,
+        operation: @Sendable () throws -> Result
+    ) async throws -> Result
+    func stageCloudHealthContextPolicyDraft(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        changeSource: CloudHealthPolicyChangeSource
+    ) async throws -> CloudHealthContextPolicySnapshot
+    func updateConversationHistoryConsent(
+        provider: ProviderID,
+        allowed: Bool,
+        changeSource: CloudHealthPolicyChangeSource,
+        confirmedAt: Date?
+    ) async throws -> CloudHealthContextPolicySnapshot
+    func updateCloudHealthContextPolicy(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        changeSource: CloudHealthPolicyChangeSource,
+        confirmedAt: Date?
+    ) async throws -> CloudHealthContextPolicySnapshot
+}
 
 /// Provider-specific, opt-in permissions for historical health context.
 /// Consent is stored in ProviderGovernanceRepository; a missing record is denied.
@@ -10,9 +134,37 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
 
     let provider: ProviderID
     let allowedClasses: Set<ProviderDataClass>
+    let allowsConversationHistory: Bool
+    let snapshot: CloudHealthContextPolicySnapshot
 
     var revision: String {
-        Self.dataClasses.map { allowedClasses.contains($0) ? "1" : "0" }.joined()
+        "\(provider.rawValue):\(snapshot.revision):\(snapshot.policyHash)"
+    }
+
+    /// This is a state fingerprint for request/cache invalidation, while
+    /// `snapshot.revision` is the persisted monotonic change counter.
+    init(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        allowsConversationHistory: Bool = false
+    ) {
+        self.provider = provider
+        self.allowedClasses = allowedClasses.intersection(Set(Self.dataClasses))
+        self.allowsConversationHistory = allowsConversationHistory
+        let effectiveClasses = allowedClasses.intersection(Set(Self.dataClasses))
+        self.snapshot = Self.snapshotForRead(provider: provider, allowedClasses: effectiveClasses)
+    }
+
+    private init(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        allowsConversationHistory: Bool,
+        snapshot: CloudHealthContextPolicySnapshot
+    ) {
+        self.provider = provider
+        self.allowedClasses = allowedClasses.intersection(Set(Self.dataClasses))
+        self.allowsConversationHistory = allowsConversationHistory
+        self.snapshot = snapshot
     }
 
     func allows(_ dataClass: ProviderDataClass) -> Bool {
@@ -24,30 +176,350 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
     }
 
     static func load(from repository: any ProviderGovernanceRepository, provider: ProviderID) async throws -> Self {
+        let firstPolicySnapshot: CloudHealthContextPolicySnapshot?
+        let secondPolicySnapshot: CloudHealthContextPolicySnapshot?
+        if let policyRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
+            firstPolicySnapshot = try await policyRepository.currentCloudHealthContextPolicySnapshot(provider: provider)
+            secondPolicySnapshot = try await policyRepository.currentCloudHealthContextPolicySnapshot(provider: provider)
+        } else {
+            firstPolicySnapshot = nil
+            secondPolicySnapshot = nil
+        }
         let firstSnapshot = try await consentSnapshot(from: repository, provider: provider, classes: dataClasses)
         let secondSnapshot = try await consentSnapshot(from: repository, provider: provider, classes: dataClasses)
+        let firstHistoryConsent = try await repository.isConsentGranted(provider: provider, dataClass: .conversationHistory)
+        let secondHistoryConsent = try await repository.isConsentGranted(provider: provider, dataClass: .conversationHistory)
         // If consent changes during the asynchronous reads, prefer the class that was denied in either pass.
-        return Self(provider: provider, allowedClasses: firstSnapshot.intersection(secondSnapshot))
+        let persistedClasses: Set<ProviderDataClass>?
+        if firstPolicySnapshot?.state == .active, secondPolicySnapshot?.state == .active {
+            persistedClasses = firstPolicySnapshot?.allowedClasses.intersection(
+                secondPolicySnapshot?.allowedClasses ?? []
+            )
+        } else if firstPolicySnapshot != nil || secondPolicySnapshot != nil {
+            persistedClasses = []
+        } else {
+            persistedClasses = nil
+        }
+        let repositoryClasses = firstSnapshot.intersection(secondSnapshot)
+        let allowed = persistedClasses.map { $0.intersection(repositoryClasses) } ?? repositoryClasses
+        let snapshot = secondPolicySnapshot ?? Self.snapshotForRead(provider: provider, allowedClasses: allowed)
+        let snapshotAllowsConversationHistory: Bool
+        if let firstPolicySnapshot, let secondPolicySnapshot {
+            snapshotAllowsConversationHistory = firstPolicySnapshot.state == .active
+                && secondPolicySnapshot.state == .active
+                && firstPolicySnapshot.allowedClasses.contains(.conversationHistory)
+                && secondPolicySnapshot.allowedClasses.contains(.conversationHistory)
+        } else {
+            snapshotAllowsConversationHistory = true
+        }
+        return Self(
+            provider: provider,
+            allowedClasses: allowed,
+            allowsConversationHistory: firstHistoryConsent
+                && secondHistoryConsent
+                && snapshotAllowsConversationHistory,
+            snapshot: snapshot
+        )
     }
 
-    /// Starts the provider operation synchronously after the final conservative consent read.
+    static func applyRestrictiveChange(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        repository: any ProviderGovernanceRepository,
+        changeSource: CloudHealthPolicyChangeSource = .agentConversation
+    ) async throws -> CloudHealthContextPolicySnapshot {
+        try await persist(
+            provider: provider,
+            allowedClasses: allowedClasses,
+            repository: repository,
+            changeSource: changeSource,
+            confirmedExpansion: false
+        )
+    }
+
+    static func confirmExpandedPolicy(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        repository: any ProviderGovernanceRepository,
+        confirmedAt: Date = Date(),
+        changeSource: CloudHealthPolicyChangeSource = .agentConversation
+    ) async throws -> CloudHealthContextPolicySnapshot {
+        try await persist(
+            provider: provider,
+            allowedClasses: allowedClasses,
+            repository: repository,
+            changeSource: changeSource,
+            confirmedExpansion: true,
+            confirmedAt: confirmedAt
+        )
+    }
+
+    static func updateConversationHistoryConsent(
+        provider: ProviderID,
+        allowed: Bool,
+        repository: any ProviderGovernanceRepository,
+        confirmedAt: Date? = nil,
+        changeSource: CloudHealthPolicyChangeSource = .settings
+    ) async throws -> CloudHealthContextPolicySnapshot {
+        let first = try await repository.isConsentGranted(provider: provider, dataClass: .conversationHistory)
+        let second = try await repository.isConsentGranted(provider: provider, dataClass: .conversationHistory)
+        guard !allowed || (first && second) || confirmedAt != nil else {
+            throw CloudHealthContextPolicyError.expansionRequiresConfirmation
+        }
+        if let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
+            return try await snapshotRepository.updateConversationHistoryConsent(
+                provider: provider,
+                allowed: allowed,
+                changeSource: changeSource,
+                confirmedAt: confirmedAt
+            )
+        }
+        try await repository.setConsent(
+            provider: provider,
+            dataClass: .conversationHistory,
+            granted: allowed,
+            policyVersion: "cloud-conversation-history-v1"
+        )
+        return try await currentSnapshotForConsent(from: repository, provider: provider)
+    }
+
+    private static func currentSnapshotForConsent(
+        from repository: any ProviderGovernanceRepository,
+        provider: ProviderID
+    ) async throws -> CloudHealthContextPolicySnapshot {
+        if let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
+            return try await snapshotRepository.currentCloudHealthContextPolicySnapshot(provider: provider)
+        }
+        return snapshotForRead(
+            provider: provider,
+            allowedClasses: try await consentSnapshot(from: repository, provider: provider, classes: dataClasses)
+        )
+    }
+
+    static func stageConversationExpansion(
+        provider: ProviderID,
+        requestedClasses: Set<ProviderDataClass>,
+        repository: any ProviderGovernanceRepository
+    ) async throws -> CloudHealthContextPolicySnapshot {
+        guard let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository else {
+            throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+        }
+        let current = try await load(from: repository, provider: provider)
+        let target = current.snapshot.allowedClasses.union(requestedClasses.intersection(Set(dataClasses)))
+        guard !target.subtracting(current.snapshot.allowedClasses).isEmpty else {
+            return current.snapshot
+        }
+        return try await snapshotRepository.stageCloudHealthContextPolicyDraft(
+            provider: provider,
+            allowedClasses: target,
+            changeSource: .agentConversation
+        )
+    }
+
+    static func confirmPendingConversationExpansion(
+        provider: ProviderID,
+        repository: any ProviderGovernanceRepository,
+        confirmedAt: Date = Date()
+    ) async throws -> CloudHealthContextPolicySnapshot {
+        guard let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository else {
+            throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+        }
+        let draft = try await snapshotRepository.currentCloudHealthContextPolicySnapshot(provider: provider)
+        guard draft.state == .draft else {
+            throw CloudHealthContextPolicyError.noPendingExpansion
+        }
+        return try await confirmExpandedPolicy(
+            provider: provider,
+            allowedClasses: draft.allowedClasses,
+            repository: repository,
+            confirmedAt: confirmedAt,
+            changeSource: .agentConversation
+        )
+    }
+
+    static func cancelPendingConversationExpansion(
+        provider: ProviderID,
+        repository: any ProviderGovernanceRepository
+    ) async throws -> CloudHealthContextPolicySnapshot {
+        guard let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository else {
+            throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+        }
+        let draft = try await snapshotRepository.currentCloudHealthContextPolicySnapshot(provider: provider)
+        guard draft.state == .draft else {
+            throw CloudHealthContextPolicyError.noPendingExpansion
+        }
+        // Consent records are deliberately untouched while a draft is pending;
+        // intersect reads twice before restoring their previously active set.
+        let before = try await consentSnapshot(from: repository, provider: provider, classes: dataClasses)
+        let after = try await consentSnapshot(from: repository, provider: provider, classes: dataClasses)
+        let retainedClasses = before.intersection(after)
+        return try await snapshotRepository.updateCloudHealthContextPolicy(
+            provider: provider,
+            allowedClasses: retainedClasses,
+            changeSource: .agentConversation,
+            confirmedAt: nil
+        )
+    }
+
+    private static func persist(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        repository: any ProviderGovernanceRepository,
+        changeSource: CloudHealthPolicyChangeSource,
+        confirmedExpansion: Bool,
+        confirmedAt: Date? = nil
+    ) async throws -> CloudHealthContextPolicySnapshot {
+        let allowed = allowedClasses.intersection(Set(dataClasses))
+        let current = try await load(from: repository, provider: provider)
+        let additions = allowed.subtracting(current.allowedClasses)
+        guard additions.isEmpty || confirmedExpansion else {
+            throw CloudHealthContextPolicyError.expansionRequiresConfirmation
+        }
+        if let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
+            return try await snapshotRepository.updateCloudHealthContextPolicy(
+                provider: provider,
+                allowedClasses: allowed,
+                changeSource: changeSource,
+                confirmedAt: additions.isEmpty ? current.snapshot.confirmedAt : confirmedAt
+            )
+        }
+        for dataClass in dataClasses {
+            try await repository.setConsent(
+                provider: provider,
+                dataClass: dataClass,
+                granted: allowed.contains(dataClass),
+                policyVersion: "cloud-health-context-v1"
+            )
+        }
+        return snapshotForRead(provider: provider, allowedClasses: allowed)
+    }
+
+    private static func snapshotForRead(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>
+    ) -> CloudHealthContextPolicySnapshot {
+        CloudHealthContextPolicySnapshot.make(
+            provider: provider,
+            policyID: CloudHealthContextPolicySnapshot.unconfigured(provider: provider).policyID,
+            revision: 0,
+            state: allowedClasses.isEmpty ? .notConfigured : .active,
+            allowedClasses: allowedClasses,
+            createdAt: .distantPast,
+            updatedAt: .distantPast,
+            confirmedAt: nil,
+            changeSource: .legacyConsent
+        )
+    }
+
+    /// Runs a send-start or retry gate after the final conservative consent read.
     static func withCurrentSendConsent<Result: Sendable>(
         from repository: any ProviderGovernanceRepository,
         provider: ProviderID,
         expectedHealthPolicy: Self,
         includesImage: Bool,
+        requiresHealthText: Bool = true,
+        additionalRequiredClasses: Set<ProviderDataClass> = [],
         operation: @Sendable () throws -> Result
     ) async throws -> Result {
-        let classes = dataClasses + [.healthText] + (includesImage ? [.mealImage] : [])
+        if let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
+            guard expectedHealthPolicy.provider == provider,
+                  expectedHealthPolicy.snapshot.provider == provider else {
+                throw ProviderError.consentPolicyChanged(provider: provider)
+            }
+            return try await snapshotRepository.withCurrentSendAuthorization(
+                provider: provider,
+                expectedSnapshot: expectedHealthPolicy.snapshot,
+                requiredClasses: currentSendRequiredClasses(
+                    expectedHealthPolicy: expectedHealthPolicy,
+                    includesImage: includesImage,
+                    requiresHealthText: requiresHealthText,
+                    additionalRequiredClasses: additionalRequiredClasses
+                ),
+                operation: operation
+            )
+        }
+        try await validateCurrentSendConsent(
+            from: repository,
+            provider: provider,
+            expectedHealthPolicy: expectedHealthPolicy,
+            includesImage: includesImage,
+            requiresHealthText: requiresHealthText,
+            additionalRequiredClasses: additionalRequiredClasses
+        )
+        return try operation()
+    }
+
+    /// Executes serialization on the governance actor after an atomic policy
+    /// revision and consent check, so revocation cannot interleave with payload
+    /// encoding.
+    static func withCurrentSendConsentSerialization<Result: Sendable>(
+        from repository: any ProviderGovernanceRepository,
+        provider: ProviderID,
+        expectedHealthPolicy: Self,
+        includesImage: Bool,
+        requiresHealthText: Bool = true,
+        operation: @Sendable () throws -> Result
+    ) async throws -> Result {
+        if let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
+            guard expectedHealthPolicy.provider == provider,
+                  expectedHealthPolicy.snapshot.provider == provider else {
+                throw ProviderError.consentPolicyChanged(provider: provider)
+            }
+            return try await snapshotRepository.withCurrentSendAuthorization(
+                provider: provider,
+                expectedSnapshot: expectedHealthPolicy.snapshot,
+                requiredClasses: currentSendRequiredClasses(
+                    expectedHealthPolicy: expectedHealthPolicy,
+                    includesImage: includesImage,
+                    requiresHealthText: requiresHealthText
+                ),
+                operation: operation
+            )
+        }
+        try await validateCurrentSendConsent(
+            from: repository,
+            provider: provider,
+            expectedHealthPolicy: expectedHealthPolicy,
+            includesImage: includesImage,
+            requiresHealthText: requiresHealthText
+        )
+        return try operation()
+    }
+
+    static func validateCurrentSendConsent(
+        from repository: any ProviderGovernanceRepository,
+        provider: ProviderID,
+        expectedHealthPolicy: Self,
+        includesImage: Bool,
+        requiresHealthText: Bool = true,
+        additionalRequiredClasses: Set<ProviderDataClass> = []
+    ) async throws {
+        guard expectedHealthPolicy.provider == provider,
+              expectedHealthPolicy.snapshot.provider == provider else {
+            throw ProviderError.consentPolicyChanged(provider: provider)
+        }
+        let classes = Array(currentSendRequiredClasses(
+            expectedHealthPolicy: expectedHealthPolicy,
+            includesImage: includesImage,
+            requiresHealthText: requiresHealthText,
+            additionalRequiredClasses: additionalRequiredClasses
+        )).sorted { $0.rawValue < $1.rawValue }
         let firstSnapshot = try await consentSnapshot(from: repository, provider: provider, classes: classes)
         let secondSnapshot = try await consentSnapshot(from: repository, provider: provider, classes: classes)
         let current = firstSnapshot.intersection(secondSnapshot)
 
-        guard current.contains(.healthText) else {
+        if requiresHealthText, !current.contains(.healthText) {
             throw ProviderError.consentRequired(provider: provider, dataClass: .healthText)
         }
         if includesImage, !current.contains(.mealImage) {
             throw ProviderError.consentRequired(provider: provider, dataClass: .mealImage)
+        }
+        if expectedHealthPolicy.allowsConversationHistory, !current.contains(.conversationHistory) {
+            throw ProviderError.consentRequired(provider: provider, dataClass: .conversationHistory)
+        }
+        for dataClass in additionalRequiredClasses.sorted(by: { $0.rawValue < $1.rawValue })
+        where !current.contains(dataClass) {
+            throw ProviderError.consentRequired(provider: provider, dataClass: dataClass)
         }
         let currentHealthClasses = current.intersection(Set(dataClasses))
         guard currentHealthClasses.isSuperset(of: expectedHealthPolicy.allowedClasses) else {
@@ -55,7 +527,34 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
                 .sorted { $0.rawValue < $1.rawValue }.first ?? .healthText
             throw ProviderError.consentRequired(provider: provider, dataClass: revokedClass)
         }
-        return try operation()
+        if let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
+            let firstPolicySnapshot = try await snapshotRepository.currentCloudHealthContextPolicySnapshot(
+                provider: provider
+            )
+            let secondPolicySnapshot = try await snapshotRepository.currentCloudHealthContextPolicySnapshot(
+                provider: provider
+            )
+            guard expectedHealthPolicy.provider == provider,
+                  expectedHealthPolicy.snapshot.provider == provider,
+                  firstPolicySnapshot == expectedHealthPolicy.snapshot,
+                  secondPolicySnapshot == expectedHealthPolicy.snapshot else {
+                throw ProviderError.consentPolicyChanged(provider: provider)
+            }
+        }
+    }
+
+    private static func currentSendRequiredClasses(
+        expectedHealthPolicy: Self,
+        includesImage: Bool,
+        requiresHealthText: Bool,
+        additionalRequiredClasses: Set<ProviderDataClass> = []
+    ) -> Set<ProviderDataClass> {
+        var required = expectedHealthPolicy.allowedClasses
+        if requiresHealthText { required.insert(.healthText) }
+        if expectedHealthPolicy.allowsConversationHistory { required.insert(.conversationHistory) }
+        if includesImage { required.insert(.mealImage) }
+        required.formUnion(additionalRequiredClasses)
+        return required
     }
 
     private static func consentSnapshot(
@@ -146,7 +645,8 @@ enum CloudRequestPolicyGuard {
                     ? value.averageDailyDeficitKcal : nil,
                 averageProteinGrams: policy.allows(.healthNutrition) ? value.averageProteinGrams : nil,
                 medianWeightKilograms: policy.allows(.healthBody) ? value.medianWeightKilograms : nil,
-                dataCoverage: dataCoverage
+                dataCoverage: dataCoverage,
+                metricWindowCoverage: filterMetricWindowCoverage(value.metricWindowCoverage, by: policy)
             )
         }
         let allowedReferencePrefixes = Set([
@@ -164,8 +664,16 @@ enum CloudRequestPolicyGuard {
             dailyProteinGoalGrams: policy.allows(.healthNutrition) ? summary.dailyProteinGoalGrams : nil,
             recommendationReferences: summary.recommendationReferences.filter { reference in
                 allowedReferencePrefixes.contains(String(reference.split(separator: ".").first ?? ""))
-            }
+            },
+            analysisWindowCoverage: filterMetricWindowCoverage(summary.analysisWindowCoverage, by: policy)
         )
+    }
+
+    private static func filterMetricWindowCoverage(
+        _ coverage: [String: HealthMetricWindowCoverage],
+        by policy: CloudHealthContextPolicy
+    ) -> [String: HealthMetricWindowCoverage] {
+        coverage.filter { policy.allows(coverageKey: $0.key) }
     }
 
     static func filterConversationHistory(
@@ -173,9 +681,8 @@ enum CloudRequestPolicyGuard {
         currentTurnStartIndex: Int,
         by policy: CloudHealthContextPolicy
     ) -> [ModelMessage] {
-        guard !allHealthClassesAllowed(policy), messages.indices.contains(currentTurnStartIndex) else {
-            return messages
-        }
+        guard messages.indices.contains(currentTurnStartIndex) else { return [] }
+        let allHealthClassesAllowed = allHealthClassesAllowed(policy)
         var output: [ModelMessage] = []
         var turn: [ModelMessage] = []
         var isCurrentTurn = false
@@ -188,7 +695,46 @@ enum CloudRequestPolicyGuard {
                     return false
                 }
             }
-            if isCurrentTurn || (!HealthContextPromptBuilder.shouldIncludeSummary(for: userText) && !containsHealthTool) {
+            let assistantReferencesHealth = turn.contains { message in
+                guard message.role == .assistant,
+                      let text = plainText(in: message) else { return false }
+                return HealthContextPromptBuilder.shouldIncludeSummary(for: text)
+            }
+            let containsStaleHealthProvenance = turn.contains { message in
+                guard let provenance = message.healthContextPolicyProvenance else { return false }
+                return provenance.provider != policy.provider
+                    || provenance.policyRevision != policy.revision
+                    || !provenance.allowedClasses.isSubset(of: policy.allowedClasses)
+            }
+            // Old user, assistant, or tool messages without a captured policy
+            // revision cannot be safely filtered for health text or policy
+            // changes. Drop the entire historical turn fail-closed.
+            let containsUnprovenancedConversationMessage = turn.contains { message in
+                [.user, .assistant, .tool].contains(message.role)
+                    && message.healthContextPolicyProvenance == nil
+            }
+            let containsUnprovenancedHealthTool = turn.contains { message in
+                guard message.healthContextPolicyProvenance == nil else { return false }
+                return message.content.contains { content in
+                    switch content {
+                    case .toolCall(let call): isHealthTool(name: call.name)
+                    case .toolResult: containsHealthTool
+                    case .text, .image, .reasoning: false
+                    }
+                }
+            }
+            if isCurrentTurn {
+                output.append(contentsOf: allHealthClassesAllowed
+                    ? turn
+                    : turn.compactMap(restrictCurrentTurnAssistantMessage))
+            } else if policy.allowsConversationHistory,
+                      !containsStaleHealthProvenance,
+                      !containsUnprovenancedConversationMessage,
+                      !containsUnprovenancedHealthTool,
+                      (allHealthClassesAllowed
+                        || (!HealthContextPromptBuilder.shouldIncludeSummary(for: userText)
+                            && !containsHealthTool
+                            && !assistantReferencesHealth)) {
                 output.append(contentsOf: turn)
             }
             turn.removeAll(keepingCapacity: true)
@@ -200,6 +746,19 @@ enum CloudRequestPolicyGuard {
         }
         flush()
         return output
+    }
+
+    private static func restrictCurrentTurnAssistantMessage(_ message: ModelMessage) -> ModelMessage? {
+        guard message.role == .assistant else { return message }
+        // Earlier provider prose or opaque reasoning may repeat health facts from
+        // a round whose policy was broader. Only tool-call structure may cross a
+        // later, narrower policy boundary; results are filtered separately.
+        let toolCalls = message.content.compactMap { content -> ModelContent? in
+            if case .toolCall(let call) = content { return .toolCall(call) }
+            return nil
+        }
+        guard !toolCalls.isEmpty else { return nil }
+        return ModelMessage(role: .assistant, content: toolCalls)
     }
 
     static func filterToolResults(in messages: [ModelMessage], by policy: CloudHealthContextPolicy) -> [ModelMessage] {
@@ -216,8 +775,17 @@ enum CloudRequestPolicyGuard {
                       let filtered = filterToolResult(name: name, result: result, by: policy) else { return item }
                 return .toolResult(toolCallID: callID, content: filtered)
             }
-            return ModelMessage(role: message.role, content: content, inputEnvelope: message.inputEnvelope)
+            return ModelMessage(
+                role: message.role,
+                content: content,
+                inputEnvelope: message.inputEnvelope,
+                healthContextPolicyProvenance: message.healthContextPolicyProvenance
+            )
         }
+    }
+
+    static func isHealthTool(name: String) -> Bool {
+        healthToolNames.contains(name)
     }
 
     private static func filterToolResult(name: String, result: String, by policy: CloudHealthContextPolicy) -> String? {
@@ -504,6 +1072,60 @@ private extension CloudHealthContextPolicy {
         if normalized.contains("deficit") {
             return allows(.healthNutrition) && allows(.healthActivity)
         }
+        if normalized == "proteingrams" { return allows(.healthNutrition) }
         return allows(source: normalized)
+    }
+}
+
+enum CloudHealthContextPolicyError: Error, Equatable {
+    case expansionRequiresConfirmation
+    case snapshotRepositoryUnavailable
+    case noPendingExpansion
+}
+
+enum CloudHealthContextPolicyAlignmentIntent: Equatable {
+    case requestExpansion(Set<ProviderDataClass>)
+    case revoke(Set<ProviderDataClass>)
+    case confirm
+    case cancel
+
+    static func parse(_ text: String) -> Self? {
+        let separators = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+        let normalized = text.lowercased().components(separatedBy: separators).joined()
+        if ["确认", "我确认", "确认授权", "确认这些类别", "同意这些类别", "是的确认"].contains(normalized) {
+            return .confirm
+        }
+        if ["取消", "我取消", "不同意", "不要", "先不", "算了", "取消授权"].contains(normalized) {
+            return .cancel
+        }
+
+        let isRevocation = [
+            "撤销", "取消授权", "停止使用", "不再使用", "关闭", "不要再",
+            "不允许", "不授权", "不同意", "不要上传", "不要使用",
+        ].contains { phrase in
+            normalized.contains(phrase)
+        }
+        let classes = mentionedClasses(in: normalized)
+        guard !classes.isEmpty else { return nil }
+        if isRevocation { return .revoke(classes) }
+
+        let isExplicitExpansion = ["授权", "允许", "同意", "可以用", "可以使用", "希望你用", "希望你使用", "同意你用"].contains { phrase in
+            normalized.contains(phrase)
+        }
+        guard isExplicitExpansion else { return nil }
+        return .requestExpansion(classes)
+    }
+
+    private static func mentionedClasses(in text: String) -> Set<ProviderDataClass> {
+        if ["全部健康", "所有健康", "全部历史健康", "所有历史健康", "健康历史", "历史健康"].contains(where: { text.contains($0) }) {
+            return Set(CloudHealthContextPolicy.dataClasses)
+        }
+        var result = Set<ProviderDataClass>()
+        if ["睡眠"].contains(where: { text.contains($0) }) { result.insert(.healthSleep) }
+        if ["饮食", "营养", "餐食", "摄入", "蛋白"].contains(where: { text.contains($0) }) { result.insert(.healthNutrition) }
+        if ["活动", "训练", "运动", "步数", "消耗"].contains(where: { text.contains($0) }) { result.insert(.healthActivity) }
+        if ["体重", "身体测量", "心率", "身体数据"].contains(where: { text.contains($0) }) { result.insert(.healthBody) }
+        if ["主观状态", "情绪", "自述", "症状"].contains(where: { text.contains($0) }) { result.insert(.healthSubjective) }
+        return result
     }
 }

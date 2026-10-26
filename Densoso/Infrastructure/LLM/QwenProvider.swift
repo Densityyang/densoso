@@ -69,9 +69,18 @@ struct QwenProvider: TextModelProvider {
                           !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw ProviderError.configurationMissing(provider: .qwen)
                     }
-                    let body = try JSONEncoder().encode(
-                        OpenAIRequest(request: request, model: descriptor.model)
-                    )
+                    let body: Data
+                    if let gate = request.preSerializationGate {
+                        body = try await gate {
+                            try JSONEncoder().encode(
+                                OpenAIRequest(request: request, model: descriptor.model)
+                            )
+                        }
+                    } else {
+                        body = try JSONEncoder().encode(
+                            OpenAIRequest(request: request, model: descriptor.model)
+                        )
+                    }
                     guard body.count <= Self.maximumPhase3RequestBytes else {
                         throw ProviderError.requestTooLarge(limitBytes: Self.maximumPhase3RequestBytes)
                     }
@@ -81,7 +90,11 @@ struct QwenProvider: TextModelProvider {
                     urlRequest.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
                     urlRequest.httpBody = body
 
-                    let result = try await executor.execute(urlRequest, deadline: request.deadline)
+                    let result = try await executor.execute(
+                        urlRequest,
+                        deadline: request.deadline,
+                        beforeNetworkAttempt: request.networkAttemptGate
+                    )
                     logSink.record(
                         ProviderLogRedactor.metadata(
                             requestID: request.requestID,

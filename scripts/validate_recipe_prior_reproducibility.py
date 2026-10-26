@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_MANIFEST = ROOT / "Densoso/Resources/FoodData/recipe_sources.json"
 SHIPPED_CATALOG = ROOT / "Densoso/Resources/FoodData/recipe_priors.json"
 SHIPPED_IMPORT_REPORT = ROOT / "Densoso/Resources/FoodData/recipe_prior_import_report.json"
+SHIPPED_VERIFIED_FOOD_IDS = ROOT / "Densoso/Resources/FoodData/verified_food_ids.json"
 IMPORTER = ROOT / "scripts/import_recipe_priors.py"
 PINNED_SOURCE_ID = "anduin-howtocook"
 PINNED_SOURCE_URL = "https://github.com/Anduin2017/HowToCook"
@@ -123,6 +124,7 @@ def main() -> int:
 
             generated_catalog = temporary / "recipe_priors.json"
             generated_import_report = temporary / "recipe_prior_import_report.json"
+            generated_verified_food_ids = temporary / "verified_food_ids.json"
             imported = subprocess.run(
                 [
                     sys.executable,
@@ -135,6 +137,8 @@ def main() -> int:
                     str(generated_catalog),
                     "--report",
                     str(generated_import_report),
+                    "--verified-food-ids-output",
+                    str(generated_verified_food_ids),
                 ],
                 check=False,
                 stdout=subprocess.PIPE,
@@ -149,6 +153,7 @@ def main() -> int:
             comparisons = {
                 "catalog": (generated_catalog, SHIPPED_CATALOG),
                 "importReport": (generated_import_report, SHIPPED_IMPORT_REPORT),
+                "verifiedFoodIDs": (generated_verified_food_ids, SHIPPED_VERIFIED_FOOD_IDS),
             }
             comparison_report: dict[str, Any] = {}
             all_match = True

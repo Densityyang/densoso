@@ -37,6 +37,20 @@ struct QwenASRProvider: CloudSpeechProvider {
         locale: Locale,
         requestID: UUID
     ) async throws -> CloudTranscript {
+        try await transcribe(
+            audio: audio,
+            locale: locale,
+            requestID: requestID,
+            beforeNetworkAttempt: {}
+        )
+    }
+
+    func transcribe(
+        audio: SanitizedAudio,
+        locale: Locale,
+        requestID: UUID,
+        beforeNetworkAttempt: @escaping @Sendable () async throws -> Void
+    ) async throws -> CloudTranscript {
         guard audio.mimeType == "audio/wav",
               audio.sampleRate == SpeechAudioFrame.canonicalSampleRate,
               audio.channelCount == SpeechAudioFrame.canonicalChannelCount,
@@ -70,7 +84,8 @@ struct QwenASRProvider: CloudSpeechProvider {
         do {
             result = try await executor.execute(
                 request,
-                deadline: Date().addingTimeInterval(45)
+                deadline: Date().addingTimeInterval(45),
+                beforeNetworkAttempt: beforeNetworkAttempt
             )
         } catch {
             logSink.record(
@@ -150,13 +165,32 @@ struct ConfiguredQwenASRProvider: CloudSpeechProvider {
         locale: Locale,
         requestID: UUID
     ) async throws -> CloudTranscript {
+        try await transcribe(
+            audio: audio,
+            locale: locale,
+            requestID: requestID,
+            beforeNetworkAttempt: {}
+        )
+    }
+
+    func transcribe(
+        audio: SanitizedAudio,
+        locale: Locale,
+        requestID: UUID,
+        beforeNetworkAttempt: @escaping @Sendable () async throws -> Void
+    ) async throws -> CloudTranscript {
         let endpoint = try UserDefaultsQwenASREndpointSource().endpoint()
         return try await QwenASRProvider(
             endpoint: endpoint,
             credentialSource: credentialSource,
             transport: transport,
             logSink: logSink
-        ).transcribe(audio: audio, locale: locale, requestID: requestID)
+        ).transcribe(
+            audio: audio,
+            locale: locale,
+            requestID: requestID,
+            beforeNetworkAttempt: beforeNetworkAttempt
+        )
     }
 }
 

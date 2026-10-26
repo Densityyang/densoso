@@ -96,7 +96,7 @@ def main() -> int:
             "last eight complete turns",
             "64 messages",
             "96 KiB input estimate",
-            "exact provider, model and capability",
+            "Pricing checks cover exact provider/model/capability matching and known descriptor entries",
             "retain unknown cost",
             "stable 64-row keyset pages",
             "cross-page currency fixture",
@@ -197,6 +197,7 @@ def main() -> int:
             "requestID: request.requestID",
             "imageCount: request.imageCount",
             "latencyMilliseconds: Self.latencyMilliseconds(since: startedAt)",
+            "if let gate = request.preSerializationGate",
         ],
         errors,
     )
@@ -208,6 +209,7 @@ def main() -> int:
             "usage.imageCount == 1",
             "usage.requestID == requestID",
             "testRetiredDeepSeekVisionCompatibilityAliasIsNotVisionCapable",
+            "testPreSerializationConsentCheckStopsBeforeDeepSeekRequestIsSent",
         ],
         errors,
     )
@@ -217,7 +219,13 @@ def main() -> int:
             "usage.requestID == requestID",
             "usage.imageCount == 0",
             "usage.latencyMilliseconds ?? -1",
+            "testPreSerializationConsentCheckStopsBeforeQwenRequestIsSent",
         ),
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "LLM" / "QwenProvider.swift",
+        ["if let gate = request.preSerializationGate"],
         errors,
     )
     require_text(
@@ -289,6 +297,7 @@ def main() -> int:
             "cancelled(requestID:", "beginAgentRequest", "resumeHistory",
             "requestSnapshot.budget", "requestSnapshot.consumption",
             "updateAgentRequestState",
+            "preSerializationGate:", "withCurrentSendConsentSerialization(",
         ],
         errors,
     )
@@ -709,7 +718,6 @@ def main() -> int:
     require_text(
         ROOT / "Packages" / "DensosoDomain" / "Sources" / "DensosoDomain" / "DailyCheckIn.swift",
         [
-            "Facts explicitly reported by the user",
             "public enum UserReportedEnergy",
             "public enum UserReportedStress",
             "public enum SubjectiveSleepQuality",

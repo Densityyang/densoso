@@ -101,6 +101,12 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         await cachedService.loadCachedBriefs()
         XCTAssertEqual(cachedService.dailyBriefSourceFingerprint, firstHash)
         XCTAssertNil(cachedService.dailyBriefValidatedAt)
+        cachedService.invalidateBriefsForHealthSnapshotRebuild()
+        XCTAssertNil(cachedService.dailyBrief)
+        XCTAssertNil(cachedService.weeklyBrief)
+        await cachedService.loadCachedBriefs()
+        XCTAssertNil(cachedService.dailyBrief)
+        XCTAssertNil(cachedService.weeklyBrief)
 
         metric.totalExpenditureKcal = 2_400
         metric.expenditureEnergyLowKcal = 2_400
@@ -112,6 +118,81 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         _ = try await service.refresh(asOf: reference)
         let changed = try XCTUnwrap(context.fetch(FetchDescriptor<DailyBriefRecord>()).first(where: { $0.dayKey == key }))
         XCTAssertNotEqual(changed.snapshotHash, firstHash)
+    }
+
+    func testHealthBriefCacheGenerationFenceRejectsPrePurgeWrites() throws {
+        let fence = HealthBriefCacheGenerationFence()
+        let prePurgeGeneration = fence.currentGeneration
+        _ = fence.invalidate()
+        var didCommit = false
+
+        XCTAssertThrowsError(try fence.withCurrentGeneration(prePurgeGeneration) {
+            didCommit = true
+        })
+        XCTAssertFalse(didCommit)
+    }
+
+    func testInvalidatedBriefCacheDoesNotReloadPrePurgeBriefs() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let reference = Date(timeIntervalSince1970: 1_800_000_000)
+        let day = Calendar.current.startOfDay(for: reference)
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: Calendar.current.timeZone.identifier,
+            energyIntakeKcal: try EstimateRange(low: 450, likely: 500, high: 600),
+            activeEnergyKcal: 420,
+            restingEnergyKcal: 1_400,
+            stepCount: 7_200,
+            exerciseMinutes: 40,
+            healthReadStates: [
+                HealthMetricID.activeEnergy.rawValue: .available,
+                HealthMetricID.restingEnergy.rawValue: .available,
+            ],
+            algorithmVersion: "v3"
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey(day),
+            timezoneID: snapshot.timezoneIdentifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "brief-invalidation-fixture",
+            algorithmVersion: snapshot.algorithmVersion
+        ))
+        context.insert(GoalProfileRecord(
+            profileKey: "primary",
+            targetWeightKilograms: 68,
+            dailyDeficitKcal: 400,
+            dailyProteinGrams: 90,
+            effectiveFrom: day
+        ))
+        try context.save()
+
+        let service = HealthIntelligenceService(modelContainer: container)
+        let initialBrief = try await service.refresh(asOf: reference)
+        XCTAssertNotNil(initialBrief)
+        XCTAssertFalse(try context.fetch(FetchDescriptor<DailyBriefRecord>()).isEmpty)
+        XCTAssertFalse(try context.fetch(FetchDescriptor<WeeklyBriefRecord>()).isEmpty)
+
+        service.invalidateBriefsForHealthSnapshotRebuild()
+        await service.loadCachedBriefs()
+        XCTAssertNil(service.dailyBrief)
+        XCTAssertNil(service.weeklyBrief)
+        var prePurgeRefreshWasRejected = false
+        do {
+            _ = try await service.refresh(asOf: reference)
+        } catch {
+            prePurgeRefreshWasRejected = true
+        }
+        XCTAssertTrue(prePurgeRefreshWasRejected)
+        XCTAssertNil(service.dailyBrief)
+        XCTAssertNil(service.weeklyBrief)
+
+        service.allowBriefRefreshAfterSuccessfulHealthSnapshotPurge()
+        let refreshedBrief = try await service.refresh(asOf: reference)
+        XCTAssertNotNil(refreshedBrief)
+        XCTAssertNotNil(service.dailyBrief)
     }
 
     func testReadModelReportsPerMetricCoverageAcrossTheFortyTwoDayHealthWindow() async throws {

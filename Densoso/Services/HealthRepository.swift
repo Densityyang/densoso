@@ -313,6 +313,170 @@ final class HealthRepository: HealthSyncRepository {
                     to: &affectedDates
                 )
             }
+            try removeHealthIntelligenceBriefCaches()
+        }
+    }
+
+    /// Clears only the requested rolling window before a fresh HealthKit snapshot.
+    /// Empty and failed reads therefore remain unknown instead of reusing values
+    /// cached under an earlier authorization scope.
+    func prepareHealthKitSnapshotRebuild(
+        for metrics: Set<HealthMetricID>,
+        from start: Date,
+        through end: Date
+    ) throws {
+        guard !metrics.isEmpty else { return }
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: start)
+        let lastDay = calendar.startOfDay(for: end)
+        guard firstDay <= lastDay,
+              let dayAfterLast = calendar.date(byAdding: .day, value: 1, to: lastDay) else {
+            throw HealthStoreClientError.invalidAnchor
+        }
+        let days = HealthDataWindowPolicy.days(from: firstDay, through: lastDay, calendar: calendar)
+        let orderedMetrics = metrics.sorted { $0.rawValue < $1.rawValue }
+        var clearedMetrics = metrics
+        if metrics.contains(.workout) {
+            clearedMetrics.insert(.workoutEffort)
+        }
+
+        try write(affecting: days) { affectedDates in
+            for metric in orderedMetrics {
+                if metric == .workout {
+                    try removeImportedWorkouts(
+                        from: firstDay,
+                        before: dayAfterLast,
+                        affectedDates: &affectedDates
+                    )
+                }
+                if metric == .bodyMass {
+                    try removeImportedHealthKitWeights(
+                        from: firstDay,
+                        before: dayAfterLast,
+                        affectedDates: &affectedDates
+                    )
+                }
+                guard metric != .workout else { continue }
+                let indexStart: Date
+                if metric == .sleepAnalysis {
+                    let previousDay = calendar.date(byAdding: .day, value: -1, to: firstDay) ?? firstDay
+                    indexStart = calendar.date(
+                        bySettingHour: 18,
+                        minute: 0,
+                        second: 0,
+                        of: previousDay
+                    ) ?? previousDay
+                } else {
+                    indexStart = firstDay
+                }
+                try removeHealthKitSampleIndexes(
+                    stream: metric.rawValue,
+                    from: indexStart,
+                    before: dayAfterLast,
+                    includeOverlapsAtStart: metric == .sleepAnalysis
+                )
+            }
+
+            for day in days {
+                var snapshot = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
+                let summary = snapshot.healthKitSampleSummary
+                let filteredSummary = summary.map {
+                    DailyHealthSampleSummary(
+                        metrics: $0.metrics.filter { !clearedMetrics.contains($0.metric) },
+                        sleep: clearedMetrics.contains(.sleepAnalysis) ? nil : $0.sleep,
+                        workoutEffort: clearedMetrics.contains(.workoutEffort) ? [] : $0.workoutEffort
+                    )
+                }
+                let legacySamples = snapshot.healthKitSamples?.filter { !clearedMetrics.contains($0.metric) }
+                var readStates = snapshot.healthReadStates ?? [:]
+                for metric in metrics {
+                    readStates[metric.rawValue] = .dataUnavailableOrReadScopeUnknown
+                }
+                if metrics.contains(.workout) {
+                    readStates[HealthMetricID.workoutEffort.rawValue] = .dataUnavailableOrReadScopeUnknown
+                }
+                snapshot = Self.replacing(
+                    snapshot,
+                    healthKitSamples: .some(legacySamples),
+                    healthKitSampleSummary: .some(filteredSummary),
+                    activeEnergyKcal: metrics.contains(.activeEnergy) ? .some(nil) : nil,
+                    restingEnergyKcal: metrics.contains(.restingEnergy) ? .some(nil) : nil,
+                    stepCount: metrics.contains(.stepCount) ? .some(nil) : nil,
+                    exerciseMinutes: metrics.contains(.exerciseMinutes) ? .some(nil) : nil,
+                    weightKilograms: metrics.contains(.bodyMass)
+                        ? .some(try latestLocalWeightKilograms(on: day))
+                        : nil,
+                    healthReadStates: .some(readStates)
+                )
+                try upsertHealthSnapshot(snapshot, for: day)
+            }
+            if metrics.contains(.bodyMass) {
+                try addDailyMetricDates(from: firstDay, through: end, to: &affectedDates)
+            }
+
+            try removeHealthIntelligenceBriefCaches()
+
+            for metric in orderedMetrics {
+                let stream = metric == .workout ? "workouts" : metric.rawValue
+                if let cursor = try cursorRecord(stream: stream) {
+                    cursor.anchorData = nil
+                    cursor.lastSuccessfulAt = nil
+                    cursor.lookbackStart = nil
+                    cursor.updatedAt = Date()
+                }
+            }
+        }
+    }
+
+    private func removeHealthKitSampleIndexes(
+        stream: String,
+        from start: Date,
+        before end: Date,
+        includeOverlapsAtStart: Bool = false
+    ) throws {
+        let predicate: Predicate<HealthKitSampleIndexRecord>
+        if includeOverlapsAtStart {
+            predicate = #Predicate<HealthKitSampleIndexRecord> {
+                $0.stream == stream && $0.endDate > start && $0.startDate < end
+            }
+        } else {
+            predicate = #Predicate<HealthKitSampleIndexRecord> {
+                $0.stream == stream && $0.startDate >= start && $0.startDate < end
+            }
+        }
+        let records = try modelContext.fetch(FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate))
+        for record in records {
+            modelContext.delete(record)
+        }
+    }
+
+    private func removeImportedWorkouts(
+        from start: Date,
+        before end: Date,
+        affectedDates: inout Set<Date>
+    ) throws {
+        let predicate = #Predicate<WorkoutRecord> {
+            $0.healthKitUUID != nil && $0.date >= start && $0.date < end
+        }
+        let records = try modelContext.fetch(FetchDescriptor<WorkoutRecord>(predicate: predicate))
+        for workout in records {
+            affectedDates.insert(workout.date)
+            modelContext.delete(workout)
+        }
+    }
+
+    private func removeImportedHealthKitWeights(
+        from start: Date,
+        before end: Date,
+        affectedDates: inout Set<Date>
+    ) throws {
+        let predicate = #Predicate<WeightRecord> {
+            $0.source == "healthKit" && $0.measuredAt >= start && $0.measuredAt < end
+        }
+        let records = try modelContext.fetch(FetchDescriptor<WeightRecord>(predicate: predicate))
+        for weight in records {
+            affectedDates.insert(weight.measuredAt)
+            modelContext.delete(weight)
         }
     }
 
@@ -786,6 +950,17 @@ final class HealthRepository: HealthSyncRepository {
         } catch {
             modelContext.rollback()
             throw error
+        }
+    }
+
+    private func removeHealthIntelligenceBriefCaches() throws {
+        // These derived briefs may contain values from the pre-purge HealthKit
+        // projection. Remove them in the same transaction as the raw cache purge.
+        for brief in try modelContext.fetch(FetchDescriptor<DailyBriefRecord>()) {
+            modelContext.delete(brief)
+        }
+        for brief in try modelContext.fetch(FetchDescriptor<WeeklyBriefRecord>()) {
+            modelContext.delete(brief)
         }
     }
 

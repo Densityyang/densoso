@@ -32,6 +32,16 @@ struct QwenMealVisionProvider: MealVisionProviding {
     }
 
     func analyze(imageJPEG: Data, locale: Locale) async throws -> MealVisionObservation {
+        try await analyze(imageJPEG: imageJPEG, locale: locale, serializationGate: { serialize in
+            try serialize()
+        })
+    }
+
+    func analyze(
+        imageJPEG: Data,
+        locale: Locale,
+        serializationGate: @escaping @Sendable (@Sendable () throws -> Data) async throws -> Data
+    ) async throws -> MealVisionObservation {
         guard imageJPEG.starts(with: [0xFF, 0xD8]) else {
             throw ProviderError.schemaViolation(path: "imageJPEG")
         }
@@ -43,7 +53,9 @@ struct QwenMealVisionProvider: MealVisionProviding {
         guard imageDataURL.utf8.count <= Self.maximumRequestBytes else {
             throw ProviderError.requestTooLarge(limitBytes: Self.maximumRequestBytes)
         }
-        let body = try JSONEncoder().encode(QwenVisionRequest(imageDataURL: imageDataURL))
+        let body = try await serializationGate {
+            try JSONEncoder().encode(QwenVisionRequest(imageDataURL: imageDataURL))
+        }
         guard body.count <= Self.maximumRequestBytes else {
             throw ProviderError.requestTooLarge(limitBytes: Self.maximumRequestBytes)
         }
@@ -59,7 +71,13 @@ struct QwenMealVisionProvider: MealVisionProviding {
         do {
             result = try await executor.execute(
                 request,
-                deadline: Date().addingTimeInterval(45)
+                deadline: Date().addingTimeInterval(45),
+                beforeNetworkAttempt: {
+                    // Reuse the captured image-policy gate for every retry. The
+                    // empty serialization keeps the policy check on the same
+                    // governance actor as the initial body encoding.
+                    _ = try await serializationGate { Data() }
+                }
             )
         } catch {
             logSink.record(
@@ -169,6 +187,16 @@ struct ConfiguredQwenMealVisionProvider: MealVisionProviding {
     }
 
     func analyze(imageJPEG: Data, locale: Locale) async throws -> MealVisionObservation {
+        try await analyze(imageJPEG: imageJPEG, locale: locale, serializationGate: { serialize in
+            try serialize()
+        })
+    }
+
+    func analyze(
+        imageJPEG: Data,
+        locale: Locale,
+        serializationGate: @escaping @Sendable (@Sendable () throws -> Data) async throws -> Data
+    ) async throws -> MealVisionObservation {
         let defaults = UserDefaults.standard
         let workspace = (defaults.string(forKey: "provider.qwen.workspaceID") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -188,7 +216,7 @@ struct ConfiguredQwenMealVisionProvider: MealVisionProviding {
             credentialSource: credentialSource,
             transport: transport,
             logSink: logSink
-        ).analyze(imageJPEG: imageJPEG, locale: locale)
+        ).analyze(imageJPEG: imageJPEG, locale: locale, serializationGate: serializationGate)
     }
 }
 

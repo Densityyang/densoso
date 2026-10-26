@@ -48,11 +48,25 @@ struct DeepSeekProvider: MultimodalModelProvider {
                     urlRequest.httpMethod = "POST"
                     urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     urlRequest.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-                    urlRequest.httpBody = try JSONEncoder().encode(
-                        DeepSeekResponsesRequest(request: request, model: descriptor.model)
-                    )
+                    let body: Data
+                    if let gate = request.preSerializationGate {
+                        body = try await gate {
+                            try JSONEncoder().encode(
+                                DeepSeekResponsesRequest(request: request, model: descriptor.model)
+                            )
+                        }
+                    } else {
+                        body = try JSONEncoder().encode(
+                            DeepSeekResponsesRequest(request: request, model: descriptor.model)
+                        )
+                    }
+                    urlRequest.httpBody = body
 
-                    let result = try await executor.executeStream(urlRequest, deadline: request.deadline)
+                    let result = try await executor.executeStream(
+                        urlRequest,
+                        deadline: request.deadline,
+                        beforeNetworkAttempt: request.networkAttemptGate
+                    )
                     logSink.record(
                         ProviderLogRedactor.metadata(
                             requestID: request.requestID,

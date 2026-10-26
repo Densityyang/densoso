@@ -75,6 +75,7 @@ struct GetRecipePriorTool: AgentTool {
                     matchType: match.kind.rawValue,
                     canonicalDishName: match.record.canonicalDishName,
                     category: match.record.category,
+                    cuisineRegion: OptionalString(value: match.record.cuisineRegion),
                     cookingMethod: match.record.cookingMethod,
                     cookingMethodEvidence: match.record.cookingMethodEvidence,
                     ingredients: Array(match.record.ingredients.prefix(RecipePriorCatalog.maximumIngredientsPerResult)),
@@ -112,11 +113,25 @@ struct GetRecipePriorTool: AgentTool {
         let results: [Result]
     }
 
+    private struct OptionalString: Encodable {
+        let value: String?
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            if let value {
+                try container.encode(value)
+            } else {
+                try container.encodeNil()
+            }
+        }
+    }
+
     private struct Result: Encodable {
         let id: String
         let matchType: String
         let canonicalDishName: String
         let category: String
+        let cuisineRegion: OptionalString
         let cookingMethod: String
         let cookingMethodEvidence: String
         let ingredients: [RecipeIngredientPrior]

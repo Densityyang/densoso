@@ -4,6 +4,7 @@ import DensosoDomain
 enum ProviderError: Equatable, Sendable, SharedErrorDescribing {
     case configurationMissing(provider: ProviderID)
     case consentRequired(provider: ProviderID, dataClass: ProviderDataClass)
+    case consentPolicyChanged(provider: ProviderID)
     case unauthorized(status: Int)
     case quotaExhausted(status: Int)
     case rateLimited(retryAfterSeconds: Double?)
@@ -36,6 +37,13 @@ enum ProviderError: Equatable, Sendable, SharedErrorDescribing {
                 userMessage: "需要先同意本次云端数据上传。",
                 subsystem: .provider,
                 reason: .consentRequired
+            )
+        case .consentPolicyChanged:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "隐私授权在请求过程中已更新，请重新发送本次请求。",
+                subsystem: .provider,
+                reason: .consentPolicyChanged
             )
         case .unauthorized(let status):
             SharedErrorDescriptor(

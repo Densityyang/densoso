@@ -497,6 +497,7 @@ jobs:
             -derivedDataPath "$DERIVED_DATA_PATH" \
             -only-testing:DensosoTests/DeepSeekProviderContractTests \
             -only-testing:DensosoTests/QwenProviderContractTests \
+            -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testQwenVisionRetryRevalidatesCapturedImagePolicyRevision \
             -only-testing:DensosoTests/ProviderRetryPolicyTests \
             -only-testing:DensosoTests/AgentCoordinatorTests \
             -only-testing:DensosoTests/AgentTurnContractTests \
@@ -1806,6 +1807,7 @@ jobs:
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testOutOfOrderMessagesAreReturnedInDurableArrivalOrder \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder \
             -only-testing:DensosoTests/AgentCoordinatorTests/testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce \
+            -only-testing:DensosoTests/AgentProviderContextPolicyTests/testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies \
             -resultBundlePath "$GATE14_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
             test 2>&1 | tee gate14-watch-daily-loop-tests.log
@@ -1843,6 +1845,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install pinned Taiwan food-import dependency
+        id: gate17_food_import_dependency
+        if: always()
+        run: |
+          python3 -m pip install --no-index --no-deps --require-hashes -r requirements-food-import.txt
+
       - name: Compile Gate 17 validators
         id: gate17_compile
         if: always()
@@ -1853,6 +1861,7 @@ jobs:
             scripts/import_recipe_priors.py \
             scripts/validate_recipe_priors.py \
             scripts/validate_recipe_prior_reproducibility.py \
+            scripts/import_taiwan_fda_foods.py \
             scripts/validate_gate17_food_data.py
 
       - name: Validate packaged food database
@@ -1878,6 +1887,14 @@ jobs:
             --report gate17-recipe-reproducibility.json 2>&1 \
             | tee gate17-recipe-reproducibility.log
 
+      - name: Reproduce Taiwan FDA rows from the pinned archive
+        id: gate17_taiwan_fda_reproducibility
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/import_taiwan_fda_foods.py --check 2>&1 \
+            | tee gate17-taiwan-fda-reproducibility.log
+
       - name: Validate production import provenance and energy semantics
         id: gate17_provenance
         if: always()
@@ -1893,12 +1910,16 @@ jobs:
           FOOD_DB_OUTCOME: ${{ steps.gate17_food_db.outcome }}
           RECIPE_PRIORS_OUTCOME: ${{ steps.gate17_recipe_priors.outcome }}
           RECIPE_REPRODUCIBILITY_OUTCOME: ${{ steps.gate17_recipe_reproducibility.outcome }}
+          TAIWAN_FDA_REPRODUCIBILITY_OUTCOME: ${{ steps.gate17_taiwan_fda_reproducibility.outcome }}
+          FOOD_IMPORT_DEPENDENCY_OUTCOME: ${{ steps.gate17_food_import_dependency.outcome }}
           PROVENANCE_OUTCOME: ${{ steps.gate17_provenance.outcome }}
         run: |
           if [ "$COMPILE_OUTCOME" = "success" ] \
+            && [ "$FOOD_IMPORT_DEPENDENCY_OUTCOME" = "success" ] \
             && [ "$FOOD_DB_OUTCOME" = "success" ] \
             && [ "$RECIPE_PRIORS_OUTCOME" = "success" ] \
             && [ "$RECIPE_REPRODUCIBILITY_OUTCOME" = "success" ] \
+            && [ "$TAIWAN_FDA_REPRODUCIBILITY_OUTCOME" = "success" ] \
             && [ "$PROVENANCE_OUTCOME" = "success" ]; then
             GATE_STATUS=PASS
           else
@@ -1917,8 +1938,11 @@ jobs:
             gate17-recipe-priors.log
             gate17-recipe-reproducibility.log
             gate17-recipe-reproducibility.json
+            gate17-taiwan-fda-reproducibility.log
             gate17-food-data-report.json
             docs/gates/gate-17-food-data-provenance.md
+            Densoso/Resources/FoodData/taiwan_food_import_report.json
+            Densoso/Resources/FoodData/taiwan_food_alias_review.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -2014,8 +2038,10 @@ jobs:
             -derivedDataPath "$GATE18_DERIVED_DATA_PATH" \
             -only-testing:DensosoTests/MultimodalAgentImageTests/testCompositePhotoMealKeepsSeparateDishesAndUsesLocalCalorieAccounting \
             -only-testing:DensosoTests/LogMealQuantityEvidenceTests \
+            -only-testing:DensosoTests/RecipePriorCatalogTests \
             -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto \
             -only-testing:DensosoTests/ConfirmationCoordinatorTests/testConsumedFractionConfirmationPersistsScaledIntakeAndUserEvidence \
+            -only-testing:DensosoTests/MealCalorieSummaryPresentationTests \
             -resultBundlePath "$GATE18_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
             test 2>&1 | tee gate18-meal-estimate-tests.log
@@ -2049,11 +2075,17 @@ jobs:
               "DensosoTests/MultimodalAgentImageTests/testCompositePhotoMealKeepsSeparateDishesAndUsesLocalCalorieAccounting",
               "DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto",
               "DensosoTests/ConfirmationCoordinatorTests/testConsumedFractionConfirmationPersistsScaledIntakeAndUserEvidence",
+              "DensosoTests/MealCalorieSummaryPresentationTests/testWideRangeKeepsLikelyAndConfidenceSeparateFromExpandableRange",
           ]
           source = Path("DensosoTests/Application/LogMealQuantityEvidenceTests.swift").read_text(encoding="utf-8")
           required.extend(
               f"DensosoTests/LogMealQuantityEvidenceTests/{method}"
               for method in re.findall(r"^\s*func\s+(test[A-Za-z0-9_]*)\s*\(", source, re.MULTILINE)
+          )
+          recipe_source = Path("DensosoTests/Application/RecipePriorCatalogTests.swift").read_text(encoding="utf-8")
+          required.extend(
+              f"DensosoTests/RecipePriorCatalogTests/{method}"
+              for method in re.findall(r"^\s*func\s+(test[A-Za-z0-9_]*)\s*\(", recipe_source, re.MULTILINE)
           )
           command = ["python3", "scripts/validate_xcresult_test_manifest.py", "--input", str(raw_path), "--report", "gate18-xctest-manifest.json"]
           for method in required:
@@ -2155,13 +2187,15 @@ jobs:
         run: |
           set +e
           set -o pipefail
-          swift test --package-path Packages/DensosoDomain --filter 'HealthIntelligenceTests/(testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial|testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders|testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage)' 2>&1 | tee gate19-domain-health-intelligence.log
+          swift test --package-path Packages/DensosoDomain --filter 'HealthIntelligenceTests/(testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial|testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders|testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage|testMetricWindowCoverageReportsThirtyAuthorizedDaysWithinFortyTwoDayTarget|testSleepWindowCoverageUsesFirstFullyAuthorizedWakeDay)' 2>&1 | tee gate19-domain-health-intelligence.log
           TEST_EXIT=$?
           python3 scripts/validate_swiftpm_test_manifest.py \
             --input gate19-domain-health-intelligence.log \
             --required HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial \
             --required HealthIntelligenceTests/testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders \
             --required HealthIntelligenceTests/testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage \
+            --required HealthIntelligenceTests/testMetricWindowCoverageReportsThirtyAuthorizedDaysWithinFortyTwoDayTarget \
+            --required HealthIntelligenceTests/testSleepWindowCoverageUsesFirstFullyAuthorizedWakeDay \
             --report gate19-domain-health-intelligence-manifest.json
           MANIFEST_EXIT=$?
           if [ "$TEST_EXIT" -ne 0 ] || [ "$MANIFEST_EXIT" -ne 0 ]; then exit 1; fi
@@ -2226,7 +2260,18 @@ jobs:
             -only-testing:DensosoTests/GetRecentWorkoutsToolTests/testRepositoryOmitsHealthKitWorkoutsWithUnknownOrMissingReadState \
             -only-testing:DensosoTests/HealthRepositoryTests/testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue \
             -only-testing:DensosoTests/AgentProviderContextPolicyTests/testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies \
+            -only-testing:DensosoTests/DeepSeekProviderContractTests/testPreSerializationConsentCheckStopsBeforeDeepSeekRequestIsSent \
+            -only-testing:DensosoTests/QwenProviderContractTests/testPreSerializationConsentCheckStopsBeforeQwenRequestIsSent \
+            -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testSerializationConsentGateStopsBeforeNetworkRequest \
+            -only-testing:DensosoTests/ProviderRetryPolicyTests/testDeepSeekStreamRetryRevalidatesCapturedPolicyRevision \
+            -only-testing:DensosoTests/ProviderRetryPolicyTests/testQwenTextRetryRevalidatesCapturedPolicyRevision \
+            -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testQwenVisionRetryRevalidatesCapturedImagePolicyRevision \
+            -only-testing:DensosoTests/ProviderRetryPolicyTests/testQwenASRRetryRejectsRevokedAndReconfirmedSpeechAudioConsent \
             -only-testing:DensosoTests/AgentRequestResumeTests/testPolicyRevocationDuringHealthToolExecutionFiltersTheContinuationRequest \
+            -only-testing:DensosoTests/AgentRequestResumeTests/testAgentHealthPolicyAlignmentStagesDraftAndRequiresConversationConfirmation \
+            -only-testing:DensosoTests/AgentRequestResumeTests/testConversationHistoryConsentDefaultsToCurrentTurnOnlyInProviderPayload \
+            -only-testing:DensosoTests/AgentRequestResumeTests/testConfirmedConversationHistoryConsentIncludesCurrentRevisionHistoryInProviderPayload \
+            -only-testing:DensosoTests/HealthIntelligenceServiceTests/testReadModelReportsPerMetricCoverageAcrossTheFortyTwoDayHealthWindow \
             -only-testing:DensosoTests/ExportServiceTests/testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied \
             -only-testing:DensosoTests/GetHealthHistoryToolTests/testHistoryResponsePreservesUnknownAndPartialCoverageWithoutAbsenceOrZero \
             -only-testing:DensosoTests/GetHealthHistoryToolTests/testReadModelHistoryKeepsUnknownHealthKitCoverageTypedWithoutZeroObservations \
@@ -2339,6 +2384,18 @@ jobs:
                   status = "PASS"
               else:
                   status = "BLOCKED"
+              if check_id == "health_window" and status in {"PASS", "BLOCKED"}:
+                  adapter = Path("Densoso/Infrastructure/HealthKit/HealthKitHealthStoreClient.swift").read_text(encoding="utf-8")
+                  if "throw HealthStoreClientError.authorizationBoundaryUnavailable" in adapter:
+                      return {
+                          "status": "BLOCKED",
+                          "evidenceRef": "Densoso/Infrastructure/HealthKit/HealthKitHealthStoreClient.swift",
+                          "blockingReason": (
+                              "The stable HealthKit SDK does not expose a reliable per-user authorized-history boundary. "
+                              "The real adapter still fails closed, so the 42-day analysis coverage cases exercised by "
+                              "fake boundary providers do not prove a usable real-device sync window."
+                          ),
+                      }
               value = {"status": status}
               if status == "PASS":
                   value["evidenceRef"] = evidence_ref
@@ -2368,10 +2425,11 @@ jobs:
               "testResults": app_results,
               "swiftPackageTestResults": package_results,
               "behaviorChecks": {
-                  "provider_final_request_body": {"status": "NOT_MEASURED"},
-                  "provider_tool_output": {"status": "NOT_MEASURED"},
-                  "cached_and_continued_context": {"status": "NOT_MEASURED"},
-                  "consent_expansion_confirmation": {"status": "NOT_MEASURED"},
+                  "provider_final_request_body": behavior_evidence("provider_final_request_body"),
+                  "retry_attempt_authorization": behavior_evidence("retry_attempt_authorization"),
+                  "provider_tool_output": behavior_evidence("provider_tool_output"),
+                  "cached_and_continued_context": behavior_evidence("cached_and_continued_context"),
+                  "consent_expansion_confirmation": behavior_evidence("consent_expansion_confirmation"),
                   "imported_backup_reconfirmation": behavior_evidence("imported_backup_reconfirmation"),
                   "health_window": behavior_evidence("health_window"),
                   "coverage_unknown_semantics": behavior_evidence("coverage_unknown_semantics"),

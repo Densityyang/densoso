@@ -1,7 +1,47 @@
 import DensosoDomain
+import Foundation
 import SwiftUI
 import SwiftData
 import Observation
+
+enum HealthContextExportGateError: Error {
+    case snapshotRebuildInProgress
+}
+
+/// Prevents cloud-facing Agent reads from observing cached HealthKit values
+/// while a foreground snapshot purge is running or has failed.
+@MainActor
+final class HealthContextExportGate {
+    private var generation: UInt64 = 0
+    private(set) var isOpen: Bool
+
+    init(initiallyOpen: Bool = false) {
+        isOpen = initiallyOpen
+    }
+
+    func closeForSnapshotRebuild() -> UInt64 {
+        generation &+= 1
+        isOpen = false
+        return generation
+    }
+
+    func openAfterSuccessfulPurge(generation expectedGeneration: UInt64) {
+        guard generation == expectedGeneration else { return }
+        isOpen = true
+    }
+
+    func withAllowedExport<Value: Sendable>(
+        _ export: @Sendable () async throws -> Value
+    ) async throws -> Value {
+        guard isOpen else { throw HealthContextExportGateError.snapshotRebuildInProgress }
+        let expectedGeneration = generation
+        let value = try await export()
+        guard isOpen, generation == expectedGeneration else {
+            throw HealthContextExportGateError.snapshotRebuildInProgress
+        }
+        return value
+    }
+}
 
 /// 全局依赖容器 —— 持有所有 Service 单例，通过 .environment() 注入
 @MainActor
@@ -17,6 +57,7 @@ final class Dependencies {
     let providerLogBuffer: ProviderLogBuffer
     let healthKitService: HealthKitService
     let healthKitSyncCoordinator: HealthKitSyncCoordinator
+    let healthContextExportGate: HealthContextExportGate
     let healthIntelligenceService: HealthIntelligenceService
     let healthProjectionActor: HealthProjectionActor
     let dailyLoopSnapshotService: DailyLoopSnapshotService
@@ -61,10 +102,33 @@ final class Dependencies {
             healthStore: healthKitService.client,
             observer: healthKitService.client
         )
-        let healthProjectionActor = HealthProjectionActor(modelContainer: modelContainer)
+        let hasCachedHealthKitData = Self.hasPersistedHealthKitData(in: modelContainer.mainContext)
+        let healthContextExportGate = HealthContextExportGate(
+            initiallyOpen: !healthKitService.hasRequestedAuthorization && !hasCachedHealthKitData
+        )
+        self.healthContextExportGate = healthContextExportGate
+        let briefCacheGenerationFence = HealthBriefCacheGenerationFence()
+        let healthProjectionActor = HealthProjectionActor(
+            modelContainer: modelContainer,
+            briefCacheGenerationFence: briefCacheGenerationFence
+        )
         self.healthProjectionActor = healthProjectionActor
-        let healthIntelligenceService = HealthIntelligenceService(projectionActor: healthProjectionActor)
+        let healthIntelligenceService = HealthIntelligenceService(
+            projectionActor: healthProjectionActor,
+            briefCacheGenerationFence: briefCacheGenerationFence
+        )
         self.healthIntelligenceService = healthIntelligenceService
+        healthKitSyncCoordinator.onHealthCachePurgeWillBegin = {
+            let generation = healthContextExportGate.closeForSnapshotRebuild()
+            healthIntelligenceService.invalidateBriefsForHealthSnapshotRebuild()
+            return generation
+        }
+        healthKitSyncCoordinator.onHealthCachePurgeDidSucceed = { generation in
+            healthContextExportGate.openAfterSuccessfulPurge(generation: generation)
+            if healthContextExportGate.isOpen {
+                healthIntelligenceService.allowBriefRefreshAfterSuccessfulHealthSnapshotPurge()
+            }
+        }
         self.briefNotificationScheduler = BriefNotificationScheduler()
         let workoutPlanSchedulingService = WorkoutPlanSchedulingService(modelContainer: modelContainer)
         self.workoutPlanSchedulingService = workoutPlanSchedulingService
@@ -95,13 +159,19 @@ final class Dependencies {
         }
         let toolRegistry = ToolRegistry(
             todayHealthStateProvider: { date in
-                try await healthProjectionActor.todayHealthState(asOf: date)
+                try await healthContextExportGate.withAllowedExport {
+                    try await healthProjectionActor.todayHealthState(asOf: date)
+                }
             },
             healthHistoryProvider: { start, end in
-                try await healthProjectionActor.healthHistory(from: start, through: end)
+                try await healthContextExportGate.withAllowedExport {
+                    try await healthProjectionActor.healthHistory(from: start, through: end)
+                }
             },
             goalProfileProvider: { date in
-                try await healthProjectionActor.goalProfile(asOf: date)
+                try await healthContextExportGate.withAllowedExport {
+                    try await healthProjectionActor.goalProfile(asOf: date)
+                }
             },
             mealPortionPriorRepository: mealPortionPriorRepository
         )
@@ -146,7 +216,9 @@ final class Dependencies {
             conversationRepository: agentRepository,
             confirmedFoodHistory: confirmedFoodHistory,
             healthNarrativeContextProvider: {
-                try await healthProjectionActor.healthNarrativeContext()
+                try await healthContextExportGate.withAllowedExport {
+                    try await healthProjectionActor.healthNarrativeContext()
+                }
             },
             confirmedWorkoutPlanHandler: { actionID in
                 try await workoutPlanSchedulingService.scheduleConfirmedPlan(actionID: actionID)
@@ -165,8 +237,10 @@ final class Dependencies {
             workoutPlanSchedulingService: workoutPlanSchedulingService
         )
         self.watchConnectivityCoordinator = watchConnectivityCoordinator
-        healthKitSyncCoordinator.onObserverSyncCompleted = {
+        healthKitSyncCoordinator.onObserverSyncCompleted = { metric, scanGeneration in
+            guard healthKitSyncCoordinator.isCurrentScanGeneration(scanGeneration, for: metric) else { return }
             _ = try? await healthIntelligenceService.refresh()
+            guard healthKitSyncCoordinator.isCurrentScanGeneration(scanGeneration, for: metric) else { return }
             watchConnectivityCoordinator.refreshApplicationContext()
         }
         self.dailyLoopBackgroundScheduler = DailyLoopBackgroundScheduler(
@@ -183,6 +257,40 @@ final class Dependencies {
         // 尝试加载食材库
         if automaticallyLoadFoodDatabase {
             Task { await setupFoodDB() }
+        }
+    }
+
+    /// A never-connected installation may export locally entered health context.
+    /// Restored or otherwise persisted HealthKit markers keep the gate closed until
+    /// the bounded cache purge establishes current read scope.
+    private static func hasPersistedHealthKitData(in context: ModelContext) -> Bool {
+        do {
+            let cursors = try context.fetch(FetchDescriptor<HealthKitImportCursor>())
+            if !cursors.isEmpty { return true }
+            let sampleIndexes = try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>())
+            if !sampleIndexes.isEmpty { return true }
+            let healthKitWeightPredicate = #Predicate<WeightRecord> { $0.source == "healthKit" }
+            let healthKitWeights = try context.fetch(
+                FetchDescriptor<WeightRecord>(predicate: healthKitWeightPredicate)
+            )
+            if !healthKitWeights.isEmpty { return true }
+
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            for record in try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()) {
+                let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+                if snapshot.healthReadStates?.isEmpty == false
+                    || snapshot.healthKitSamples?.isEmpty == false
+                    || snapshot.healthKitSampleSummary.map({
+                        !$0.metrics.isEmpty || $0.sleep != nil || !$0.workoutEffort.isEmpty
+                    }) == true {
+                    return true
+                }
+            }
+            return false
+        } catch {
+            // An unreadable cache may contain HealthKit data, so keep exports closed.
+            return true
         }
     }
 

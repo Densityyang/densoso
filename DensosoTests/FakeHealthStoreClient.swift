@@ -16,6 +16,9 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     private var observerHandler: HealthObserverClient.UpdateHandler?
     private var observerCompletions = 0
     private var completionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var sampleMetricsBlockedOnNextResponse: Set<HealthMetricID> = []
+    private var blockedSampleResponseContinuations: [HealthMetricID: CheckedContinuation<Void, Never>] = [:]
+    private var blockedSampleResponseWaiters: [HealthMetricID: [CheckedContinuation<Void, Never>]] = [:]
     private var writeFailuresRemaining = 0
 
     private(set) var authorizationScope: HealthAuthorizationScope?
@@ -37,6 +40,16 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     func failAggregate(for metric: HealthMetricID) { aggregateFailures.insert(metric) }
     func setSampleResponses(_ pages: [HealthSamplePage], for metric: HealthMetricID) {
         sampleResponses[metric] = pages
+    }
+    func blockNextSampleResponse(for metric: HealthMetricID) {
+        sampleMetricsBlockedOnNextResponse.insert(metric)
+    }
+    func waitUntilSampleResponseIsBlocked(for metric: HealthMetricID) async {
+        if blockedSampleResponseContinuations[metric] != nil { return }
+        await withCheckedContinuation { blockedSampleResponseWaiters[metric, default: []].append($0) }
+    }
+    func resumeBlockedSampleResponse(for metric: HealthMetricID) {
+        blockedSampleResponseContinuations.removeValue(forKey: metric)?.resume()
     }
     func setWorkoutResponses(_ pages: [HealthChangePage<WorkoutSnapshot>]) {
         workoutResponses = pages
@@ -69,16 +82,25 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     func samples(_ request: HealthSampleRequest) async throws -> HealthSamplePage {
         guard available else { throw HealthStoreClientError.unavailable }
         sampleRequestLog[request.metric, default: []].append(request)
-        guard var pages = sampleResponses[request.metric], !pages.isEmpty else {
-            return HealthSamplePage(
+        let response: HealthSamplePage
+        if var pages = sampleResponses[request.metric], !pages.isEmpty {
+            response = pages.removeFirst()
+            sampleResponses[request.metric] = pages
+        } else {
+            response = HealthSamplePage(
                 samples: [],
                 nextAnchorData: request.anchorData ?? Data([0]),
                 readState: .dataUnavailableOrReadScopeUnknown
             )
         }
-        let page = pages.removeFirst()
-        sampleResponses[request.metric] = pages
-        return page
+        if sampleMetricsBlockedOnNextResponse.remove(request.metric) != nil {
+            await withCheckedContinuation { continuation in
+                blockedSampleResponseContinuations[request.metric] = continuation
+                let waiters = blockedSampleResponseWaiters.removeValue(forKey: request.metric) ?? []
+                waiters.forEach { $0.resume() }
+            }
+        }
+        return response
     }
 
     func workoutChanges(from startDate: Date, after anchor: Data?) async throws -> HealthChangePage<WorkoutSnapshot> {

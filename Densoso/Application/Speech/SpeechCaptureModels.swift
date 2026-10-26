@@ -206,6 +206,12 @@ protocol CloudSpeechProvider: Sendable {
         locale: Locale,
         requestID: UUID
     ) async throws -> CloudTranscript
+    func transcribe(
+        audio: SanitizedAudio,
+        locale: Locale,
+        requestID: UUID,
+        beforeNetworkAttempt: @escaping @Sendable () async throws -> Void
+    ) async throws -> CloudTranscript
 }
 
 extension CloudSpeechProvider {
@@ -217,6 +223,7 @@ extension CloudSpeechProvider {
     ) async throws -> CloudTranscript {
         try await transcribe(audio: audio, locale: locale)
     }
+
 }
 
 protocol SpeechAudioStoring: Sendable {

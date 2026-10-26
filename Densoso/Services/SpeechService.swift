@@ -597,7 +597,8 @@ final class SpeechService {
               let audio,
               audio.durationSeconds >= policy.minimumCloudFallbackSeconds,
               let cloudProvider,
-              let captureRequestID else {
+              let captureRequestID,
+              let governanceRepository else {
             await audioStore.discard()
             runtime = .manualEntry
             let failure = makeFailure(
@@ -616,10 +617,34 @@ final class SpeechService {
 
         do {
             let providerStartedAt = Date()
+            let expectedSpeechPolicy = try await CloudHealthContextPolicy.load(
+                from: governanceRepository,
+                provider: .qwen
+            )
+            try await CloudHealthContextPolicy.withCurrentSendConsent(
+                from: governanceRepository,
+                provider: .qwen,
+                expectedHealthPolicy: expectedSpeechPolicy,
+                includesImage: false,
+                requiresHealthText: false,
+                additionalRequiredClasses: [.speechAudio],
+                operation: {}
+            )
             let cloud = try await cloudProvider.transcribe(
                 audio: audio,
                 locale: locale,
-                requestID: captureRequestID
+                requestID: captureRequestID,
+                beforeNetworkAttempt: {
+                    try await CloudHealthContextPolicy.withCurrentSendConsent(
+                        from: governanceRepository,
+                        provider: .qwen,
+                        expectedHealthPolicy: expectedSpeechPolicy,
+                        includesImage: false,
+                        requiresHealthText: false,
+                        additionalRequiredClasses: [.speechAudio],
+                        operation: {}
+                    )
+                }
             )
             transcribedText = cloud.text
             recordFirstTranscriptLatencyIfNeeded()

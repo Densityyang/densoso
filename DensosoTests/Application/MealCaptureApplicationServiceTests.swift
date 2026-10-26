@@ -637,6 +637,15 @@ private actor FakeMealVisionProvider: MealVisionProviding {
         return observation
     }
 
+    func analyze(
+        imageJPEG: Data,
+        locale: Locale,
+        serializationGate: @escaping @Sendable (@Sendable () throws -> Data) async throws -> Data
+    ) async throws -> MealVisionObservation {
+        _ = try await serializationGate { Data() }
+        return try await analyze(imageJPEG: imageJPEG, locale: locale)
+    }
+
     func callCount() -> Int { calls }
 }
 

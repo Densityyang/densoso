@@ -37,11 +37,32 @@ records before the boundary are removed from direct read paths, and affected
 daily projections are recomputed. Sleep uses its 18:00-to-18:00 wake-day window
 when determining the first fully authorized projection day.
 If boundary lookup fails, that metric's current analysis window is marked
-unknown and anchored cursors reset. HealthKit workouts are excluded from both
-daily-metric projection inputs and `get_recent_workouts` unless that day's
-workout read state is available; manual workouts remain eligible. Aggregate
-energy, step, and exercise values are admitted to the read model only when the
-matching daily read state is available.
+unknown by synchronously clearing only HealthKit-derived cache/index data inside
+the 42-day window before the snapshot query. Manual weights and records outside
+the window are retained. A successful snapshot makes days with visible records
+available; empty or failed days remain unknown, never `noData` or zero. The
+foreground path purges before scheduling its async rebuild, and a generation
+checked export gate blocks Agent health context until that purge succeeds. A
+failed purge keeps the gate closed; an export already reading while a new
+rebaseline starts is rejected after its generation changes. Daily background
+refresh also forces a full-window rebaseline, while ordinary observer updates
+continue from their stored anchors. This does not claim immediate detection of
+arbitrary HealthKit permission changes made outside the app. HealthKit workouts
+are excluded from both daily-metric projection inputs and
+`get_recent_workouts` unless that day's workout read state is available; manual
+workouts remain eligible. Aggregate energy, step, and exercise values are
+admitted to the read model only when the matching daily read state is available.
+
+The gate starts open for a never-connected installation only when persistence has
+no HealthKit cursor, sample index, HealthKit weight, or HealthKit-marked snapshot;
+this keeps locally entered health context available to a user who does not use
+HealthKit. A restored HealthKit-marked cache with no restored connection preference
+is purged synchronously from the bounded window without querying HealthKit before
+the gate opens. An unreadable cache remains closed. Each purge transaction also
+deletes persisted daily and weekly derived briefs. The observable service hides
+those briefs and uses a shared generation fence so a pre-purge projection cannot
+commit after invalidation or republish one to the UI/Watch; a failed purge leaves
+brief refresh disabled until a later purge succeeds.
 
 The dedicated policy and sync tests include unique sentinels for all five
 health classes under both DeepSeek and Qwen, a cross-domain goal-field case,
@@ -49,7 +70,11 @@ health classes under both DeepSeek and Qwen, a cross-domain goal-field case,
 repeated rebaseline assertion. The authorization-boundary regression also
 checks an out-of-window cached weight, HealthKit-only weight row, and imported
 workout, then verifies they are unavailable through the weight observation and
-workout record paths. A new adapter integration test passes guarded
+workout record paths. The foreground serialization fixture verifies a stale
+HealthKit sentinel is present before purge and absent from the serialized
+provider health summary afterward. Export-gate tests cover startup closed state,
+successful purge opening, failed purge denial, and invalidation of an in-flight
+export across rebaseline. A new adapter integration test passes guarded
 continuation messages through both provider serializers and inspects the
 captured local `URLRequest.httpBody`; a session test revokes sleep consent
 during a health tool read and checks the next provider-bound continuation. An

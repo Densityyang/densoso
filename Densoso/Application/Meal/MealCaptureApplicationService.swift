@@ -348,7 +348,24 @@ final class MealCaptureApplicationService {
             throw MealCaptureApplicationError.mealVisionConsentRequired
         }
 
-        let observation = try await visionProvider.analyze(imageJPEG: sanitized, locale: locale)
+        let expectedImagePolicy = try await CloudHealthContextPolicy.load(
+            from: governanceRepository,
+            provider: .qwen
+        )
+        let observation = try await visionProvider.analyze(
+            imageJPEG: sanitized,
+            locale: locale,
+            serializationGate: { serialize in
+                try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
+                    from: governanceRepository,
+                    provider: .qwen,
+                    expectedHealthPolicy: expectedImagePolicy,
+                    includesImage: true,
+                    requiresHealthText: false,
+                    operation: serialize
+                )
+            }
+        )
         if let usage = observation.usage {
             try? await usageLedger.record(
                 ProviderUsage(

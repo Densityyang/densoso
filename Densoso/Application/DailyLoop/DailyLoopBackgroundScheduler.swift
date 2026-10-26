@@ -143,7 +143,13 @@ final class DailyLoopBackgroundScheduler {
                     return
                 }
                 let repository = HealthRepository(modelContext: self.modelContainer.mainContext)
-                let syncResult = try await self.healthSyncCoordinator.syncAvailableData(using: repository)
+                // A daily full-window snapshot refresh revalidates the locally
+                // cached HealthKit window even when the stable SDK cannot expose
+                // a per-type limited-history boundary.
+                let syncResult = try await self.healthSyncCoordinator.syncAvailableData(
+                    using: repository,
+                    forceRebaseline: true
+                )
                 guard !Task.isCancelled, !taskBox.isExpired else {
                     taskBox.complete(success: false)
                     return

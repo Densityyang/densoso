@@ -2,11 +2,15 @@
 
 Status: original Gate 6 passed macOS CI; V5-to-V6 main-PR extension awaits current GitHub CI
 
-Gate 6 extends Draft PR #14 after the user approved Gate 5. It adds the HealthKit
-boundary, query/sync path, outbox worker and energy projection rules. The
-original Gate 6 implementation retained the V3 schema; the current cumulative
-main-PR extension adds the V5-to-V6 daily sample-summary migration described
-below without changing V1–V5 schema identities.
+The original Phase 6 Gate 6 record said it extended Draft PR #14 after the user
+approved Gate 5. That implementation added the HealthKit boundary, query/sync
+path, outbox worker and energy projection rules while retaining the V3 schema.
+The current cumulative main-PR extension adds the V5-to-V6 daily sample-summary
+migration described below without changing V1–V5 schema identities.
+
+PR #14 references below are historical evidence for the earlier Phase 6 change.
+They are not associated with the current `codex/ai-native-health-loop` branch and
+must not be treated as the current main-line PR.
 
 ## Scope
 
@@ -35,19 +39,30 @@ below without changing V1–V5 schema identities.
   HealthKit-origin workouts and weight rows before that timestamp are removed,
   and body-mass dependent historical projections are recomputed. Sleep uses the
   wake-day window beginning at 18:00 on the prior day.
-- If the limited-history boundary lookup fails, the current 42-day projection
-  for that metric is marked unknown and anchored cursors are reset. This avoids
-  consuming cached values while scope is unresolved and makes the next successful
-  sync perform a fresh bounded read.
+- If the stable SDK cannot report a per-type limited-history boundary, a fresh
+  bounded snapshot can still rebuild the current 42-day window. Before querying,
+  only HealthKit-derived cache/index data in that window is removed and every
+  affected daily read state is set to unknown; window-external records and manual
+  weights are retained. Empty or failed days remain unknown, while days with
+  successfully read records become available. The foreground and daily
+  background refresh paths force this rebaseline; ordinary observer wakeups keep
+  using an existing anchored cursor.
 - The Xcode 26.6 CI SDK does not expose Apple's documented authorization-boundary
   method in its stable HealthKit interface; Apple currently marks that method
   Beta. The adapter therefore emits the typed
   `healthKitAuthorizationBoundaryUnavailable` failure instead of calling a
   missing member or substituting the system-wide `earliestPermittedSampleDate`.
-  On this SDK, affected HealthKit streams remain unknown until a supported
-  per-type boundary source is available. This is a fail-closed compatibility
-  fallback, not evidence that production limited-history synchronization is
-  complete.
+  The app does not claim immediate detection of arbitrary permission changes
+  made outside the app. Rebaseline is triggered when authorization is confirmed
+  in Settings, when the app returns to foreground, and during the daily
+  background health refresh. Cloud-facing health reads stay closed until the
+  synchronous cache purge succeeds; a failed purge leaves the export gate closed.
+- A never-connected installation keeps manually entered health context available
+  only when persistence has no HealthKit markers. Restored HealthKit-marked
+  snapshots with no restored connection preference trigger a synchronous 42-day
+  local purge without querying HealthKit; unreadable caches remain closed. The purge
+  also deletes stored daily/weekly briefs, and a generation fence prevents an
+  already-running projection from committing or republishing a pre-purge brief.
 - Observer updates are only wakeups. The coordinator drains the relevant query
   before calling HealthKit's completion handler, guarded to complete once; an
   observer error completes without starting a sync or advancing a cursor.
@@ -58,7 +73,8 @@ below without changing V1–V5 schema identities.
 - A failure in one stream does not abort other independent streams; only the
   failed stream retains its prior cursor, and Settings reports partial completion.
 - After a prior user-initiated HealthKit request, app launch reinstalls observers
-  and runs a foreground incremental sync so missed events can converge.
+  and runs a foreground 42-day snapshot rebaseline before exporting current
+  HealthKit context; subsequent observer updates use anchored increments.
 - iOS target requests HealthKit background delivery in its entitlement. If the
   active signing profile cannot grant it, foreground observer/sync remains
   available and Settings reports that background delivery is unavailable.
@@ -197,7 +213,7 @@ unknown so the live projection does not reuse it as current.
 
 | Evidence | Required result | Current result |
 | --- | --- | --- |
-| Phase 6 implementation commit | Phase 6 implementation on Draft PR #14 | `b4230aee2961e4aa1e784428935616feba77e42c`; PR #14 remains OPEN, Draft, and `blocked-by-signing` |
+| Phase 6 implementation commit | Historical Phase 6 implementation on Draft PR #14 | `b4230aee2961e4aa1e784428935616feba77e42c`; historical PR #14 was OPEN, Draft, and `blocked-by-signing` |
 | Workflow | Gates 1–6 pass on the same head | [Run 38661937756](https://github.com/Densityyang/densoso/actions/runs/38661937756) — success |
 | Prior dependency | Gate 5 succeeds on the same head | 49 domain tests + 44 meal-capture tests, 0 failures; [Gate 5 artifact 11942720241](https://github.com/Densityyang/densoso/actions/runs/38661937756/artifacts/11942720241) |
 | Domain package | Foundation-only HealthKit contracts pass | 49 tests, 0 failures |
@@ -213,7 +229,7 @@ unknown so the live projection does not reuse it as current.
 Simulator fakes validate ordering and transaction behavior, not Apple's real
 HealthKit server delivery. No signed-device background-delivery result is
 claimed. Gate 6 does not claim medical interpretation, complete Phase 7
-health-intelligence behavior, or production/signing acceptance. PR #14 remains
-Draft and `blocked-by-signing` unless the user separately approves otherwise.
+health-intelligence behavior, or production/signing acceptance. The historical
+PR #14 state does not describe or identify the current main coding branch.
 Weight edit/delete controls are not added in this synchronization gate; the
 repository/outbox operations are covered so a later Records UI can call them.

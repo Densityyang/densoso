@@ -45,11 +45,19 @@ struct AppRoot: View {
     @State private var hasCompletedInitialDailyBriefRefresh = false
     @State private var isRefreshingStaleDailyBrief = false
     @State private var lastSuccessfulHealthRefreshDay: Date?
+    @State private var isRebaseliningHealthForForeground = false
+    @State private var isRunningForegroundHealthRebaselineTask = false
+    @State private var isForegroundHealthRebaselineQueued = false
+    @State private var hasRebaselinedHealthForForeground = false
+    @State private var preparedHealthSnapshotRebuild: HealthKitSnapshotRebuildPreparation?
 
     @ViewBuilder
     var body: some View {
         if dependencies.persistenceWriteGate.state.allowsWrites {
             ContentView()
+                .onAppear {
+                    prepareHealthRebaselineForCurrentForegroundActivation()
+                }
                 .task {
                     await dependencies.setupFoodDB()
                     await dependencies.restorePersistenceState()
@@ -67,9 +75,11 @@ struct AppRoot: View {
                     }
                     dependencies.watchConnectivityCoordinator.activate()
                     if dependencies.healthKitService.hasRequestedAuthorization {
+                        await rebaselineHealthForCurrentForegroundActivation()
                         let healthRepository = HealthRepository(modelContext: modelContext)
                         try? await dependencies.healthKitSyncCoordinator.startBackgroundObservers(using: healthRepository)
-                        _ = try? await dependencies.healthKitSyncCoordinator.syncAvailableData(using: healthRepository)
+                    } else {
+                        prepareHealthRebaselineForCurrentForegroundActivation()
                     }
                     dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
                     await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
@@ -101,8 +111,14 @@ struct AppRoot: View {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
-                        AppIntentInbox.receivePendingDrafts(receiveWorkoutPlan: false)
-                        Task { await refreshStaleDailyBriefAfterActivation() }
+                        prepareHealthRebaselineForCurrentForegroundActivation()
+                        Task {
+                            await rebaselineHealthForCurrentForegroundActivation()
+                            AppIntentInbox.receivePendingDrafts(receiveWorkoutPlan: false)
+                            await refreshStaleDailyBriefAfterActivation()
+                        }
+                    } else {
+                        hasRebaselinedHealthForForeground = false
                     }
                 }
         } else {
@@ -119,6 +135,73 @@ struct AppRoot: View {
     private func refreshNotificationSnapshot() async {
         let snapshot = try? await dependencies.dailyLoopSnapshotService.snapshot()
         await dependencies.briefNotificationScheduler.updateSnapshot(snapshot)
+    }
+
+    @MainActor
+    private func prepareHealthRebaselineForCurrentForegroundActivation() {
+        guard !launchConfiguration.isUITesting else { return }
+        guard dependencies.healthKitService.hasRequestedAuthorization else {
+            // A restored snapshot can contain HealthKit markers even when its
+            // connection preference was intentionally not restored. Purge the
+            // bounded cache locally without issuing HealthKit queries.
+            guard !dependencies.healthContextExportGate.isOpen else { return }
+            let repository = HealthRepository(modelContext: modelContext)
+            _ = try? dependencies.healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(using: repository)
+            return
+        }
+
+        if isRunningForegroundHealthRebaselineTask {
+            _ = dependencies.healthContextExportGate.closeForSnapshotRebuild()
+            dependencies.healthIntelligenceService.invalidateBriefsForHealthSnapshotRebuild()
+            isForegroundHealthRebaselineQueued = true
+            preparedHealthSnapshotRebuild = nil
+            return
+        }
+        guard !hasRebaselinedHealthForForeground,
+              !isRebaseliningHealthForForeground else { return }
+
+        isRebaseliningHealthForForeground = true
+        let repository = HealthRepository(modelContext: modelContext)
+        preparedHealthSnapshotRebuild = try? dependencies.healthKitSyncCoordinator
+            .prepareForegroundSnapshotRebuild(using: repository)
+    }
+
+    @MainActor
+    private func rebaselineHealthForCurrentForegroundActivation() async {
+        guard !launchConfiguration.isUITesting,
+              dependencies.healthKitService.hasRequestedAuthorization,
+              !hasRebaselinedHealthForForeground,
+              !isRunningForegroundHealthRebaselineTask else { return }
+        if preparedHealthSnapshotRebuild == nil {
+            let repository = HealthRepository(modelContext: modelContext)
+            preparedHealthSnapshotRebuild = try? dependencies.healthKitSyncCoordinator
+                .prepareForegroundSnapshotRebuild(using: repository)
+        }
+        isRunningForegroundHealthRebaselineTask = true
+        isRebaseliningHealthForForeground = true
+        defer {
+            isRebaseliningHealthForForeground = false
+            isRunningForegroundHealthRebaselineTask = false
+        }
+
+        let repository = HealthRepository(modelContext: modelContext)
+        let rebuild = preparedHealthSnapshotRebuild
+        _ = try? await dependencies.healthKitSyncCoordinator.syncAvailableData(
+            using: repository,
+            forceRebaseline: true,
+            now: rebuild?.through ?? Date(),
+            preparedSnapshotRebuild: rebuild
+        )
+        preparedHealthSnapshotRebuild = nil
+        let shouldRunQueuedRebaseline = isForegroundHealthRebaselineQueued
+        isForegroundHealthRebaselineQueued = false
+        hasRebaselinedHealthForForeground = !shouldRunQueuedRebaseline
+        if shouldRunQueuedRebaseline {
+            Task { @MainActor in
+                self.prepareHealthRebaselineForCurrentForegroundActivation()
+                await self.rebaselineHealthForCurrentForegroundActivation()
+            }
+        }
     }
 
     private func refreshStaleDailyBriefAfterActivation() async {

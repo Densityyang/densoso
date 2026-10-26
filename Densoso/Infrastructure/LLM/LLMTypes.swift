@@ -31,6 +31,9 @@ enum ProviderDataClass: String, Codable, CaseIterable, Hashable, Sendable {
     case healthActivity
     case healthBody
     case healthSubjective
+    /// Prior chat turns are a separate provider-scoped permission from current
+    /// user input and automatic historical health context.
+    case conversationHistory
     case mealImage
     case speechAudio
 
@@ -38,9 +41,13 @@ enum ProviderDataClass: String, Codable, CaseIterable, Hashable, Sendable {
         switch self {
         case .healthNutrition, .healthSleep, .healthActivity, .healthBody, .healthSubjective:
             true
-        case .healthText, .mealImage, .speechAudio:
+        case .healthText, .conversationHistory, .mealImage, .speechAudio:
             false
         }
+    }
+
+    var isConversationHistoryClass: Bool {
+        self == .conversationHistory
     }
 
     var healthContextTitle: String? {
@@ -50,9 +57,18 @@ enum ProviderDataClass: String, Codable, CaseIterable, Hashable, Sendable {
         case .healthActivity: "活动与训练"
         case .healthBody: "身体测量"
         case .healthSubjective: "主观状态自述"
-        case .healthText, .mealImage, .speechAudio: nil
+        case .healthText, .conversationHistory, .mealImage, .speechAudio: nil
         }
     }
+}
+
+/// Local-only provenance for assistant and tool messages generated from
+/// automatic health context. It is persisted with conversation history so a
+/// later provider request can remove turns whose policy became more restrictive.
+struct HealthContextPolicyProvenance: Codable, Equatable, Sendable {
+    let provider: ProviderID
+    let policyRevision: String
+    let allowedClasses: Set<ProviderDataClass>
 }
 
 enum ThinkingPolicy: String, Codable, Sendable {
@@ -74,17 +90,29 @@ struct ModelMessage: Codable, Equatable, Sendable {
     let role: ModelRole
     let content: [ModelContent]
     let inputEnvelope: InputEnvelope?
+    let healthContextPolicyProvenance: HealthContextPolicyProvenance?
 
-    init(role: ModelRole, text: String) {
+    init(
+        role: ModelRole,
+        text: String,
+        healthContextPolicyProvenance: HealthContextPolicyProvenance? = nil
+    ) {
         self.role = role
         self.content = [.text(text)]
         self.inputEnvelope = nil
+        self.healthContextPolicyProvenance = healthContextPolicyProvenance
     }
 
-    init(role: ModelRole, content: [ModelContent], inputEnvelope: InputEnvelope? = nil) {
+    init(
+        role: ModelRole,
+        content: [ModelContent],
+        inputEnvelope: InputEnvelope? = nil,
+        healthContextPolicyProvenance: HealthContextPolicyProvenance? = nil
+    ) {
         self.role = role
         self.content = content
         self.inputEnvelope = inputEnvelope
+        self.healthContextPolicyProvenance = healthContextPolicyProvenance
     }
 }
 
@@ -443,6 +471,10 @@ struct ModelRequest: Sendable {
     let thinking: ThinkingPolicy
     var responseFormat: StructuredOutputFormat? = nil
     let deadline: Date
+    var preSerializationGate: (@Sendable (@Sendable () throws -> Data) async throws -> Data)? = nil
+    /// Revalidates the captured consent policy immediately before every HTTP
+    /// attempt, including retries that reuse this request's serialized body.
+    var networkAttemptGate: (@Sendable () async throws -> Void)? = nil
 
     var imageCount: Int {
         messages.reduce(0) { count, message in

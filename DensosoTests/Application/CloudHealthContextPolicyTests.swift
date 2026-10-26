@@ -1,4 +1,5 @@
 import DensosoDomain
+import Foundation
 import SwiftData
 import XCTest
 @testable import Densoso
@@ -6,7 +7,7 @@ import XCTest
 @MainActor
 final class CloudHealthContextPolicyTests: XCTestCase {
     func testGranularConsentPersistsPerProviderAndDefaultsToDenied() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -16,11 +17,11 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         let initial = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
         XCTAssertTrue(initial.allowedClasses.isEmpty)
 
-        try await repository.setConsent(
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
             provider: .deepSeek,
-            dataClass: .healthActivity,
-            granted: true,
-            policyVersion: "cloud-health-context-v1"
+            allowedClasses: [.healthActivity],
+            repository: repository,
+            changeSource: .settings
         )
         let updated = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
         XCTAssertEqual(updated.allowedClasses, [.healthActivity])
@@ -29,16 +30,76 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         let otherProvider = try await CloudHealthContextPolicy.load(from: repository, provider: .qwen)
         XCTAssertTrue(otherProvider.allowedClasses.isEmpty)
 
-        try await repository.setConsent(
+        _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
             provider: .deepSeek,
-            dataClass: .healthActivity,
-            granted: false,
-            policyVersion: "cloud-health-context-v1"
+            allowedClasses: [],
+            repository: repository,
+            changeSource: .settings
         )
         let revoked = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
         XCTAssertFalse(revoked.allows(.healthActivity))
         XCTAssertEqual(revoked.allowedClasses, [])
         XCTAssertNotEqual(revoked.revision, updated.revision)
+    }
+
+    func testPolicySnapshotPersistsMonotonicRevisionHashAndRequiresConfirmedExpansion() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        let initial = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+
+        XCTAssertEqual(initial.schemaVersion, CloudHealthContextPolicySnapshot.currentSchemaVersion)
+        XCTAssertEqual(initial.state, .notConfigured)
+        XCTAssertEqual(initial.revision, 0)
+        XCTAssertTrue(initial.allowedClasses.isEmpty)
+
+        let firstConfirmedAt = Date(timeIntervalSince1970: 1_798_000_000)
+        let first = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: repository,
+            confirmedAt: firstConfirmedAt,
+            changeSource: .onboarding
+        )
+        XCTAssertEqual(first.state, .active)
+        XCTAssertEqual(first.revision, 1)
+        XCTAssertEqual(first.confirmedAt, firstConfirmedAt)
+        XCTAssertNotEqual(first.policyHash, initial.policyHash)
+
+        do {
+            _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+                provider: .deepSeek,
+                allowedClasses: [.healthSleep, .healthActivity],
+                repository: repository
+            )
+            XCTFail("Expanding a policy must require an explicit confirmation")
+        } catch {
+            XCTAssertEqual(error as? CloudHealthContextPolicyError, .expansionRequiresConfirmation)
+        }
+
+        let expanded = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep, .healthActivity],
+            repository: repository,
+            confirmedAt: firstConfirmedAt.addingTimeInterval(60),
+            changeSource: .settings
+        )
+        XCTAssertEqual(expanded.revision, 2)
+        XCTAssertEqual(expanded.policyID, first.policyID)
+        XCTAssertNotEqual(expanded.policyHash, first.policyHash)
+
+        let revoked = try await CloudHealthContextPolicy.applyRestrictiveChange(
+            provider: .deepSeek,
+            allowedClasses: [],
+            repository: repository
+        )
+        XCTAssertEqual(revoked.state, .revoked)
+        XCTAssertEqual(revoked.allowedClasses, [])
+        XCTAssertEqual(revoked.revision, 3)
+        XCTAssertNotEqual(revoked.policyHash, expanded.policyHash)
     }
 
     func testPolicySnapshotIntersectsReadsWhenConsentIsRevokedMidLoad() async throws {
@@ -48,6 +109,107 @@ final class CloudHealthContextPolicyTests: XCTestCase {
 
         XCTAssertFalse(policy.allows(.healthSleep))
         XCTAssertTrue(policy.allows(.healthActivity))
+    }
+
+    func testFinalProviderSendRejectsRevokedAndReconfirmedPolicyRevision() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: repository,
+            confirmedAt: Date(timeIntervalSince1970: 1_798_300_000),
+            changeSource: .settings
+        )
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        let expectedPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
+        XCTAssertTrue(expectedPolicy.allows(.healthSleep))
+
+        _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+            provider: .deepSeek,
+            allowedClasses: [],
+            repository: repository,
+            changeSource: .settings
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: repository,
+            confirmedAt: Date(timeIntervalSince1970: 1_798_300_060),
+            changeSource: .settings
+        )
+
+        do {
+            _ = try await CloudHealthContextPolicy.withCurrentSendConsent(
+                from: repository,
+                provider: .deepSeek,
+                expectedHealthPolicy: expectedPolicy,
+                includesImage: false,
+                operation: { true }
+            )
+            XCTFail("A stale policy revision must not start a provider request after reconfirmation")
+        } catch {
+            let policyChanged = error as? ProviderError
+            XCTAssertEqual(policyChanged, .consentPolicyChanged(provider: .deepSeek))
+            XCTAssertEqual(policyChanged?.sharedErrorDescriptor.reason, .consentPolicyChanged)
+        }
+
+        do {
+            _ = try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
+                from: repository,
+                provider: .deepSeek,
+                expectedHealthPolicy: expectedPolicy,
+                includesImage: false,
+                operation: { Data("stale-private-payload".utf8) }
+            )
+            XCTFail("A stale policy must not serialize a provider payload")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .deepSeek))
+        }
+    }
+
+    func testImageConsentReconfirmationAdvancesTheFinalSendPolicyRevision() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        let initial = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .mealImage,
+            granted: true,
+            policyVersion: "deepseek-sanitized-meal-image-v1"
+        )
+        let firstGrant = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .mealImage,
+            granted: false,
+            policyVersion: "deepseek-sanitized-meal-image-v1"
+        )
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .mealImage,
+            granted: true,
+            policyVersion: "deepseek-sanitized-meal-image-v1"
+        )
+        let reconfirmed = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+
+        XCTAssertEqual(firstGrant.revision, initial.revision + 1)
+        XCTAssertEqual(reconfirmed.revision, firstGrant.revision + 2)
+        XCTAssertEqual(reconfirmed.allowedClasses, initial.allowedClasses)
     }
 
     func testUnconfiguredPolicyOmitsAutomaticHistoricalContext() {
@@ -89,6 +251,324 @@ final class CloudHealthContextPolicyTests: XCTestCase {
             Set(sleepOnly?.aggregateSummary?.sevenDay.coverageDays.keys.map { $0 } ?? []),
             Set(["sleep"])
         )
+    }
+
+    func testSummaryPreservesOnlyAuthorizedPerMetricWindowCoverage() {
+        let start = Date(timeIntervalSince1970: 1_798_000_000)
+        let end = start.addingTimeInterval(41 * 24 * 60 * 60)
+        let metricCoverage = Dictionary(uniqueKeysWithValues: [
+            "sleep", "steps", "activeEnergy", "energyIntake", "dailyDeficitKcal", "proteinGrams", "bodyMass",
+        ].map { key in
+            (key, HealthMetricWindowCoverage(
+                targetWindowStart: start,
+                targetWindowEnd: end,
+                expectedCalendarDays: 42,
+                actualEarliestDate: start,
+                validCalendarDays: 30,
+                missingCalendarDays: 12,
+                authorizationLimited: true,
+                dataAvailabilityLimited: false
+            ))
+        })
+        let window = HealthContextWindowSummary(
+            windowDays: 28,
+            coverageDays: Dictionary(uniqueKeysWithValues: metricCoverage.keys.map { ($0, 10) }),
+            averageSleepMinutes: 420,
+            averageStepCount: 8_000,
+            averageActiveEnergyKcal: 500,
+            averageEnergyIntakeKcal: 1_900,
+            averageDailyDeficitKcal: 300,
+            averageProteinGrams: 90,
+            medianWeightKilograms: 68,
+            metricWindowCoverage: metricCoverage
+        )
+        let summary = HealthContextSummary(
+            sevenDay: window,
+            twentyEightDay: window,
+            targetWeightKilograms: 65,
+            dailyDeficitGoalKcal: 300,
+            dailyProteinGoalGrams: 100,
+            recommendationReferences: [],
+            analysisWindowCoverage: metricCoverage
+        )
+
+        let activityAndSleep = CloudRequestPolicyGuard.filtered(
+            summary,
+            by: CloudHealthContextPolicy(provider: .deepSeek, allowedClasses: [.healthSleep, .healthActivity])
+        )
+        let expectedActivityAndSleep = Set(["sleep", "steps", "activeEnergy"])
+        XCTAssertEqual(Set(activityAndSleep.analysisWindowCoverage.keys), expectedActivityAndSleep)
+        XCTAssertEqual(Set(activityAndSleep.sevenDay.metricWindowCoverage.keys), expectedActivityAndSleep)
+        XCTAssertEqual(Set(activityAndSleep.twentyEightDay.metricWindowCoverage.keys), expectedActivityAndSleep)
+        XCTAssertEqual(activityAndSleep.analysisWindowCoverage["sleep"]?.validCalendarDays, 30)
+        XCTAssertNil(activityAndSleep.analysisWindowCoverage["proteinGrams"])
+        XCTAssertNil(activityAndSleep.analysisWindowCoverage["dailyDeficitKcal"])
+
+        let nutritionAndActivity = CloudRequestPolicyGuard.filtered(
+            summary,
+            by: CloudHealthContextPolicy(provider: .deepSeek, allowedClasses: [.healthNutrition, .healthActivity])
+        )
+        XCTAssertEqual(
+            Set(nutritionAndActivity.analysisWindowCoverage.keys),
+            Set(["steps", "activeEnergy", "energyIntake", "dailyDeficitKcal", "proteinGrams"])
+        )
+        XCTAssertNotNil(nutritionAndActivity.analysisWindowCoverage["proteinGrams"])
+        XCTAssertNotNil(nutritionAndActivity.analysisWindowCoverage["dailyDeficitKcal"])
+        XCTAssertNil(nutritionAndActivity.analysisWindowCoverage["sleep"])
+        XCTAssertNil(nutritionAndActivity.analysisWindowCoverage["bodyMass"])
+    }
+
+    func testCurrentTurnAssistantTextIsRemovedBeforeRestrictedContinuation() throws {
+        let toolCall = ToolCall(id: "health-history", name: "get_health_history", arguments: .object([:]))
+        let messages = [
+            ModelMessage(role: .user, text: "之前的问题"),
+            ModelMessage(role: .assistant, text: "previous health answer"),
+            ModelMessage(role: .user, text: "继续查询"),
+            ModelMessage(role: .assistant, content: [
+                .text("sleep.current-round-secret"),
+                .toolCall(toolCall),
+                .reasoning(.string("sleep.reasoning-secret")),
+            ]),
+        ]
+
+        let filtered = CloudRequestPolicyGuard.filterConversationHistory(
+            messages,
+            currentTurnStartIndex: 2,
+            by: CloudHealthContextPolicy(
+                provider: .deepSeek,
+                allowedClasses: [.healthActivity],
+                allowsConversationHistory: true
+            )
+        )
+        let currentTurn = Array(filtered.suffix(2))
+        XCTAssertEqual(currentTurn.first?.role, .user)
+        XCTAssertEqual(currentTurn.first?.content, [.text("继续查询")])
+        XCTAssertEqual(currentTurn.count, 2)
+        XCTAssertEqual(currentTurn[1].content, [.toolCall(toolCall)])
+        let serializedCurrentTurn = String(describing: currentTurn)
+        XCTAssertFalse(serializedCurrentTurn.contains("sleep.current-round-secret"))
+        XCTAssertFalse(serializedCurrentTurn.contains("sleep.reasoning-secret"))
+    }
+
+    func testPastHealthNarrativeWithRevokedPolicyProvenanceIsRemovedForGenericUserWording() throws {
+        let messages = [
+            ModelMessage(role: .user, text: "好的"),
+            ModelMessage(
+                role: .assistant,
+                text: "这周的睡眠覆盖了七天，sleep.provenance-secret。",
+                healthContextPolicyProvenance: HealthContextPolicyProvenance(
+                    provider: .deepSeek,
+                    policyRevision: "deepSeek:4:sleep-activity-policy-hash",
+                    allowedClasses: [.healthSleep, .healthActivity]
+                )
+            ),
+            ModelMessage(role: .user, text: "继续")
+        ]
+
+        let filtered = CloudRequestPolicyGuard.filterConversationHistory(
+            messages,
+            currentTurnStartIndex: 2,
+            by: CloudHealthContextPolicy(
+                provider: .deepSeek,
+                allowedClasses: [.healthActivity],
+                allowsConversationHistory: true
+            )
+        )
+
+        XCTAssertEqual(filtered.map(\.role), [.user])
+        XCTAssertFalse(String(describing: filtered).contains("sleep.provenance-secret"))
+    }
+
+    func testPastUnprovenancedAssistantNarrativeFailsClosedForGenericWording() throws {
+        let messages = [
+            ModelMessage(role: .user, text: "继续"),
+            ModelMessage(role: .assistant, text: "这里是昨天的数字 12345。"),
+            ModelMessage(role: .user, text: "下一步"),
+        ]
+
+        let filtered = CloudRequestPolicyGuard.filterConversationHistory(
+            messages,
+            currentTurnStartIndex: 2,
+            by: CloudHealthContextPolicy(
+                provider: .deepSeek,
+                allowedClasses: [.healthActivity],
+                allowsConversationHistory: true
+            )
+        )
+
+        XCTAssertEqual(filtered.map(\.role), [.user])
+        XCTAssertFalse(String(describing: filtered).contains("12345"))
+    }
+
+    func testPolicyRevisionChangeDoesNotRestorePreviouslyRevokedNarrativeAfterReconfirmation() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: repository,
+            confirmedAt: Date(timeIntervalSince1970: 1_798_100_000),
+            changeSource: .settings
+        )
+        _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+            provider: .deepSeek,
+            allowed: true,
+            repository: repository,
+            confirmedAt: Date(timeIntervalSince1970: 1_798_100_030),
+            changeSource: .settings
+        )
+        let originalPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
+        XCTAssertTrue(originalPolicy.allowsConversationHistory)
+        let messages = [
+            ModelMessage(role: .user, text: "好的"),
+            ModelMessage(
+                role: .assistant,
+                text: "睡眠信息 sleep.revoked-then-reconfirmed-secret。",
+                healthContextPolicyProvenance: HealthContextPolicyProvenance(
+                    provider: .deepSeek,
+                    policyRevision: originalPolicy.revision,
+                    allowedClasses: originalPolicy.allowedClasses
+                )
+            ),
+            ModelMessage(role: .user, text: "继续"),
+        ]
+
+        _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+            provider: .deepSeek,
+            allowedClasses: [],
+            repository: repository,
+            changeSource: .settings
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: repository,
+            confirmedAt: Date(timeIntervalSince1970: 1_798_100_060),
+            changeSource: .settings
+        )
+        let reconfirmedPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
+        XCTAssertEqual(reconfirmedPolicy.allowedClasses, [.healthSleep])
+        XCTAssertTrue(reconfirmedPolicy.allowsConversationHistory)
+        XCTAssertNotEqual(reconfirmedPolicy.revision, originalPolicy.revision)
+
+        let filtered = CloudRequestPolicyGuard.filterConversationHistory(
+            messages,
+            currentTurnStartIndex: 2,
+            by: reconfirmedPolicy
+        )
+        XCTAssertEqual(filtered.map(\.role), [.user])
+        XCTAssertFalse(String(describing: filtered).contains("sleep.revoked-then-reconfirmed-secret"))
+    }
+
+    func testConversationAlignmentRequiresExplicitOptInAndSeparatesRevocation() {
+        XCTAssertNil(CloudHealthContextPolicyAlignmentIntent.parse("看看我的睡眠数据"))
+        XCTAssertEqual(
+            CloudHealthContextPolicyAlignmentIntent.parse("我同意你使用睡眠和活动历史"),
+            .requestExpansion([.healthSleep, .healthActivity])
+        )
+        XCTAssertEqual(
+            CloudHealthContextPolicyAlignmentIntent.parse("不再使用睡眠历史"),
+            .revoke([.healthSleep])
+        )
+        XCTAssertEqual(CloudHealthContextPolicyAlignmentIntent.parse("确认。"), .confirm)
+    }
+
+    func testConversationHistoryIsProviderScopedIndependentAndRevisionBound() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+
+        let defaultPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
+        XCTAssertFalse(defaultPolicy.allowsConversationHistory)
+        do {
+            _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+                provider: .deepSeek,
+                allowed: true,
+                repository: repository
+            )
+            XCTFail("Conversation history expansion must require explicit confirmation")
+        } catch {
+            XCTAssertEqual(error as? CloudHealthContextPolicyError, .expansionRequiresConfirmation)
+        }
+
+        _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+            provider: .deepSeek,
+            allowed: true,
+            repository: repository,
+            confirmedAt: Date(timeIntervalSince1970: 1_798_200_000),
+            changeSource: .settings
+        )
+        let allowedPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
+        XCTAssertTrue(allowedPolicy.allowsConversationHistory)
+        XCTAssertTrue(allowedPolicy.allowedClasses.isEmpty)
+        let qwenPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .qwen)
+        XCTAssertFalse(qwenPolicy.allowsConversationHistory)
+
+        let history = [
+            ModelMessage(
+                role: .user,
+                text: "previous private user note",
+                healthContextPolicyProvenance: HealthContextPolicyProvenance(
+                    provider: .deepSeek,
+                    policyRevision: allowedPolicy.revision,
+                    allowedClasses: allowedPolicy.allowedClasses
+                )
+            ),
+            ModelMessage(
+                role: .assistant,
+                text: "previous assistant note",
+                healthContextPolicyProvenance: HealthContextPolicyProvenance(
+                    provider: .deepSeek,
+                    policyRevision: allowedPolicy.revision,
+                    allowedClasses: allowedPolicy.allowedClasses
+                )
+            ),
+            ModelMessage(
+                role: .user,
+                text: "current question",
+                healthContextPolicyProvenance: HealthContextPolicyProvenance(
+                    provider: .deepSeek,
+                    policyRevision: allowedPolicy.revision,
+                    allowedClasses: allowedPolicy.allowedClasses
+                )
+            ),
+        ]
+        let forwarded = CloudRequestPolicyGuard.filterConversationHistory(
+            history,
+            currentTurnStartIndex: 2,
+            by: allowedPolicy
+        )
+        XCTAssertTrue(String(describing: forwarded).contains("previous private user note"))
+
+        _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+            provider: .deepSeek,
+            allowed: false,
+            repository: repository,
+            changeSource: .settings
+        )
+        let revokedPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
+        XCTAssertFalse(revokedPolicy.allowsConversationHistory)
+        XCTAssertNotEqual(revokedPolicy.revision, allowedPolicy.revision)
+        let afterRevocation = CloudRequestPolicyGuard.filterConversationHistory(
+            history,
+            currentTurnStartIndex: 2,
+            by: revokedPolicy
+        )
+        XCTAssertEqual(afterRevocation.map(\.role), [.user])
+        XCTAssertFalse(String(describing: afterRevocation).contains("previous private user note"))
     }
 
     func testProviderContinuationRemovesForbiddenSleepAndSleepDerivedRecovery() throws {
@@ -309,7 +789,11 @@ final class CloudHealthContextPolicyTests: XCTestCase {
     }
 
     func testHealthHistoryRecomputesStatusFromAuthorizedFieldsAndDropsForbiddenOnlyDates() throws {
-        let policy = CloudHealthContextPolicy(provider: .deepSeek, allowedClasses: [.healthActivity])
+        let policy = CloudHealthContextPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity],
+            allowsConversationHistory: true
+        )
         let payload = #"{"status":"available","message":"sleep data was available","startDate":"2026-10-01","endDate":"2026-10-02","days":[{"date":"2026-10-01","domainStatuses":{"sleep":"attention"},"observations":{"sleep.mainSleep.minutes":999},"recoveryStatus":"attention"},{"date":"2026-10-02","domainStatuses":{"activity":"noData"},"observations":{},"recoveryStatus":"attention","trainingLoadBand":"unavailable"}]}"#
         let messages = [
             ModelMessage(role: .assistant, content: [
@@ -337,7 +821,11 @@ final class CloudHealthContextPolicyTests: XCTestCase {
     }
 
     func testAuthorizedUnknownHealthHistoryCoverageDoesNotBecomeNoDataOrZero() throws {
-        let policy = CloudHealthContextPolicy(provider: .deepSeek, allowedClasses: [.healthActivity])
+        let policy = CloudHealthContextPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity],
+            allowsConversationHistory: true
+        )
         let payload = #"{"status":"noData","message":"no observations","startDate":"2026-10-01","endDate":"2026-10-02","days":[{"date":"2026-10-01","domainStatuses":{"activity":"unknown","sleep":"attention"},"observations":{"sleep.mainSleep.minutes":9876543}},{"date":"2026-10-02","domainStatuses":{"activity":"partial","sleep":"attention"},"observations":{"sleep.mainSleep.minutes":9876543}}]}"#
         let messages = [
             ModelMessage(role: .assistant, content: [

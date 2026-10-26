@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 @ModelActor
-actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
+actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, CloudHealthContextPolicySnapshotRepository {
     static let monthlyUsageBatchSize = 64
 
     private struct UsageCursor {
@@ -25,6 +25,13 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
         granted: Bool,
         policyVersion: String
     ) throws {
+        if granted,
+           (dataClass.isHealthContextClass || dataClass.isConversationHistoryClass),
+           try isConsentGranted(provider: provider, dataClass: dataClass) == false {
+            throw CloudHealthContextPolicyError.expansionRequiresConfirmation
+        }
+        let now = Date()
+        let previousPolicy = try? currentCloudHealthContextPolicySnapshot(provider: provider)
         let key = consentKey(provider: provider, dataClass: dataClass)
         var descriptor = FetchDescriptor<ConsentRecord>(
             predicate: #Predicate { $0.consentKey == key }
@@ -33,8 +40,8 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
         if let record = try modelContext.fetch(descriptor).first {
             record.granted = granted
             record.policyVersion = policyVersion
-            record.decidedAt = Date()
-            record.revokedAt = granted ? nil : Date()
+            record.decidedAt = now
+            record.revokedAt = granted ? nil : now
         } else {
             modelContext.insert(
                 ConsentRecord(
@@ -42,11 +49,194 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
                     kind: dataClass.rawValue,
                     policyVersion: policyVersion,
                     granted: granted,
-                    revokedAt: granted ? nil : Date()
+                    decidedAt: now,
+                    revokedAt: granted ? nil : now
                 )
             )
         }
+        var allowed = try currentGrantedHealthContextClasses(for: provider)
+        if try isConsentGranted(provider: provider, dataClass: .conversationHistory) {
+            allowed.insert(.conversationHistory)
+        }
+        let prior = previousPolicy ?? CloudHealthContextPolicySnapshot.unconfigured(provider: provider)
+        let changesHealthPolicy = dataClass.isHealthContextClass || dataClass.isConversationHistoryClass
+        let state: CloudHealthPolicyState = changesHealthPolicy
+            ? (allowed.isEmpty ? .revoked : .active)
+            : prior.state
+        let snapshot = CloudHealthContextPolicySnapshot.make(
+            provider: provider,
+            policyID: prior.policyID,
+            revision: prior.revision + 1,
+            state: state,
+            allowedClasses: allowed,
+            createdAt: prior.createdAt == .distantPast ? now : prior.createdAt,
+            updatedAt: now,
+            confirmedAt: changesHealthPolicy && granted ? now : prior.confirmedAt,
+            changeSource: .settings
+        )
+        _ = upsertPolicySnapshot(snapshot)
         try modelContext.save()
+    }
+
+    func currentCloudHealthContextPolicySnapshot(
+        provider: ProviderID
+    ) throws -> CloudHealthContextPolicySnapshot {
+        let key = policyKey(provider: provider)
+        var descriptor = FetchDescriptor<CloudHealthContextPolicyRecord>(
+            predicate: #Predicate { $0.policyKey == key }
+        )
+        descriptor.fetchLimit = 1
+        if let records = try? modelContext.fetch(descriptor) {
+            if let record = records.first {
+                if let decoded = decodePolicySnapshot(record) { return decoded }
+                return CloudHealthContextPolicySnapshot.make(
+                    provider: provider,
+                    policyID: record.policyID,
+                    revision: record.revision,
+                    state: .needsReconfirmation,
+                    allowedClasses: [],
+                    createdAt: record.createdAt,
+                    updatedAt: record.updatedAt,
+                    confirmedAt: nil,
+                    changeSource: .backupRestore
+                )
+            }
+            let legacy = try legacyPolicySnapshot(provider: provider)
+            if legacy.state != .notConfigured, upsertPolicySnapshot(legacy) {
+                try modelContext.save()
+            }
+            return legacy
+        }
+        return try legacyPolicySnapshot(provider: provider)
+    }
+
+    func withCurrentSendAuthorization<Result: Sendable>(
+        provider: ProviderID,
+        expectedSnapshot: CloudHealthContextPolicySnapshot,
+        requiredClasses: Set<ProviderDataClass>,
+        operation: @Sendable () throws -> Result
+    ) async throws -> Result {
+        let currentSnapshot = try currentCloudHealthContextPolicySnapshot(provider: provider)
+        guard expectedSnapshot.provider == provider, currentSnapshot == expectedSnapshot else {
+            throw ProviderError.consentPolicyChanged(provider: provider)
+        }
+        for dataClass in requiredClasses.sorted(by: { $0.rawValue < $1.rawValue }) {
+            guard try isConsentGranted(provider: provider, dataClass: dataClass) else {
+                throw ProviderError.consentRequired(provider: provider, dataClass: dataClass)
+            }
+        }
+        return try operation()
+    }
+
+    func updateCloudHealthContextPolicy(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        changeSource: CloudHealthPolicyChangeSource,
+        confirmedAt: Date?
+    ) throws -> CloudHealthContextPolicySnapshot {
+        let allowed = allowedClasses.intersection(Set(CloudHealthContextPolicy.dataClasses))
+        let prior = try currentCloudHealthContextPolicySnapshot(provider: provider)
+        let expansion = allowed.subtracting(prior.allowedClasses)
+        guard expansion.isEmpty || confirmedAt != nil else {
+            throw CloudHealthContextPolicyError.expansionRequiresConfirmation
+        }
+
+        let now = Date()
+        for dataClass in CloudHealthContextPolicy.dataClasses {
+            try upsertConsentRecord(
+                provider: provider,
+                dataClass: dataClass,
+                granted: allowed.contains(dataClass),
+                policyVersion: "cloud-health-context-v1",
+                decidedAt: now
+            )
+        }
+        var snapshotClasses = allowed
+        if try isConsentGranted(provider: provider, dataClass: .conversationHistory) {
+            snapshotClasses.insert(.conversationHistory)
+        }
+        let snapshot = CloudHealthContextPolicySnapshot.make(
+            provider: provider,
+            policyID: prior.policyID,
+            revision: prior.revision + 1,
+            state: snapshotClasses.isEmpty ? .revoked : .active,
+            allowedClasses: snapshotClasses,
+            createdAt: prior.createdAt == .distantPast ? now : prior.createdAt,
+            updatedAt: now,
+            confirmedAt: confirmedAt ?? prior.confirmedAt,
+            changeSource: changeSource
+        )
+        _ = upsertPolicySnapshot(snapshot)
+        try modelContext.save()
+        return snapshot
+    }
+
+    func stageCloudHealthContextPolicyDraft(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        changeSource: CloudHealthPolicyChangeSource
+    ) throws -> CloudHealthContextPolicySnapshot {
+        let target = allowedClasses.intersection(
+            Set(CloudHealthContextPolicy.dataClasses).union([.conversationHistory])
+        )
+        let prior = try currentCloudHealthContextPolicySnapshot(provider: provider)
+        guard !target.subtracting(prior.allowedClasses).isEmpty else { return prior }
+        let now = Date()
+        let snapshot = CloudHealthContextPolicySnapshot.make(
+            provider: provider,
+            policyID: prior.policyID,
+            revision: prior.revision + 1,
+            state: .draft,
+            allowedClasses: target,
+            createdAt: prior.createdAt == .distantPast ? now : prior.createdAt,
+            updatedAt: now,
+            confirmedAt: prior.confirmedAt,
+            changeSource: changeSource
+        )
+        guard upsertPolicySnapshot(snapshot) else {
+            throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+        }
+        try modelContext.save()
+        return snapshot
+    }
+
+    func updateConversationHistoryConsent(
+        provider: ProviderID,
+        allowed: Bool,
+        changeSource: CloudHealthPolicyChangeSource,
+        confirmedAt: Date?
+    ) throws -> CloudHealthContextPolicySnapshot {
+        let prior = try currentCloudHealthContextPolicySnapshot(provider: provider)
+        let wasAllowed = try isConsentGranted(provider: provider, dataClass: .conversationHistory)
+        guard !allowed || wasAllowed || confirmedAt != nil else {
+            throw CloudHealthContextPolicyError.expansionRequiresConfirmation
+        }
+        let now = Date()
+        try upsertConsentRecord(
+            provider: provider,
+            dataClass: .conversationHistory,
+            granted: allowed,
+            policyVersion: "cloud-conversation-history-v1",
+            decidedAt: now
+        )
+        var snapshotClasses = try currentGrantedHealthContextClasses(for: provider)
+        if allowed { snapshotClasses.insert(.conversationHistory) }
+        let snapshot = CloudHealthContextPolicySnapshot.make(
+            provider: provider,
+            policyID: prior.policyID,
+            revision: prior.revision + 1,
+            state: snapshotClasses.isEmpty ? .revoked : .active,
+            allowedClasses: snapshotClasses,
+            createdAt: prior.createdAt == .distantPast ? now : prior.createdAt,
+            updatedAt: now,
+            confirmedAt: allowed && !wasAllowed ? confirmedAt : prior.confirmedAt,
+            changeSource: changeSource
+        )
+        guard upsertPolicySnapshot(snapshot) else {
+            throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+        }
+        try modelContext.save()
+        return snapshot
     }
 
     func recordUsage(
@@ -191,5 +381,142 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository {
 
     private func consentKey(provider: ProviderID, dataClass: ProviderDataClass) -> String {
         "provider|\(provider.rawValue)|\(dataClass.rawValue)"
+    }
+
+    private func policyKey(provider: ProviderID) -> String {
+        "cloud-health-context-policy|\(provider.rawValue)"
+    }
+
+    private func currentGrantedHealthContextClasses(for provider: ProviderID) throws -> Set<ProviderDataClass> {
+        Set(try CloudHealthContextPolicy.dataClasses.filter {
+            try isConsentGranted(provider: provider, dataClass: $0)
+        })
+    }
+
+    private func legacyPolicySnapshot(provider: ProviderID) throws -> CloudHealthContextPolicySnapshot {
+        let policyClasses = CloudHealthContextPolicy.dataClasses + [.conversationHistory]
+        let records = try modelContext.fetch(FetchDescriptor<ConsentRecord>())
+        let relevant = records.filter { record in
+            policyClasses.contains { dataClass in
+                record.consentKey == consentKey(provider: provider, dataClass: dataClass)
+            }
+        }
+        guard !relevant.isEmpty else { return .unconfigured(provider: provider) }
+        let allowed = Set(relevant.compactMap { record in
+            guard record.granted,
+                  let dataClass = policyClasses.first(where: {
+                      consentKey(provider: provider, dataClass: $0) == record.consentKey
+                  }) else { return nil }
+            return dataClass
+        })
+        let createdAt = relevant.map(\.decidedAt).min() ?? .distantPast
+        let updatedAt = relevant.map(\.decidedAt).max() ?? createdAt
+        let confirmedAt = relevant.filter(\.granted).map(\.decidedAt).max()
+        return CloudHealthContextPolicySnapshot.make(
+            provider: provider,
+            policyID: CloudHealthContextPolicySnapshot.unconfigured(provider: provider).policyID,
+            revision: 1,
+            state: allowed.isEmpty ? .revoked : .active,
+            allowedClasses: allowed,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            confirmedAt: confirmedAt,
+            changeSource: .legacyConsent
+        )
+    }
+
+    private func decodePolicySnapshot(
+        _ record: CloudHealthContextPolicyRecord
+    ) -> CloudHealthContextPolicySnapshot? {
+        guard record.schemaVersion == CloudHealthContextPolicySnapshot.currentSchemaVersion,
+              let provider = ProviderID(rawValue: record.providerRaw),
+              let state = CloudHealthPolicyState(rawValue: record.stateRaw),
+              let changeSource = CloudHealthPolicyChangeSource(rawValue: record.changeSourceRaw) else {
+            return nil
+        }
+        let allowed = Set(record.allowedClassesRaw.split(separator: ",").compactMap {
+            ProviderDataClass(rawValue: String($0))
+        }).intersection(Set(CloudHealthContextPolicy.dataClasses).union([.conversationHistory]))
+        let snapshot = CloudHealthContextPolicySnapshot.make(
+            provider: provider,
+            policyID: record.policyID,
+            revision: record.revision,
+            state: state,
+            allowedClasses: allowed,
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt,
+            confirmedAt: record.confirmedAt,
+            changeSource: changeSource
+        )
+        guard provider.rawValue == record.providerRaw,
+              snapshot.policyHash == record.policyHash else { return nil }
+        return snapshot
+    }
+
+    @discardableResult
+    private func upsertPolicySnapshot(_ snapshot: CloudHealthContextPolicySnapshot) -> Bool {
+        let key = policyKey(provider: snapshot.provider)
+        var descriptor = FetchDescriptor<CloudHealthContextPolicyRecord>(
+            predicate: #Predicate { $0.policyKey == key }
+        )
+        descriptor.fetchLimit = 1
+        guard let records = try? modelContext.fetch(descriptor) else { return false }
+        let allowedClassesRaw = snapshot.allowedClasses.map(\.rawValue).sorted().joined(separator: ",")
+        if let record = records.first {
+            record.schemaVersion = snapshot.schemaVersion
+            record.policyID = snapshot.policyID
+            record.providerRaw = snapshot.provider.rawValue
+            record.revision = snapshot.revision
+            record.stateRaw = snapshot.state.rawValue
+            record.allowedClassesRaw = allowedClassesRaw
+            record.createdAt = snapshot.createdAt
+            record.updatedAt = snapshot.updatedAt
+            record.confirmedAt = snapshot.confirmedAt
+            record.policyHash = snapshot.policyHash
+            record.changeSourceRaw = snapshot.changeSource.rawValue
+        } else {
+            modelContext.insert(CloudHealthContextPolicyRecord(
+                policyKey: key,
+                schemaVersion: snapshot.schemaVersion,
+                policyID: snapshot.policyID,
+                providerRaw: snapshot.provider.rawValue,
+                revision: snapshot.revision,
+                stateRaw: snapshot.state.rawValue,
+                allowedClassesRaw: allowedClassesRaw,
+                createdAt: snapshot.createdAt,
+                updatedAt: snapshot.updatedAt,
+                confirmedAt: snapshot.confirmedAt,
+                policyHash: snapshot.policyHash,
+                changeSourceRaw: snapshot.changeSource.rawValue
+            ))
+        }
+        return true
+    }
+
+    private func upsertConsentRecord(
+        provider: ProviderID,
+        dataClass: ProviderDataClass,
+        granted: Bool,
+        policyVersion: String,
+        decidedAt: Date
+    ) throws {
+        let key = consentKey(provider: provider, dataClass: dataClass)
+        var descriptor = FetchDescriptor<ConsentRecord>(predicate: #Predicate { $0.consentKey == key })
+        descriptor.fetchLimit = 1
+        if let record = try modelContext.fetch(descriptor).first {
+            record.granted = granted
+            record.policyVersion = policyVersion
+            record.decidedAt = decidedAt
+            record.revokedAt = granted ? nil : decidedAt
+        } else {
+            modelContext.insert(ConsentRecord(
+                consentKey: key,
+                kind: dataClass.rawValue,
+                policyVersion: policyVersion,
+                granted: granted,
+                decidedAt: decidedAt,
+                revokedAt: granted ? nil : decidedAt
+            ))
+        }
     }
 }

@@ -24,6 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "Densoso/Resources/FoodData/recipe_sources.json"
 DEFAULT_OUTPUT = ROOT / "Densoso/Resources/FoodData/recipe_priors.json"
 DEFAULT_REPORT = ROOT / "Densoso/Resources/FoodData/recipe_prior_import_report.json"
+DEFAULT_FOOD_DATA = ROOT / "Densoso/Resources/seed_foods.json"
+DEFAULT_FOOD_SOURCES = ROOT / "Densoso/Resources/FoodData/sources.json"
+DEFAULT_VERIFIED_FOOD_IDS = ROOT / "Densoso/Resources/FoodData/verified_food_ids.json"
+DEFAULT_VERIFIED_FOOD_RECORDS = ROOT / "Densoso/Resources/FoodData/verified_food_records.json"
 
 CATEGORY_MAP = {
     "vegetable_dish": "vegetable",
@@ -39,6 +43,7 @@ CATEGORY_MAP = {
 }
 MINIMUM_RECIPE_COUNT = 100
 MAXIMUM_INGREDIENTS = 40
+ROLE_RULE_VERSION = "recipe-ingredient-role-v1"
 NOTE_PREFIX_RE = re.compile(r"^(?:注|备注|说明|提示)\s*[:：，,]|^注意\s*[:：，,]")
 TOOL_PREFIX_RE = re.compile(
     r"^(?:工具|工具清单|所需工具|准备工具|需要工具|必备工具|厨具|器具)\s*[:：]"
@@ -485,6 +490,7 @@ def extract_ingredient_rows(
                 rows.append(
                     {
                         "sourceName": source_name,
+                        "sourceText": ingredient_label,
                         "isOptional": bool(re.search(r"可选|任选|备选|可依口味", ingredient_label)),
                         "isAlternative": bool(re.search(r"或者|或|/|等|任选", raw_label)),
                         "quantityEvidence": (
@@ -509,6 +515,281 @@ def ingredient_terms(source_name: str) -> list[str]:
     for term in terms:
         expanded.extend(re.split(r"(?:别称[:：]?|或者|或|/|、|，|,)", term))
     return list(dict.fromkeys(term.strip() for term in expanded if len(normalized_text(term.strip())) >= 2))
+
+
+def canonical_json_sha256(raw: bytes) -> str:
+    source_text = raw.decode("utf-8")
+    canonical_bytes = source_text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+    return hashlib.sha256(canonical_bytes).hexdigest()
+
+
+def load_verified_food_sources(path: Path) -> tuple[dict[str, dict[str, Any]], str]:
+    raw = path.read_bytes()
+    manifest = json.loads(raw.decode("utf-8"))
+    if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 1:
+        raise ValueError("food source manifest must declare schemaVersion 1")
+    sources = manifest.get("sources")
+    if not isinstance(sources, list):
+        raise ValueError("food source manifest is missing its sources array")
+
+    eligible: dict[str, dict[str, Any]] = {}
+    all_source_ids: set[str] = set()
+    for index, source in enumerate(sources):
+        if not isinstance(source, dict):
+            raise ValueError(f"food source manifest entry {index} must be an object")
+        source_id = source.get("sourceID")
+        if not isinstance(source_id, str) or not source_id.strip() or source_id in all_source_ids:
+            raise ValueError(f"food source manifest entry {index} has a missing or duplicate sourceID")
+        all_source_ids.add(source_id)
+        if source.get("verificationStatus") != "verified" or source.get("redistributionAllowed") is not True:
+            continue
+        if (
+            not isinstance(source.get("licenseSPDX"), str)
+            or not source["licenseSPDX"].strip()
+            or not isinstance(source.get("licenseURL"), str)
+            or not source["licenseURL"].strip()
+            or not isinstance(source.get("sourceVersion"), str)
+            or not source["sourceVersion"].strip()
+            or source.get("dataRole") != "food-composition"
+            or not isinstance(source.get("dataType"), str)
+            or not source["dataType"].strip()
+        ):
+            raise ValueError(f"verified redistributable food source {source_id} lacks food-role/license/version provenance")
+        eligible[source_id] = source
+    if not eligible:
+        raise ValueError("food source manifest has no verified redistributable food records")
+    return eligible, canonical_json_sha256(raw)
+
+
+def load_food_composition(path: Path) -> tuple[list[dict[str, Any]], str]:
+    raw = path.read_bytes()
+    source_text = raw.decode("utf-8")
+    items = json.loads(source_text)
+    if not isinstance(items, list) or not items:
+        raise ValueError("food composition input must be a non-empty array")
+    ids: set[int] = set()
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(f"food composition row {index} must be an object")
+        food_id = item.get("id")
+        edible = item.get("edible")
+        if isinstance(food_id, bool) or not isinstance(food_id, int) or food_id <= 0 or food_id in ids:
+            raise ValueError(f"food composition row {index} has a missing, invalid, or duplicate ID")
+        if isinstance(edible, bool) or not isinstance(edible, int) or not 0 <= edible <= 100:
+            raise ValueError(f"food composition row {index} has an invalid edible percentage")
+        if not isinstance(item.get("name"), str) or not item["name"].strip():
+            raise ValueError(f"food composition row {index} has no canonical name")
+        if not isinstance(item.get("sourceID"), str) or not item["sourceID"].strip():
+            raise ValueError(f"food composition row {index} has no sourceID")
+        ids.add(food_id)
+    return items, canonical_json_sha256(raw)
+
+
+def build_food_name_index(
+    items: list[dict[str, Any]],
+    verified_sources: dict[str, dict[str, Any]],
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    verified_food_records: list[dict[str, Any]] = []
+    seen_source_records: set[tuple[str, str]] = set()
+    for item in items:
+        source_id = item.get("sourceID")
+        if not isinstance(source_id, str) or not source_id.strip():
+            raise ValueError(f"food composition row {item.get('id')} has no sourceID")
+        source = verified_sources.get(source_id)
+        if source is None:
+            continue
+        if (
+            item.get("licenseStatus") != "verified"
+            or not isinstance(item.get("sourceRecordID"), str)
+            or not item["sourceRecordID"].strip()
+            or item.get("sourceVersion") != source["sourceVersion"]
+            or item.get("sourceDataType") != source["dataType"]
+        ):
+            raise ValueError(
+                f"verified food source row {item['id']} has incomplete or inconsistent row provenance"
+            )
+        source_record_key = (source_id, item["sourceRecordID"])
+        if source_record_key in seen_source_records:
+            raise ValueError(f"verified food source repeats source record {source_record_key!r}")
+        seen_source_records.add(source_record_key)
+        indexed_item = {
+            **item,
+            "_verifiedLicenseSPDX": source["licenseSPDX"],
+            "_verifiedRedistributionAllowed": source["redistributionAllowed"],
+        }
+        verified_food_records.append({
+            "id": item["id"],
+            "sourceID": item["sourceID"],
+            "sourceRecordID": item["sourceRecordID"],
+            "sourceVersion": item["sourceVersion"],
+            "sourceDataType": item["sourceDataType"],
+            "licenseStatus": item["licenseStatus"],
+            "licenseSPDX": source["licenseSPDX"],
+            "redistributionAllowed": source["redistributionAllowed"],
+            "dataRole": source["dataRole"],
+            "edible": item["edible"],
+        })
+        names = [item["name"]]
+        aliases = item.get("alias")
+        if isinstance(aliases, str):
+            names.extend(aliases.split("|"))
+        elif isinstance(aliases, list):
+            names.extend(alias for alias in aliases if isinstance(alias, str))
+        for name in names:
+            key = normalized_text(name)
+            if key:
+                index.setdefault(key, []).append(indexed_item)
+    verified_food_records.sort(key=lambda record: record["id"])
+    return index, verified_food_records
+
+
+def match_food_record(source_name: str, food_index: dict[str, list[dict[str, Any]]]) -> tuple[str, dict[str, Any] | None]:
+    matched: dict[int, dict[str, Any]] = {}
+    for term in ingredient_terms(source_name):
+        for item in food_index.get(normalized_text(term), []):
+            matched[item["id"]] = item
+    if len(matched) == 1:
+        return "exact", next(iter(matched.values()))
+    if len(matched) > 1:
+        return "ambiguous", None
+    return "unmapped", None
+
+
+def classify_mass_basis(source_text: str) -> tuple[str, dict[str, Any]]:
+    cooked_patterns = (
+        r"(?:^|[（(])熟(?:[）)]|$)",
+        r"^熟(?:米饭|面条|面|饭|肉|鸡蛋|蛋|土豆|红薯|豆腐)",
+        r"\b(?:cooked|prepared)\b",
+    )
+    raw_patterns = (
+        r"(?:^|[（(])生(?:[）)]|$)",
+        r"^生(?:米|肉|鸡蛋|蛋|鱼|虾|猪肉|牛肉|羊肉)",
+        r"\b(?:raw|uncooked)\b",
+    )
+    if any(re.search(pattern, source_text, flags=re.IGNORECASE) for pattern in cooked_patterns):
+        return "cooked", {"kind": "explicitSourceCue", "sourceText": source_text}
+    if any(re.search(pattern, source_text, flags=re.IGNORECASE) for pattern in raw_patterns):
+        return "raw", {"kind": "explicitSourceCue", "sourceText": source_text}
+    return "unknown", {"kind": "unknown", "sourceText": None}
+
+
+OIL_TERMS = (
+    "食用油", "菜籽油", "花生油", "玉米油", "大豆油", "豆油", "芝麻油", "香油", "葱油",
+    "辣椒油", "植物油", "猪油", "牛油", "黄油", "橄榄油", "椰子油", "色拉油", "酥油",
+    "油脂", "油菜籽油", "米糠油",
+)
+SEASONING_TERMS = (
+    "盐", "糖", "酱油", "生抽", "老抽", "醋", "料酒", "味精", "鸡精", "胡椒", "花椒",
+    "八角", "桂皮", "香叶", "豆瓣酱", "蚝油", "芝麻酱", "番茄酱", "咖喱", "淀粉", "生粉",
+    "蜂蜜", "腐乳", "孜然", "五香粉", "辣椒粉", "调味", "味噌", "酱",
+)
+
+
+def classify_ingredient_role(source_name: str) -> tuple[str, str]:
+    normalized = normalized_text(source_name)
+    if normalized == "油":
+        return "oil", f"{ROLE_RULE_VERSION}:exact-oil"
+    oil_match = next((term for term in OIL_TERMS if normalized_text(term) in normalized), None)
+    if oil_match:
+        return "oil", f"{ROLE_RULE_VERSION}:oil-term:{oil_match}"
+    seasoning_match = next(
+        (term for term in SEASONING_TERMS if normalized_text(term) in normalized),
+        None,
+    )
+    if seasoning_match:
+        return "seasoning", f"{ROLE_RULE_VERSION}:seasoning-term:{seasoning_match}"
+    return "ingredient", f"{ROLE_RULE_VERSION}:default-ingredient"
+
+
+def enrich_ingredient(
+    ingredient: dict[str, Any],
+    recipe_source: dict[str, Any],
+    source_record_id: str,
+    food_index: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    source_name = ingredient["sourceName"]
+    source_text = ingredient["sourceText"]
+    match_status, food = match_food_record(source_name, food_index)
+    role, role_evidence = classify_ingredient_role(source_name)
+    mass_basis, mass_evidence = classify_mass_basis(source_text)
+
+    food_id: int | None = food["id"] if food is not None else None
+    edible_evidence: dict[str, Any]
+    if food is None:
+        reason = "ambiguousFoodCompositionMatch" if match_status == "ambiguous" else "noExactFoodCompositionMatch"
+        edible_evidence = {
+            "kind": "unknown",
+            "fraction": None,
+            "foodID": None,
+            "sourceID": None,
+            "sourceRecordID": None,
+            "sourceVersion": None,
+            "licenseStatus": None,
+                "licenseSPDX": None,
+                "redistributionAllowed": None,
+            "reason": reason,
+        }
+    else:
+        source_record = food.get("sourceRecordID")
+        source_id = food.get("sourceID")
+        source_version = food.get("sourceVersion")
+        license_status = food.get("licenseStatus")
+        if (
+            isinstance(source_record, str)
+            and source_record.strip()
+            and isinstance(source_id, str)
+            and source_id.strip()
+            and isinstance(source_version, str)
+            and source_version.strip()
+            and license_status == "verified"
+            and food.get("_verifiedRedistributionAllowed") is True
+            and isinstance(food.get("_verifiedLicenseSPDX"), str)
+            and food["_verifiedLicenseSPDX"].strip()
+        ):
+            edible_evidence = {
+                "kind": "foodCompositionRecord",
+                "fraction": food["edible"] / 100.0,
+                "foodID": food_id,
+                "sourceID": source_id,
+                "sourceRecordID": source_record,
+                "sourceVersion": source_version,
+                "licenseStatus": license_status,
+                "licenseSPDX": food["_verifiedLicenseSPDX"],
+                "redistributionAllowed": True,
+                "reason": None,
+            }
+        else:
+            edible_evidence = {
+                "kind": "unknown",
+                "fraction": None,
+                "foodID": None,
+                "sourceID": None,
+                "sourceRecordID": None,
+                "sourceVersion": None,
+                "licenseStatus": None,
+                "licenseSPDX": None,
+                "redistributionAllowed": None,
+                "reason": "foodCompositionProvenanceNotVerified",
+            }
+
+    source_ingredient = {key: value for key, value in ingredient.items() if key != "sourceText"}
+    return {
+        **source_ingredient,
+        "foodID": food_id,
+        "foodMatchStatus": match_status,
+        "edibleFractionEvidence": edible_evidence,
+        "massBasis": mass_basis,
+        "massBasisEvidence": mass_evidence,
+        "role": role,
+        "roleEvidence": role_evidence,
+        "sourceProvenance": {
+            "sourceID": recipe_source["sourceID"],
+            "sourceRecordID": source_record_id,
+            "sourceVersion": recipe_source["sourceVersion"],
+            "sourceText": source_text,
+        },
+    }
 
 
 def extract_calculation_lines(
@@ -650,6 +931,7 @@ def canonical_name(text: str, source_path: Path) -> str:
 def import_recipes(
     source_root: Path,
     source: dict[str, Any],
+    food_index: dict[str, list[dict[str, Any]]],
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, str]],
@@ -695,6 +977,10 @@ def import_recipes(
             continue
         canonical_names.add(name_key)
         attach_quantity_evidence(ingredients, sections, relative, quantity_review_rows)
+        ingredients = [
+            enrich_ingredient(ingredient, source, relative, food_index)
+            for ingredient in ingredients
+        ]
         method, method_evidence = cooking_method(text, category)
         serving_match = re.search(r"([^。\n]{0,80}(?:一份|份数|人食用)[^。\n]{0,80})", text)
         servings_text = clean_markdown(serving_match.group(1)) if serving_match else None
@@ -708,6 +994,8 @@ def import_recipes(
                 "canonicalDishName": name,
                 "aliases": [],
                 "category": category,
+                # The pinned source does not provide a trustworthy cuisine-region field.
+                "cuisineRegion": None,
                 "cookingMethod": method,
                 "cookingMethodEvidence": method_evidence,
                 "ingredients": ingredients,
@@ -731,29 +1019,66 @@ def import_recipes(
     return records, failures, review_rows, quantity_review_rows
 
 
+def json_bytes(value: Any) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_bytes(json_bytes(value))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-repo", type=Path, required=True, help="Local HowToCook checkout at the pinned commit")
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--food-data", type=Path, default=DEFAULT_FOOD_DATA)
+    parser.add_argument("--food-sources", type=Path, default=DEFAULT_FOOD_SOURCES)
+    parser.add_argument("--verified-food-ids-output", type=Path, default=DEFAULT_VERIFIED_FOOD_IDS)
+    parser.add_argument("--verified-food-records-output", type=Path, default=DEFAULT_VERIFIED_FOOD_RECORDS)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
     args = parser.parse_args()
 
     try:
         source = load_source_manifest(args.manifest)
+        verified_food_sources, food_sources_sha256 = load_verified_food_sources(args.food_sources)
+        food_items, seed_food_data_sha256 = load_food_composition(args.food_data)
+        food_index, verified_food_records = build_food_name_index(food_items, verified_food_sources)
+        verified_food_records_file = {"schemaVersion": 1, "records": verified_food_records}
+        verified_food_records_bytes = json_bytes(verified_food_records_file)
+        food_data_sha256 = canonical_json_sha256(verified_food_records_bytes)
+        verified_food_ids = [record["id"] for record in verified_food_records]
         verify_source_checkout(args.source_repo, source)
-        recipes, failures, review_rows, quantity_review_rows = import_recipes(args.source_repo, source)
+        recipes, failures, review_rows, quantity_review_rows = import_recipes(
+            args.source_repo, source, food_index
+        )
         quantity_counts: Counter[str] = Counter(
             ingredient["quantityEvidence"]["kind"]
             for recipe in recipes
             for ingredient in recipe["ingredients"]
         )
         ingredient_count = sum(len(recipe["ingredients"]) for recipe in recipes)
+        food_match_counts = Counter(
+            ingredient["foodMatchStatus"]
+            for recipe in recipes
+            for ingredient in recipe["ingredients"]
+        )
+        mass_basis_counts = Counter(
+            ingredient["massBasis"]
+            for recipe in recipes
+            for ingredient in recipe["ingredients"]
+        )
+        edible_fraction_evidence_counts = Counter(
+            ingredient["edibleFractionEvidence"]["kind"]
+            for recipe in recipes
+            for ingredient in recipe["ingredients"]
+        )
+        ingredient_role_counts = Counter(
+            ingredient["role"]
+            for recipe in recipes
+            for ingredient in recipe["ingredients"]
+        )
         report = {
             "schemaVersion": 1,
             "sourceID": source["sourceID"],
@@ -765,6 +1090,13 @@ def main() -> int:
             "rejections": failures,
             "ingredientRowCount": ingredient_count,
             "quantityEvidenceCounts": dict(sorted(quantity_counts.items())),
+            "foodDataSHA256": seed_food_data_sha256,
+            "foodSourceManifestSHA256": food_sources_sha256,
+            "verifiedFoodIDCount": len(verified_food_ids),
+            "foodMatchCounts": dict(sorted(food_match_counts.items())),
+            "massBasisCounts": dict(sorted(mass_basis_counts.items())),
+            "edibleFractionEvidenceCounts": dict(sorted(edible_fraction_evidence_counts.items())),
+            "ingredientRoleCounts": dict(sorted(ingredient_role_counts.items())),
             "reviewRowCount": len(review_rows),
             "reviewRows": review_rows,
             "quantityReviewRowCount": len(quantity_review_rows),
@@ -772,12 +1104,21 @@ def main() -> int:
             "status": "PASS" if len(recipes) >= MINIMUM_RECIPE_COUNT else "FAIL",
         }
         write_json(args.output, {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "dataRole": "recipe-prior",
             "source": source,
             "recipes": recipes,
         })
         write_json(args.report, report)
+        write_json(args.verified_food_ids_output, {
+            "schemaVersion": 2,
+            "foodDataSHA256": food_data_sha256,
+            "seedFoodDataSHA256": seed_food_data_sha256,
+            "foodSourceManifestSHA256": food_sources_sha256,
+            "foodIDs": verified_food_ids,
+        })
+        args.verified_food_records_output.parent.mkdir(parents=True, exist_ok=True)
+        args.verified_food_records_output.write_bytes(verified_food_records_bytes)
         print(json.dumps({key: report[key] for key in (
             "status",
             "sourceVersion",
@@ -786,6 +1127,10 @@ def main() -> int:
             "rejectedCount",
             "ingredientRowCount",
             "quantityEvidenceCounts",
+            "foodMatchCounts",
+            "massBasisCounts",
+            "edibleFractionEvidenceCounts",
+            "ingredientRoleCounts",
             "reviewRowCount",
             "quantityReviewRowCount",
         )}, ensure_ascii=False, sort_keys=True))

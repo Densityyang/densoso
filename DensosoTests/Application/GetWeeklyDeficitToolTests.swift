@@ -34,6 +34,8 @@ final class GetWeeklyDeficitToolTests: XCTestCase {
         let coverage = try XCTUnwrap(response["coverage"] as? [String: Any])
 
         XCTAssertEqual(response["status"] as? String, "available")
+        XCTAssertEqual(response["projectionVersion"] as? String, AlgorithmVersions.dailyMetricsProjection)
+        XCTAssertEqual(response["projectionVersions"] as? [String], [AlgorithmVersions.dailyMetricsProjection])
         XCTAssertEqual(response["projectedWeightLossNote"] as? String,
                        "仅按累计净能量缺口以 7,700 kcal/kg 粗略折算；不代表实际体重预测。")
         XCTAssertEqual(response["requestedDays"] as? Int, 7)
@@ -43,6 +45,51 @@ final class GetWeeklyDeficitToolTests: XCTestCase {
         let value = try XCTUnwrap(total["value"] as? Double)
         XCTAssertEqual(value, 250)
         XCTAssertLessThanOrEqual(output.utf8.count, AgentToolOutputLimiter.maximumUTF8Bytes)
+    }
+
+    func testMixedProjectionVersionsRemainExplicitInWeeklySummary() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let weekStart = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let secondDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: weekStart))
+        let weekEnd = try XCTUnwrap(calendar.date(byAdding: .day, value: 6, to: weekStart))
+        let current = DailyMetricsReadModelMapper.make(DailyMetrics(
+            date: weekStart,
+            totalExpenditureKcal: 2_000,
+            totalIntakeKcal: 1_750,
+            deficitKcal: 250,
+            mealCount: 1,
+            energyQuality: EnergyQuality.observed.rawValue,
+            dataCoverageJSON: #"{"intake":true,"protein":false,"fat":false,"carbs":false}"#,
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "weekly-deficit-current-version"
+        ))
+        let legacy = DailyMetricsReadModelMapper.make(DailyMetrics(
+            date: secondDay,
+            totalExpenditureKcal: 2_000,
+            totalIntakeKcal: 1_750,
+            deficitKcal: 250,
+            mealCount: 1,
+            energyQuality: EnergyQuality.observed.rawValue,
+            dataCoverageJSON: #"{"intake":true,"protein":false,"fat":false,"carbs":false}"#,
+            projectionVersion: "daily-metrics-legacy-v1",
+            sourceFingerprint: "weekly-deficit-legacy-version"
+        ))
+
+        let output = GetWeeklyDeficitTool.responseJSON(
+            [current, legacy],
+            weekStart: weekStart,
+            weekEnd: weekEnd,
+            expectedDays: 7,
+            calendar: calendar
+        )
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+
+        XCTAssertEqual(response["projectionVersion"] as? String, "mixed")
+        XCTAssertEqual(
+            response["projectionVersions"] as? [String],
+            ["daily-metrics-legacy-v1", AlgorithmVersions.dailyMetricsProjection].sorted()
+        )
     }
 
     func testEmptyResponseDoesNotConvertUnavailableDeficitToZero() throws {
@@ -62,6 +109,8 @@ final class GetWeeklyDeficitToolTests: XCTestCase {
         let total = try XCTUnwrap(response["totalDeficitKcal"] as? [String: Any])
 
         XCTAssertEqual(response["status"] as? String, "insufficient_data")
+        XCTAssertEqual(response["projectionVersion"] as? String, "unavailable")
+        XCTAssertEqual(response["projectionVersions"] as? [String], [])
         XCTAssertTrue(total["value"] is NSNull)
     }
 }

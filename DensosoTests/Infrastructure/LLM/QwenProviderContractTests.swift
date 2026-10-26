@@ -3,6 +3,31 @@ import XCTest
 
 @MainActor
 final class QwenProviderContractTests: XCTestCase {
+    func testPreSerializationConsentCheckStopsBeforeQwenRequestIsSent() async throws {
+        let transport = ScriptedProviderHTTPTransport(steps: [])
+        let clock = TestProviderRetryClock()
+        let provider = QwenProvider(
+            endpoint: URL(string: "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions")!,
+            credentialSource: TestCredentialSource(values: [.qwen: "fixture"]),
+            transport: transport,
+            clock: clock,
+            jitter: { _ in 0 }
+        )
+        var request = request(deadline: clock.now().addingTimeInterval(45))
+        request.preSerializationGate = { _ in
+            throw ProviderError.consentPolicyChanged(provider: .qwen)
+        }
+
+        do {
+            _ = try await collect(provider.stream(request))
+            XCTFail("A failed pre-serialization consent check must stop the provider request")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .qwen))
+        }
+        let recorded = await transport.recordedRequests()
+        XCTAssertTrue(recorded.isEmpty)
+    }
+
     func testOpenAICompatibleRequestAndResponseContract() async throws {
         let transport = ScriptedProviderHTTPTransport(
             steps: [

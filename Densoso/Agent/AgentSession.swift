@@ -93,6 +93,7 @@ final class AgentSession {
 
     weak var foodDatabase: FoodDatabase?
     private var conversationHistory: [ModelMessage] = []
+    private var activeCloudHealthPolicy: CloudHealthContextPolicy?
     private var activeAgentTask: Task<AgentResponse, Error>?
     private var activeProviderTask: Task<ProviderRoundResult, Error>?
     private var activeRequestID: UUID?
@@ -303,9 +304,17 @@ final class AgentSession {
 
     private func completeDeterministicHealthResponse(
         _ text: String,
-        requestID: UUID
+        requestID: UUID,
+        healthContextPolicyProvenance: HealthContextPolicyProvenance? = nil
     ) async throws -> AgentResponse {
-        try await append(ModelMessage(role: .assistant, text: text), requestID: requestID)
+        try await append(
+            ModelMessage(
+                role: .assistant,
+                text: text,
+                healthContextPolicyProvenance: healthContextPolicyProvenance
+            ),
+            requestID: requestID
+        )
         let response = AgentResponse(text: text, toolCallsCount: 0, providerRoundsCount: 0)
         try await conversationRepository.updateAgentRequestState(
             requestID: requestID,
@@ -338,6 +347,7 @@ final class AgentSession {
             didIssueMealClarification = false
             transientMealClarificationWasAnswered = false
             transientMealPriorClarificationField = nil
+            activeCloudHealthPolicy = nil
             conversationHistory = conversationHistory.map(Self.withoutSensitiveTransientContent)
         }
         streamedText = ""
@@ -424,6 +434,13 @@ final class AgentSession {
                 throw AgentError.transientImageRequired
             }
 
+            let provider = try providerSelector.provider(for: intelligencePreferences.mode)
+            let initialCloudHealthPolicy = try await CloudHealthContextPolicy.load(
+                from: governanceRepository,
+                provider: provider.descriptor.id
+            )
+            activeCloudHealthPolicy = initialCloudHealthPolicy
+
             if hasPersistedHistory {
                 // Rebuild from the saved conversation and original user turn. Partial assistant
                 // tool turns are discarded so a restarted provider does not need persisted CoT.
@@ -453,7 +470,8 @@ final class AgentSession {
                     conversationHistory[userIndex] = ModelMessage(
                         role: .user,
                         content: priorUserMessage.content + [.image(image)],
-                        inputEnvelope: priorUserMessage.inputEnvelope
+                        inputEnvelope: priorUserMessage.inputEnvelope,
+                        healthContextPolicyProvenance: priorUserMessage.healthContextPolicyProvenance
                     )
                 }
             } else {
@@ -463,7 +481,8 @@ final class AgentSession {
                     ModelMessage(
                         role: .user,
                         content: userContent,
-                        inputEnvelope: multimodalRequest.inputEnvelope
+                        inputEnvelope: multimodalRequest.inputEnvelope,
+                        healthContextPolicyProvenance: Self.healthContextProvenance(for: initialCloudHealthPolicy)
                     ),
                     requestID: requestID
                 )
@@ -472,12 +491,17 @@ final class AgentSession {
             let promptUserText = conversationHistory.last(where: { $0.role == .user })
                 .flatMap { Self.visibleMessage($0)?.text }
                 ?? userText
-            let provider = try providerSelector.provider(for: intelligencePreferences.mode)
             let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(for: promptUserText)
-            let initialCloudHealthPolicy = try await CloudHealthContextPolicy.load(
-                from: governanceRepository,
-                provider: provider.descriptor.id
-            )
+            if !containsImage,
+               let policyAlignmentResponse = try await handleCloudHealthPolicyAlignment(
+                   promptUserText,
+                   provider: provider.descriptor.id
+               ) {
+                return try await completeDeterministicHealthResponse(
+                    policyAlignmentResponse,
+                    requestID: requestID
+                )
+            }
             let unfilteredNarrativeContext: HealthNarrativeContext?
             if wantsHealthNarrative && !initialCloudHealthPolicy.allowedClasses.isEmpty {
                 do {
@@ -505,7 +529,10 @@ final class AgentSession {
                     narrativeContext == nil
                         ? "当前没有获准用于云端的历史健康类别；请在设置中逐类确认后，我才能结合这些记录分析。"
                         : HealthNarrativePolicy.deterministicFallback(narrativeContext),
-                    requestID: requestID
+                    requestID: requestID,
+                    healthContextPolicyProvenance: narrativeContext.map { _ in
+                        Self.healthContextProvenance(for: initialCloudHealthPolicy)
+                    }
                 )
             }
 
@@ -570,13 +597,20 @@ final class AgentSession {
                     from: governanceRepository,
                     provider: provider.descriptor.id
                 )
+                activeCloudHealthPolicy = roundPolicy
                 let roundContext = CloudRequestPolicyGuard.filtered(unfilteredNarrativeContext, by: roundPolicy)
                 let roundAllowedEvidenceKeys = Set(roundContext?.allowedEvidenceKeys ?? [])
                 if wantsHealthNarrative && (roundContext?.aggregateSummary == nil || roundAllowedEvidenceKeys.isEmpty) {
                     let safeFallback = roundContext == nil
                         ? "当前没有获准用于云端的历史健康类别；请在设置中逐类确认后，我才能结合这些记录分析。"
                         : HealthNarrativePolicy.deterministicFallback(roundContext)
-                    return try await completeDeterministicHealthResponse(safeFallback, requestID: requestID)
+                    return try await completeDeterministicHealthResponse(
+                        safeFallback,
+                        requestID: requestID,
+                        healthContextPolicyProvenance: roundContext.map { _ in
+                            Self.healthContextProvenance(for: roundPolicy)
+                        }
+                    )
                 }
                 currentNarrativeContext = roundContext
                 currentAllowedEvidenceKeys = roundAllowedEvidenceKeys
@@ -612,7 +646,25 @@ final class AgentSession {
                         ? AgentReasoningPolicy.forUserMessage(userText)
                         : .none,
                     responseFormat: responseFormat,
-                    deadline: tracker.budget.deadline
+                    deadline: tracker.budget.deadline,
+                    preSerializationGate: { serialize in
+                        try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
+                            from: governanceRepository,
+                            provider: provider.descriptor.id,
+                            expectedHealthPolicy: roundPolicy,
+                            includesImage: includesImage,
+                            operation: serialize
+                        )
+                    },
+                    networkAttemptGate: {
+                        try await CloudHealthContextPolicy.withCurrentSendConsent(
+                            from: governanceRepository,
+                            provider: provider.descriptor.id,
+                            expectedHealthPolicy: roundPolicy,
+                            includesImage: includesImage,
+                            operation: {}
+                        )
+                    }
                 )
                 try tracker.requireTime()
                 let costEstimate = await usageLedger.maximumRequestCostEstimate(
@@ -680,8 +732,18 @@ final class AgentSession {
                     }
                     assistantContent.append(contentsOf: result.reasoning.map(ModelContent.reasoning))
                     assistantContent.append(contentsOf: result.toolCalls.map(ModelContent.toolCall))
+                    let hasHealthToolCall = result.toolCalls.contains {
+                        CloudRequestPolicyGuard.isHealthTool(name: $0.name)
+                    }
                     try await append(
-                        ModelMessage(role: .assistant, content: assistantContent),
+                        ModelMessage(
+                            role: .assistant,
+                            content: assistantContent,
+                            healthContextPolicyProvenance: healthContextPolicyProvenance(
+                                for: roundPolicy,
+                                includeIf: roundContext != nil || hasHealthToolCall || currentTurnContainsHealthTool()
+                            )
+                        ),
                         requestID: requestID
                     )
 
@@ -693,10 +755,14 @@ final class AgentSession {
                             useStructuredHealthNarrative = false
                         }
                         let output = await executeTool(call, clientRequestID: requestID)
+                        let toolProvenance = CloudRequestPolicyGuard.isHealthTool(name: call.name)
+                            ? healthContextPolicyProvenance(for: roundPolicy, includeIf: true)
+                            : nil
                         try await append(
                             ModelMessage(
                                 role: .tool,
-                                content: [.toolResult(toolCallID: call.id, content: output)]
+                                content: [.toolResult(toolCallID: call.id, content: output)],
+                                healthContextPolicyProvenance: toolProvenance
                             ),
                             requestID: requestID
                         )
@@ -719,7 +785,14 @@ final class AgentSession {
                     responseText = result.text
                 }
                 try await append(
-                    ModelMessage(role: .assistant, text: responseText),
+                    ModelMessage(
+                        role: .assistant,
+                        text: responseText,
+                        healthContextPolicyProvenance: healthContextPolicyProvenance(
+                            for: roundPolicy,
+                            includeIf: currentNarrativeContext != nil || currentTurnContainsHealthTool()
+                        )
+                    ),
                     requestID: requestID
                 )
                 let response = AgentResponse(
@@ -1080,7 +1153,14 @@ final class AgentSession {
             )
         )
         return CloudRequestPolicyGuard.filterToolResults(in: boundedMessages, by: cloudHealthPolicy)
-            .map { ModelMessage(role: $0.role, content: $0.content, inputEnvelope: $0.inputEnvelope) }
+            .map {
+                ModelMessage(
+                    role: $0.role,
+                    content: $0.content,
+                    inputEnvelope: $0.inputEnvelope,
+                    healthContextPolicyProvenance: $0.healthContextPolicyProvenance
+                )
+            }
     }
 
     private static func transientMealEvidenceMessage(_ evidence: [MealEvidence]) -> ModelMessage? {
@@ -1316,16 +1396,29 @@ final class AgentSession {
     }
 
     private func append(_ message: ModelMessage, requestID: UUID?) async throws {
-        let persistedContent = message.content.filter { content in
+        let recordedMessage: ModelMessage
+        if message.healthContextPolicyProvenance == nil,
+           let activeCloudHealthPolicy {
+            recordedMessage = ModelMessage(
+                role: message.role,
+                content: message.content,
+                inputEnvelope: message.inputEnvelope,
+                healthContextPolicyProvenance: Self.healthContextProvenance(for: activeCloudHealthPolicy)
+            )
+        } else {
+            recordedMessage = message
+        }
+        let persistedContent = recordedMessage.content.filter { content in
             switch content {
             case .reasoning, .image: return false
             case .text, .toolCall, .toolResult: return true
             }
         }
         let persistedMessage = ModelMessage(
-            role: message.role,
+            role: recordedMessage.role,
             content: persistedContent,
-            inputEnvelope: message.inputEnvelope
+            inputEnvelope: recordedMessage.inputEnvelope,
+            healthContextPolicyProvenance: recordedMessage.healthContextPolicyProvenance
         )
         let data = try JSONEncoder().encode(persistedMessage)
         let summaries = message.content.compactMap { content -> String? in
@@ -1343,7 +1436,7 @@ final class AgentSession {
             toolSummaryData: toolSummaryData,
             requestID: requestID
         )
-        conversationHistory.append(message)
+        conversationHistory.append(recordedMessage)
     }
 
     private static func withoutSensitiveTransientContent(_ message: ModelMessage) -> ModelMessage {
@@ -1357,8 +1450,136 @@ final class AgentSession {
                     return true
                 }
             },
-            inputEnvelope: message.inputEnvelope
+            inputEnvelope: message.inputEnvelope,
+            healthContextPolicyProvenance: message.healthContextPolicyProvenance
         )
+    }
+
+    private static func healthContextProvenance(
+        for policy: CloudHealthContextPolicy
+    ) -> HealthContextPolicyProvenance {
+        HealthContextPolicyProvenance(
+            provider: policy.provider,
+            policyRevision: policy.revision,
+            allowedClasses: policy.allowedClasses
+        )
+    }
+
+    private func handleCloudHealthPolicyAlignment(
+        _ userText: String,
+        provider: ProviderID
+    ) async throws -> String? {
+        guard let snapshotRepository = governanceRepository as? any CloudHealthContextPolicySnapshotRepository else {
+            return nil
+        }
+        let snapshot = try await snapshotRepository.currentCloudHealthContextPolicySnapshot(provider: provider)
+        let intent = CloudHealthContextPolicyAlignmentIntent.parse(userText)
+        if snapshot.state == .draft {
+            switch intent {
+            case .some(.confirm):
+                let confirmed = try await CloudHealthContextPolicy.confirmPendingConversationExpansion(
+                    provider: provider,
+                    repository: governanceRepository
+                )
+                let titles = confirmed.allowedClasses
+                    .sorted { $0.rawValue < $1.rawValue }
+                    .compactMap(\.healthContextTitle)
+                    .joined(separator: "、")
+                return "已确认云端健康上下文策略修订 \(confirmed.revision)：仅包含\(titles)类别。你可以在设置或对话中随时撤销。"
+            case .some(.cancel):
+                let cancelled = try await CloudHealthContextPolicy.cancelPendingConversationExpansion(
+                    provider: provider,
+                    repository: governanceRepository
+                )
+                return cancelled.allowedClasses.isEmpty
+                    ? "已取消这次授权；云端不会自动附加历史健康上下文。"
+                    : "已取消新增类别；仍保留此前确认的类别。"
+            case .some(.revoke(let revokedClasses)):
+                let restored = try await CloudHealthContextPolicy.cancelPendingConversationExpansion(
+                    provider: provider,
+                    repository: governanceRepository
+                )
+                let updated = try await CloudHealthContextPolicy.applyRestrictiveChange(
+                    provider: provider,
+                    allowedClasses: restored.allowedClasses.subtracting(revokedClasses),
+                    repository: governanceRepository,
+                    changeSource: .agentConversation
+                )
+                let titles = revokedClasses
+                    .sorted { $0.rawValue < $1.rawValue }
+                    .compactMap(\.healthContextTitle)
+                    .joined(separator: "、")
+                return updated.allowedClasses.isEmpty
+                    ? "已取消待确认草案，并立即撤销全部云端历史健康类别。"
+                    : "已取消待确认草案，并立即撤销\(titles)类别。"
+            default:
+                let titles = snapshot.allowedClasses
+                    .sorted { $0.rawValue < $1.rawValue }
+                    .compactMap(\.healthContextTitle)
+                    .joined(separator: "、")
+                return "待确认的云端健康类别为：\(titles)。回复“确认”后才会启用；回复“取消”会放弃这次扩权。"
+            }
+        }
+
+        guard let intent else { return nil }
+        switch intent {
+        case .requestExpansion(let requestedClasses):
+            let draft = try await CloudHealthContextPolicy.stageConversationExpansion(
+                provider: provider,
+                requestedClasses: requestedClasses,
+                repository: governanceRepository
+            )
+            guard draft.state == .draft else {
+                return "这些类别已经在当前云端健康策略中；没有更改授权。"
+            }
+            let titles = draft.allowedClasses
+                .sorted { $0.rawValue < $1.rawValue }
+                .compactMap(\.healthContextTitle)
+                .joined(separator: "、")
+            return "我将云端健康上下文草案设为：\(titles)。这不会立即启用；请回复“确认”启用，或回复“取消”放弃。"
+        case .revoke(let revokedClasses):
+            let current = try await CloudHealthContextPolicy.load(
+                from: governanceRepository,
+                provider: provider
+            )
+            let target = current.allowedClasses.subtracting(revokedClasses)
+            let updated = try await CloudHealthContextPolicy.applyRestrictiveChange(
+                provider: provider,
+                allowedClasses: target,
+                repository: governanceRepository,
+                changeSource: .agentConversation
+            )
+            let titles = revokedClasses
+                .sorted { $0.rawValue < $1.rawValue }
+                .compactMap(\.healthContextTitle)
+                .joined(separator: "、")
+            return updated.allowedClasses.isEmpty
+                ? "已立即撤销全部云端历史健康类别；后续请求不会附加历史健康上下文。"
+                : "已立即撤销\(titles)类别；其他此前确认的类别保持不变。"
+        case .confirm, .cancel:
+            return nil
+        }
+    }
+
+    private func healthContextPolicyProvenance(
+        for policy: CloudHealthContextPolicy,
+        includeIf: Bool
+    ) -> HealthContextPolicyProvenance? {
+        guard includeIf else { return nil }
+        return Self.healthContextProvenance(for: policy)
+    }
+
+    private func currentTurnContainsHealthTool() -> Bool {
+        guard let currentTurnStartIndex = conversationHistory.lastIndex(where: { $0.role == .user }),
+              conversationHistory.indices.contains(currentTurnStartIndex) else { return false }
+        return conversationHistory[currentTurnStartIndex...].contains { message in
+            message.content.contains { content in
+                if case .toolCall(let call) = content {
+                    return CloudRequestPolicyGuard.isHealthTool(name: call.name)
+                }
+                return false
+            }
+        }
     }
 
     private static func visibleMessage(_ message: ModelMessage) -> PersistedChatMessage? {

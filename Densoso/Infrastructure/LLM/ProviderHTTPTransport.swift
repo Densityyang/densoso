@@ -113,11 +113,16 @@ struct ProviderRequestExecutor: Sendable {
         self.jitter = jitter
     }
 
-    func execute(_ request: URLRequest, deadline: Date) async throws -> ProviderHTTPResult {
+    func execute(
+        _ request: URLRequest,
+        deadline: Date,
+        beforeNetworkAttempt: (@Sendable () async throws -> Void)? = nil
+    ) async throws -> ProviderHTTPResult {
         var attempt = 0
         while true {
             try Task.checkCancellation()
             guard clock.now() < deadline else { throw ProviderError.timeout }
+            try await beforeNetworkAttempt?()
             attempt += 1
             do {
                 let (data, response) = try await data(for: request, deadline: deadline)
@@ -164,11 +169,16 @@ struct ProviderRequestExecutor: Sendable {
         }
     }
 
-    func executeStream(_ request: URLRequest, deadline: Date) async throws -> ProviderHTTPStreamResult {
+    func executeStream(
+        _ request: URLRequest,
+        deadline: Date,
+        beforeNetworkAttempt: (@Sendable () async throws -> Void)? = nil
+    ) async throws -> ProviderHTTPStreamResult {
         var attempt = 0
         while true {
             try Task.checkCancellation()
             guard clock.now() < deadline else { throw ProviderError.timeout }
+            try await beforeNetworkAttempt?()
             attempt += 1
             do {
                 let opened = try await stream(for: request, deadline: deadline)

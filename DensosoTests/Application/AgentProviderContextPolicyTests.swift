@@ -140,7 +140,7 @@ final class AgentProviderContextPolicyTests: XCTestCase {
                     ]),
                 ]
                 let guardedMessages = CloudRequestPolicyGuard.filterToolResults(
-                    continuationMessages,
+                    in: continuationMessages,
                     by: policy
                 )
                 let request = ModelRequest(

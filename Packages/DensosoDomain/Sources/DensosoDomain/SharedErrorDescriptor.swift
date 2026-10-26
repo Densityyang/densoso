@@ -33,6 +33,7 @@ public enum SharedErrorSubsystem: String, Codable, CaseIterable, Sendable {
 public enum SharedErrorReason: String, Codable, CaseIterable, Sendable {
     case configurationMissing
     case consentRequired
+    case consentPolicyChanged
     case unauthorized
     case quotaExhausted
     case rateLimited

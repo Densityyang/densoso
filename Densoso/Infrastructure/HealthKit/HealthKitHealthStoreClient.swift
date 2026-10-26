@@ -34,12 +34,11 @@ final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient,
             throw HealthStoreClientError.unsupportedMetric(metric)
         }
 
-        // The authorized-history boundary API is currently Beta and is absent from
-        // the stable HealthKit SDK used to build this target. Returning nil would
-        // make the coordinator treat the authorization boundary as absent, which
-        // can expose cached values from a limited-history window. Fail closed so
-        // the coordinator marks this metric's current window unknown and retries
-        // once a supported boundary source is available.
+        // The per-type authorized-history boundary APIs are currently Beta in
+        // Apple's SDK. Do not substitute the systemwide earliest-permitted date,
+        // and do not represent an unavailable boundary as `nil` (which means no
+        // limited-history boundary). The coordinator handles this explicit signal
+        // by rebuilding the bounded local snapshot and keeping empty days unknown.
         throw HealthStoreClientError.authorizationBoundaryUnavailable
     }
 

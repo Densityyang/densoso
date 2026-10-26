@@ -67,6 +67,157 @@ final class AgentRequestResumeTests: XCTestCase {
         XCTAssertTrue(provider.recordedRequests().isEmpty)
     }
 
+    func testAgentHealthPolicyAlignmentStagesDraftAndRequiresConversationConfirmation() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000939")!
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let governance = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await governance.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        let provider = ScriptedTextProvider(scripts: [], capabilities: [.text, .toolCalling, .structuredOutput])
+        let session = makeSession(
+            container: container,
+            repository: repository,
+            provider: provider,
+            conversationID: conversationID,
+            budget: AgentBudget(deadline: .distantFuture),
+            governance: governance
+        )
+
+        let proposal = try await session.send(
+            userText: "我授权你使用睡眠历史分析",
+            requestID: UUID()
+        )
+        XCTAssertTrue(proposal.text.contains("回复“确认”启用"))
+        let draft = try await governance.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+        XCTAssertEqual(draft.state, .draft)
+        XCTAssertEqual(draft.allowedClasses, [.healthSleep])
+        let draftPolicy = try await CloudHealthContextPolicy.load(from: governance, provider: .deepSeek)
+        XCTAssertFalse(draftPolicy.allows(.healthSleep))
+        XCTAssertTrue(provider.recordedRequests().isEmpty)
+
+        let confirmation = try await session.send(userText: "确认", requestID: UUID())
+        XCTAssertTrue(confirmation.text.contains("已确认云端健康上下文策略"))
+        let active = try await governance.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+        XCTAssertEqual(active.state, .active)
+        XCTAssertEqual(active.allowedClasses, [.healthSleep])
+        XCTAssertNotNil(active.confirmedAt)
+        XCTAssertTrue(provider.recordedRequests().isEmpty)
+    }
+
+    func testConversationHistoryConsentDefaultsToCurrentTurnOnlyInProviderPayload() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let governance = InMemoryProviderGovernanceRepository(granted: [(.deepSeek, .healthText)])
+        let provider = ScriptedTextProvider(scripts: [
+            [.textDelta("prior assistant private-history-secret"), .completed(.completed)],
+            [.textDelta("仅看本轮输入。"), .completed(.completed)],
+        ])
+        let session = makeSession(
+            container: container,
+            repository: repository,
+            provider: provider,
+            conversationID: UUID(uuidString: "00000000-0000-0000-0000-000000000938")!,
+            budget: AgentBudget(deadline: .distantFuture),
+            governance: governance
+        )
+
+        _ = try await session.send(userText: "prior user private-history-secret", requestID: UUID())
+        _ = try await session.send(userText: "current turn only", requestID: UUID())
+
+        let requests = provider.recordedRequests()
+        XCTAssertEqual(requests.count, 2)
+        let secondRequestText = try XCTUnwrap(requests.last).messages
+            .flatMap { message in
+                message.content.compactMap { content -> String? in
+                    if case .text(let text) = content { return text }
+                    if case .toolResult(_, let text) = content { return text }
+                    return nil
+                }
+            }
+            .joined(separator: "\n")
+        XCTAssertTrue(secondRequestText.contains("current turn only"))
+        XCTAssertFalse(secondRequestText.contains("private-history-secret"))
+        XCTAssertFalse(secondRequestText.contains("prior assistant"))
+    }
+
+    func testConfirmedConversationHistoryConsentIncludesCurrentRevisionHistoryInProviderPayload() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let governance = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await governance.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+            provider: .deepSeek,
+            allowed: true,
+            repository: governance,
+            confirmedAt: Date(timeIntervalSince1970: 1_798_100_100),
+            changeSource: .settings
+        )
+        let confirmedPolicy = try await CloudHealthContextPolicy.load(
+            from: governance,
+            provider: .deepSeek
+        )
+        XCTAssertTrue(confirmedPolicy.allowsConversationHistory)
+
+        let provider = ScriptedTextProvider(scripts: [
+            [.textDelta("previous ordinary assistant reply"), .completed(.completed)],
+            [.textDelta("current reply"), .completed(.completed)],
+        ])
+        let session = makeSession(
+            container: container,
+            repository: repository,
+            provider: provider,
+            conversationID: UUID(uuidString: "00000000-0000-0000-0000-000000000942")!,
+            budget: AgentBudget(deadline: .distantFuture),
+            governance: governance
+        )
+
+        _ = try await session.send(userText: "previous ordinary user message", requestID: UUID())
+        let policyAfterFirstTurn = try await CloudHealthContextPolicy.load(
+            from: governance,
+            provider: .deepSeek
+        )
+        XCTAssertEqual(policyAfterFirstTurn.revision, confirmedPolicy.revision)
+
+        _ = try await session.send(userText: "current user message", requestID: UUID())
+
+        let requests = provider.recordedRequests()
+        XCTAssertEqual(requests.count, 2)
+        let secondRequestText = try XCTUnwrap(requests.last).messages
+            .flatMap { message in
+                message.content.compactMap { content -> String? in
+                    if case .text(let text) = content { return text }
+                    if case .toolResult(_, let text) = content { return text }
+                    return nil
+                }
+            }
+            .joined(separator: "\n")
+        XCTAssertTrue(secondRequestText.contains("previous ordinary user message"))
+        XCTAssertTrue(secondRequestText.contains("previous ordinary assistant reply"))
+        XCTAssertTrue(secondRequestText.contains("current user message"))
+    }
+
     func testPolicyRevocationDuringHealthToolExecutionFiltersTheContinuationRequest() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
@@ -83,6 +234,7 @@ final class AgentRequestResumeTests: XCTestCase {
         let now = Date()
         let provider = ScriptedTextProvider(scripts: [
             [
+                .textDelta("sleep.current-turn-prose-secret"),
                 .toolCall(ToolCall(
                     id: "health-history-revocation",
                     name: "get_today_health_state",
@@ -174,6 +326,7 @@ final class AgentRequestResumeTests: XCTestCase {
             }
             .joined(separator: "\n")
         XCTAssertFalse(continuationText.contains("sleep.revoked-value-sentinel"))
+        XCTAssertFalse(continuationText.contains("sleep.current-turn-prose-secret"))
         XCTAssertFalse(continuationText.contains("sleep.recovery-provenance-sentinel"))
         XCTAssertFalse(continuationText.contains("sleep.guidance-provenance-sentinel"))
         XCTAssertFalse(continuationText.contains("919191"))

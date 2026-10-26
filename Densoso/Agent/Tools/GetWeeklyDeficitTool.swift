@@ -4,7 +4,7 @@ import Foundation
 struct GetWeeklyDeficitTool: AgentTool {
     var definition: ToolSchema { .strictObject(
         name: "get_weekly_deficit",
-        description: "获取本周或指定历史周的热量缺口，返回有效天数、缺失天数、可用状态与覆盖率；本周只统计截至今天的日期。projectedWeightLossKg 仅为粗略能量折算，并附非体重预测说明。",
+        description: "获取本周或指定历史周的热量缺口，返回有效天数、缺失天数、可用状态、覆盖率和投影版本（混合时列出版本集合）；本周只统计截至今天的日期。projectedWeightLossKg 仅为粗略能量折算，并附非体重预测说明。",
         properties: [
             "weekOffset": .integer(minimum: -52, maximum: 0, description: "周偏移: 0=本周, -1=上周")
         ],
@@ -83,6 +83,8 @@ struct GetWeeklyDeficitTool: AgentTool {
             daysWithData: deficit.coverage.availableDays,
             missingDays: max(expectedDays - deficit.coverage.availableDays, 0),
             coverage: deficit.coverage,
+            projectionVersion: Self.projectionVersion(for: metrics),
+            projectionVersions: Self.projectionVersions(for: metrics),
             totalDeficitKcal: Self.likelyValue(from: deficit.total),
             avgDailyDeficitKcal: Self.likelyValue(from: average),
             projectedWeightLossKg: projectedWeightLoss,
@@ -93,6 +95,23 @@ struct GetWeeklyDeficitTool: AgentTool {
             totalWorkouts: metrics.reduce(0) { $0 + $1.workoutCount }
         )
         return Self.encode(response)
+    }
+
+    private static func projectionVersions(for metrics: [DailyMetricsReadResult]) -> [String] {
+        let versions = metrics.map { metric -> String in
+            let version = metric.projectionVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+            return version.isEmpty ? "unknown" : version
+        }
+        return Array(Set(versions)).sorted()
+    }
+
+    private static func projectionVersion(for metrics: [DailyMetricsReadResult]) -> String {
+        let versions = projectionVersions(for: metrics)
+        switch versions.count {
+        case 0: "unavailable"
+        case 1: versions[0]
+        default: "mixed"
+        }
     }
 
     private static func average(
@@ -156,6 +175,10 @@ private struct WeeklyDeficitToolResponse: Encodable {
     let daysWithData: Int
     let missingDays: Int
     let coverage: MetricCoverage
+    /// A version, "mixed", or "unavailable" when no daily projections were returned.
+    let projectionVersion: String
+    /// Sorted distinct source versions, preserving detail for mixed-version windows.
+    let projectionVersions: [String]
     let totalDeficitKcal: MetricValue<Double>
     let avgDailyDeficitKcal: MetricValue<Double>
     let projectedWeightLossKg: MetricValue<Double>

@@ -10,19 +10,28 @@ actor HealthProjectionActor {
     private static let confirmedPlanFetchBatchSize = 64
     private static let watchPlanSummaryLimit = 10
     private var calendar: Calendar = .current
+    private let briefCacheGenerationFence: HealthBriefCacheGenerationFence
 
     private enum WatchPlanCandidate {
         case workout(ConfirmedWorkoutPlanEntry)
         case training(ConfirmedTrainingPlanEntry, TrainingSessionDraft)
     }
 
-    init(modelContainer: ModelContainer, calendar: Calendar = .current) {
+    init(
+        modelContainer: ModelContainer,
+        calendar: Calendar = .current,
+        briefCacheGenerationFence: HealthBriefCacheGenerationFence = HealthBriefCacheGenerationFence()
+    ) {
         self.modelContainer = modelContainer
         self.modelExecutor = DefaultSerialModelExecutor(modelContext: ModelContext(modelContainer))
         self.calendar = calendar
+        self.briefCacheGenerationFence = briefCacheGenerationFence
     }
 
-    func refresh(asOf date: Date = Date()) throws -> HealthIntelligenceRefreshSnapshot {
+    func refresh(
+        asOf date: Date = Date(),
+        cacheGeneration: UInt64
+    ) throws -> HealthIntelligenceRefreshSnapshot {
         let reader = HealthIntelligenceReadModel(calendar: calendar)
         let days = try reader.loadDays(through: date, in: modelContext)
         let goal = try reader.goalProfile(asOf: date, in: modelContext)
@@ -50,7 +59,8 @@ actor HealthProjectionActor {
         let daily = try cachedDailyBrief(
             result.dailyBrief,
             snapshotHash: dailySnapshotHash,
-            in: modelContext
+            in: modelContext,
+            cacheGeneration: cacheGeneration
         )
 
         let weekStart = previousWeekStart(containing: date)
@@ -69,7 +79,8 @@ actor HealthProjectionActor {
         let cachedWeekly = try cachedWeeklyBrief(
             weekly,
             snapshotHash: weeklySnapshotHash,
-            in: modelContext
+            in: modelContext,
+            cacheGeneration: cacheGeneration
         )
         return HealthIntelligenceRefreshSnapshot(
             dailyBrief: daily,
@@ -348,72 +359,78 @@ actor HealthProjectionActor {
     private func cachedDailyBrief(
         _ brief: DailyHealthBrief,
         snapshotHash: String,
-        in context: ModelContext
+        in context: ModelContext,
+        cacheGeneration: UInt64
     ) throws -> DailyHealthBrief {
-        let key = "daily:\(dayKey(brief.dayStart))"
-        let predicate = #Predicate<DailyBriefRecord> { $0.cacheKey == key }
-        var descriptor = FetchDescriptor<DailyBriefRecord>(predicate: predicate)
-        descriptor.fetchLimit = 1
-        let existing = try context.fetch(descriptor).first
-        if let existing,
-           existing.snapshotHash == snapshotHash,
-           existing.algorithmVersion == brief.algorithmVersion,
-           let cached = try? makeDecoder().decode(DailyHealthBrief.self, from: existing.payloadData) {
-            return cached
+        try briefCacheGenerationFence.withCurrentGeneration(cacheGeneration) {
+            let key = "daily:\(dayKey(brief.dayStart))"
+            let predicate = #Predicate<DailyBriefRecord> { $0.cacheKey == key }
+            var descriptor = FetchDescriptor<DailyBriefRecord>(predicate: predicate)
+            descriptor.fetchLimit = 1
+            let existing = try context.fetch(descriptor).first
+            if let existing,
+               existing.snapshotHash == snapshotHash,
+               existing.algorithmVersion == brief.algorithmVersion,
+               let cached = try? makeDecoder().decode(DailyHealthBrief.self, from: existing.payloadData) {
+                return cached
+            }
+            let payload = try encode(brief)
+            let generatedAt = Date()
+            if let existing {
+                existing.snapshotHash = snapshotHash
+                existing.algorithmVersion = brief.algorithmVersion
+                existing.payloadData = payload
+                existing.generatedAt = generatedAt
+            } else {
+                context.insert(DailyBriefRecord(
+                    cacheKey: key,
+                    dayKey: dayKey(brief.dayStart),
+                    snapshotHash: snapshotHash,
+                    algorithmVersion: brief.algorithmVersion,
+                    payloadData: payload
+                ))
+            }
+            try context.save()
+            return brief
         }
-        let payload = try encode(brief)
-        let generatedAt = Date()
-        if let existing {
-            existing.snapshotHash = snapshotHash
-            existing.algorithmVersion = brief.algorithmVersion
-            existing.payloadData = payload
-            existing.generatedAt = generatedAt
-        } else {
-            context.insert(DailyBriefRecord(
-                cacheKey: key,
-                dayKey: dayKey(brief.dayStart),
-                snapshotHash: snapshotHash,
-                algorithmVersion: brief.algorithmVersion,
-                payloadData: payload
-            ))
-        }
-        try context.save()
-        return brief
     }
 
     private func cachedWeeklyBrief(
         _ brief: WeeklyHealthBrief,
         snapshotHash: String,
-        in context: ModelContext
+        in context: ModelContext,
+        cacheGeneration: UInt64
     ) throws -> WeeklyHealthBrief {
-        let key = "weekly:\(dayKey(brief.weekStart))"
-        let predicate = #Predicate<WeeklyBriefRecord> { $0.cacheKey == key }
-        var descriptor = FetchDescriptor<WeeklyBriefRecord>(predicate: predicate)
-        descriptor.fetchLimit = 1
-        let existing = try context.fetch(descriptor).first
-        if let existing,
-           existing.snapshotHash == snapshotHash,
-           existing.algorithmVersion == brief.algorithmVersion,
-           let cached = try? makeDecoder().decode(WeeklyHealthBrief.self, from: existing.payloadData) {
-            return cached
+        try briefCacheGenerationFence.withCurrentGeneration(cacheGeneration) {
+            let key = "weekly:\(dayKey(brief.weekStart))"
+            let predicate = #Predicate<WeeklyBriefRecord> { $0.cacheKey == key }
+            var descriptor = FetchDescriptor<WeeklyBriefRecord>(predicate: predicate)
+            descriptor.fetchLimit = 1
+            let existing = try context.fetch(descriptor).first
+            if let existing,
+               existing.snapshotHash == snapshotHash,
+               existing.algorithmVersion == brief.algorithmVersion,
+               let cached = try? makeDecoder().decode(WeeklyHealthBrief.self, from: existing.payloadData) {
+                return cached
+            }
+            let payload = try encode(brief)
+            if let existing {
+                existing.snapshotHash = snapshotHash
+                existing.algorithmVersion = brief.algorithmVersion
+                existing.payloadData = payload
+                existing.generatedAt = Date()
+            } else {
+                context.insert(WeeklyBriefRecord(
+                    cacheKey: key,
+                    weekKey: dayKey(brief.weekStart),
+                    snapshotHash: snapshotHash,
+                    algorithmVersion: brief.algorithmVersion,
+                    payloadData: payload
+                ))
+            }
+            try context.save()
+            return brief
         }
-        let payload = try encode(brief)
-        if let existing {
-            existing.snapshotHash = snapshotHash
-            existing.algorithmVersion = brief.algorithmVersion
-            existing.payloadData = payload
-            existing.generatedAt = Date()
-        } else {
-            context.insert(WeeklyBriefRecord(
-                cacheKey: key,
-                weekKey: dayKey(brief.weekStart),
-                snapshotHash: snapshotHash,
-                algorithmVersion: brief.algorithmVersion,
-                payloadData: payload
-            ))
-        }
-        try context.save()
-        return brief
     }
 
     private func hash(

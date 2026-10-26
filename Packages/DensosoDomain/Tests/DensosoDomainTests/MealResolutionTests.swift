@@ -1,3 +1,5 @@
+import Dispatch
+import Foundation
 import XCTest
 @testable import DensosoDomain
 
@@ -98,6 +100,43 @@ final class MealResolutionTests: XCTestCase {
 
         XCTAssertEqual(dish.ingredients.count, 1)
         XCTAssertEqual(dish.nutrients.energyKcal.likely, 150, accuracy: 0.001)
+    }
+
+    func testProductionMealEstimatorReportsP50P95AgainstLatencyTarget() throws {
+        let input = try makePerformanceInput(ingredientCount: 12)
+        let estimator = MealEstimator()
+        let warmupCount = 10
+        let sampleCount = 100
+        for _ in 0..<warmupCount {
+            _ = try estimator.estimateDish(input)
+        }
+
+        var durationsNanoseconds: [UInt64] = []
+        durationsNanoseconds.reserveCapacity(sampleCount)
+        var energyChecksum = 0.0
+        for _ in 0..<sampleCount {
+            let startedAt = DispatchTime.now().uptimeNanoseconds
+            let estimate = try estimator.estimateDish(input)
+            durationsNanoseconds.append(DispatchTime.now().uptimeNanoseconds - startedAt)
+            energyChecksum += estimate.nutrients.energyKcal.likely
+        }
+
+        let sortedDurations = durationsNanoseconds.sorted()
+        let p50 = sortedDurations[(sampleCount - 1) * 50 / 100]
+        let p95 = sortedDurations[(sampleCount * 95 + 99) / 100 - 1]
+        let environment = ProcessInfo.processInfo.environment
+        let deviceName = environment["SIMULATOR_DEVICE_NAME"] ?? "macOS test host"
+        let modelIdentifier = environment["SIMULATOR_MODEL_IDENTIFIER"] ?? "macOS runner"
+        print(
+            "DENSOSO_PERF scenario=production_meal_estimator "
+                + "device=\(deviceName) model=\(modelIdentifier) "
+                + "os=\(ProcessInfo.processInfo.operatingSystemVersionString) "
+                + "ingredients=12 warmups=\(warmupCount) samples=\(sampleCount) "
+                + "p50_us=\(Double(p50) / 1_000) p95_us=\(Double(p95) / 1_000)"
+        )
+
+        XCTAssertGreaterThan(energyChecksum, 0)
+        XCTAssertLessThanOrEqual(p95, 100_000_000, "12-ingredient production MealEstimator p95 exceeded 100 ms")
     }
 
     func testUnknownMacroRemainsNil() throws {
@@ -308,6 +347,47 @@ final class MealResolutionTests: XCTestCase {
             evidence: []
         )
         return FoodResolution(candidates: [candidate], autoPreselect: candidate)
+    }
+
+    private func makePerformanceInput(ingredientCount: Int) throws -> MealDishEstimationInput {
+        var ingredients: [MealIngredientEstimationInput] = []
+        ingredients.reserveCapacity(ingredientCount)
+        for index in 0..<ingredientCount {
+            let offset = Double(index)
+            let entry = FoodCatalogEntry(
+                id: "performance-food-\(index)",
+                name: "performance-food-\(index)",
+                preparation: .cooked,
+                category: "staple",
+                nutrients: FoodNutrientProfile(
+                    energyKcalPer100Grams: 90 + offset * 4,
+                    proteinGramsPer100Grams: 4 + offset / 2,
+                    fatGramsPer100Grams: 1 + offset / 4,
+                    carbohydrateGramsPer100Grams: 15 + offset
+                ),
+                sourceVersion: "meal-estimator-performance-fixture-v1"
+            )
+            let resolution = selected(entry)
+            let portion = try PortionEstimator().estimate(
+                evidence: [.exactGrams(grams: 75 + offset * 5)],
+                food: resolution.autoPreselect
+            )
+            ingredients.append(
+                MealIngredientEstimationInput(
+                    label: entry.name,
+                    resolution: resolution,
+                    portion: portion,
+                    massBasis: .cooked
+                )
+            )
+        }
+
+        return MealDishEstimationInput(
+            name: "12 项复合餐性能 fixture",
+            cookingMethod: "stirFry",
+            ingredients: ingredients,
+            inferredOilGrams: try EstimateRange(low: 4, likely: 8, high: 12)
+        )
     }
 
     private func makeDish(entry: FoodCatalogEntry) throws -> MealDishDraft {

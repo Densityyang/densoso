@@ -85,6 +85,136 @@ final class ProviderRetryPolicyTests: XCTestCase {
         XCTAssertEqual(result.attempt, 2)
     }
 
+    func testDeepSeekStreamRetryRevalidatesCapturedPolicyRevision() async throws {
+        let authorization = RetryPolicyAuthorization(
+            provider: .deepSeek,
+            allowedClasses: [.healthText]
+        )
+        let transport = RetryPolicyChangingTransport {
+            await authorization.revokeAndReconfirm(.healthText)
+        }
+        let clock = TestProviderRetryClock()
+        let provider = DeepSeekProvider(
+            credentialSource: TestCredentialSource(values: [.deepSeek: "fixture"]),
+            transport: transport,
+            clock: clock,
+            jitter: { _ in 0 }
+        )
+        var providerRequest = ModelRequest(
+            requestID: UUID(),
+            conversationID: UUID(),
+            systemPrompt: nil,
+            messages: [ModelMessage(role: .user, text: "retry policy")],
+            tools: [],
+            maxOutputTokens: 32,
+            thinking: .none,
+            deadline: clock.now().addingTimeInterval(45)
+        )
+        providerRequest.preSerializationGate = { serialize in try serialize() }
+        providerRequest.networkAttemptGate = {
+            try await authorization.authorize(
+                expectedRevision: 4,
+                requiredClasses: [.healthText]
+            )
+        }
+
+        do {
+            _ = try await collect(provider.stream(providerRequest))
+            XCTFail("A stale DeepSeek body must not be retried after its policy revision changes")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .deepSeek))
+        }
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    func testQwenTextRetryRevalidatesCapturedPolicyRevision() async throws {
+        let authorization = RetryPolicyAuthorization(
+            provider: .qwen,
+            allowedClasses: [.healthText]
+        )
+        let transport = RetryPolicyChangingTransport {
+            await authorization.revokeAndReconfirm(.healthText)
+        }
+        let clock = TestProviderRetryClock()
+        let provider = QwenProvider(
+            endpoint: URL(string: "https://provider.example.test/v1/chat/completions")!,
+            credentialSource: TestCredentialSource(values: [.qwen: "fixture"]),
+            transport: transport,
+            clock: clock,
+            jitter: { _ in 0 }
+        )
+        var providerRequest = ModelRequest(
+            requestID: UUID(),
+            conversationID: UUID(),
+            systemPrompt: nil,
+            messages: [ModelMessage(role: .user, text: "retry policy")],
+            tools: [],
+            maxOutputTokens: 32,
+            thinking: .none,
+            deadline: clock.now().addingTimeInterval(45)
+        )
+        providerRequest.preSerializationGate = { serialize in try serialize() }
+        providerRequest.networkAttemptGate = {
+            try await authorization.authorize(
+                expectedRevision: 4,
+                requiredClasses: [.healthText]
+            )
+        }
+
+        do {
+            _ = try await collect(provider.stream(providerRequest))
+            XCTFail("A stale Qwen body must not be retried after its policy revision changes")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .qwen))
+        }
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    func testQwenASRRetryRejectsRevokedAndReconfirmedSpeechAudioConsent() async throws {
+        let authorization = RetryPolicyAuthorization(
+            provider: .qwen,
+            allowedClasses: [.speechAudio]
+        )
+        let transport = RetryPolicyChangingTransport {
+            await authorization.revokeAndReconfirm(.speechAudio)
+        }
+        let clock = TestProviderRetryClock()
+        let provider = QwenASRProvider(
+            endpoint: URL(string: "https://provider.example.test/v1/chat/completions")!,
+            credentialSource: TestCredentialSource(values: [.qwen: "fixture"]),
+            transport: transport,
+            clock: clock,
+            jitter: { _ in 0 }
+        )
+
+        do {
+            _ = try await provider.transcribe(
+                audio: SanitizedAudio(
+                    data: Data("RIFF-retry".utf8),
+                    mimeType: "audio/wav",
+                    durationSeconds: 1,
+                    sampleRate: 16_000,
+                    channelCount: 1
+                ),
+                locale: .current,
+                requestID: UUID(),
+                beforeNetworkAttempt: {
+                    try await authorization.authorize(
+                        expectedRevision: 4,
+                        requiredClasses: [.speechAudio]
+                    )
+                }
+            )
+            XCTFail("Qwen ASR must reject old audio after speech-audio consent is revoked and reconfirmed")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .qwen))
+        }
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.count, 1)
+    }
+
     func testDeadlineStopsRetryBeforeSleepingPastBudget() async throws {
         let transport = ScriptedProviderHTTPTransport(
             steps: [.response(status: 503, data: Data())]
@@ -203,6 +333,65 @@ final class ProviderRetryPolicyTests: XCTestCase {
         var request = URLRequest(url: URL(string: "https://provider.example.test/v1/messages")!)
         request.httpMethod = "POST"
         return request
+    }
+}
+
+actor RetryPolicyAuthorization {
+    private let provider: ProviderID
+    private var revision = 4
+    private var allowedClasses: Set<ProviderDataClass>
+
+    init(provider: ProviderID, allowedClasses: Set<ProviderDataClass>) {
+        self.provider = provider
+        self.allowedClasses = allowedClasses
+    }
+
+    func authorize(
+        expectedRevision: Int,
+        requiredClasses: Set<ProviderDataClass>
+    ) throws {
+        guard revision == expectedRevision else {
+            throw ProviderError.consentPolicyChanged(provider: provider)
+        }
+        for dataClass in requiredClasses where !allowedClasses.contains(dataClass) {
+            throw ProviderError.consentRequired(provider: provider, dataClass: dataClass)
+        }
+    }
+
+    func revokeAndReconfirm(_ dataClass: ProviderDataClass) {
+        allowedClasses.remove(dataClass)
+        revision += 1
+        allowedClasses.insert(dataClass)
+        revision += 1
+    }
+}
+
+actor RetryPolicyChangingTransport: ProviderHTTPTransport {
+    private let onFirstRequest: @Sendable () async -> Void
+    private var requests: [URLRequest] = []
+
+    init(onFirstRequest: @escaping @Sendable () async -> Void) {
+        self.onFirstRequest = onFirstRequest
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        requests.append(request)
+        if requests.count == 1 {
+            await onFirstRequest()
+            return (Data(), response(for: request, status: 503))
+        }
+        return (Data("{}".utf8), response(for: request, status: 200))
+    }
+
+    func recordedRequests() -> [URLRequest] { requests }
+
+    private func response(for request: URLRequest, status: Int) -> HTTPURLResponse {
+        HTTPURLResponse(
+            url: request.url!,
+            statusCode: status,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        )!
     }
 }
 

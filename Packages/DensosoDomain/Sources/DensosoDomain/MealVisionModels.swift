@@ -147,4 +147,9 @@ public struct MealVisionObservation: Codable, Equatable, Sendable {
 
 public protocol MealVisionProviding: Sendable {
     func analyze(imageJPEG: Data, locale: Locale) async throws -> MealVisionObservation
+    func analyze(
+        imageJPEG: Data,
+        locale: Locale,
+        serializationGate: @escaping @Sendable (@Sendable () throws -> Data) async throws -> Data
+    ) async throws -> MealVisionObservation
 }

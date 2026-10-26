@@ -4,6 +4,68 @@ import XCTest
 
 @MainActor
 final class QwenMealVisionProviderContractTests: XCTestCase {
+    func testSerializationConsentGateStopsBeforeNetworkRequest() async throws {
+        let transport = ScriptedProviderHTTPTransport(steps: [])
+        let provider = QwenMealVisionProvider(
+            endpoint: endpoint,
+            credentialSource: TestCredentialSource(values: [.qwen: "fixture"]),
+            transport: transport,
+            jitter: { _ in 0 }
+        )
+
+        do {
+            _ = try await provider.analyze(
+                imageJPEG: fixtureJPEG,
+                locale: .current,
+                serializationGate: { _ in
+                    throw ProviderError.consentPolicyChanged(provider: .qwen)
+                }
+            )
+            XCTFail("A failed image consent gate must stop request serialization and sending")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .qwen))
+        }
+        let requests = await transport.recordedRequests()
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testQwenVisionRetryRevalidatesCapturedImagePolicyRevision() async throws {
+        let authorization = RetryPolicyAuthorization(
+            provider: .qwen,
+            allowedClasses: [.mealImage]
+        )
+        let transport = RetryPolicyChangingTransport {
+            await authorization.revokeAndReconfirm(.mealImage)
+        }
+        let clock = TestProviderRetryClock()
+        let provider = QwenMealVisionProvider(
+            endpoint: endpoint,
+            credentialSource: TestCredentialSource(values: [.qwen: "fixture"]),
+            transport: transport,
+            clock: clock,
+            jitter: { _ in 0 }
+        )
+
+        do {
+            _ = try await provider.analyze(
+                imageJPEG: fixtureJPEG,
+                locale: .current,
+                serializationGate: { serialize in
+                    try await authorization.authorize(
+                        expectedRevision: 4,
+                        requiredClasses: [.mealImage]
+                    )
+                    return try serialize()
+                }
+            )
+            XCTFail("A stale Qwen vision body must not be retried after its policy revision changes")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .qwen))
+        }
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.count, 1)
+    }
+
     func testPinnedQwen37SnapshotUsesImageAndStructuredObservationContract() async throws {
         let transport = ScriptedProviderHTTPTransport(
             steps: [

@@ -15,7 +15,30 @@ Required evidence:
 - every production food and recipe row has source ID, source record ID, source
   version, and verified redistribution status;
 - unverified legacy food rows remain excluded from the production database;
-- the verified food bundle contains exactly the pinned USDA records;
+- the verified food bundle contains exactly 24 pinned USDA records and 979
+  Taiwan FDA records regenerated from the pinned archive;
+- the Taiwan FDA archive has the pinned SHA-256 and source release metadata,
+  and its OpenCC build-time dependency is installed from the vendored,
+  SHA-256-pinned wheel before importer reproduction;
+- Taiwan FDA canonical names and raw source records retain their Traditional
+  Chinese values. The pinned OpenCC `t2s` transform adds Simplified Chinese
+  search aliases; aliases that collide with a canonical name or another food
+  are omitted and enumerated in the alias review report. This import attaches
+  1,144 converted aliases and sends 319 conflicting converted aliases to
+  review;
+- the Taiwan FDA importer accepts records only when energy is numeric and
+  within 0–1000 kcal/100 g, source metadata and nutrient rows do not conflict,
+  a source waste rate is present in 0–100%, and the Integration number can be
+  mapped to a stable catalog ID. The pinned release has 2,116 grouped foods:
+  979 accepted and 1,137 excluded for missing or invalid waste rate;
+- Taiwan FDA nutrients are retained as analyzed per 100 g of edible portion.
+  Waste rate is kept as edible percentage and is not deducted from those
+  values; it is used only when scaling an as-purchased portion. Preparation is
+  kept as raw, cooked, or unknown, and unknown state is represented with an
+  as-purchased mass basis;
+- missing Taiwan FDA nutrient values remain null. In the pinned release,
+  dietary fiber is absent for 344 accepted foods; the importer never fills
+  missing energy with zero;
 - missing, null, empty, dash, and trace energy values are rejected, while an
   explicitly recorded numeric zero remains distinct;
 - every input row must declare an energy unit and per-100 g nutrient basis;
@@ -36,5 +59,7 @@ Required evidence:
 - multiple source quantity lines remain verbatim as text-only evidence and are
   listed for review instead of being reduced to the first numeric amount.
 
-The validator reports evidence about the packaged data and importer behavior;
-it does not establish the nutritional accuracy of USDA data for Chinese dishes.
+The Taiwan FDA archive and source rows are reproducible from the pinned release;
+the USDA archives are not bundled, so the gate does not independently
+recompute their nutrient values. Provenance checks do not establish that a
+source sample is the best nutritional match for every user-described food.

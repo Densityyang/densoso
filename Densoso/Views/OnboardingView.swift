@@ -20,6 +20,8 @@ struct OnboardingView: View {
     @State private var qwenWorkspaceID = ""
     @State private var cloudTextConsent = false
     @State private var qwenSpeechConsent = false
+    @State private var cloudHealthContextClasses: Set<ProviderDataClass> = []
+    @State private var cloudConversationHistoryConsent = false
     @State private var name = ""
     @State private var sex = ""
     @State private var dateOfBirth: Date?
@@ -183,6 +185,11 @@ struct OnboardingView: View {
                 Text("只包含当前主动提交的文字；不会自动上传图片、音频或后台健康数据。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                Toggle("允许发送此前与云端助手的聊天记录", isOn: $cloudConversationHistoryConsent)
+                Text("这是独立权限，默认关闭；不影响本轮你主动提交的文字。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                healthContextConsentControls
             }
         } else if intelligenceMode == .cloudQwen {
             Section("Qwen Model Studio") {
@@ -199,7 +206,34 @@ struct OnboardingView: View {
             Section("云端同意") {
                 Toggle("同意上传我主动提交的健康文字", isOn: $cloudTextConsent)
                 Toggle("同意在本地转写失败时上传单次临时音频", isOn: $qwenSpeechConsent)
+                Toggle("允许发送此前与云端助手的聊天记录", isOn: $cloudConversationHistoryConsent)
+                Text("这是独立权限，默认关闭；不影响本轮你主动提交的文字。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                healthContextConsentControls
             }
+        }
+    }
+
+    @ViewBuilder
+    private var healthContextConsentControls: some View {
+        Text("历史健康汇总默认关闭。只勾选你明确同意用于后续云端请求的类别；保存后可在设置中随时撤销。")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        ForEach(CloudHealthContextPolicy.dataClasses, id: \.self) { dataClass in
+            Toggle(
+                "允许上传\(dataClass.healthContextTitle ?? "健康")历史汇总",
+                isOn: Binding(
+                    get: { cloudHealthContextClasses.contains(dataClass) },
+                    set: { granted in
+                        if granted {
+                            cloudHealthContextClasses.insert(dataClass)
+                        } else {
+                            cloudHealthContextClasses.remove(dataClass)
+                        }
+                    }
+                )
+            )
         }
     }
 
@@ -323,6 +357,40 @@ struct OnboardingView: View {
                     granted: qwenSpeechConsent,
                     policyVersion: "qwen-single-audio-v1"
                 )
+            }
+            if intelligenceMode != .localOnly {
+                let provider: ProviderID = intelligenceMode == .cloudDeepSeek ? .deepSeek : .qwen
+                if cloudHealthContextClasses.isEmpty {
+                    let currentPolicy = try await CloudHealthContextPolicy.load(
+                        from: dependencies.providerGovernanceRepository,
+                        provider: provider
+                    )
+                    if !currentPolicy.allowedClasses.isEmpty {
+                        _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+                            provider: provider,
+                            allowedClasses: [],
+                            repository: dependencies.providerGovernanceRepository,
+                            changeSource: .onboarding
+                        )
+                    }
+                } else {
+                    _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+                        provider: provider,
+                        allowedClasses: cloudHealthContextClasses,
+                        repository: dependencies.providerGovernanceRepository,
+                        confirmedAt: Date(),
+                        changeSource: .onboarding
+                    )
+                }
+                if cloudConversationHistoryConsent {
+                    _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+                        provider: provider,
+                        allowed: true,
+                        repository: dependencies.providerGovernanceRepository,
+                        confirmedAt: Date(),
+                        changeSource: .onboarding
+                    )
+                }
             }
             dependencies.intelligencePreferences.mode = intelligenceMode
 
