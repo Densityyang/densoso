@@ -1678,6 +1678,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "stale or missing brief offers a refresh",
             "offline replay deduplication",
             "arrival ordering",
+            "atomic application-support file",
+            "Legacy `confirm`",
+            "rejected on iPhone",
+            "New schema-2 messages carry explicit expiry",
+            "ordered commands expire after 24 hours",
             "Sequenced commands wait while their predecessor is missing",
             "Rejected or conflicting predecessors terminally",
             "Transcripts remain pending until the user sends",
@@ -1759,6 +1764,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "testHundredOfflineMessagesRemainOrderedAndDuplicateReplaysDoNotAddRows",
             "testAcceptedAcknowledgementRemovesMessageAfterPhonePersistsItsReceipt",
+            "testPendingQueueHasABoundedCapacityAndRejectsWithoutDroppingCommands",
+            "testCurrentCommandsCarryExpiryAndLegacyCommandsGetAnExpiryFallback",
+            "testCurrentCommandWithoutValidExpiryIsRejected",
+            "testWatchPendingActionMutationRequiresPhoneConfirmation",
+            "testCommandWithFutureCreatedAtIsRejectedByExpiryPolicy",
             "testCausalSequenceSurvivesAcknowledgementAndOutboxRestore",
             "testCausalDependencyPolicyWaitsAndFailsOnRejectedOrConflictingPredecessors",
             "testTerminalSequenceWatermarkAcknowledgesOnlyCoveredCausalEntries",
@@ -1810,6 +1820,12 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     require(
         "Packages/DensosoDomain/Sources/DensosoDomain/WatchConnectivityContracts.swift",
         (
+            "public static let currentSchemaVersion = 2",
+            "public let expiresAt: Date?",
+            "public enum WatchMessageExpiryPolicy",
+            "public enum WatchMessageAuthorizationPolicy",
+            "maximumPendingMessageCount = 128",
+            "maximumTranscriptUTF8Bytes = 32_000",
             "private var lastCausalSequence: Int?",
             "public var latestCausalSequence: Int?",
             "public var latestPendingCausalSequence: Int?",
@@ -1837,9 +1853,14 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "formatter.calendar = calendar",
             "snapshot.activePendingActions(asOf: now)",
             "if let snapshot = currentSnapshot(asOf: date), !snapshot.workoutPlans.isEmpty",
+            "请在 iPhone 查看并确认或拒绝",
+            "Watch 仅展示待处理事项；确认和拒绝必须在 iPhone 完成。",
         ),
         errors,
     )
+    watch_view = read_text("DensosoWatchExtension/WatchCompanionView.swift", errors)
+    if 'Button("确认")' in watch_view or 'Button("拒绝"' in watch_view:
+        errors.append("Watch pending-action UI must direct users to iPhone review")
     require(
         "Packages/DensosoDomain/Tests/DensosoDomainTests/WatchWorkoutCoordinatorTests.swift",
         ("testLifecyclePreservesLogicalSessionAcrossPauseAndResume",),
@@ -1939,6 +1960,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     require(
         "Densoso/Infrastructure/WatchConnectivity/PhoneWatchConnectivityCoordinator.swift",
         (
+            "WatchMessageExpiryPolicy.isExpired(envelope, asOf: Date())",
+            "WatchMessageAuthorizationPolicy.requiresPhoneConfirmation(for: envelope.payload)",
+            "待确认事项必须在 iPhone 查看并处理",
             "inboxStore.pendingReplayEnvelopes()",
             "inboxStore.causalSequenceStates(for: [envelope])",
             "inboxStore.highestContiguousTerminalCausalSequence()",
@@ -1953,6 +1977,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         ),
         errors,
     )
+    if "confirmationCoordinator.confirm(id: actionID)" in phone_watch_coordinator \
+            or "confirmationCoordinator.reject(id: actionID)" in phone_watch_coordinator:
+        errors.append("Phone Watch ingress must not confirm or reject a pending action on Watch's behalf")
     require(
         "Densoso/Infrastructure/WatchConnectivity/WatchMessageInboxStore.swift",
         (
@@ -1970,6 +1997,26 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "sequences.contains(sequence)",
             "duplicateSequences.insert(sequence)",
             "WatchCommandDependencyPolicy.decision(for: envelope, sequenceStates: states) == .ready",
+        ),
+        errors,
+    )
+    require(
+        "Densoso/Infrastructure/WatchConnectivity/WatchMessageOutboxStore.swift",
+        (
+            "legacyStorageKey",
+            "maximumPersistedBytes",
+            "data.write(to: storageURL, options: .atomic)",
+            "defaults.removeObject(forKey: Self.legacyStorageKey)",
+        ),
+        errors,
+    )
+    require(
+        "DensosoTests/WatchMessageOutboxStoreTests.swift",
+        (
+            "testPendingCommandsAndCausalSequenceSurviveStoreRecreation",
+            "testLegacyDefaultsOutboxMigratesToDurableFile",
+            "testCorruptPersistedFileIsNotSilentlyReplacedByAnEmptyQueue",
+            "testFileWriteFailureIsReportedToStopDispatch",
         ),
         errors,
     )
@@ -2285,7 +2332,9 @@ def main() -> int:
             (
                 "--filter TrainingPlanDraftTests",
                 "--filter WatchMessageOutboxTests",
+                "--filter SharedErrorDescriptorTests",
                 "--filter WatchWorkoutCoordinatorTests",
+                "-only-testing:DensosoTests/WatchMessageOutboxStoreTests",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource",
                 "-only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint",

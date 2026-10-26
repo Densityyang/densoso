@@ -47,7 +47,6 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     private static let watchSnapshotEntryLimit = 10
 
     @ObservationIgnored private let session: WCSession
-    @ObservationIgnored private let confirmationCoordinator: ConfirmationCoordinator
     @ObservationIgnored private let agentSession: AgentSession
     @ObservationIgnored private let healthIntelligenceService: HealthIntelligenceService
     @ObservationIgnored private let workoutPlanSchedulingService: WorkoutPlanSchedulingService
@@ -63,13 +62,11 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
 
     init(
         modelContainer: ModelContainer,
-        confirmationCoordinator: ConfirmationCoordinator,
         agentSession: AgentSession,
         healthIntelligenceService: HealthIntelligenceService,
         workoutPlanSchedulingService: WorkoutPlanSchedulingService,
         session: WCSession = .default
     ) {
-        self.confirmationCoordinator = confirmationCoordinator
         self.agentSession = agentSession
         self.healthIntelligenceService = healthIntelligenceService
         self.workoutPlanSchedulingService = workoutPlanSchedulingService
@@ -300,6 +297,15 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
             if disposition == .duplicateProcessed {
                 return acknowledgement(for: envelope.messageID, state: .duplicate, detail: nil)
             }
+            if WatchMessageExpiryPolicy.isExpired(envelope, asOf: Date()) {
+                return try rejectPendingMessage(envelope, detail: "Watch 消息已过期，未执行；请在 iPhone 查看当前状态后重试。")
+            }
+            if WatchMessageAuthorizationPolicy.requiresPhoneConfirmation(for: envelope.payload) {
+                return try rejectPendingMessage(
+                    envelope,
+                    detail: "待确认事项必须在 iPhone 查看并处理；Watch 命令未执行。"
+                )
+            }
             if isCommandOrTranscript(envelope.payload) {
                 switch try dependencyState(for: envelope) {
                 case .ready:
@@ -339,66 +345,11 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 try setReceiptState(WatchReceiptState.processed, for: envelope.messageID)
                 refreshApplicationContext()
                 return acknowledgement(for: envelope.messageID, state: .processed, detail: "已更新 Today 摘要")
-            case .confirm(let actionID):
-                if agentSession.pendingActions.contains(where: { action in
-                    guard action.id == actionID else { return false }
-                    if case .trainingPlan = action.payload { return true }
-                    return false
-                }) {
-                    try setReceiptState(WatchReceiptState.rejected, for: envelope.messageID)
-                    return acknowledgement(
-                        for: envelope.messageID,
-                        state: .rejected,
-                        detail: "多日训练计划请在 iPhone 查看完整安排后确认。"
-                    )
-                }
-                let receipt: CommitReceipt
-                do {
-                    receipt = try await confirmationCoordinator.confirm(id: actionID)
-                } catch {
-                    if let confirmationError = error as? ConfirmationError, !confirmationError.isRetryable {
-                        try setReceiptState(WatchReceiptState.rejected, for: envelope.messageID)
-                        return acknowledgement(
-                            for: envelope.messageID,
-                            state: .rejected,
-                            detail: confirmationError.localizedDescription
-                        )
-                    }
-                    throw error
-                }
-                var detail = "已在本机确认"
-                if receipt.actionType == .workoutPlan || receipt.actionType == .trainingPlan {
-                    do {
-                        try await workoutPlanSchedulingService.scheduleConfirmedPlan(actionID: actionID)
-                        detail = "训练计划已确认并提交给 WorkoutKit"
-                    } catch {
-                        detail = "训练计划已确认；系统安排待处理"
-                    }
-                }
-                try? await agentSession.reloadPendingActions()
-                try setReceiptState(WatchReceiptState.processed, for: envelope.messageID)
-                _ = try? await healthIntelligenceService.refresh()
-                refreshApplicationContext()
-                return acknowledgement(for: envelope.messageID, state: .processed, detail: detail)
-            case .reject(let actionID):
-                do {
-                    try await confirmationCoordinator.reject(id: actionID)
-                } catch {
-                    if let confirmationError = error as? ConfirmationError, !confirmationError.isRetryable {
-                        try setReceiptState(WatchReceiptState.rejected, for: envelope.messageID)
-                        refreshApplicationContext()
-                        return acknowledgement(
-                            for: envelope.messageID,
-                            state: .rejected,
-                            detail: confirmationError.localizedDescription
-                        )
-                    }
-                    throw error
-                }
-                try? await agentSession.reloadPendingActions()
-                try setReceiptState(WatchReceiptState.processed, for: envelope.messageID)
-                refreshApplicationContext()
-                return acknowledgement(for: envelope.messageID, state: .processed, detail: "草稿已拒绝")
+            case .confirm, .reject:
+                return try rejectPendingMessage(
+                    envelope,
+                    detail: "待确认事项必须在 iPhone 查看并处理；Watch 命令未执行。"
+                )
             case .acknowledgement, .todaySnapshot:
                 try setReceiptState(WatchReceiptState.rejected, for: envelope.messageID)
                 return acknowledgement(for: envelope.messageID, state: .rejected, detail: "此消息类型只能由 iPhone 发送")

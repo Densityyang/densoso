@@ -23,8 +23,17 @@ inbox messages are read in stable, bounded pages; Swift matches non-nil request
 IDs in memory so SwiftData predicates do not force unwrap optional fields.
 Repeated offline Watch refresh taps coalesce while a snapshot request remains
 unacknowledged in the durable outbox. Once iPhone acknowledges it, a later tap
-can enqueue a new request; transcript, confirm, and reject messages remain
-independent queue entries.
+can enqueue a new request. The outbox uses atomic application-support file
+replacement, migrates its previous UserDefaults payload, and caps pending
+entries at 128; write failures stop dispatch and leave existing commands
+recoverable. The Watch UI only displays pending actions. Legacy `confirm` and
+`reject` messages from earlier app versions are rejected on iPhone, where
+pending actions must be reviewed and handled.
+New schema-2 messages carry explicit expiry for commands: ordered commands
+expire after 24 hours and snapshot requests after 15 minutes. Schema-1 queued
+commands remain decodable and derive the same lifetime from `createdAt`;
+timestamps more than five minutes in the future are rejected. Expired messages
+are durably marked terminal before replay can execute them.
 Incoming Watch messages are persisted before dependency checks or execution.
 New commands keep a monotonic sequence but depend only on the latest command
 still awaiting a terminal receipt, so an old rejection does not poison a later
@@ -79,6 +88,8 @@ health refreshes reach the companion without waiting for another activation.
 
 - DensosoDomain: `DailyLoopSnapshotTests`, `TrainingPlanDraftTests`,
   `WatchMessageOutboxTests` (including
+  bounded queue/decoder, schema-1 expiry compatibility, future timestamp
+  rejection, and phone-only pending-action policy),
   `testCausalSequenceSurvivesAcknowledgementAndOutboxRestore`,
   `testCausalDependencyPolicyWaitsAndFailsOnRejectedOrConflictingPredecessors`,
   and `testTerminalSequenceWatermarkAcknowledgesOnlyCoveredCausalEntries`),
@@ -121,6 +132,9 @@ Confirmed multi-day training sessions expose bounded human-readable goal,
 location, intensity, and reason details to schedule queries. Rest days expose
 their reason only; encoded plan payloads are never returned to the Agent.
 
-Simulator evidence does not prove Watch pairing, radio delivery, offline
-reconnection, WorkoutKit presentation, or signed-device HealthKit behavior.
+`WatchMessageOutboxStoreTests` cover atomic-file restoration, migration from
+UserDefaults, corrupt-file rejection, and reported write failure. Gate 15 still
+requires paired-device crash/reconnect evidence. Simulator evidence does not
+prove Watch pairing, radio delivery, offline reconnection, WorkoutKit
+presentation, or signed-device HealthKit behavior.
 Those checks belong to manual Gate 15.

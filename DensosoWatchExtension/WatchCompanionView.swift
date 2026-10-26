@@ -163,22 +163,16 @@ struct WatchCompanionView: View {
                             Text(action.summary)
                                 .font(.caption2)
                                 .lineLimit(3)
-                            HStack {
-                                if action.requiresPhoneReview == true {
-                                    Text("请在 iPhone 查看完整安排后确认")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                } else {
-                                    Button("确认") { connectivity.confirm(actionID: action.actionID) }
-                                }
-                                Button("拒绝", role: .destructive) { connectivity.reject(actionID: action.actionID) }
-                            }
-                            .font(.caption2)
+                            Text(action.requiresPhoneReview == true
+                                ? "请在 iPhone 查看完整安排并处理"
+                                : "请在 iPhone 查看并确认或拒绝")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
                         .padding(7)
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9))
                     }
-                    Text("确认和拒绝由 iPhone 的本地事务幂等处理。")
+                    Text("Watch 仅展示待处理事项；确认和拒绝必须在 iPhone 完成。")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

@@ -24,6 +24,31 @@ final class WatchMessageOutboxTests: XCTestCase {
         XCTAssertEqual(outbox.pending, Array(messages.suffix(60)))
     }
 
+    func testPendingQueueHasABoundedCapacityAndRejectsWithoutDroppingCommands() throws {
+        var outbox = WatchMessageOutbox()
+        for index in 0..<WatchMessageOutbox.maximumPendingMessageCount {
+            _ = try outbox.enqueue(WatchMessageEnvelope(payload: .transcript("记录 \(index)")))
+        }
+        let pendingBeforeOverflow = outbox.pending
+
+        XCTAssertThrowsError(try outbox.enqueue(WatchMessageEnvelope(payload: .confirm(actionID: UUID())))) {
+            XCTAssertEqual($0 as? WatchMessageError, .outboxCapacityExceeded)
+        }
+        XCTAssertEqual(outbox.pending, pendingBeforeOverflow)
+    }
+
+    func testDecoderRejectsPersistedQueueAboveCapacity() throws {
+        let messages = (0...WatchMessageOutbox.maximumPendingMessageCount).map { index in
+            WatchMessageEnvelope(
+                messageID: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index + 1))!,
+                payload: .requestTodaySnapshot
+            )
+        }
+        let encoded = try JSONEncoder().encode(WatchMessageOutbox(pending: messages))
+
+        XCTAssertThrowsError(try JSONDecoder().decode(WatchMessageOutbox.self, from: encoded))
+    }
+
     func testMessageIDCannotBeReusedForDifferentPayload() throws {
         let id = UUID()
         var outbox = WatchMessageOutbox()
@@ -256,15 +281,111 @@ final class WatchMessageOutboxTests: XCTestCase {
 
     func testCodecRejectsUnsupportedSchemaAndUnboundedTranscript() {
         XCTAssertThrowsError(try WatchMessageCodec.encode(
-            WatchMessageEnvelope(schemaVersion: 2, payload: .requestTodaySnapshot)
+            WatchMessageEnvelope(schemaVersion: 3, payload: .requestTodaySnapshot)
         )) {
-            XCTAssertEqual($0 as? WatchMessageError, .unsupportedSchemaVersion(2))
+            XCTAssertEqual($0 as? WatchMessageError, .unsupportedSchemaVersion(3))
         }
         XCTAssertThrowsError(try WatchMessageCodec.encode(
             WatchMessageEnvelope(payload: .transcript(String(repeating: "字", count: 4_001)))
         )) {
             XCTAssertEqual($0 as? WatchMessageError, .transcriptTooLong)
         }
+        let oversizedGrapheme = "a" + String(repeating: "\u{301}", count: 10)
+        let oversizedUTF8 = String(repeating: oversizedGrapheme, count: WatchMessageCodec.maximumTranscriptLength)
+        XCTAssertLessThanOrEqual(oversizedUTF8.count, WatchMessageCodec.maximumTranscriptLength)
+        XCTAssertGreaterThan(oversizedUTF8.utf8.count, WatchMessageCodec.maximumTranscriptUTF8Bytes)
+        XCTAssertThrowsError(try WatchMessageCodec.encode(
+            WatchMessageEnvelope(payload: .transcript(oversizedUTF8))
+        )) {
+            XCTAssertEqual($0 as? WatchMessageError, .transcriptTooLong)
+        }
+    }
+
+    func testCurrentCommandsCarryExpiryAndLegacyCommandsGetAnExpiryFallback() throws {
+        let createdAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let command = WatchMessageEnvelope(createdAt: createdAt, payload: .transcript("记录早餐"))
+        XCTAssertEqual(command.schemaVersion, WatchMessageEnvelope.currentSchemaVersion)
+        XCTAssertEqual(
+            command.expiresAt,
+            createdAt.addingTimeInterval(WatchMessageExpiryPolicy.orderedCommandLifetime)
+        )
+        XCTAssertTrue(WatchMessageExpiryPolicy.isExpired(
+            command,
+            asOf: createdAt.addingTimeInterval(WatchMessageExpiryPolicy.orderedCommandLifetime)
+        ))
+
+        let snapshotRequest = WatchMessageEnvelope(createdAt: createdAt, payload: .requestTodaySnapshot)
+        XCTAssertEqual(
+            snapshotRequest.expiresAt,
+            createdAt.addingTimeInterval(WatchMessageExpiryPolicy.snapshotRequestLifetime)
+        )
+        XCTAssertTrue(WatchMessageExpiryPolicy.isExpired(
+            snapshotRequest,
+            asOf: createdAt.addingTimeInterval(WatchMessageExpiryPolicy.snapshotRequestLifetime)
+        ))
+
+        let oldEnvelope = WatchMessageEnvelope(
+            schemaVersion: 1,
+            createdAt: createdAt,
+            expiresAt: createdAt.addingTimeInterval(WatchMessageExpiryPolicy.orderedCommandLifetime),
+            payload: .transcript("旧版离线记录")
+        )
+        var legacyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: WatchMessageCodec.encode(oldEnvelope)) as? [String: Any]
+        )
+        legacyObject.removeValue(forKey: "expiresAt")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyObject)
+        let decodedLegacy = try WatchMessageCodec.decode(legacyData)
+
+        XCTAssertNil(decodedLegacy.expiresAt)
+        XCTAssertTrue(WatchMessageExpiryPolicy.isExpired(
+            decodedLegacy,
+            asOf: createdAt.addingTimeInterval(WatchMessageExpiryPolicy.orderedCommandLifetime)
+        ))
+    }
+
+    func testCurrentCommandWithoutValidExpiryIsRejected() throws {
+        let createdAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let command = WatchMessageEnvelope(
+            createdAt: createdAt,
+            expiresAt: createdAt,
+            payload: .transcript("记录午餐")
+        )
+
+        XCTAssertThrowsError(try WatchMessageCodec.encode(command)) {
+            XCTAssertEqual($0 as? WatchMessageError, .invalidExpiry)
+        }
+
+        let overlongCommand = WatchMessageEnvelope(
+            createdAt: createdAt,
+            expiresAt: createdAt.addingTimeInterval(WatchMessageExpiryPolicy.orderedCommandLifetime + 1),
+            payload: .transcript("记录午餐")
+        )
+        XCTAssertThrowsError(try WatchMessageCodec.encode(overlongCommand)) {
+            XCTAssertEqual($0 as? WatchMessageError, .invalidExpiry)
+        }
+    }
+
+    func testWatchPendingActionMutationRequiresPhoneConfirmation() {
+        XCTAssertTrue(WatchMessageAuthorizationPolicy.requiresPhoneConfirmation(
+            for: .confirm(actionID: UUID())
+        ))
+        XCTAssertTrue(WatchMessageAuthorizationPolicy.requiresPhoneConfirmation(
+            for: .reject(actionID: UUID())
+        ))
+        XCTAssertFalse(WatchMessageAuthorizationPolicy.requiresPhoneConfirmation(
+            for: .transcript("快速记录")
+        ))
+    }
+
+    func testCommandWithFutureCreatedAtIsRejectedByExpiryPolicy() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let futureCommand = WatchMessageEnvelope(
+            createdAt: now.addingTimeInterval(WatchMessageExpiryPolicy.maximumFutureClockSkew + 1),
+            payload: .transcript("未来时间的记录")
+        )
+
+        XCTAssertTrue(WatchMessageExpiryPolicy.isExpired(futureCommand, asOf: now))
     }
 
     func testSnapshotRequestPolicyCoalescesOnlyUntilAcknowledged() throws {

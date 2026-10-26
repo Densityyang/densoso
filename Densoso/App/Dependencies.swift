@@ -156,7 +156,6 @@ final class Dependencies {
         )
         let watchConnectivityCoordinator = PhoneWatchConnectivityCoordinator(
             modelContainer: modelContainer,
-            confirmationCoordinator: confirmationCoordinator,
             agentSession: agentSession,
             healthIntelligenceService: healthIntelligenceService,
             workoutPlanSchedulingService: workoutPlanSchedulingService

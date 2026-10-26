@@ -8,9 +8,11 @@ database, microphone recorder, or workout tracker.
 ## Scope
 
 - WatchConnectivity sends bounded, versioned message envelopes. The Watch
-  stores outgoing messages durably and retries with `sendMessage` when
-  reachable or `transferUserInfo` when offline; the phone persists inbox
-  messages and receipts transactionally and treats message IDs idempotently.
+  stores outgoing messages with atomic application-support file replacement,
+  migrates the earlier UserDefaults outbox, and rejects new entries after its
+  128-message bound. It retries with `sendMessage` when reachable or
+  `transferUserInfo` when offline; the phone persists inbox messages and
+  receipts transactionally and treats message IDs idempotently.
   The phone's `accepted` acknowledgement means its durable inbox owns the
   envelope, even if transcript review/action confirmation remains pending.
   On app startup, pending non-transcript commands are replayed in durable
@@ -20,9 +22,14 @@ database, microphone recorder, or workout tracker.
   pending for recovery.
 - The phone reads complete single-workout plan history in stable 64-row pages;
   action scheduling scans bounded pages and preserves multi-day-plan priority.
-- The Watch shows a small current-day snapshot, accepts system text dictation,
-  and can confirm or reject an existing phone-side draft. A transcript creates
-  a draft on the phone and does not itself write a health record.
+- The Watch shows a small current-day snapshot and accepts system text
+  dictation. It only displays pending drafts; confirmation and rejection happen
+  on iPhone. Legacy Watch confirmation/rejection messages are rejected by the
+  phone. A transcript creates a draft on the phone and does not itself write a
+  health record.
+- New Watch commands carry an expiry. The phone rejects stale commands before
+  execution; schema-1 queued commands remain readable and receive an expiry
+  derived from their creation time.
 - Workout plans use a single supported activity and one open, time or distance
   goal. Legacy strength-set payloads remain decodable only for compatibility
   and are rejected by the active compiler.
@@ -40,8 +47,9 @@ database, microphone recorder, or workout tracker.
    Pending inbox reads also preserve transcript and command order across a
    65-receipt page boundary.
 3. Offline transcript recovery yields the same durable phone-side draft.
-4. Replayed confirmation is idempotent and a workout plan never enters the
-   HealthKit workout outbox.
+4. Watch-originated confirmation/rejection cannot commit a pending action; the
+   phone requires its own review. A workout plan never enters the HealthKit
+   workout outbox.
 5. An unconfirmed plan never calls `WorkoutScheduler`; unsupported activity or
    goal returns a readable local error.
 6. Watch source files do not import HealthKit or declare custom microphone or
@@ -51,6 +59,8 @@ database, microphone recorder, or workout tracker.
 
 ## Evidence boundary
 
-Simulator/fake transport tests do not establish real Watch pairing, offline
+The focused Watch outbox store tests cover restart restoration, legacy
+migration, corrupt-file rejection, write-failure reporting, and acknowledgement
+persistence. Simulator/fake transport tests do not establish real Watch pairing, offline
 radio behavior, WorkoutKit availability on signed hardware, or TestFlight
 acceptance. The signing gate remains blocked.

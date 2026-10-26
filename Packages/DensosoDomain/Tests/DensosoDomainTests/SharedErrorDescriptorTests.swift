@@ -44,6 +44,23 @@ final class SharedErrorDescriptorTests: XCTestCase {
         XCTAssertFalse(descriptor.diagnosticSafeDetail.contains(privateMessageID.uuidString))
     }
 
+    func testWatchOutboxCapacityErrorUsesStableSafeReason() {
+        let descriptor = WatchMessageError.outboxCapacityExceeded.sharedErrorDescriptor
+
+        XCTAssertEqual(descriptor.code, .watchUnavailable)
+        XCTAssertEqual(descriptor.subsystem, .watch)
+        XCTAssertEqual(descriptor.reason, .watchOutboxFull)
+        XCTAssertEqual(descriptor.userMessage, "暂时无法同步 Apple Watch 数据。")
+    }
+
+    func testWatchExpiryErrorUsesStableSafeReason() {
+        let descriptor = WatchMessageError.invalidExpiry.sharedErrorDescriptor
+
+        XCTAssertEqual(descriptor.code, .watchUnavailable)
+        XCTAssertEqual(descriptor.subsystem, .watch)
+        XCTAssertEqual(descriptor.reason, .watchInvalidExpiry)
+    }
+
     func testUnclassifiedErrorUsesSafeFallbackWithoutUnderlyingDescription() {
         let privateDetail = "private file path /Users/person/health-export.json"
         let error = PrivateDetailError(detail: privateDetail)

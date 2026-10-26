@@ -1738,6 +1738,7 @@ jobs:
           swift test --package-path Packages/DensosoDomain --filter DailyLoopSnapshotTests 2>&1 | tee gate14-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter TrainingPlanDraftTests 2>&1 | tee -a gate14-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter WatchMessageOutboxTests 2>&1 | tee -a gate14-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter SharedErrorDescriptorTests 2>&1 | tee -a gate14-domain-contracts.log
           swift test --package-path Packages/DensosoDomain --filter WatchWorkoutCoordinatorTests 2>&1 | tee -a gate14-domain-contracts.log
 
       - name: Generate Xcode project and select iPhone Simulator
@@ -1778,6 +1779,7 @@ jobs:
             -only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents \
             -only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions \
             -only-testing:DensosoTests/HealthProjectionActorTests/testDailyLoopSnapshotRetainsTenEarliestPlanSessionsAcrossPages \
+            -only-testing:DensosoTests/WatchMessageOutboxStoreTests \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages \
             -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder \

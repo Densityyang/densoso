@@ -1,11 +1,14 @@
 import Foundation
 
 public struct WatchMessageEnvelope: Codable, Equatable, Sendable, Identifiable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public let schemaVersion: Int
     public let messageID: UUID
     public let createdAt: Date
+    /// Commands expire before they can be replayed as stale user intent.
+    /// Optional remains decodable for schema-1 messages from earlier releases.
+    public let expiresAt: Date?
     /// Positive sequence assigned to a new Watch command; nil preserves legacy arrival ordering.
     public let causalSequence: Int?
     /// The earlier causal sequence that must finish successfully before this command executes.
@@ -18,6 +21,7 @@ public struct WatchMessageEnvelope: Codable, Equatable, Sendable, Identifiable {
         schemaVersion: Int = currentSchemaVersion,
         messageID: UUID = UUID(),
         createdAt: Date = Date(),
+        expiresAt: Date? = nil,
         causalSequence: Int? = nil,
         dependsOn: Int? = nil,
         payload: WatchPayload
@@ -25,6 +29,7 @@ public struct WatchMessageEnvelope: Codable, Equatable, Sendable, Identifiable {
         self.schemaVersion = schemaVersion
         self.messageID = messageID
         self.createdAt = createdAt
+        self.expiresAt = expiresAt ?? WatchMessageExpiryPolicy.expirationDate(for: payload, createdAt: createdAt)
         self.causalSequence = causalSequence
         self.dependsOn = dependsOn
         self.payload = payload
@@ -239,6 +244,8 @@ public enum WatchMessageError: Equatable, Sendable, SharedErrorDescribing {
     case invalidCausalSequence
     case invalidCausalDependency
     case causalSequenceExhausted
+    case outboxCapacityExceeded
+    case invalidExpiry
 
     public var sharedErrorDescriptor: SharedErrorDescriptor {
         let reason: SharedErrorReason
@@ -265,6 +272,12 @@ public enum WatchMessageError: Equatable, Sendable, SharedErrorDescribing {
         case .causalSequenceExhausted:
             reason = .watchCausalSequenceExhausted
             numericCode = nil
+        case .outboxCapacityExceeded:
+            reason = .watchOutboxFull
+            numericCode = nil
+        case .invalidExpiry:
+            reason = .watchInvalidExpiry
+            numericCode = nil
         }
         return SharedErrorDescriptor(
             code: .watchUnavailable,
@@ -276,7 +289,47 @@ public enum WatchMessageError: Equatable, Sendable, SharedErrorDescribing {
     }
 }
 
+public enum WatchMessageExpiryPolicy {
+    public static let orderedCommandLifetime: TimeInterval = 24 * 60 * 60
+    public static let snapshotRequestLifetime: TimeInterval = 15 * 60
+    public static let maximumFutureClockSkew: TimeInterval = 5 * 60
+
+    public static func expirationDate(for payload: WatchPayload, createdAt: Date) -> Date? {
+        let lifetime: TimeInterval
+        switch payload {
+        case .transcript, .confirm, .reject:
+            lifetime = orderedCommandLifetime
+        case .requestTodaySnapshot:
+            lifetime = snapshotRequestLifetime
+        case .acknowledgement, .todaySnapshot:
+            return nil
+        }
+        return createdAt.addingTimeInterval(lifetime)
+    }
+
+    public static func isExpired(_ envelope: WatchMessageEnvelope, asOf date: Date) -> Bool {
+        guard envelope.createdAt <= date.addingTimeInterval(maximumFutureClockSkew) else { return true }
+        guard let expiresAt = envelope.expiresAt
+                ?? expirationDate(for: envelope.payload, createdAt: envelope.createdAt) else { return false }
+        return expiresAt <= date
+    }
+}
+
+public enum WatchMessageAuthorizationPolicy {
+    /// Watch can submit quick records, but pending actions must be reviewed on iPhone.
+    public static func requiresPhoneConfirmation(for payload: WatchPayload) -> Bool {
+        switch payload {
+        case .confirm, .reject:
+            true
+        case .transcript, .requestTodaySnapshot, .acknowledgement, .todaySnapshot:
+            false
+        }
+    }
+}
+
 public struct WatchMessageOutbox: Codable, Equatable, Sendable {
+    public static let maximumPendingMessageCount = 128
+
     private var pendingByID: [UUID: WatchMessageEnvelope]
     private var lastCausalSequence: Int?
 
@@ -302,6 +355,9 @@ public struct WatchMessageOutbox: Codable, Equatable, Sendable {
         if let existing = pendingByID[envelope.messageID] {
             guard existing == envelope else { throw WatchMessageError.messageIDCollision(envelope.messageID) }
             return false
+        }
+        guard pendingByID.count < Self.maximumPendingMessageCount else {
+            throw WatchMessageError.outboxCapacityExceeded
         }
         pendingByID[envelope.messageID] = envelope
         if let causalSequence = envelope.causalSequence {
@@ -362,10 +418,62 @@ public struct WatchMessageOutbox: Codable, Equatable, Sendable {
     public var pending: [WatchMessageEnvelope] {
         WatchCommandOrderingPolicy.dispatchOrder(Array(pendingByID.values))
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case pendingByID
+        case lastCausalSequence
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let pendingByID = try container.decode([UUID: WatchMessageEnvelope].self, forKey: .pendingByID)
+        guard pendingByID.count <= Self.maximumPendingMessageCount else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .pendingByID,
+                in: container,
+                debugDescription: "Watch outbox exceeds its pending-message limit."
+            )
+        }
+        for (key, envelope) in pendingByID {
+            guard key == envelope.messageID else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .pendingByID,
+                    in: container,
+                    debugDescription: "Watch outbox keys must match message identifiers."
+                )
+            }
+            do {
+                try WatchMessageCodec.validate(envelope)
+            } catch {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .pendingByID,
+                    in: container,
+                    debugDescription: "Watch outbox contains an invalid message envelope."
+                )
+            }
+        }
+        let lastCausalSequence = try container.decodeIfPresent(Int.self, forKey: .lastCausalSequence)
+        guard lastCausalSequence.map({ $0 >= 0 }) ?? true else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .lastCausalSequence,
+                in: container,
+                debugDescription: "Watch outbox causal sequence cannot be negative."
+            )
+        }
+        self.pendingByID = pendingByID
+        self.lastCausalSequence = lastCausalSequence
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(pendingByID, forKey: .pendingByID)
+        try container.encodeIfPresent(lastCausalSequence, forKey: .lastCausalSequence)
+    }
 }
 
 public enum WatchMessageCodec {
     public static let maximumTranscriptLength = 4_000
+    public static let maximumTranscriptUTF8Bytes = 32_000
 
     public static func encode(_ envelope: WatchMessageEnvelope) throws -> Data {
         try validate(envelope)
@@ -384,8 +492,25 @@ public enum WatchMessageCodec {
     }
 
     public static func validate(_ envelope: WatchMessageEnvelope) throws {
-        guard envelope.schemaVersion == WatchMessageEnvelope.currentSchemaVersion else {
+        guard (1...WatchMessageEnvelope.currentSchemaVersion).contains(envelope.schemaVersion) else {
             throw WatchMessageError.unsupportedSchemaVersion(envelope.schemaVersion)
+        }
+        guard envelope.createdAt.timeIntervalSince1970.isFinite else {
+            throw WatchMessageError.invalidExpiry
+        }
+        let maximumExpiry = WatchMessageExpiryPolicy.expirationDate(
+            for: envelope.payload,
+            createdAt: envelope.createdAt
+        )
+        if let expiresAt = envelope.expiresAt {
+            guard expiresAt.timeIntervalSince1970.isFinite,
+                  expiresAt > envelope.createdAt,
+                  maximumExpiry.map({ expiresAt <= $0 }) ?? true else {
+                throw WatchMessageError.invalidExpiry
+            }
+        }
+        if envelope.schemaVersion >= 2, maximumExpiry != nil, envelope.expiresAt == nil {
+            throw WatchMessageError.invalidExpiry
         }
         if let causalSequence = envelope.causalSequence {
             guard causalSequence > 0 else { throw WatchMessageError.invalidCausalSequence }
@@ -406,7 +531,10 @@ public enum WatchMessageCodec {
         if case .transcript(let text) = envelope.payload {
             let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !normalized.isEmpty else { throw WatchMessageError.emptyTranscript }
-            guard normalized.count <= maximumTranscriptLength else { throw WatchMessageError.transcriptTooLong }
+            guard normalized.count <= maximumTranscriptLength,
+                  normalized.utf8.count <= maximumTranscriptUTF8Bytes else {
+                throw WatchMessageError.transcriptTooLong
+            }
         }
     }
 }

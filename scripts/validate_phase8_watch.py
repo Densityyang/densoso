@@ -34,10 +34,16 @@ def main() -> int:
         "Packages/DensosoDomain/Sources/DensosoDomain/WatchConnectivityContracts.swift",
         (
             "public struct WatchMessageEnvelope",
+            "public static let currentSchemaVersion = 2",
+            "public let expiresAt: Date?",
+            "public enum WatchMessageExpiryPolicy",
+            "public enum WatchMessageAuthorizationPolicy",
             "public enum WatchPayload",
             "public struct WatchMessageOutbox",
+            "maximumPendingMessageCount = 128",
             "case messageIDCollision(UUID)",
             "maximumTranscriptLength = 4_000",
+            "maximumTranscriptUTF8Bytes = 32_000",
         ),
         errors,
     )
@@ -74,6 +80,38 @@ def main() -> int:
         ),
         errors,
     )
+    require_text(
+        "Densoso/Infrastructure/WatchConnectivity/WatchMessageOutboxStore.swift",
+        (
+            "legacyStorageKey",
+            "maximumPersistedBytes",
+            "data.write(to: storageURL, options: .atomic)",
+            "defaults.removeObject(forKey: Self.legacyStorageKey)",
+        ),
+        errors,
+    )
+    if "func confirm(actionID:" in watch or "func reject(actionID:" in watch:
+        errors.append("Watch client must not expose pending-action confirmation or rejection")
+    if "enqueue(.confirm" in watch or "enqueue(.reject" in watch:
+        errors.append("Watch client must not dispatch pending-action mutations")
+    phone = require_text(
+        "Densoso/Infrastructure/WatchConnectivity/PhoneWatchConnectivityCoordinator.swift",
+        (
+            "WatchMessageExpiryPolicy.isExpired(envelope, asOf: Date())",
+            "WatchMessageAuthorizationPolicy.requiresPhoneConfirmation(for: envelope.payload)",
+            "待确认事项必须在 iPhone 查看并处理",
+        ),
+        errors,
+    )
+    if "confirmationCoordinator.confirm(id: actionID)" in phone or "confirmationCoordinator.reject(id: actionID)" in phone:
+        errors.append("Phone Watch ingress must not confirm or reject a pending action on the Watch's behalf")
+    view = require_text(
+        "DensosoWatchExtension/WatchCompanionView.swift",
+        ("请在 iPhone 查看并确认或拒绝",),
+        errors,
+    )
+    if 'Button("确认")' in view or 'Button("拒绝"' in view:
+        errors.append("Watch pending-action UI must direct users to iPhone review")
 
     compiler = require_text(
         "Densoso/Services/WorkoutPlanCompiler.swift",
@@ -126,6 +164,19 @@ def main() -> int:
         (
             "testHundredOfflineMessagesRemainOrderedAndDuplicateReplaysDoNotAddRows",
             "testAcceptedAcknowledgementRemovesMessageAfterPhonePersistsItsReceipt",
+            "testPendingQueueHasABoundedCapacityAndRejectsWithoutDroppingCommands",
+            "testCurrentCommandsCarryExpiryAndLegacyCommandsGetAnExpiryFallback",
+            "testWatchPendingActionMutationRequiresPhoneConfirmation",
+        ),
+        errors,
+    )
+    require_text(
+        "DensosoTests/WatchMessageOutboxStoreTests.swift",
+        (
+            "testPendingCommandsAndCausalSequenceSurviveStoreRecreation",
+            "testLegacyDefaultsOutboxMigratesToDurableFile",
+            "testCorruptPersistedFileIsNotSilentlyReplacedByAnEmptyQueue",
+            "testFileWriteFailureIsReportedToStopDispatch",
         ),
         errors,
     )
@@ -212,6 +263,8 @@ def main() -> int:
         (
             "Status:",
             "100-message offline/replay fixture",
+            "Legacy Watch confirmation/rejection messages are rejected by the",
+            "schema-1 queued commands remain readable",
             "arrival order from receipt-filtered 64-row pages",
             "65-receipt page boundary",
             "stable 64-row pages",
@@ -237,6 +290,9 @@ def main() -> int:
         "status": "pass",
         "scope": "watch-companion-and-confirmed-workoutkit-scheduling",
         "watchHealthKitWriter": False,
+        "watchPendingActionMutationEnabled": False,
+        "watchCommandExpiryEnforced": True,
+        "watchOutboxDurableStorage": "atomic-file",
         "unconfirmedWorkoutScheduling": False,
         "hardwarePairingClaimed": False,
     }

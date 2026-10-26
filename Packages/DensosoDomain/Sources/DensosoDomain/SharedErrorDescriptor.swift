@@ -79,6 +79,8 @@ public enum SharedErrorReason: String, Codable, CaseIterable, Sendable {
     case watchInvalidCausalSequence
     case watchInvalidCausalDependency
     case watchCausalSequenceExhausted
+    case watchOutboxFull
+    case watchInvalidExpiry
     case workoutKitAuthorizationDenied
     case workoutKitUnavailable
     case invalidWorkoutPlan
