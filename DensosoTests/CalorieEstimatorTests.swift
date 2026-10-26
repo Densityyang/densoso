@@ -41,15 +41,26 @@ final class CalorieEstimatorTests: XCTestCase {
     }
 
     func testDeterministicMealEstimateReportsP50P95AgainstLatencyTarget() {
-        let ingredients = (0..<12).map { index in
-            ingredient(
-                name: "fixture-food-\(index)",
-                energy: 80 + index * 7,
-                protein: 8 + Double(index),
-                fat: 3 + Double(index) / 2,
-                carbs: 10 + Double(index),
-                amount: 75 + Double(index) * 5,
-                edible: 85 + index
+        var ingredients: [CalorieEstimator.Ingredient] = []
+        ingredients.reserveCapacity(12)
+        for index in 0..<12 {
+            let indexValue = Double(index)
+            let energy = 80 + index * 7
+            let protein = 8.0 + indexValue
+            let fat = 3.0 + indexValue / 2.0
+            let carbs = 10.0 + indexValue
+            let amount = 75.0 + indexValue * 5.0
+            let edible = 85 + index
+            ingredients.append(
+                ingredient(
+                    name: "fixture-food-\(index)",
+                    energy: energy,
+                    protein: protein,
+                    fat: fat,
+                    carbs: carbs,
+                    amount: amount,
+                    edible: edible
+                )
             )
         }
         let warmupCount = 10
