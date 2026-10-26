@@ -187,12 +187,8 @@ def main() -> int:
         (source_changed_repository / "source.swift").write_text("let changedAfterTesting = true\n", encoding="utf-8")
         git(source_changed_repository, "add", "source.swift")
         git(source_changed_repository, "commit", "-m", "change source after device testing")
-        changed_doc.write_text(
-            gate15_document("PASS", tested_source_sha=changed_tested_sha),
-            encoding="utf-8",
-        )
-        git(source_changed_repository, "add", "docs/gates/gate-15-real-device-acceptance.md")
-        git(source_changed_repository, "commit", "-m", "record evidence after source change")
+        # Keep the device evidence commit unchanged; the source-only successor
+        # must be rejected because its tested source is no longer the current tree.
         changed_current_sha = git(source_changed_repository, "rev-parse", "HEAD")
         changed_status, changed_reason, _ = manual_gate15_status(
             changed_doc,
