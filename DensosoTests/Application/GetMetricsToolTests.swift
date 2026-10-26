@@ -58,10 +58,10 @@ final class GetMetricsToolTests: XCTestCase {
         let pending = DailyMetrics(
             date: day,
             totalIntakeKcal: 1_750,
+            mealCount: 1,
             intakeEnergyLowKcal: 1_700,
             intakeEnergyLikelyKcal: 1_750,
             intakeEnergyHighKcal: 1_800,
-            mealCount: 1,
             energyQuality: EnergyQuality.unavailable.rawValue,
             dataCoverageJSON: #"{"intake":true,"protein":false,"fat":false,"carbs":false}"#,
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
