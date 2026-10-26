@@ -539,19 +539,16 @@ TEST_FILE_CONTRACTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         "unknown_healthkit_projection_and_recent_workout_tests_present",
         "DensosoTests/DailyMetricsProjectionFingerprintTests.swift",
         ("testProjectionInputReaderFiltersHealthKitWorkoutsByDailyReadState",),
-        (),
     ),
     (
         "recent_workout_repository_unknown_state_test_present",
         "DensosoTests/Application/GetRecentWorkoutsToolTests.swift",
         ("testRepositoryOmitsHealthKitWorkoutsWithUnknownOrMissingReadState",),
-        (),
     ),
     (
         "unknown_aggregate_projection_test_present",
         "DensosoTests/HealthRepositoryTests.swift",
         ("testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue",),
-        (),
     ),
     (
         "provider_adapter_continuation_body_test_present",

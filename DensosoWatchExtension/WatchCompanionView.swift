@@ -259,6 +259,8 @@ struct WatchCompanionView: View {
     private func domainStatusName(_ status: HealthDomainStatus) -> String {
         switch status {
         case .noData: "暂无数据"
+        case .unknown: "读取状态未知"
+        case .partial: "部分数据"
         case .learning: "学习中"
         case .withinTypicalRange: "常见范围"
         case .changed: "有所变化"
