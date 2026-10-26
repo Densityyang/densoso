@@ -430,16 +430,19 @@ def main() -> int:
     )
     watch_view = require_text(
         "DensosoWatchExtension/WatchCompanionView.swift",
-        ("WatchCompanionView", "connectivity.sendTranscript", "pendingActionsSection(asOf", "请在 iPhone 查看"),
+        ("WatchCompanionView", "connectivity.sendTranscript", "pendingActionsSection(asOf"),
         errors,
     )
     if "connectivity.confirm" in watch_view or "connectivity.reject" in watch_view:
         errors.append("Watch must not expose pending-action confirmation or rejection controls")
-    require_text(
+    phone_watch = require_text(
         "Densoso/Infrastructure/WatchConnectivity/PhoneWatchConnectivityCoordinator.swift",
-        ("case .confirm, .reject:", "待确认事项必须在 iPhone 查看并处理；Watch 命令未执行。"),
+        ("case .confirm, .reject:", "rejectPendingMessage("),
         errors,
     )
+    confirmation_branch = phone_watch.partition("case .confirm, .reject:")[2].partition("case .acknowledgement")[0]
+    if "rejectPendingMessage(" not in confirmation_branch:
+        errors.append("iPhone must reject Watch-originated pending-action confirmation and rejection")
     if any(token in watch_app + watch_view for token in ("import HealthKit", "HKWorkout")):
         errors.append("Watch extension must not host a custom HealthKit Workout writer")
     require_text(
