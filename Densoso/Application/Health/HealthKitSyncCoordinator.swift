@@ -128,7 +128,7 @@ final class HealthKitSyncCoordinator {
         if forceRebaseline { maskedAuthorizationBoundaryByMetric.removeAll() }
         var windowPlans: [HealthMetricID: WindowPlan] = [:]
         var windowErrors: [HealthMetricID: Error] = [:]
-        var requiresRebaseline = forceRebaseline
+        var shouldResetAnchors = forceRebaseline
         let windowedMetrics = Self.aggregateStreams.union(Self.sampleStreams).union([.workout])
         for metric in windowedMetrics.sorted(by: { $0.rawValue < $1.rawValue }) {
             do {
@@ -142,12 +142,12 @@ final class HealthKitSyncCoordinator {
                         policyStart: anchorPolicyStart(for: metric, targetStart: plan.targetStart),
                         authorizationStart: plan.authorizationStart
                     ) {
-                        requiresRebaseline = true
+                        shouldResetAnchors = true
                     }
                 }
             } catch {
                 windowErrors[metric] = error
-                requiresRebaseline = true
+                shouldResetAnchors = true
                 // A failed authorization-boundary lookup cannot prove that cached
                 // HealthKit values are still in scope. Hide this metric's current
                 // analysis window and reset anchored cursors so a later successful
@@ -165,7 +165,7 @@ final class HealthKitSyncCoordinator {
                 }
             }
         }
-        if requiresRebaseline { try repository.resetHealthKitCursors() }
+        if shouldResetAnchors { try repository.resetHealthKitCursors() }
         var completedStreams = Set<HealthMetricID>()
         var failedStreams: [HealthMetricID: HealthSyncFailure] = [:]
         do {

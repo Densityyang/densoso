@@ -252,20 +252,22 @@ struct WeeklyHealthBriefCard: View {
             )
             .font(.footnote)
         } else {
-            let detail: String
-            switch load.dataCoverage {
-            case .unknown:
-                detail = "训练记录覆盖未知，暂不评估负荷。"
-            case .partial:
-                detail = "训练记录不完整，暂不评估负荷。"
-            case .complete:
-                detail = load.unavailableEffortCount > 0
-                    ? "有 \(load.unavailableEffortCount) 次运动缺少强度数据，暂不比较"
-                    : "训练负荷基线：\(readinessName(load.readiness))"
-            }
-            Label(detail, systemImage: "figure.run")
+            Label(loadSummaryDetail(load), systemImage: "figure.run")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private func loadSummaryDetail(_ load: TrainingLoadSummary) -> String {
+        switch load.dataCoverage {
+        case .unknown:
+            return "训练记录覆盖未知，暂不评估负荷。"
+        case .partial:
+            return "训练记录不完整，暂不评估负荷。"
+        case .complete:
+            return load.unavailableEffortCount > 0
+                ? "有 \(load.unavailableEffortCount) 次运动缺少强度数据，暂不比较"
+                : "训练负荷基线：\(readinessName(load.readiness))"
         }
     }
 
