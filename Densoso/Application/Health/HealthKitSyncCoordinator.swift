@@ -459,10 +459,8 @@ final class HealthKitSyncCoordinator {
                 hasMore: page.hasMore,
                 readState: page.readState
             )
-            let changedDays = try repository.changedHealthSampleDays(for: allowedPage, stream: stream)
-            let pendingDays = try repository.pendingHealthSampleDays(stream: stream)
+            let affectedDays = try repository.affectedHealthSampleDays(for: allowedPage, stream: stream)
                 .filter { $0 >= plan.targetStart }
-            let affectedDays = Array(Set(changedDays).union(pendingDays)).sorted()
             let replacements = try await requerySampleDays(
                 metric: metric,
                 days: affectedDays,

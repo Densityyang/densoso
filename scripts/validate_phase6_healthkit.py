@@ -263,7 +263,6 @@ def main() -> int:
             "lookbackStart", "endDate: .distantFuture", "forceRebaseline",
             "failedStreams[metric]", "completedStreams.insert(metric)",
             "onObserverSyncCompleted", "self.onObserverSyncCompleted?()",
-            "repository.affectedHealthSampleDays(for: page, stream: stream)",
             "requerySampleDays(",
             "private func requerySampleDays(",
             "HealthDataWindowPolicy.initialBackfillStart",
@@ -271,8 +270,6 @@ def main() -> int:
             "HealthDataWindowPolicy.requiresRebaseline",
             "maskCachedHealthDataIfNeeded(",
             "markHealthWindowUnknown(",
-            "changedHealthSampleDays(for: allowedPage, stream: stream)",
-            "pendingHealthSampleDays(stream: stream)",
             "let start = min(cursor?.lookbackStart ?? plan.queryStart, plan.queryStart)",
             "A failed authorization-boundary lookup cannot prove that cached",
             "requiresRebaseline = true",
@@ -286,6 +283,37 @@ def main() -> int:
         ),
         errors,
     )
+    normalized_sync_coordinator = " ".join(sync_coordinator.split())
+    affected_day_flow = " ".join(
+        """
+        let allowedPage = HealthSamplePage(
+            samples: page.samples.filter { $0.startDate >= allowedStart },
+            deletedSampleIDs: page.deletedSampleIDs,
+            nextAnchorData: page.nextAnchorData,
+            hasMore: page.hasMore,
+            readState: page.readState
+        )
+        let affectedDays = try repository.affectedHealthSampleDays(for: allowedPage, stream: stream)
+            .filter { $0 >= plan.targetStart }
+        """.split()
+    )
+    if affected_day_flow not in normalized_sync_coordinator:
+        errors.append(
+            "HealthKit sync must derive affected days from the allowed page and filter them at the analysis start"
+        )
+    normalized_repository = " ".join(repository.split())
+    repository_affected_day_union = " ".join(
+        """
+        func affectedHealthSampleDays(for page: HealthSamplePage, stream: String) throws -> [Date] {
+            Array(Set(
+                try changedHealthSampleDays(for: page, stream: stream)
+                    + pendingHealthSampleDays(stream: stream)
+            )).sorted()
+        }
+        """.split()
+    )
+    if repository_affected_day_union not in normalized_repository:
+        errors.append("affected HealthKit sample days must include both changed and pending index days")
     require_text(
         "Densoso/Infrastructure/HealthKit/HealthKitHealthStoreClient.swift",
         (
@@ -323,11 +351,75 @@ def main() -> int:
             "case partial",
             "public enum HealthDataCoverage",
             "private func healthReadCoverage(",
-            "decodedCoverage == .unknown",
             "guard dataCoverage == .complete else { return }",
         ),
         errors,
     )
+    normalized_domain_coverage = " ".join(domain_coverage.split())
+    decoded_domain_coverage = " ".join(
+        """
+        let decodedCoverage = try container.decodeIfPresent(HealthDataCoverage.self, forKey: .dataCoverage)
+            ?? (domain == .nutrition ? .complete : .unknown)
+        """.split()
+    )
+    fail_closed_unknown_domain = " ".join(
+        """
+        if resolvedCoverage == .unknown {
+            self.status = .unknown
+            self.currentValue = nil
+            self.baseline = HealthBaseline(readiness: .noData, validDays: 0, median: nil, p10: nil, p90: nil, mad: nil)
+            self.evidenceKeys = []
+        }
+        """.split()
+    )
+    decoded_domain_uses_coverage = " ".join(
+        """
+        dataCoverage: decodedCoverage
+        """.split()
+    )
+    unknown_training_load_decode = " ".join(
+        """
+        let decodedCoverage = try container.decodeIfPresent(HealthDataCoverage.self, forKey: .dataCoverage) ?? .unknown
+        dataCoverage = decodedCoverage
+        if decodedCoverage == .complete {
+            recentSevenDayLoad = try container.decodeIfPresent(Double.self, forKey: .recentSevenDayLoad) ?? 0
+            priorTwentyEightDayAverage = try container.decodeIfPresent(Double.self, forKey: .priorTwentyEightDayAverage)
+            ratio = try container.decodeIfPresent(Double.self, forKey: .ratio)
+            readiness = try container.decode(BaselineReadiness.self, forKey: .readiness)
+            band = try container.decode(TrainingLoadBand.self, forKey: .band)
+            estimatedWorkoutCount = try container.decodeIfPresent(Int.self, forKey: .estimatedWorkoutCount) ?? 0
+            unavailableEffortCount = try container.decodeIfPresent(Int.self, forKey: .unavailableEffortCount) ?? 0
+        } else {
+            recentSevenDayLoad = 0
+            priorTwentyEightDayAverage = nil
+            ratio = nil
+            readiness = .noData
+            band = .unavailable
+            estimatedWorkoutCount = 0
+            unavailableEffortCount = 0
+        }
+        """.split()
+    )
+    unknown_vital_trend = " ".join(
+        """
+        if resolvedCoverage == .unknown {
+            self.latestMedian = nil
+            self.baseline = HealthBaseline(readiness: .noData, validDays: 0, median: nil, p10: nil, p90: nil, mad: nil)
+            self.status = .unknown
+        }
+        """.split()
+    )
+    if decoded_domain_coverage not in normalized_domain_coverage:
+        errors.append("legacy health-domain cache decoding must treat absent non-nutrition coverage as unknown")
+    if (
+        fail_closed_unknown_domain not in normalized_domain_coverage
+        or decoded_domain_uses_coverage not in normalized_domain_coverage
+    ):
+        errors.append("unknown health-domain coverage must clear cached status, value, baseline, and evidence")
+    if unknown_training_load_decode not in normalized_domain_coverage:
+        errors.append("legacy training-load caches without coverage must decode as unknown and omit numeric placeholders")
+    if unknown_vital_trend not in normalized_domain_coverage:
+        errors.append("unknown vital-trend coverage must clear its median and reset its baseline/status")
     if "health-intelligence-v3" not in require_text(
         "Packages/DensosoDomain/Sources/DensosoDomain/AlgorithmVersions.swift",
         ("public static let healthIntelligence = \"health-intelligence-v3\"",),

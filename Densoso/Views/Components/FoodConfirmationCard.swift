@@ -4,7 +4,7 @@ import DensosoDomain
 /// 食物热量估算确认卡片
 struct FoodConfirmationCard: View {
     let summary: String
-    let confidence: Double
+    let energyRange: EstimateRange?
     let onConfirm: () -> Void
     let onAdjust: (Double) -> Void
 
@@ -22,6 +22,24 @@ struct FoodConfirmationCard: View {
             Text(summary)
                 .font(.subheadline)
                 .lineLimit(5)
+
+            if let presentation = caloriePresentation,
+               let adjustedEnergyRange {
+                Text("约 \(presentation.likelyKcal) kcal")
+                    .font(.title3.weight(.semibold))
+                DisclosureGroup {
+                    Text("基于当前份量调整后的估算范围")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } label: {
+                    Text("区间详情：\(rangeText(adjustedEnergyRange, unit: "kcal"))")
+                        .font(.subheadline)
+                }
+            } else {
+                Text("热量暂不可用")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
 
             Picker("估算调整", selection: $selectedFactor) {
                 Text("-20%").tag(0.8)
@@ -42,19 +60,33 @@ struct FoodConfirmationCard: View {
     }
 
     private var confidenceBadge: some View {
-        let text: String
+        let confidence = caloriePresentation?.confidence ?? .low
         let color: Color
         switch confidence {
-        case ..<0.5: text = "低"; color = .red
-        case 0.5..<0.8: text = "中"; color = .orange
-        default: text = "高"; color = .green
+        case .low: color = .red
+        case .medium: color = .orange
+        case .high: color = .green
         }
-        return Text(text)
+        return Text(confidence.displayName)
             .font(.caption.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(color.opacity(0.16), in: Capsule())
             .foregroundStyle(color)
+    }
+
+    private var adjustedEnergyRange: EstimateRange? {
+        guard let energyRange else { return nil }
+        return try? energyRange.scaled(by: selectedFactor)
+    }
+
+    private var caloriePresentation: CaloriePresentation? {
+        guard let adjustedEnergyRange else { return nil }
+        return CaloriePresentationPolicy().presentation(for: adjustedEnergyRange)
+    }
+
+    private func rangeText(_ range: EstimateRange, unit: String) -> String {
+        "\(Int(range.low.rounded()))–\(Int(range.high.rounded())) \(unit)"
     }
 }
 
@@ -79,6 +111,18 @@ struct PendingActionConfirmationCard: View {
                     Text("按你本轮明确报告的约 \(Int((consumedFraction.fraction * 100).rounded()))% 摄入比例计算")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
+                }
+                if let energyRange = meal.totalNutrients?.energyKcal {
+                    let presentation = CaloriePresentationPolicy().presentation(for: energyRange)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("约 \(presentation.likelyKcal) kcal")
+                            .font(.title3.weight(.semibold))
+                        Text("估算可信度：\(presentation.confidence.displayName)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("区间详情：\(rangeText(energyRange, unit: "kcal"))")
+                            .font(.subheadline)
+                    }
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     DisclosureGroup("营养素与估算详情") {
@@ -155,7 +199,7 @@ struct PendingActionConfirmationCard: View {
 #Preview {
     FoodConfirmationCard(
         summary: "红烧肉一小碗 ≈ 690 kcal\n五花肉 120g + 冰糖 10g + 油 10g",
-        confidence: 0.65,
+        energyRange: try! EstimateRange(low: 580, likely: 690, high: 840),
         onConfirm: {},
         onAdjust: { _ in }
     )

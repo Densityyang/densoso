@@ -38,7 +38,7 @@ def main() -> int:
             "7..<28",
             "mad > 1e-9",
             "func sleepSummary(for wakeDate:",
-            "public func trainingLoad(workouts: [TrainingWorkoutInput], asOf date: Date)",
+            "public func trainingLoad(",
             "divide load across the full four-week calendar window",
             "public struct RecommendationEngine",
             "recommendations.prefix(2)",
@@ -48,6 +48,20 @@ def main() -> int:
         ),
         errors,
     )
+    normalized_domain = " ".join(domain.split())
+    training_load_signature = " ".join(
+        """
+        public func trainingLoad(
+            workouts: [TrainingWorkoutInput],
+            asOf date: Date,
+            dataCoverage: HealthDataCoverage = .complete
+        ) -> TrainingLoadSummary
+        """.split()
+    )
+    if training_load_signature not in normalized_domain:
+        errors.append(
+            "HealthIntelligence must expose trainingLoad with a default-complete coverage argument"
+        )
     if "HKHealthStore" in domain or "import HealthKit" in domain:
         errors.append("domain health-intelligence code must remain HealthKit-free")
 
@@ -96,14 +110,22 @@ def main() -> int:
             "let metricReadResult = metric.map(DailyMetricsReadModelMapper.make)",
             "let proteinGrams = metricReadResult?.proteinG.value",
             "let energyIntake = metricReadResult?.intake.value?.likely",
-            "let dailyDeficit = metricReadResult?.deficit.value?.likely",
             "descriptor.fetchLimit = 1",
         ),
         errors,
     )
-    read_model = (ROOT / "Densoso" / "Services" / "HealthIntelligenceReadModel.swift").read_text(
-        encoding="utf-8"
+    normalized_read_model = " ".join(read_model.split())
+    available_gated_deficit = " ".join(
+        """
+        let dailyDeficit = projectionReadStates[HealthMetricID.activeEnergy.rawValue] == .available
+            ? metricReadResult?.deficit.value?.likely
+            : nil
+        """.split()
     )
+    if available_gated_deficit not in normalized_read_model:
+        errors.append(
+            "daily deficit must be read from canonical metrics only when active-energy read state is available"
+        )
     if "MealRecord" in read_model or "mealPredicate" in read_model:
         errors.append("HealthIntelligence must consume canonical DailyMetrics instead of summing meals again")
     prompt = require_text(
