@@ -93,6 +93,7 @@ targets:
     deploymentTarget: "11.0"
     sources:
       - path: DensosoWatchExtension
+      - path: Densoso/Infrastructure/WatchConnectivity/WatchMessageOutboxStore.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.densoso.densoso.watchkitapp.watchkitextension
