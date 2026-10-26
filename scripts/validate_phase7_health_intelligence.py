@@ -97,7 +97,7 @@ def main() -> int:
         ),
         errors,
     )
-    require_text(
+    read_model = require_text(
         "Densoso/Services/HealthIntelligenceReadModel.swift",
         (
             "DailyHealthSnapshotRecord",
