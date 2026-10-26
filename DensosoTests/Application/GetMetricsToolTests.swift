@@ -54,8 +54,8 @@ final class GetMetricsToolTests: XCTestCase {
             date: day,
             energyQuality: EnergyQuality.unavailable.rawValue,
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
-            requiresRecompute: true,
-            sourceFingerprint: "pending-get-metrics"
+            sourceFingerprint: "pending-get-metrics",
+            requiresRecompute: true
         )
 
         let output = GetMetricsTool.responseJSON(
