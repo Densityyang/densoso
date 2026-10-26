@@ -563,7 +563,11 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let day = calendar.startOfDay(for: date)
         let now = Date()
         let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
-        let projectionInputs = try DailyMetricsProjectionInputReader.read(on: day, in: modelContext)
+        let projectionInputs = try DailyMetricsProjectionInputReader.read(
+            on: day,
+            calendar: calendar,
+            in: modelContext
+        )
         let primaryProfileKey = "primary"
         let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
         var profileDescriptor = FetchDescriptor<UserProfile>(predicate: profilePredicate)
@@ -606,6 +610,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         let healthSnapshot = try snapshotRecord.map { try decoder.decode(DailyHealthSnapshot.self, from: $0.payloadData) }
         let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
             on: day,
+            calendar: calendar,
             asOf: asOf,
             inputs: projectionInputs,
             profileRevision: effectiveRevision,
@@ -653,6 +658,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         }
         let projected = CaloricEngine.computeDailyMetrics(
             date: day,
+            calendar: calendar,
             meals: projectionInputs.meals,
             workouts: projectionInputs.workouts,
             effectiveProfile: effectiveProfile,

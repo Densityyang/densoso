@@ -12,6 +12,7 @@ final class CaloricEnergySemanticsTests: XCTestCase {
 
         let withoutWorkout = CaloricEngine.computeDailyMetrics(
             date: day,
+            calendar: .current,
             meals: [],
             workouts: [],
             effectiveProfile: profile,
@@ -21,6 +22,7 @@ final class CaloricEnergySemanticsTests: XCTestCase {
         )
         let withWorkout = CaloricEngine.computeDailyMetrics(
             date: day,
+            calendar: .current,
             meals: [],
             workouts: [workout],
             effectiveProfile: profile,
@@ -43,10 +45,20 @@ final class CaloricEnergySemanticsTests: XCTestCase {
         let workout = WorkoutRecord(date: day, type: "cycling", durationMinutes: 45, estimatedCaloriesBurned: 300)
 
         let withoutWorkout = CaloricEngine.computeDailyMetrics(
-            date: day, meals: [], workouts: [], effectiveProfile: profile, effectiveWeight: weight
+            date: day,
+            calendar: .current,
+            meals: [],
+            workouts: [],
+            effectiveProfile: profile,
+            effectiveWeight: weight
         )
         let withWorkout = CaloricEngine.computeDailyMetrics(
-            date: day, meals: [], workouts: [workout], effectiveProfile: profile, effectiveWeight: weight
+            date: day,
+            calendar: .current,
+            meals: [],
+            workouts: [workout],
+            effectiveProfile: profile,
+            effectiveWeight: weight
         )
 
         XCTAssertEqual(withWorkout.activeCaloriesKcal, withoutWorkout.activeCaloriesKcal)
@@ -59,6 +71,7 @@ final class CaloricEnergySemanticsTests: XCTestCase {
         let day = Date(timeIntervalSince1970: 1_700_000_000)
         let result = CaloricEngine.computeDailyMetrics(
             date: day,
+            calendar: .current,
             meals: [],
             workouts: [],
             effectiveProfile: nil,
@@ -85,6 +98,7 @@ final class CaloricEnergySemanticsTests: XCTestCase {
 
         let first = CaloricEngine.computeDailyMetrics(
             date: day,
+            calendar: .current,
             meals: [meal],
             workouts: [],
             effectiveProfile: profile,
@@ -92,6 +106,7 @@ final class CaloricEnergySemanticsTests: XCTestCase {
         )
         let repeated = CaloricEngine.computeDailyMetrics(
             date: day,
+            calendar: .current,
             meals: [meal],
             workouts: [],
             effectiveProfile: profile,
@@ -99,6 +114,7 @@ final class CaloricEnergySemanticsTests: XCTestCase {
         )
         let changed = CaloricEngine.computeDailyMetrics(
             date: day,
+            calendar: .current,
             meals: [MealRecord(
                 date: day,
                 totalCaloriesKcal: 520,
@@ -114,6 +130,59 @@ final class CaloricEnergySemanticsTests: XCTestCase {
 
         XCTAssertEqual(first.sourceFingerprint, repeated.sourceFingerprint)
         XCTAssertNotEqual(first.sourceFingerprint, changed.sourceFingerprint)
+    }
+
+    func testDailyCalculationUsesExplicitTimezoneForDayBoundaries() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        var shanghai = utc
+        shanghai.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+        var losAngeles = utc
+        losAngeles.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+
+        let requestedInstant = try XCTUnwrap(utc.date(from: DateComponents(year: 2026, month: 10, day: 26, hour: 4, minute: 30)))
+        let earlierMealDate = try XCTUnwrap(utc.date(from: DateComponents(year: 2026, month: 10, day: 25, hour: 20)))
+        let laterMealDate = try XCTUnwrap(utc.date(from: DateComponents(year: 2026, month: 10, day: 26, hour: 8)))
+        let meals = [
+            MealRecord(
+                date: earlierMealDate,
+                totalCaloriesKcal: 200,
+                proteinG: 10,
+                fatG: 5,
+                carbsG: 25,
+                evidenceData: currentMealEvidenceData()
+            ),
+            MealRecord(
+                date: laterMealDate,
+                totalCaloriesKcal: 300,
+                proteinG: 15,
+                fatG: 8,
+                carbsG: 35,
+                evidenceData: currentMealEvidenceData()
+            ),
+        ]
+
+        let shanghaiProjection = CaloricEngine.computeDailyMetrics(
+            date: requestedInstant,
+            calendar: shanghai,
+            meals: meals,
+            workouts: [],
+            effectiveProfile: nil,
+            effectiveWeight: nil
+        )
+        let losAngelesProjection = CaloricEngine.computeDailyMetrics(
+            date: requestedInstant,
+            calendar: losAngeles,
+            meals: meals,
+            workouts: [],
+            effectiveProfile: nil,
+            effectiveWeight: nil
+        )
+
+        XCTAssertEqual(shanghaiProjection.mealCount, 2)
+        XCTAssertEqual(shanghaiProjection.totalIntakeKcal, 500)
+        XCTAssertEqual(losAngelesProjection.mealCount, 1)
+        XCTAssertEqual(losAngelesProjection.totalIntakeKcal, 200)
     }
 
     private func effectiveProfile(at date: Date, activityLevel: ActivityLevel) -> EffectiveProfile {

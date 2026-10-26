@@ -28,10 +28,15 @@ enum DailyMetricsProjector {
             let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
             let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first
             let effectiveInputs = try resolveEffectiveInputs(on: day, asOf: asOf, in: modelContext)
-            let projectionInputs = try DailyMetricsProjectionInputReader.read(on: day, in: modelContext)
+            let projectionInputs = try DailyMetricsProjectionInputReader.read(
+                on: day,
+                calendar: calendar,
+                in: modelContext
+            )
             let healthSnapshot = try healthSnapshot(for: day, in: modelContext)
             let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
                 on: day,
+                calendar: calendar,
                 asOf: asOf,
                 inputs: projectionInputs,
                 profileRevision: effectiveInputs.profileRevision,
@@ -82,7 +87,8 @@ enum DailyMetricsProjector {
                 effectiveInputs: effectiveInputs,
                 projectionInputs: projectionInputs,
                 healthSnapshot: healthSnapshot,
-                fingerprintContext: fingerprintContext
+                fingerprintContext: fingerprintContext,
+                calendar: calendar
             )
             HistoricalMetricsEligibilityPolicy.markPendingIfHistoricalInputsAreMissing(
                 projected,
@@ -143,10 +149,15 @@ enum DailyMetricsProjector {
                 calendar: calendar
             ) else { return false }
 
-            let projectionInputs = try DailyMetricsProjectionInputReader.read(on: day, in: modelContext)
+            let projectionInputs = try DailyMetricsProjectionInputReader.read(
+                on: day,
+                calendar: calendar,
+                in: modelContext
+            )
             let healthSnapshot = try healthSnapshot(for: day, in: modelContext)
             let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
                 on: day,
+                calendar: calendar,
                 asOf: asOf,
                 inputs: projectionInputs,
                 profileRevision: effectiveInputs.profileRevision,
@@ -157,6 +168,7 @@ enum DailyMetricsProjector {
             // this context. Only pure fingerprinting/accounting work runs detached.
             let calculationInput = CaloricEngine.calculationInput(
                 date: day,
+                calendar: calendar,
                 meals: projectionInputs.meals,
                 workouts: projectionInputs.workouts,
                 effectiveProfile: effectiveInputs.profile,
@@ -279,10 +291,12 @@ enum DailyMetricsProjector {
         effectiveInputs: EffectiveProjectionInputs,
         projectionInputs: DailyMetricsProjectionInputs,
         healthSnapshot: DailyHealthSnapshot?,
-        fingerprintContext: DailyMetricsProjectionFingerprintContext
+        fingerprintContext: DailyMetricsProjectionFingerprintContext,
+        calendar: Calendar
     ) -> DailyMetrics {
         CaloricEngine.computeDailyMetrics(
             date: day,
+            calendar: calendar,
             meals: projectionInputs.meals,
             workouts: projectionInputs.workouts,
             effectiveProfile: effectiveInputs.profile,

@@ -244,6 +244,7 @@ enum CaloricEngine {
     /// 根据某天的所有餐和运动，计算 DailyMetrics
     static func computeDailyMetrics(
         date: Date,
+        calendar: Calendar,
         meals: [MealRecord],
         workouts: [WorkoutRecord],
         effectiveProfile: EffectiveProfile?,
@@ -256,6 +257,7 @@ enum CaloricEngine {
     ) -> DailyMetrics {
         let input = calculationInput(
             date: date,
+            calendar: calendar,
             meals: meals,
             workouts: workouts,
             effectiveProfile: effectiveProfile,
@@ -272,6 +274,7 @@ enum CaloricEngine {
 
     static func calculationInput(
         date: Date,
+        calendar: Calendar,
         meals: [MealRecord],
         workouts: [WorkoutRecord],
         effectiveProfile: EffectiveProfile?,
@@ -282,7 +285,6 @@ enum CaloricEngine {
         healthKitExerciseMinutes: Double? = nil,
         fingerprintContext: DailyMetricsProjectionFingerprintContext = .init()
     ) -> DailyMetricsCalculationInput {
-        let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
         return DailyMetricsCalculationInput(
             date: startOfDay,

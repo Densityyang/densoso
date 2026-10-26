@@ -6,6 +6,28 @@ import DensosoDomain
 
 @MainActor
 final class DailyMetricsProjectionFingerprintTests: XCTestCase {
+    func testProjectionInputReaderUsesExplicitTimezoneForDayBoundaries() throws {
+        let (_, context) = try makeContext()
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        var shanghai = utc
+        shanghai.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+        let requestedInstant = try XCTUnwrap(utc.date(from: DateComponents(year: 2026, month: 10, day: 26, hour: 4, minute: 30)))
+        let earlierMealDate = try XCTUnwrap(utc.date(from: DateComponents(year: 2026, month: 10, day: 25, hour: 20)))
+        let laterMealDate = try XCTUnwrap(utc.date(from: DateComponents(year: 2026, month: 10, day: 26, hour: 8)))
+        context.insert(MealRecord(date: earlierMealDate, totalCaloriesKcal: 200, proteinG: 10, fatG: 5, carbsG: 25))
+        context.insert(MealRecord(date: laterMealDate, totalCaloriesKcal: 300, proteinG: 15, fatG: 8, carbsG: 35))
+
+        let inputs = try DailyMetricsProjectionInputReader.read(
+            on: requestedInstant,
+            calendar: shanghai,
+            in: context
+        )
+
+        XCTAssertEqual(inputs.meals.count, 2)
+        XCTAssertEqual(inputs.meals.map(\.totalCaloriesKcal).reduce(0, +), 500)
+    }
+
     func testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected() throws {
         let (_, context) = try makeContext()
         let day = Calendar.current.startOfDay(for: Date())
@@ -31,7 +53,8 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
 
     func testSourceProfileAndGoalRevisionsChangeProjectionFingerprint() throws {
         let (_, context) = try makeContext()
-        let day = Calendar.current.startOfDay(for: Date())
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: Date())
 
         try DailyMetricsProjector.reproject(on: day, in: context)
         let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
@@ -103,7 +126,8 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
 
         let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
             on: day,
-            inputs: DailyMetricsProjectionInputReader.read(on: day, in: context),
+            calendar: calendar,
+            inputs: DailyMetricsProjectionInputReader.read(on: day, calendar: calendar, in: context),
             profileRevision: try EffectiveProfileRevisionReader.latest(
                 in: context,
                 profileKey: "primary",
@@ -204,6 +228,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         )
         let initial = CaloricEngine.computeDailyMetrics(
             date: day,
+            calendar: .current,
             meals: [],
             workouts: [workout],
             effectiveProfile: nil,
@@ -216,6 +241,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         workout.energySource = "userEntered"
         let changed = CaloricEngine.computeDailyMetrics(
             date: day,
+            calendar: .current,
             meals: [],
             workouts: [workout],
             effectiveProfile: nil,

@@ -12,8 +12,11 @@ struct DailyMetricsProjectionInputs {
 enum DailyMetricsProjectionInputReader {
     static let fetchBatchSize = 64
 
-    static func read(on date: Date, in modelContext: ModelContext) throws -> DailyMetricsProjectionInputs {
-        let calendar = Calendar.current
+    static func read(
+        on date: Date,
+        calendar: Calendar,
+        in modelContext: ModelContext
+    ) throws -> DailyMetricsProjectionInputs {
         let day = calendar.startOfDay(for: date)
         let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
         let meals = try meals(from: day, before: nextDay, in: modelContext)

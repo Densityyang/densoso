@@ -146,6 +146,7 @@ final class HealthRepositoryTests: XCTestCase {
 
         let projection = CaloricEngine.computeDailyMetrics(
             date: date,
+            calendar: .current,
             meals: [meal],
             workouts: [],
             effectiveProfile: nil,

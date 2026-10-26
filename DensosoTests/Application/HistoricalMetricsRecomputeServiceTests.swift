@@ -6,7 +6,8 @@ import XCTest
 @MainActor
 final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
     func testDetachedProjectionCalculationMatchesSynchronousProjection() async throws {
-        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
         let profile = EffectiveProfile(
             profileKey: "primary",
             sourceRevisionID: UUID(uuidString: "00000000-0000-0000-0000-000000000901")!,
@@ -33,6 +34,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         )
         let input = CaloricEngine.calculationInput(
             date: day,
+            calendar: calendar,
             meals: [],
             workouts: [workout],
             effectiveProfile: profile,
@@ -47,6 +49,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         let detachedProjection = detachedResult.makeDailyMetrics()
         let synchronousProjection = CaloricEngine.computeDailyMetrics(
             date: day,
+            calendar: calendar,
             meals: [],
             workouts: [workout],
             effectiveProfile: profile,

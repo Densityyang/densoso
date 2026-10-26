@@ -32,13 +32,14 @@ struct DailyMetricsProjectionFingerprintContext: Equatable, Sendable {
 enum DailyMetricsProjectionFingerprint {
     static func context(
         on date: Date,
+        calendar: Calendar,
         asOf referenceDate: Date? = nil,
         inputs: DailyMetricsProjectionInputs,
         profileRevision: ProfileRevisionRecord?,
         weightObservations: [WeightObservation],
         in modelContext: ModelContext
     ) throws -> DailyMetricsProjectionFingerprintContext {
-        let day = Calendar.current.startOfDay(for: date)
+        let day = calendar.startOfDay(for: date)
         let effectiveAt = referenceDate ?? day
         let profileKey = profileRevision?.profileKey ?? "primary"
         let goalPredicate = #Predicate<GoalProfileRecord> { $0.profileKey == profileKey }
