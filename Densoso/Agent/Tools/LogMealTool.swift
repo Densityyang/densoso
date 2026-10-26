@@ -488,7 +488,10 @@ struct LogMealTool: ConfirmationRequiredTool {
         guard fractions.allSatisfy({ abs($0 - firstFraction) < 0.000_001 }) else {
             return .unresolved
         }
-        return .resolved(ConsumedFractionEvidence(fraction: firstFraction))
+        guard let evidence = ConsumedFractionEvidence(fraction: firstFraction) else {
+            return .unresolved
+        }
+        return .resolved(evidence)
     }
 
     private func containsFractionExpression(in text: String) -> Bool {
