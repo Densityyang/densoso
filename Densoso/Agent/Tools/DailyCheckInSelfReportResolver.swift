@@ -43,6 +43,7 @@ struct DailyCheckInSelfReportResolver {
             throw DailyCheckInSelfReportError.ambiguousNegation(field)
         }
 
+        try validateDate(checkIn.occurredAt, in: userText, asOf: date)
         try requireMatch(
             checkIn.energy.rawValue,
             field: .energy,
@@ -62,7 +63,6 @@ struct DailyCheckInSelfReportResolver {
             in: text
         )
         try validateNote(checkIn.note, in: text)
-        try validateDate(checkIn.occurredAt, in: userText, asOf: date)
     }
 
     private func requireMatch(
