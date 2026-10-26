@@ -33,6 +33,17 @@ final class FoodDatabaseTests: XCTestCase {
         XCTAssertEqual(firstRead.first?.name, "鸡胸肉")
     }
 
+    func testFoodSourceProvenanceSurvivesSeedDatabaseImport() throws {
+        let database = try FoodDatabase(seedJSON: seedData)
+
+        let item = try XCTUnwrap(database.lookup(id: 1))
+        XCTAssertEqual(item.sourceID, "fixture-food-source")
+        XCTAssertEqual(item.sourceRecordID, "fixture-chicken-breast")
+        XCTAssertEqual(item.sourceVersion, "fixture-v1")
+        XCTAssertEqual(item.licenseStatus, "verified")
+        XCTAssertEqual(try database.catalogEntries().first?.sourceVersion, "fixture-v1")
+    }
+
     private var seedData: Data {
         Data(
             """
@@ -44,6 +55,12 @@ final class FoodDatabaseTests: XCTestCase {
                 "category": "肉类",
                 "edible": 100,
                 "energyKcal": 133,
+                "energyRaw": "133",
+                "energyUnit": "kcal/100g",
+                "sourceID": "fixture-food-source",
+                "sourceRecordID": "fixture-chicken-breast",
+                "sourceVersion": "fixture-v1",
+                "licenseStatus": "verified",
                 "proteinG": 19.4,
                 "fatG": 5.0,
                 "carbohydrateG": 2.5,

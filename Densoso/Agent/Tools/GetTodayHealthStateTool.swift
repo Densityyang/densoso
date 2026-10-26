@@ -80,6 +80,7 @@ struct GetTodayHealthStateTool: AgentTool {
     private static func hasNoEvidence(_ state: HealthStateV2) -> Bool {
         state.domains.allSatisfy({ $0.status == .noData })
             && state.trainingLoad.band == .unavailable
+            && state.trainingLoad.dataCoverage == .complete
     }
 }
 
@@ -118,19 +119,22 @@ private struct TodayTrainingLoadPayload: Encodable {
     let ratio: Double?
     let readiness: BaselineReadiness
     let band: TrainingLoadBand
-    let estimatedWorkoutCount: Int
-    let unavailableEffortCount: Int
+    let dataCoverage: HealthDataCoverage
+    let estimatedWorkoutCount: Int?
+    let unavailableEffortCount: Int?
 
     init(summary: TrainingLoadSummary) {
         // The domain model uses zero as its required placeholder when no load
         // could be observed. Keep that sentinel from becoming an agent-facing
         // claim that the user's actual recent load was zero.
-        recentSevenDayLoad = summary.readiness == .noData ? nil : summary.recentSevenDayLoad
-        priorTwentyEightDayAverage = summary.priorTwentyEightDayAverage
-        ratio = summary.ratio
+        let isComplete = summary.dataCoverage == .complete
+        recentSevenDayLoad = isComplete && summary.readiness != .noData ? summary.recentSevenDayLoad : nil
+        priorTwentyEightDayAverage = isComplete ? summary.priorTwentyEightDayAverage : nil
+        ratio = isComplete ? summary.ratio : nil
         readiness = summary.readiness
         band = summary.band
-        estimatedWorkoutCount = summary.estimatedWorkoutCount
-        unavailableEffortCount = summary.unavailableEffortCount
+        dataCoverage = summary.dataCoverage
+        estimatedWorkoutCount = isComplete ? summary.estimatedWorkoutCount : nil
+        unavailableEffortCount = isComplete ? summary.unavailableEffortCount : nil
     }
 }

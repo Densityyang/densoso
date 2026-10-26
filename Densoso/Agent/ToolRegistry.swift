@@ -40,6 +40,7 @@ final class ToolRegistry {
             GetPendingActionsTool(),
             GetRecentMealsTool(),
             GetRecentWorkoutsTool(),
+            GetRecipePriorTool(),
             GetGoalTool(goalProvider: goalProfileProvider),
             GetUserPreferencesTool(),
         ]

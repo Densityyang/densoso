@@ -105,6 +105,7 @@ final class HealthRepository: HealthSyncRepository {
         _ snapshots: [WorkoutSnapshot],
         deletedHealthKitUUIDs: [UUID],
         nextAnchorData: Data,
+        lookbackStart: Date? = nil,
         stream: String = "workouts"
     ) throws {
         try write(affecting: snapshots.map(\.startedAt)) { affectedDates in
@@ -186,13 +187,15 @@ final class HealthRepository: HealthSyncRepository {
 
             if let cursor = try cursorRecord(stream: stream) {
                 cursor.anchorData = nextAnchorData
+                if cursor.lookbackStart == nil { cursor.lookbackStart = lookbackStart }
                 cursor.updatedAt = Date()
                 cursor.lastSuccessfulAt = Date()
             } else {
                 modelContext.insert(HealthKitImportCursor(
                     stream: stream,
                     anchorData: nextAnchorData,
-                    lastSuccessfulAt: Date()
+                    lastSuccessfulAt: Date(),
+                    lookbackStart: lookbackStart
                 ))
             }
         }
@@ -244,7 +247,249 @@ final class HealthRepository: HealthSyncRepository {
         }
     }
 
+    func setHealthReadState(_ state: HealthReadState, metric: HealthMetricID, days: [Date]) throws {
+        let calendar = Calendar.current
+        let normalizedDays = Array(Set(days.map { calendar.startOfDay(for: $0) })).sorted()
+        guard !normalizedDays.isEmpty else { return }
+        try write(affecting: normalizedDays) { _ in
+            for day in normalizedDays {
+                var snapshot = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
+                var readStates = snapshot.healthReadStates ?? [:]
+                readStates[metric.rawValue] = state
+                snapshot = Self.replacing(snapshot, healthReadStates: .some(readStates))
+                try upsertHealthSnapshot(snapshot, for: day)
+            }
+        }
+    }
+
+    func maskCachedHealthDataBeforeAuthorizationBoundary(
+        for metric: HealthMetricID,
+        authorizationStart: Date,
+        through: Date
+    ) throws {
+        let calendar = Calendar.current
+        let firstAuthorizedDay = HealthDataWindowPolicy.firstFullyAuthorizedDay(
+            for: metric,
+            authorizationStart: authorizationStart,
+            calendar: calendar
+        )
+        let cutoffDayKey = Self.dayKey(for: firstAuthorizedDay)
+        let projectionStart = calendar.startOfDay(for: authorizationStart)
+
+        try write(affecting: []) { affectedDates in
+            var removedSourceRecords = false
+            if metric == .workout {
+                removedSourceRecords = try removeImportedWorkouts(
+                    before: authorizationStart,
+                    affectedDates: &affectedDates
+                ) || removedSourceRecords
+            }
+            if metric == .bodyMass {
+                removedSourceRecords = try removeImportedHealthKitWeights(
+                    before: authorizationStart,
+                    affectedDates: &affectedDates
+                ) || removedSourceRecords
+            }
+            let changedSnapshots = try maskCachedHealthSnapshots(
+                for: metric,
+                beforeDayKey: cutoffDayKey,
+                affectedDates: &affectedDates
+            )
+            if metric == .bodyMass, changedSnapshots || removedSourceRecords {
+                let recomputeStart = affectedDates.min().map { calendar.startOfDay(for: $0) } ?? projectionStart
+                try addDailyMetricDates(
+                    from: recomputeStart,
+                    through: through,
+                    to: &affectedDates
+                )
+            }
+        }
+    }
+
+    private func maskCachedHealthSnapshots(
+        for metric: HealthMetricID,
+        beforeDayKey cutoffDayKey: String,
+        affectedDates: inout Set<Date>
+    ) throws -> Bool {
+        let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey < cutoffDayKey }
+        var descriptor = FetchDescriptor<DailyHealthSnapshotRecord>(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\.dayKey)]
+        )
+        descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize
+        var offset = 0
+        var changed = false
+        while true {
+            descriptor.fetchOffset = offset
+            let records = try modelContext.fetch(descriptor)
+            guard !records.isEmpty else { break }
+            for record in records {
+                guard let snapshot = try? Self.decodeHealthSnapshot(record.payloadData, decoder: JSONDecoder()) else {
+                    continue
+                }
+                let hasSummaryValue = snapshot.healthKitSampleSummary.map { summary in
+                    summary.aggregate(for: metric) != nil
+                        || (metric == .sleepAnalysis && summary.sleep != nil)
+                        || (metric == .workoutEffort && !summary.workoutEffort.isEmpty)
+                } ?? false
+                let hasLegacySample = snapshot.healthKitSamples?.contains { $0.metric == metric } == true
+                let hasScalarValue: Bool
+                switch metric {
+                case .activeEnergy: hasScalarValue = snapshot.activeEnergyKcal != nil
+                case .restingEnergy: hasScalarValue = snapshot.restingEnergyKcal != nil
+                case .stepCount: hasScalarValue = snapshot.stepCount != nil
+                case .exerciseMinutes: hasScalarValue = snapshot.exerciseMinutes != nil
+                case .bodyMass: hasScalarValue = snapshot.weightKilograms != nil
+                default: hasScalarValue = false
+                }
+                let hasPreviouslyAvailableState = snapshot.healthReadStates?[metric.rawValue] == .available
+                guard hasSummaryValue || hasLegacySample || hasScalarValue || hasPreviouslyAvailableState else {
+                    continue
+                }
+                var readStates = snapshot.healthReadStates ?? [:]
+                readStates[metric.rawValue] = .dataUnavailableOrReadScopeUnknown
+                let filteredSummary = snapshot.healthKitSampleSummary.map { summary in
+                    DailyHealthSampleSummary(
+                        metrics: summary.metrics.filter { $0.metric != metric },
+                        sleep: metric == .sleepAnalysis ? nil : summary.sleep,
+                        workoutEffort: metric == .workoutEffort ? [] : summary.workoutEffort
+                    )
+                }
+                let remainingLegacySamples = snapshot.healthKitSamples?.filter { $0.metric != metric }
+                var updated = Self.replacing(
+                    snapshot,
+                    healthKitSamples: .some(remainingLegacySamples),
+                    healthKitSampleSummary: .some(filteredSummary),
+                    healthReadStates: .some(readStates)
+                )
+                switch metric {
+                case .activeEnergy:
+                    updated = Self.replacing(updated, activeEnergyKcal: .some(nil))
+                case .restingEnergy:
+                    updated = Self.replacing(updated, restingEnergyKcal: .some(nil))
+                case .stepCount:
+                    updated = Self.replacing(updated, stepCount: .some(nil))
+                case .exerciseMinutes:
+                    updated = Self.replacing(updated, exerciseMinutes: .some(nil))
+                case .bodyMass:
+                    let day = Calendar.current.startOfDay(for: snapshot.dayStart)
+                    updated = Self.replacing(
+                        updated,
+                        weightKilograms: .some(try latestLocalWeightKilograms(on: day))
+                    )
+                default:
+                    break
+                }
+                guard updated != snapshot else { continue }
+                let day = Calendar.current.startOfDay(for: snapshot.dayStart)
+                try upsertHealthSnapshot(updated, for: day)
+                affectedDates.insert(day)
+                changed = true
+            }
+            if records.count < Self.healthKitSampleIndexBatchSize { break }
+            offset += records.count
+        }
+        return changed
+    }
+
+    private func removeImportedWorkouts(
+        before authorizationStart: Date,
+        affectedDates: inout Set<Date>
+    ) throws -> Bool {
+        var cursor: (date: Date, id: UUID)?
+        var removed = false
+        while true {
+            let predicate: Predicate<WorkoutRecord>
+            if let cursor {
+                let cursorDate = cursor.date
+                let cursorID = cursor.id
+                predicate = #Predicate<WorkoutRecord> { workout in
+                    workout.healthKitUUID != nil && workout.date < authorizationStart
+                        && (workout.date > cursorDate
+                            || (workout.date == cursorDate && workout.id > cursorID))
+                }
+            } else {
+                predicate = #Predicate<WorkoutRecord> {
+                    $0.healthKitUUID != nil && $0.date < authorizationStart
+                }
+            }
+            var descriptor = FetchDescriptor<WorkoutRecord>(
+                predicate: predicate,
+                sortBy: [SortDescriptor(\.date), SortDescriptor(\.id)]
+            )
+            descriptor.fetchLimit = Self.workoutEffortFetchBatchSize
+            let records = try modelContext.fetch(descriptor)
+            guard let last = records.last else { break }
+            for workout in records {
+                affectedDates.insert(workout.date)
+                modelContext.delete(workout)
+                removed = true
+            }
+            cursor = (last.date, last.id)
+            if records.count < Self.workoutEffortFetchBatchSize { break }
+        }
+        return removed
+    }
+
+    private func removeImportedHealthKitWeights(
+        before authorizationStart: Date,
+        affectedDates: inout Set<Date>
+    ) throws -> Bool {
+        let healthKitSource = "healthKit"
+        var cursor: (date: Date, id: UUID)?
+        var removed = false
+        while true {
+            let predicate: Predicate<WeightRecord>
+            if let cursor {
+                let cursorDate = cursor.date
+                let cursorID = cursor.id
+                predicate = #Predicate<WeightRecord> { weight in
+                    weight.source == healthKitSource && weight.measuredAt < authorizationStart
+                        && (weight.measuredAt > cursorDate
+                            || (weight.measuredAt == cursorDate && weight.id > cursorID))
+                }
+            } else {
+                predicate = #Predicate<WeightRecord> {
+                    $0.source == healthKitSource && $0.measuredAt < authorizationStart
+                }
+            }
+            var descriptor = FetchDescriptor<WeightRecord>(
+                predicate: predicate,
+                sortBy: [SortDescriptor(\.measuredAt), SortDescriptor(\.id)]
+            )
+            descriptor.fetchLimit = Self.workoutEffortFetchBatchSize
+            let records = try modelContext.fetch(descriptor)
+            guard let last = records.last else { break }
+            for weight in records {
+                affectedDates.insert(weight.measuredAt)
+                modelContext.delete(weight)
+                removed = true
+            }
+            cursor = (last.measuredAt, last.id)
+            if records.count < Self.workoutEffortFetchBatchSize { break }
+        }
+        return removed
+    }
+
+    private func addDailyMetricDates(
+        from start: Date,
+        through end: Date,
+        to affectedDates: inout Set<Date>
+    ) throws {
+        let predicate = #Predicate<DailyMetrics> { $0.date >= start && $0.date <= end }
+        for metric in try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: predicate)) {
+            affectedDates.insert(metric.date)
+        }
+    }
+
     func affectedHealthSampleDays(for page: HealthSamplePage, stream: String) throws -> [Date] {
+        Array(Set(
+            try changedHealthSampleDays(for: page, stream: stream)
+                + pendingHealthSampleDays(stream: stream)
+        )).sorted()
+    }
+
+    func changedHealthSampleDays(for page: HealthSamplePage, stream: String) throws -> [Date] {
         let requestedIDs = Array(Set(page.samples.map(\.id)).union(page.deletedSampleIDs))
             .sorted { $0.uuidString < $1.uuidString }
         var days = Set<Date>()
@@ -269,6 +514,11 @@ final class HealthRepository: HealthSyncRepository {
                 days.insert(Calendar.current.startOfDay(for: sample.startDate))
             }
         }
+        return days.sorted()
+    }
+
+    func pendingHealthSampleDays(stream: String) throws -> [Date] {
+        var days = Set<Date>()
         try forEachPendingHealthKitSampleIndex(stream: stream) { records in
             for record in records {
                 days.formUnion(Self.pendingDays(for: record))
@@ -294,7 +544,7 @@ final class HealthRepository: HealthSyncRepository {
             uniquingKeysWith: { _, latest in latest }
         )
         let affectedDays = Array(replacementsByDay.keys)
-        try write(affecting: affectedDays) { _ in
+        try write(affecting: affectedDays) { affectedProjectionDates in
             for (day, replacement) in replacementsByDay {
                 let existing = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
                 let priorSummary = existing.healthKitSampleSummary
@@ -437,6 +687,14 @@ final class HealthRepository: HealthSyncRepository {
                     lookbackStart: lookbackStart
                 ))
             }
+            if stream == HealthMetricID.bodyMass.rawValue,
+               let firstAffectedDay = replacementsByDay.keys.min() {
+                try addDailyMetricDates(
+                    from: firstAffectedDay,
+                    through: lastSuccessfulAt,
+                    to: &affectedProjectionDates
+                )
+            }
         }
     }
 
@@ -471,7 +729,9 @@ final class HealthRepository: HealthSyncRepository {
                 try upsertHealthSnapshot(snapshot, for: day)
             }
             if let cursor = try cursorRecord(stream: stream) {
-                if cursor.lookbackStart == nil { cursor.lookbackStart = lookbackStart }
+                // Aggregate reads are bounded non-anchored queries, so their
+                // cursor records the current policy/authorization lower bound.
+                cursor.lookbackStart = lookbackStart
                 if containsMeasuredValues { cursor.lastSuccessfulAt = lastSuccessfulAt }
                 cursor.updatedAt = lastSuccessfulAt
             } else {
@@ -612,15 +872,18 @@ final class HealthRepository: HealthSyncRepository {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: date)
         let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+        let healthKitSource = "healthKit"
         let predicate: Predicate<WeightRecord>
         if let excludedWeightID {
             let excludedID = excludedWeightID
             predicate = #Predicate<WeightRecord> { record in
-                record.measuredAt >= day && record.measuredAt < nextDay && record.id != excludedID
+                record.measuredAt >= day && record.measuredAt < nextDay
+                    && record.id != excludedID && record.source != healthKitSource
             }
         } else {
             predicate = #Predicate<WeightRecord> { record in
                 record.measuredAt >= day && record.measuredAt < nextDay
+                    && record.source != healthKitSource
             }
         }
         var descriptor = FetchDescriptor<WeightRecord>(

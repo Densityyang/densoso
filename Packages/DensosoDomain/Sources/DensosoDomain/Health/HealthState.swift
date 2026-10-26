@@ -104,7 +104,9 @@ public enum HealthStatePolicy {
         let sleepUsable = sleep.map { isUsable($0.status) } ?? false
         let restingUsable = restingHeartRate.map { isUsable($0.status) } ?? false
         let variabilityUsable = heartRateVariability.map { isUsable($0.status) } ?? false
-        let loadUsable = trainingLoad.readiness == .mature && trainingLoad.band != .unavailable
+        let loadUsable = trainingLoad.dataCoverage == .complete
+            && trainingLoad.readiness == .mature
+            && trainingLoad.band != .unavailable
         let evidenceCount = [sleepUsable, restingUsable, variabilityUsable, loadUsable].filter { $0 }.count
 
         let evidence = unique([

@@ -9,6 +9,7 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
     static let userPreferenceFetchBatchSize = 64
     static let scheduleEventFetchBatchSize = 64
     static let conversationResetBatchSize = 64
+    static let recentWorkoutFetchBatchSize = 64
 
     private struct UserPreferenceCursor {
         let createdAt: Date
@@ -390,17 +391,48 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
     func recentWorkouts(from startDate: Date, through endDate: Date, limit: Int) throws -> [AgentRecentWorkout] {
         guard startDate <= endDate else { return [] }
         let cappedLimit = min(max(limit, 1), AgentRecentWorkoutsLimits.maximumQueryWorkoutCount)
-        let predicate = #Predicate<WorkoutRecord> { workout in
-            workout.date >= startDate && workout.date <= endDate && workout.durationMinutes > 0
-        }
-        var descriptor = FetchDescriptor<WorkoutRecord>(predicate: predicate)
-        descriptor.sortBy = [
+        let sortDescriptors = [
             SortDescriptor(\WorkoutRecord.date, order: .reverse),
             SortDescriptor(\WorkoutRecord.createdAt, order: .reverse),
             SortDescriptor(\WorkoutRecord.id, order: .reverse),
         ]
-        descriptor.fetchLimit = cappedLimit
-        return try modelContext.fetch(descriptor)
+        var allowedWorkouts: [WorkoutRecord] = []
+        var cursorDate: Date?
+        var cursorCreatedAt: Date?
+        var cursorID: UUID?
+        while allowedWorkouts.count < cappedLimit {
+            let predicate: Predicate<WorkoutRecord>
+            if let cursorDate, let cursorCreatedAt, let cursorID {
+                let lastDate = cursorDate
+                let lastCreatedAt = cursorCreatedAt
+                let lastID = cursorID
+                predicate = #Predicate<WorkoutRecord> { workout in
+                    workout.date >= startDate && workout.date <= endDate && workout.durationMinutes > 0
+                        && (workout.date < lastDate
+                            || (workout.date == lastDate
+                                && (workout.createdAt < lastCreatedAt
+                                    || (workout.createdAt == lastCreatedAt && workout.id < lastID))))
+                }
+            } else {
+                predicate = #Predicate<WorkoutRecord> { workout in
+                    workout.date >= startDate && workout.date <= endDate && workout.durationMinutes > 0
+                }
+            }
+            var descriptor = FetchDescriptor<WorkoutRecord>(predicate: predicate, sortBy: sortDescriptors)
+            descriptor.fetchLimit = Self.recentWorkoutFetchBatchSize
+            let page = try modelContext.fetch(descriptor)
+            guard !page.isEmpty else { break }
+            let readStates = try healthKitWorkoutReadStates(for: page)
+            allowedWorkouts.append(contentsOf: page.filter { workout in
+                guard workout.healthKitUUID != nil else { return true }
+                return readStates[Self.dayKey(for: workout.date)] == .available
+            })
+            guard page.count == Self.recentWorkoutFetchBatchSize, let last = page.last else { break }
+            cursorDate = last.date
+            cursorCreatedAt = last.createdAt
+            cursorID = last.id
+        }
+        return allowedWorkouts
             .sorted {
                 if $0.date != $1.date { return $0.date > $1.date }
                 if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
@@ -418,6 +450,36 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
                         : nil
                 )
             }
+    }
+
+    private func healthKitWorkoutReadStates(for workouts: [WorkoutRecord]) throws -> [String: HealthReadState] {
+        let dayKeys = Array(Set(workouts.compactMap { workout in
+            workout.healthKitUUID == nil ? nil : Self.dayKey(for: workout.date)
+        })).sorted()
+        guard !dayKeys.isEmpty else { return [:] }
+        var states: [String: HealthReadState] = [:]
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        var offset = 0
+        while offset < dayKeys.count {
+            let batchEnd = min(offset + Self.recentWorkoutFetchBatchSize, dayKeys.count)
+            let keys = Array(dayKeys[offset..<batchEnd])
+            let predicate = #Predicate<DailyHealthSnapshotRecord> { keys.contains($0.dayKey) }
+            for record in try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate)) {
+                guard let snapshot = try? decoder.decode(DailyHealthSnapshot.self, from: record.payloadData),
+                      let state = snapshot.healthReadStates?[HealthMetricID.workout.rawValue] else {
+                    continue
+                }
+                states[record.dayKey] = state
+            }
+            offset = batchEnd
+        }
+        return states
+    }
+
+    private static func dayKey(for date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
     func userPreferences(limit: Int) throws -> [AgentUserPreference] {

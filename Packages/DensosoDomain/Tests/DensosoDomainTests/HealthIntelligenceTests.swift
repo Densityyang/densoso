@@ -326,6 +326,98 @@ final class HealthIntelligenceTests: XCTestCase {
         XCTAssertEqual(surplusOnly.sevenDay.coverageDays["dailyDeficitKcal"], 1)
     }
 
+    func testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial() throws {
+        let today = try date(2026, 10, 20)
+        let unknown = HealthReadState.dataUnavailableOrReadScopeUnknown
+        let unknownStates = [
+            HealthMetricID.sleepAnalysis,
+            .stepCount,
+            .exerciseMinutes,
+            .activeEnergy,
+            .bodyMass,
+            .workout,
+        ].reduce(into: [String: HealthReadState]()) { result, metric in
+            result[metric.rawValue] = unknown
+        }
+        let engine = HealthIntelligenceEngine(calendar: calendar)
+        let unknownDay = HealthIntelligenceDay(dayStart: today, healthReadStates: unknownStates)
+        let unknownResult = try XCTUnwrap(engine.makeDailyBrief(days: [unknownDay]))
+
+        XCTAssertEqual(unknownResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .sleep })?.status, .unknown)
+        XCTAssertEqual(unknownResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .activity })?.status, .unknown)
+        XCTAssertEqual(unknownResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .body })?.status, .unknown)
+        XCTAssertNil(unknownResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .activity })?.currentValue)
+        XCTAssertEqual(unknownResult.dailyBrief.trainingLoad.dataCoverage, .unknown)
+        XCTAssertEqual(unknownResult.dailyBrief.contextSummary.sevenDay.dataCoverage["steps"], .unknown)
+        XCTAssertNil(unknownResult.dailyBrief.contextSummary.sevenDay.coverageDays["steps"])
+        XCTAssertNil(unknownResult.dailyBrief.contextSummary.sevenDay.averageStepCount)
+        let weekly = engine.makeWeeklyBrief(days: [unknownDay], weekStart: today)
+        XCTAssertEqual(weekly.domainStatuses.first(where: { $0.domain == .activity })?.status, .unknown)
+        XCTAssertTrue(weekly.summary.contains("覆盖未知"))
+
+        let partiallyKnownStates: [String: HealthReadState] = [
+            HealthMetricID.sleepAnalysis.rawValue: .available,
+            HealthMetricID.stepCount.rawValue: .available,
+            HealthMetricID.exerciseMinutes.rawValue: unknown,
+            HealthMetricID.activeEnergy.rawValue: unknown,
+            HealthMetricID.bodyMass.rawValue: unknown,
+            HealthMetricID.workout.rawValue: unknown,
+        ]
+        let partialResult = try XCTUnwrap(engine.makeDailyBrief(days: [HealthIntelligenceDay(
+            dayStart: today,
+            stepCount: 5_600,
+            weightSamplesKilograms: [71.4],
+            healthReadStates: partiallyKnownStates
+        )]))
+        XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .activity })?.status, .partial)
+        XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .activity })?.currentValue, 5_600)
+        XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .body })?.status, .partial)
+        XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .sleep })?.status, .noData)
+        XCTAssertEqual(partialResult.dailyBrief.trainingLoad.dataCoverage, .unknown)
+    }
+
+    func testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders() throws {
+        let legacy = #"{"recentSevenDayLoad":0,"priorTwentyEightDayAverage":null,"ratio":null,"readiness":"noData","band":"unavailable","estimatedWorkoutCount":0,"unavailableEffortCount":0}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(TrainingLoadSummary.self, from: legacy)
+
+        XCTAssertEqual(decoded.dataCoverage, .unknown)
+        let reencoded = try JSONEncoder().encode(decoded)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: reencoded) as? [String: Any])
+        XCTAssertEqual(object["dataCoverage"] as? String, HealthDataCoverage.unknown.rawValue)
+        XCTAssertNil(object["recentSevenDayLoad"])
+        XCTAssertNil(object["priorTwentyEightDayAverage"])
+        XCTAssertNil(object["ratio"])
+        XCTAssertNil(object["estimatedWorkoutCount"])
+        XCTAssertNil(object["unavailableEffortCount"])
+    }
+
+    func testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage() throws {
+        let baselineJSON = #"{"readiness":"mature","validDays":28,"median":420,"p10":360,"p90":480,"mad":30}"#
+        let domainJSON = #"{"domain":"sleep","status":"withinTypicalRange","currentValue":420,"baseline":\#(baselineJSON),"evidenceKeys":["sleep.mainSleep.minutes"]}"#.data(using: .utf8)!
+        let domain = try JSONDecoder().decode(HealthDomainResult.self, from: domainJSON)
+        XCTAssertEqual(domain.dataCoverage, .unknown)
+        XCTAssertEqual(domain.status, .unknown)
+        XCTAssertNil(domain.currentValue)
+        XCTAssertTrue(domain.evidenceKeys.isEmpty)
+
+        let vitalJSON = #"{"metric":"restingHeartRate","latestMedian":58,"baseline":\#(baselineJSON),"status":"withinTypicalRange","evidenceKey":"vitals.restingHeartRate.median"}"#.data(using: .utf8)!
+        let vital = try JSONDecoder().decode(HealthVitalTrend.self, from: vitalJSON)
+        XCTAssertEqual(vital.dataCoverage, .unknown)
+        XCTAssertEqual(vital.status, .unknown)
+        XCTAssertNil(vital.latestMedian)
+
+        let contextJSON = #"{"windowDays":7,"coverageDays":{"sleep":3,"steps":2,"energyIntake":4,"proteinGrams":4},"averageSleepMinutes":420,"averageStepCount":5200,"averageActiveEnergyKcal":450,"averageEnergyIntakeKcal":1800,"averageDailyDeficitKcal":300,"averageProteinGrams":80,"medianWeightKilograms":71}"#.data(using: .utf8)!
+        let context = try JSONDecoder().decode(HealthContextWindowSummary.self, from: contextJSON)
+        XCTAssertEqual(context.dataCoverage["sleep"], .unknown)
+        XCTAssertNil(context.coverageDays["sleep"])
+        XCTAssertNil(context.averageSleepMinutes)
+        XCTAssertNil(context.averageStepCount)
+        XCTAssertEqual(context.averageEnergyIntakeKcal, 1_800)
+        XCTAssertEqual(context.averageProteinGrams, 80)
+        XCTAssertNil(context.averageDailyDeficitKcal)
+        XCTAssertNil(context.medianWeightKilograms)
+    }
+
     func testWeightTrendRequiresFourValidDaysInEachSevenDayWindow() throws {
         let engine = HealthIntelligenceEngine(calendar: calendar)
         let today = try date(2026, 8, 30)

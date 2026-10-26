@@ -1,0 +1,2348 @@
+{
+  "acceptedCount": 366,
+  "ingredientRowCount": 3262,
+  "licenseSPDX": "Unlicense",
+  "quantityEvidenceCounts": {
+    "formula": 133,
+    "notSpecifiedInSource": 1264,
+    "sourceQuantity": 1404,
+    "sourceRange": 96,
+    "sourceTextOnly": 365
+  },
+  "quantityReviewRowCount": 289,
+  "quantityReviewRows": [
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "青蟹（别称：肉蟹）",
+      "sourceRecordID": "dishes/aquatic/咖喱炒蟹.md",
+      "sourceText": "1 只（大约 300g） * 份数"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "葱姜蒜",
+      "sourceRecordID": "dishes/aquatic/小龙虾/小龙虾.md",
+      "sourceText": "一根大葱; 30 克; 7 瓣大蒜"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "黑鳕鱼，带皮",
+      "sourceRecordID": "dishes/aquatic/微波葱姜黑鳕鱼.md",
+      "sourceText": "，带皮，2 片，450g（本菜谱主角，所有调料可根据鳕鱼的实际重量进行比例调整"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "青葱",
+      "sourceRecordID": "dishes/aquatic/微波葱姜黑鳕鱼.md",
+      "sourceText": "，葱白，25g。; ，葱绿，10g。"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "蔬菜（比如土豆片/豆芽/花菜/生菜/……）",
+      "sourceRecordID": "dishes/aquatic/水煮鱼.md",
+      "sourceText": "/豆芽/花菜/生菜/……） 可有不同搭配，推荐合计重量 300g 至 500g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "红油豆瓣酱",
+      "sourceRecordID": "dishes/aquatic/水煮鱼.md",
+      "sourceText": "40g （不怕辣想多加红油就多加 10 至 20g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "白胡椒粉",
+      "sourceRecordID": "dishes/aquatic/混合烤鱼/烤鱼.md",
+      "sourceText": "5g-10g"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "清水",
+      "sourceRecordID": "dishes/aquatic/糖醋鲤鱼/糖醋鲤鱼.md",
+      "sourceText": "50g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/aquatic/肉蟹煲.md",
+      "sourceText": "20 g（如果放了虾，追加 10 g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "甜面酱（或烧烤酱，可选）",
+      "sourceRecordID": "dishes/aquatic/肉蟹煲.md",
+      "sourceText": "10 g（替代：白糖 5.5 g + 生抽 4 ml + 老抽 0.5 ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "白胡椒粉",
+      "sourceRecordID": "dishes/aquatic/肉蟹煲.md",
+      "sourceText": "2 g（如果放了虾，追加 1 g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "啤酒",
+      "sourceRecordID": "dishes/aquatic/肉蟹煲.md",
+      "sourceText": "200 ml（如果放了虾，追加 50-100 ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "清水",
+      "sourceRecordID": "dishes/aquatic/肉蟹煲.md",
+      "sourceText": "800 ml（如果放了虾，追加 200 ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "料酒",
+      "sourceRecordID": "dishes/aquatic/芥末黄油罗氏虾/芥末黄油罗氏虾.md",
+      "sourceText": "、朗姆酒或啤酒 15g 到 30g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "桂鱼",
+      "sourceRecordID": "dishes/aquatic/葱油桂鱼/葱油桂鱼.md",
+      "sourceText": "1 斤(500g)"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/aquatic/蒜香黄油虾/蒜香黄油虾.md",
+      "sourceText": "4 瓣（约 20g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "剑骨鱼或鲤鱼（约",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "剑骨鱼或鲤鱼（约 1.5 斤，让店家处理内脏，但不要刮鱼鳞）; 或鲤鱼 1 条（约 750g，不去鳞"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "剑骨鱼或鲤鱼（约",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "剑骨鱼或鲤鱼（约 1.5 斤，让店家处理内脏，但不要刮鱼鳞）; 或鲤鱼 1 条（约 750g，不去鳞"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "番茄",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "番茄（2 个）; 2 个（约 300g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "番茄",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "番茄（2 个）; 2 个（约 300g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "青椒",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "青椒（2 个）; 2 个（约 150g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "青椒",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "青椒（2 个）; 2 个（约 150g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "红椒",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "红椒（1 个）; 1 个（约 80g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "红椒",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "红椒（1 个）; 1 个（约 80g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "大蒜（5-6 瓣）; 6 瓣（约 30g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "大蒜（5-6 瓣）; 6 瓣（约 30g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "生姜",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "生姜（1 块）; 1 块（约 20g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "生姜",
+      "sourceRecordID": "dishes/aquatic/阳朔啤酒鱼/阳朔啤酒鱼.md",
+      "sourceText": "生姜（1 块）; 1 块（约 20g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "黄油（推荐安佳，一次用一小盒 7g）",
+      "sourceRecordID": "dishes/aquatic/黄油煎虾/黄油煎虾.md",
+      "sourceText": "黄油（推荐安佳，一次用一小盒 7g）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡蛋",
+      "sourceRecordID": "dishes/breakfast/微波炉蒸蛋.md",
+      "sourceText": "2 个（约 100g 蛋液"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "橄榄油",
+      "sourceRecordID": "dishes/breakfast/意式香肠北非蛋.md",
+      "sourceText": "10ml - 15ml（用于炒菜"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "可根据口味选择增加 50g 蔬菜，如菠菜。",
+      "sourceRecordID": "dishes/breakfast/燕麦鸡蛋饼.md",
+      "sourceText": "可根据口味选择增加 50g 蔬菜，如菠菜。"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "牛奶",
+      "sourceRecordID": "dishes/breakfast/燕麦鸡蛋饼.md",
+      "sourceText": "牛奶 50-100g，能够将燕麦搅拌粘稠即可; 一盒 约 250ml"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "牛奶",
+      "sourceRecordID": "dishes/breakfast/燕麦鸡蛋饼.md",
+      "sourceText": "牛奶 50-100g，能够将燕麦搅拌粘稠即可; 一盒 约 250ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡蛋",
+      "sourceRecordID": "dishes/breakfast/苏格兰蛋/苏格兰蛋.md",
+      "sourceText": "50g（约 1 颗"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡蛋",
+      "sourceRecordID": "dishes/breakfast/茶叶蛋.md",
+      "sourceText": "400g（约 8 颗"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "八角",
+      "sourceRecordID": "dishes/breakfast/茶叶蛋.md",
+      "sourceText": "4g（约 2 颗"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "香叶",
+      "sourceRecordID": "dishes/breakfast/茶叶蛋.md",
+      "sourceText": "0.5-1g（约 2 片"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "冷冻花卷",
+      "sourceRecordID": "dishes/breakfast/蒸花卷.md",
+      "sourceText": "5 个（女生分量 3 个即可）（可以在超市、各种买菜平台购买"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "白糖或红糖",
+      "sourceRecordID": "dishes/breakfast/蛋煎糍粑.md",
+      "sourceText": "10g （建议 8g - 15g 之间"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "一个容量在 600 毫升以上且直径小（PS: 需要注意能放得下电动打蛋仪）深度深的容器（如准备了冰淇淋模具 容器需要有尖嘴方便转移）",
+      "sourceRecordID": "dishes/dessert/奥利奥冰淇淋/奥利奥冰淇淋.md",
+      "sourceText": "一个容量在 600 毫升以上且直径小（PS: 需要注意能放得下电动打蛋仪）深度深的容器（如准备了冰淇淋模具 容器需要有尖嘴方便转移）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡蛋",
+      "sourceRecordID": "dishes/dessert/炸鲜奶/炸鲜奶.md",
+      "sourceText": "1 个，去壳后约 50g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "奶油奶酪：212g （这是一块的质量，比较方便，原教程是 250g）",
+      "sourceRecordID": "dishes/dessert/烤箱版巴斯克芝士蛋糕/烤箱版巴斯克芝士蛋糕.md",
+      "sourceText": "奶油奶酪：212g （这是一块的质量，比较方便，原教程是 250g）"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "糯米粉",
+      "sourceRecordID": "dishes/dessert/芋泥雪媚娘/芋泥雪媚娘.md",
+      "sourceText": "a 50g; b 75g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡蛋",
+      "sourceRecordID": "dishes/dessert/英式司康/英式司康.md",
+      "sourceText": "1 个（约 50g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "草莓",
+      "sourceRecordID": "dishes/dessert/草莓冰淇淋/草莓冰淇淋.md",
+      "sourceText": "糖浆; 500 克"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "香草精",
+      "sourceRecordID": "dishes/dessert/草莓冰淇淋/草莓冰淇淋.md",
+      "sourceText": "1 克; 5 克"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "薄荷汁 10ml / 薄荷粉 10g",
+      "sourceRecordID": "dishes/drink/冰粉/冰粉.md",
+      "sourceText": "薄荷汁 10ml / 薄荷粉 10g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "冰粉籽",
+      "sourceRecordID": "dishes/drink/冰粉/冰粉.md",
+      "sourceText": "冰粉籽 200g; 200g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "冰粉籽",
+      "sourceRecordID": "dishes/drink/冰粉/冰粉.md",
+      "sourceText": "冰粉籽 200g; 200g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "凉白开",
+      "sourceRecordID": "dishes/drink/冰粉/冰粉.md",
+      "sourceText": "凉白开 2000g; 2000g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "凉白开",
+      "sourceRecordID": "dishes/drink/冰粉/冰粉.md",
+      "sourceText": "凉白开 2000g; 2000g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "薄荷汁 10ml / 薄荷粉 10g",
+      "sourceRecordID": "dishes/drink/冰粉/冰粉.md",
+      "sourceText": "薄荷汁 10ml / 薄荷粉 10g; / 薄荷粉 10g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "薄荷汁 10ml / 薄荷粉 10g",
+      "sourceRecordID": "dishes/drink/冰粉/冰粉.md",
+      "sourceText": "薄荷汁 10ml / 薄荷粉 10g; / 薄荷粉 10g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "菠菜叶",
+      "sourceRecordID": "dishes/drink/奇异果菠菜特调/奇异果菠菜特调.md",
+      "sourceText": "菠菜叶（ 2-5 片）; 4 叶"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "菠菜叶",
+      "sourceRecordID": "dishes/drink/奇异果菠菜特调/奇异果菠菜特调.md",
+      "sourceText": "菠菜叶（ 2-5 片）; 4 叶"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "橙子",
+      "sourceRecordID": "dishes/drink/百香果橙子特调/百香果橙子特调.md",
+      "sourceText": "1 个（约 200 克，拳头大小"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "安琪甜酒曲一包 (8g)（虽然按比例为每 1000g 糯米用 3g，但多放酒曲能提高成功概率）",
+      "sourceRecordID": "dishes/drink/酒酿醪糟/酒酿醪糟.md",
+      "sourceText": "安琪甜酒曲一包 (8g)（虽然按比例为每 1000g 糯米用 3g，但多放酒曲能提高成功概率）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "清水 720g + 600g（720 克用于蒸饭，后 500g 用于发酵）",
+      "sourceRecordID": "dishes/drink/酒酿醪糟/酒酿醪糟.md",
+      "sourceText": "清水 720g + 600g（720 克用于蒸饭，后 500g 用于发酵）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "高球杯（容量 300ml）",
+      "sourceRecordID": "dishes/drink/长岛冰茶.md",
+      "sourceText": "高球杯（容量 300ml）"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "柠檬",
+      "sourceRecordID": "dishes/drink/长岛冰茶.md",
+      "sourceText": "汁 30ml; 1 个"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "啤酒",
+      "sourceRecordID": "dishes/meat_dish/乡村啤酒鸭.md",
+      "sourceText": "1000 ml （可以买 500 ml 的罐装啤酒两瓶"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "青椒",
+      "sourceRecordID": "dishes/meat_dish/乡村啤酒鸭.md",
+      "sourceText": "2 条，红椒 1 条 （ 长度 10 厘米到 15 厘米 之间都可以）（切段 或者切片都可以， 2 厘米一段"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大葱",
+      "sourceRecordID": "dishes/meat_dish/乡村啤酒鸭.md",
+      "sourceText": "2 根 1 根切段,1 根备用"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "葱姜末",
+      "sourceRecordID": "dishes/meat_dish/冬瓜酿肉/冬瓜酿肉.md",
+      "sourceText": "姜 3-4 片约 30g, 取上面一根葱花中的葱白部分即可"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "油量",
+      "sourceRecordID": "dishes/meat_dish/冷吃兔.md",
+      "sourceText": "兔肉斤数 * 0.9 ～ 1 升"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "花椒",
+      "sourceRecordID": "dishes/meat_dish/口水鸡/口水鸡.md",
+      "sourceText": "30 颗(20g; 粉 5g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "花生",
+      "sourceRecordID": "dishes/meat_dish/口水鸡/口水鸡.md",
+      "sourceText": "10 颗(30g"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "1 汤匙",
+      "sourceRecordID": "dishes/meat_dish/咕噜肉.md",
+      "sourceText": "15ml"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "1 茶匙",
+      "sourceRecordID": "dishes/meat_dish/咕噜肉.md",
+      "sourceText": "5ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "咖喱块",
+      "sourceRecordID": "dishes/meat_dish/咖喱肥牛/咖喱肥牛.md",
+      "sourceText": "2 块 （大约 100g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "熟猪油",
+      "sourceRecordID": "dishes/meat_dish/商芝肉.md",
+      "sourceText": "2000 克（消耗约 60 克"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "五花肉",
+      "sourceRecordID": "dishes/meat_dish/回锅肉/回锅肉.md",
+      "sourceText": "的用量为 0.5 斤/男人 0.3 斤/女人 （正宗回锅肉使用二刀肉[俗称：臀尖]制作，肉质坚实，肥瘦合适"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "青红椒",
+      "sourceRecordID": "dishes/meat_dish/回锅肉/回锅肉.md",
+      "sourceText": "根据受辣程度选择, 0-30g）*注：不建议使用肉厚的菜椒"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "开水",
+      "sourceRecordID": "dishes/meat_dish/土豆炖排骨/土豆炖排骨.md",
+      "sourceText": "700ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "姜",
+      "sourceRecordID": "dishes/meat_dish/土豆炖排骨/土豆炖排骨.md",
+      "sourceText": "30g （分为两份：15g 焯水用，15g 炒制用）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "小葱",
+      "sourceRecordID": "dishes/meat_dish/土豆炖排骨/土豆炖排骨.md",
+      "sourceText": "25g （分为两份：15g 打成葱结，10g 切葱花）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "料酒",
+      "sourceRecordID": "dishes/meat_dish/土豆炖排骨/土豆炖排骨.md",
+      "sourceText": "25ml （分为两份：15ml 焯水用，10ml 炒制用）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "八角",
+      "sourceRecordID": "dishes/meat_dish/土豆炖排骨/土豆炖排骨.md",
+      "sourceText": "1g （约 1-2 颗）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "手枪腿鸡腿",
+      "sourceRecordID": "dishes/meat_dish/奥尔良风味烤鸡腿/奥尔良风味烤鸡腿.md",
+      "sourceText": "2 只（每个手枪腿大约重 200g，共约 400g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "奶酪",
+      "sourceRecordID": "dishes/meat_dish/奶酪培根通心粉/奶酪培根通心粉.md",
+      "sourceText": "40-55g，若要烘烤额外准备 25g， 条状"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "洋葱",
+      "sourceRecordID": "dishes/meat_dish/奶酪培根通心粉/奶酪培根通心粉.md",
+      "sourceText": "25g-40g 切成碎"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "食用油",
+      "sourceRecordID": "dishes/meat_dish/姜炒鸡/姜炒鸡.md",
+      "sourceText": "50ml（茶油最好，没有就用菜籽油）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "小米椒",
+      "sourceRecordID": "dishes/meat_dish/姜炒鸡/姜炒鸡.md",
+      "sourceText": "0-5 个 (0-50g)（根据辣口味调整）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "美人辣",
+      "sourceRecordID": "dishes/meat_dish/姜炒鸡/姜炒鸡.md",
+      "sourceText": "0-5 个 (0-50g)（没有可以用小米椒代替）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "泡椒",
+      "sourceRecordID": "dishes/meat_dish/姜炒鸡/姜炒鸡.md",
+      "sourceText": "5 个 (50g)"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "青椒",
+      "sourceRecordID": "dishes/meat_dish/孜然牛肉.md",
+      "sourceText": "用量为 2 颗/人, 每颗 100g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "小米椒",
+      "sourceRecordID": "dishes/meat_dish/孜然牛肉.md",
+      "sourceText": "用量为 3 颗/人, 每颗 5g"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "姜片",
+      "sourceRecordID": "dishes/meat_dish/宫保鸡丁/宫保鸡丁.md",
+      "sourceText": "10g"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "老抽酱油",
+      "sourceRecordID": "dishes/meat_dish/宫保鸡丁/宫保鸡丁.md",
+      "sourceText": "5g"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "花椒",
+      "sourceRecordID": "dishes/meat_dish/宫保鸡丁/宫保鸡丁.md",
+      "sourceText": "5g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大葱",
+      "sourceRecordID": "dishes/meat_dish/宫保鸡丁/宫保鸡丁.md",
+      "sourceText": "1 根（约 180g）"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "淀粉",
+      "sourceRecordID": "dishes/meat_dish/宫保鸡丁/宫保鸡丁.md",
+      "sourceText": "15g; 10g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "豆豉",
+      "sourceRecordID": "dishes/meat_dish/小炒肉.md",
+      "sourceText": "10g，根据个人口味加减 ±5g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "豆瓣酱",
+      "sourceRecordID": "dishes/meat_dish/小炒肉.md",
+      "sourceText": "10g，根据个人口味加减 ±5g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "生鸡肝",
+      "sourceRecordID": "dishes/meat_dish/小炒鸡肝/小炒鸡肝.md",
+      "sourceText": "5 个（约 800g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大葱",
+      "sourceRecordID": "dishes/meat_dish/小炒鸡肝/小炒鸡肝.md",
+      "sourceText": "150g（分成两份，一份切段 100g，一份切片 50g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "牛蛙肉",
+      "sourceRecordID": "dishes/meat_dish/尖叫牛蛙/尖叫牛蛙.md",
+      "sourceText": "块 800g （买 3 斤活蛙，建议挑小个头的，肉质鲜嫩"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "泡椒",
+      "sourceRecordID": "dishes/meat_dish/尖叫牛蛙/尖叫牛蛙.md",
+      "sourceText": "5-10 克 （看个人吃辣的承受能力，不能吃辣的建议减半为 2.5 克，微微辣"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/meat_dish/尖叫牛蛙/尖叫牛蛙.md",
+      "sourceText": "30-50 克 （可以根据口味偏好调整，最好不低于 30 克"
+    },
+    {
+      "reason": "ambiguousIngredientMatch",
+      "sourceName": "带脚、爪猪前肘: 一个（大约二斤五两",
+      "sourceRecordID": "dishes/meat_dish/带把肘子.md",
+      "sourceText": "1250 克）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡腿肉",
+      "sourceRecordID": "dishes/meat_dish/意式烤鸡.md",
+      "sourceText": "用量通常来说为 1-2 个/人"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "花椒，香叶，香果，干线椒，大蒜，大葱",
+      "sourceRecordID": "dishes/meat_dish/新疆大盘鸡/新疆大盘鸡.md",
+      "sourceText": "100g; 5 个; 4 瓣"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡肉（鸡腿肉最好），土豆，菜椒和甜椒（可以不用，加上配色好看）",
+      "sourceRecordID": "dishes/meat_dish/新疆大盘鸡/新疆大盘鸡.md",
+      "sourceText": "2 个适中大小：750g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "小米辣",
+      "sourceRecordID": "dishes/meat_dish/无骨鸡爪/无骨鸡爪.md",
+      "sourceText": "4 个少辣，6 个中辣，12 个大辣（推荐大辣"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "柠檬",
+      "sourceRecordID": "dishes/meat_dish/无骨鸡爪/无骨鸡爪.md",
+      "sourceText": "2 颗（以 1 颗为单位来调整酸度"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "洋葱或红葱头",
+      "sourceRecordID": "dishes/meat_dish/枝竹羊腩煲/枝竹羊腩煲.md",
+      "sourceText": "1 个或红葱头 4 - 5 个"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "柱候酱（核心酱），郫县豆瓣酱，南腐乳，叉烧酱（可选），蚝油， 老抽，生抽",
+      "sourceRecordID": "dishes/meat_dish/柱候牛腩/柱候牛腩.md",
+      "sourceText": "2 块; 15g; 20g; 5g; 60g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "花雕酒，白酒",
+      "sourceRecordID": "dishes/meat_dish/柱候牛腩/柱候牛腩.md",
+      "sourceText": "10g; 20g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "香叶， 花椒，八角，干辣椒，丁香，甘草，干辣椒，小米辣（可选），姜，蒜",
+      "sourceRecordID": "dishes/meat_dish/柱候牛腩/柱候牛腩.md",
+      "sourceText": "2 片; 0.5g; 2 个; 3 个（可根据口味调整用量; 3 个"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大排",
+      "sourceRecordID": "dishes/meat_dish/椒盐排条.md",
+      "sourceText": "4 块（大约 360 克"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡蛋",
+      "sourceRecordID": "dishes/meat_dish/椒盐排条.md",
+      "sourceText": "1 个 50 g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "植物油",
+      "sourceRecordID": "dishes/meat_dish/水煮肉片.md",
+      "sourceText": "280g（根据情况选择，想吃重油就多加 100g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "红泡椒",
+      "sourceRecordID": "dishes/meat_dish/水煮肉片.md",
+      "sourceText": "20g（根据受辣程度选择 0-40 g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "青花椒",
+      "sourceRecordID": "dishes/meat_dish/水煮肉片.md",
+      "sourceText": "5g（根据情况选择，想吃麻就多 5g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "菜籽油",
+      "sourceRecordID": "dishes/meat_dish/水煮肉片.md",
+      "sourceText": "200g（根据情况选择，想吃重油就多加 100g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大葱",
+      "sourceRecordID": "dishes/meat_dish/淄博烧烤/淄博烧烤.md",
+      "sourceText": "1 根（约 100g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/meat_dish/牛排/牛排.md",
+      "sourceText": "1 个（约 25-30g，实际用量约为 5-10g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "香料（可选，推荐迷迭香或者百里香，尽量使用新鲜的植物枝条而不是这些香料磨成的粉）",
+      "sourceRecordID": "dishes/meat_dish/牛排/牛排.md",
+      "sourceText": "2g（若使用新鲜百里香枝条，取 3-6 根，每根约 10cm 长即可"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "配菜（ 可选，按喜好准备，这里推荐芦笋，口蘑，小番茄，小土豆，选其中的 1-2 种即可）",
+      "sourceRecordID": "dishes/meat_dish/牛排/牛排.md",
+      "sourceText": "5-10 个; 5-10 个（每个约 20g; 5-10 个（每个约 15g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "猪肉（",
+      "sourceRecordID": "dishes/meat_dish/田螺酿/田螺酿.md",
+      "sourceText": "猪肉（250g，肥瘦比例 3:7 的前夹肉最佳）; 250g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "猪肉（",
+      "sourceRecordID": "dishes/meat_dish/田螺酿/田螺酿.md",
+      "sourceText": "猪肉（250g，肥瘦比例 3:7 的前夹肉最佳）; 250g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "生抽",
+      "sourceRecordID": "dishes/meat_dish/田螺酿/田螺酿.md",
+      "sourceText": "30ml（其中 15ml 调馅、15ml 调味汤汁"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "酸笋",
+      "sourceRecordID": "dishes/meat_dish/田螺酿/田螺酿.md",
+      "sourceText": "酸笋（可选，50g）; 50g（可选"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "酸笋",
+      "sourceRecordID": "dishes/meat_dish/田螺酿/田螺酿.md",
+      "sourceText": "酸笋（可选，50g）; 50g（可选"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/meat_dish/田螺酿/田螺酿.md",
+      "sourceText": "大蒜（可选，4-5 瓣）; 5 瓣（可选，约 20g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/meat_dish/田螺酿/田螺酿.md",
+      "sourceText": "大蒜（可选，4-5 瓣）; 5 瓣（可选，约 20g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "干辣椒",
+      "sourceRecordID": "dishes/meat_dish/田螺酿/田螺酿.md",
+      "sourceText": "干辣椒（可选，3-4 个）; 4 个（可选"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "干辣椒",
+      "sourceRecordID": "dishes/meat_dish/田螺酿/田螺酿.md",
+      "sourceText": "干辣椒（可选，3-4 个）; 4 个（可选"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "蒜苗",
+      "sourceRecordID": "dishes/meat_dish/瘦肉土豆片/瘦肉土豆片.md",
+      "sourceText": "2 根（约 20 g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "土豆 300g（或南瓜 300g，作为垫底食材）",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "土豆 300g（或南瓜 300g，作为垫底食材）"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "五花肉",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "五花肉 500g（肥瘦相间）; 250g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "五花肉",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "五花肉 500g（肥瘦相间）; 250g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "蒸肉米粉",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "蒸肉米粉 100g（推荐使用李锦记或自制）; 50g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "蒸肉米粉",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "蒸肉米粉 100g（推荐使用李锦记或自制）; 50g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "生抽",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "生抽 15ml; 7.5ml"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "生抽",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "生抽 15ml; 7.5ml"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "老抽",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "老抽 10ml; 5ml"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "老抽",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "老抽 10ml; 5ml"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "料酒",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "料酒 15ml; 7.5ml"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "料酒",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "料酒 15ml; 7.5ml"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "郫县豆瓣酱",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "郫县豆瓣酱 10g（可选）; 5g（可选"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "郫县豆瓣酱",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "郫县豆瓣酱 10g（可选）; 5g（可选"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "姜末",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "姜末 10g; 5g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "姜末",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "姜末 10g; 5g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "蒜末",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "蒜末 10g; 5g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "蒜末",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "蒜末 10g; 5g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "白砂糖",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "白砂糖 5g; 2.5g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "白砂糖",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "白砂糖 5g; 2.5g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "清水（蒸锅用）",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "清水（蒸锅用）2000ml; 水 1000ml"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "清水（蒸锅用）",
+      "sourceRecordID": "dishes/meat_dish/粉蒸肉.md",
+      "sourceText": "清水（蒸锅用）2000ml; 水 1000ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "食用油",
+      "sourceRecordID": "dishes/meat_dish/糖醋排骨/糖醋排骨.md",
+      "sourceText": "300–350 ml （油量需根据锅具大小调整，如用于深炸则以足以覆盖排骨 2/3 为准"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "冰糖",
+      "sourceRecordID": "dishes/meat_dish/红烧肉/南派红烧肉.md",
+      "sourceText": "50g（约大拇指甲盖大小的碎单晶冰糖 15 块）。如果上一步炒糖色已经使用了 50g，此处的 50g 为炖煮时二次调味使用，可根据对\"南派甜口\"的接受度调整至 30g。"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "料酒",
+      "sourceRecordID": "dishes/meat_dish/红烧肉/南派红烧肉.md",
+      "sourceText": "总量 30ml（其中 20ml 用于前期焯水去腥，10ml 用于后期炖煮提鲜"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "冰糖",
+      "sourceRecordID": "dishes/meat_dish/红烧肉/简易红烧肉.md",
+      "sourceText": "15 克（约 7 块"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/meat_dish/红烧鸡翅.md",
+      "sourceText": "3-4 瓣（约 15g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "料酒或者黄酒",
+      "sourceRecordID": "dishes/meat_dish/萝卜炖羊排.md",
+      "sourceText": "或者黄酒 30ml-40ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡腿 2 个（约 500g）",
+      "sourceRecordID": "dishes/meat_dish/葱烧鸡腿.md",
+      "sourceText": "鸡腿 2 个（约 500g）"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "大葱",
+      "sourceRecordID": "dishes/meat_dish/葱烧鸡腿.md",
+      "sourceText": "大葱 1 根; 1 根（约 100g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "大葱",
+      "sourceRecordID": "dishes/meat_dish/葱烧鸡腿.md",
+      "sourceText": "大葱 1 根; 1 根（约 100g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "小葱",
+      "sourceRecordID": "dishes/meat_dish/葱烧鸡腿.md",
+      "sourceText": "小葱 3-4 根; 3-4 根（约 30g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "小葱",
+      "sourceRecordID": "dishes/meat_dish/葱烧鸡腿.md",
+      "sourceText": "小葱 3-4 根; 3-4 根（约 30g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "五花肉薄片",
+      "sourceRecordID": "dishes/meat_dish/蒜苔炒肉末.md",
+      "sourceText": "4 片（约 20g"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "1 汤匙",
+      "sourceRecordID": "dishes/meat_dish/虎皮肘子.md",
+      "sourceText": "15ml"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "1 茶匙",
+      "sourceRecordID": "dishes/meat_dish/虎皮肘子.md",
+      "sourceText": "5ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "辣椒",
+      "sourceRecordID": "dishes/meat_dish/血浆鸭/血浆鸭.md",
+      "sourceText": "1000g（根据个人吃辣喜好程度可选青椒，线椒，美人椒等，喜欢吃辣可增加 5-8 个小米辣或朝天椒，切好备用"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "西红柿",
+      "sourceRecordID": "dishes/meat_dish/西红柿牛腩/西红柿牛腩.md",
+      "sourceText": "3-4 个（每个约 200g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "食用油",
+      "sourceRecordID": "dishes/meat_dish/豉汁排骨.md",
+      "sourceText": "20 ml（不打算淋热油为 10 ml"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "青椒的数量",
+      "sourceRecordID": "dishes/meat_dish/辣椒炒肉.md",
+      "sourceText": "份数 * 3 个。"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "肉量",
+      "sourceRecordID": "dishes/meat_dish/辣椒炒肉.md",
+      "sourceText": "份数 * 200g。"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "青椒",
+      "sourceRecordID": "dishes/meat_dish/青椒土豆炒肉/青椒土豆炒肉.md",
+      "sourceText": "2 个（共约 200g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "土豆",
+      "sourceRecordID": "dishes/meat_dish/青椒土豆炒肉/青椒土豆炒肉.md",
+      "sourceText": "2 个（共约 300g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "青椒（",
+      "sourceRecordID": "dishes/meat_dish/青椒酿/青椒酿.md",
+      "sourceText": "青椒（6-8 个，选笔直; 8 个（约 400g，选笔直肉厚的尖椒"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "青椒（",
+      "sourceRecordID": "dishes/meat_dish/青椒酿/青椒酿.md",
+      "sourceText": "青椒（6-8 个，选笔直; 8 个（约 400g，选笔直肉厚的尖椒"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "猪肉（",
+      "sourceRecordID": "dishes/meat_dish/青椒酿/青椒酿.md",
+      "sourceText": "猪肉（250g，肥瘦比例 3:7 的前夹肉最佳）; 馅 250g（肥瘦比例 3:7"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "猪肉（",
+      "sourceRecordID": "dishes/meat_dish/青椒酿/青椒酿.md",
+      "sourceText": "猪肉（250g，肥瘦比例 3:7 的前夹肉最佳）; 馅 250g（肥瘦比例 3:7"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "生抽",
+      "sourceRecordID": "dishes/meat_dish/青椒酿/青椒酿.md",
+      "sourceText": "30ml（其中 15ml 调馅，15ml 调酱汁"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/meat_dish/青椒酿/青椒酿.md",
+      "sourceText": "大蒜（可选，3-4 瓣）; 4 瓣（可选，约 15g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/meat_dish/青椒酿/青椒酿.md",
+      "sourceText": "大蒜（可选，3-4 瓣）; 4 瓣（可选，约 15g"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "肉量",
+      "sourceRecordID": "dishes/meat_dish/香干肉丝.md",
+      "sourceText": "份数 * 100g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/meat_dish/香干肉丝.md",
+      "sourceText": "份数 * 5g（大约 3 个蒜瓣）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "番茄",
+      "sourceRecordID": "dishes/meat_dish/黄油鸡.md",
+      "sourceText": "5 个（约 500g），切块"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "洋葱",
+      "sourceRecordID": "dishes/meat_dish/黄油鸡.md",
+      "sourceText": "1 个（约 100g），切块"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "生姜",
+      "sourceRecordID": "dishes/meat_dish/黄油鸡.md",
+      "sourceText": "10g，磨碎; 10g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/meat_dish/黄油鸡.md",
+      "sourceText": "4 瓣（约 12g），磨碎; 4 瓣"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "猪肉",
+      "sourceRecordID": "dishes/meat_dish/黄瓜炒肉.md",
+      "sourceText": "50 克 * 份数"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "油量",
+      "sourceRecordID": "dishes/meat_dish/黄瓜炒肉.md",
+      "sourceText": "50 克 * 份数"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "酱油",
+      "sourceRecordID": "dishes/meat_dish/黄瓜炒肉.md",
+      "sourceText": "5 克 * 份数"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "牛肉量",
+      "sourceRecordID": "dishes/meat_dish/黑椒牛柳/黑椒牛柳.md",
+      "sourceText": "份数 * 100 克 （视就餐者胃容量和锅容量酌情增减）"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "菜椒量",
+      "sourceRecordID": "dishes/meat_dish/黑椒牛柳/黑椒牛柳.md",
+      "sourceText": "份数 * 1/12 个（即 3 人时约切 1/4 ）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "黄瓜",
+      "sourceRecordID": "dishes/semi-finished/凉皮.md",
+      "sourceText": "100g/人、绿豆芽 50g/人。"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "老油 ? 颗粒香料 100 g : 整形香料 150 g",
+      "sourceRecordID": "dishes/semi-finished/牛油火锅底料.md",
+      "sourceText": "老油 ? 颗粒香料 100 g : 整形香料 150 g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "必备：羊排（推荐 JD 购买大庄园 新西兰进口 羔羊法式肩排，500g/袋共三片，JD 打折的话 42 元）",
+      "sourceRecordID": "dishes/semi-finished/空气炸锅羊排/空气炸锅羊排.md",
+      "sourceText": "必备：羊排（推荐 JD 购买大庄园 新西兰进口 羔羊法式肩排，500g/袋共三片，JD 打折的话 42 元）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "必备：鸡翅中（推荐买泰森的奥尔良鸡翅中，JD 打折的话 30 多一袋 454g 大概 12 个。上鲜和圣农的也买过，没这个方便。泰森的是腌好的，如果有时间的话可以买没腌的自己腌。）",
+      "sourceRecordID": "dishes/semi-finished/空气炸锅鸡翅中/空气炸锅鸡翅中.md",
+      "sourceText": "必备：鸡翅中（推荐买泰森的奥尔良鸡翅中，JD 打折的话 30 多一袋 454g 大概 12 个。上鲜和圣农的也买过，没这个方便。泰森的是腌好的，如果有时间的话可以买没腌的自己腌。）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "小南瓜",
+      "sourceRecordID": "dishes/soup/山药南瓜炖鸡汤.md",
+      "sourceText": "1 个（约 300 g，蒸熟后挖果肉做泥"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "胡萝卜",
+      "sourceRecordID": "dishes/soup/排骨山药玉米汤/排骨山药玉米汤.md",
+      "sourceText": "1 根（大约 150g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "食盐",
+      "sourceRecordID": "dishes/soup/排骨山药玉米汤/排骨山药玉米汤.md",
+      "sourceText": "6g - 8g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "排骨",
+      "sourceRecordID": "dishes/soup/排骨苦瓜汤/排骨苦瓜汤.md",
+      "sourceText": "250g 到 500g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "苦瓜",
+      "sourceRecordID": "dishes/soup/排骨苦瓜汤/排骨苦瓜汤.md",
+      "sourceText": "100g 到 200g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "虾皮",
+      "sourceRecordID": "dishes/soup/排骨苦瓜汤/排骨苦瓜汤.md",
+      "sourceText": "5g 到 15g"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "冷藏时间 Tc",
+      "sourceRecordID": "dishes/soup/米粥.md",
+      "sourceText": "生米体积 /10 ml/分钟。"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡蛋",
+      "sourceRecordID": "dishes/soup/西红柿鸡蛋汤.md",
+      "sourceText": "1-2 个（依照自己的口味而定，喜欢吃鸡蛋就放 2 个，一般就放 1 个"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "陈皮",
+      "sourceRecordID": "dishes/soup/陈皮排骨汤/陈皮排骨汤.md",
+      "sourceText": "一般选用 8-20 年制），一般 1 块陈皮是 3 瓣，取 1 瓣即可"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "茄子",
+      "sourceRecordID": "dishes/staple/利提巧卡.md",
+      "sourceText": "1 个（约 250g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "番茄",
+      "sourceRecordID": "dishes/staple/利提巧卡.md",
+      "sourceText": "2 个（约 180g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "土豆",
+      "sourceRecordID": "dishes/staple/利提巧卡.md",
+      "sourceText": "2 个（约 240g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "洋葱",
+      "sourceRecordID": "dishes/staple/利提巧卡.md",
+      "sourceText": "1 个（约 80g），切极细碎"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/staple/利提巧卡.md",
+      "sourceText": "4 瓣（约 12g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "青辣椒",
+      "sourceRecordID": "dishes/staple/利提巧卡.md",
+      "sourceText": "2 根，切极细碎; 1 根"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "香菜",
+      "sourceRecordID": "dishes/staple/利提巧卡.md",
+      "sourceText": "叶 10g，切碎; 叶 10g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "洋葱",
+      "sourceRecordID": "dishes/staple/印度焖饭.md",
+      "sourceText": "3 个（约 300g），切薄片"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/staple/印度焖饭.md",
+      "sourceText": "6 瓣（约 18g），磨碎"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "老抽",
+      "sourceRecordID": "dishes/staple/可乐炒饭.md",
+      "sourceText": "7.5 ml（如果使用无糖可乐，追加 5 ml，如果不使用豆瓣酱，追加 5 ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "午餐肉罐头",
+      "sourceRecordID": "dishes/staple/扬州炒饭/扬州炒饭.md",
+      "sourceText": "150g（推荐上海梅林的火腿午餐肉罐头，340g 每罐，一次用半罐"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "面粉 125g x 4",
+      "sourceRecordID": "dishes/staple/披萨饼皮/披萨饼皮.md",
+      "sourceText": "500g，"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "水 70 x 5",
+      "sourceRecordID": "dishes/staple/披萨饼皮/披萨饼皮.md",
+      "sourceText": "350g，"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "酵母粉 1 x 5",
+      "sourceRecordID": "dishes/staple/披萨饼皮/披萨饼皮.md",
+      "sourceText": "5g，"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "盐 0.6 x 5",
+      "sourceRecordID": "dishes/staple/披萨饼皮/披萨饼皮.md",
+      "sourceText": "3g，"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "糖 0.6 x 5",
+      "sourceRecordID": "dishes/staple/披萨饼皮/披萨饼皮.md",
+      "sourceText": "3g"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "白面煎饼数量",
+      "sourceRecordID": "dishes/staple/滕州菜煎饼.md",
+      "sourceText": "份数 * 2 张"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "老抽",
+      "sourceRecordID": "dishes/staple/炒河粉.md",
+      "sourceText": "/生抽，分别为每 250g 河粉 10ml/15ml。"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "黄瓜",
+      "sourceRecordID": "dishes/staple/炒河粉.md",
+      "sourceText": "丝 30g/人、面筋块 30g/人、绿豆芽 30g/人、打碎的鸡蛋 1 个/人。"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "淀粉",
+      "sourceRecordID": "dishes/staple/炒河粉.md",
+      "sourceText": "可准备每 100g 肉+5g 淀粉比例准备。"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "热水",
+      "sourceRecordID": "dishes/staple/烙饼/烙饼.md",
+      "sourceText": "130ml（80 度）"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "冷水",
+      "sourceRecordID": "dishes/staple/烙饼/烙饼.md",
+      "sourceText": "130ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡腿",
+      "sourceRecordID": "dishes/staple/照烧鸡腿饭.md",
+      "sourceText": "500 g（约 3 只"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "猪油",
+      "sourceRecordID": "dishes/staple/猪油拌饭.md",
+      "sourceText": "15 g（添加蚝油时，减少到 10 g; 渣 5 g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "江南米或北方大米",
+      "sourceRecordID": "dishes/staple/米饭/电饭煲蒸米饭.md",
+      "sourceText": "，米和水放在电饭煲的容器内，食指触及米时，水量能刚好没过食指的第一个指节又第二个指节 1/4 处（即大约 2.6 厘米）。; ，米和水放在电饭煲的容器内，食指触及米，水量能刚好没过食指的第一个指节（即大约 2 厘米处）。"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "洋葱",
+      "sourceRecordID": "dishes/staple/红芸豆拌饭.md",
+      "sourceText": "2 个（约 200g），切碎"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "番茄",
+      "sourceRecordID": "dishes/staple/红芸豆拌饭.md",
+      "sourceText": "3 个（约 300g），切碎（或番茄酱 30ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/staple/红芸豆拌饭.md",
+      "sourceText": "4 瓣（约 12g），磨碎"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "干面条",
+      "sourceRecordID": "dishes/staple/葱油拌面.md",
+      "sourceText": "80 g （约相当于 150 g 湿面条"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "生抽，老抽，料酒，盐，五香粉",
+      "sourceRecordID": "dishes/staple/蒸卤面.md",
+      "sourceText": "5g; 15ml; 10ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "挂面或者鲜面条也行",
+      "sourceRecordID": "dishes/staple/西红柿鸡蛋挂面/西红柿鸡蛋挂面.md",
+      "sourceText": "1 把（根据食量来）50-100g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "酱油、蚝油或者鸡精",
+      "sourceRecordID": "dishes/staple/西红柿鸡蛋挂面/西红柿鸡蛋挂面.md",
+      "sourceText": "5g 或鸡精 3g; 5-8g"
+    },
+    {
+      "reason": "ambiguousIngredientMatch",
+      "sourceName": "酱油 : 醋 : 油泼辣子",
+      "sourceRecordID": "dishes/staple/酸辣蕨根粉.md",
+      "sourceText": "3 : 2 : 2 （酱料具体量根据蕨根粉多少决定，这个比例仅为保证口味的方向不出错）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "米饭",
+      "sourceRecordID": "dishes/staple/韩式拌饭/韩式拌饭.md",
+      "sourceText": "1 碗 (400g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "豆芽",
+      "sourceRecordID": "dishes/staple/韩式拌饭/韩式拌饭.md",
+      "sourceText": "1 把 80g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "烧卖皮",
+      "sourceRecordID": "dishes/staple/鲜肉烧卖.md",
+      "sourceText": "240-465 g（约 24-31 张，建议用每张 10g 的烧卖皮 30 张"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "高汤或浓汤宝",
+      "sourceRecordID": "dishes/staple/鲜肉烧卖.md",
+      "sourceText": "30 mL; 6 g（建议家乐牌，约 1/8 块"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "香菇（或干香菇泡发，可选）",
+      "sourceRecordID": "dishes/staple/鲜肉烧卖.md",
+      "sourceText": "75 g（或干香菇 30 g 泡发"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "必备：东北米（金龙鱼 30 元 5kg 的就行，推荐使用米家 IH 电饭煲煮，教程用的是米家小饭煲，不推荐使用高压锅煮饭）",
+      "sourceRecordID": "dishes/staple/鲣鱼海苔玉米饭/鲣鱼海苔玉米饭.md",
+      "sourceText": "必备：东北米（金龙鱼 30 元 5kg 的就行，推荐使用米家 IH 电饭煲煮，教程用的是米家小饭煲，不推荐使用高压锅煮饭）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "洋葱",
+      "sourceRecordID": "dishes/staple/鹰嘴豆炸饼.md",
+      "sourceText": "2 个（约 200g），切碎"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "番茄",
+      "sourceRecordID": "dishes/staple/鹰嘴豆炸饼.md",
+      "sourceText": "3 个（约 300g），切碎"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/staple/鹰嘴豆炸饼.md",
+      "sourceText": "4 瓣（约 12g），磨碎"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "食用油",
+      "sourceRecordID": "dishes/staple/鹰嘴豆炸饼.md",
+      "sourceText": "30ml; 15ml（和面用; 500ml（炸饼用"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "娃娃菜",
+      "sourceRecordID": "dishes/staple/麻辣减脂荞麦面.md",
+      "sourceText": "8 片（共 150g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "生菜",
+      "sourceRecordID": "dishes/staple/麻辣减脂荞麦面.md",
+      "sourceText": "6 片（共 80g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "酱油",
+      "sourceRecordID": "dishes/vegetable_dish/凉拌黄瓜.md",
+      "sourceText": "5 ml + 2.5 ml * 份数"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "土豆",
+      "sourceRecordID": "dishes/vegetable_dish/印度土豆花菜.md",
+      "sourceText": "2 个（约 250g），去皮切块（约 2cm 大小"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "洋葱",
+      "sourceRecordID": "dishes/vegetable_dish/印度土豆花菜.md",
+      "sourceText": "1 个（约 100g），切碎"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "番茄",
+      "sourceRecordID": "dishes/vegetable_dish/印度土豆花菜.md",
+      "sourceText": "1 个（约 100g），切碎"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/vegetable_dish/印度土豆花菜.md",
+      "sourceText": "3 瓣（约 9g），切碎"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "瓠瓜（葫芦）",
+      "sourceRecordID": "dishes/vegetable_dish/印度葫芦丸子.md",
+      "sourceText": "1 根（约 400g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "洋葱",
+      "sourceRecordID": "dishes/vegetable_dish/印度葫芦丸子.md",
+      "sourceText": "2 个（约 200g），切碎"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "番茄",
+      "sourceRecordID": "dishes/vegetable_dish/印度葫芦丸子.md",
+      "sourceText": "3 个（约 300g），切碎"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/vegetable_dish/印度葫芦丸子.md",
+      "sourceText": "4 瓣（约 12g），磨碎"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "香菜",
+      "sourceRecordID": "dishes/vegetable_dish/印度葫芦丸子.md",
+      "sourceText": "粉 3g; 粉 5g; 叶（装饰用）10g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "红辣椒粉",
+      "sourceRecordID": "dishes/vegetable_dish/印度葫芦丸子.md",
+      "sourceText": "3g; 5g"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "食用油",
+      "sourceRecordID": "dishes/vegetable_dish/印度葫芦丸子.md",
+      "sourceText": "炸丸子用）500ml; 30ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "青椒",
+      "sourceRecordID": "dishes/vegetable_dish/家常日本豆腐.md",
+      "sourceText": "120 g（中等大小 1 个"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "生抽",
+      "sourceRecordID": "dishes/vegetable_dish/家常日本豆腐.md",
+      "sourceText": "生抽 8 ml; 8 ml"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "生抽",
+      "sourceRecordID": "dishes/vegetable_dish/家常日本豆腐.md",
+      "sourceText": "生抽 8 ml; 8 ml"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "蚝油",
+      "sourceRecordID": "dishes/vegetable_dish/家常日本豆腐.md",
+      "sourceText": "蚝油 15 ml; 15 ml"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "蚝油",
+      "sourceRecordID": "dishes/vegetable_dish/家常日本豆腐.md",
+      "sourceText": "蚝油 15 ml; 15 ml"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "叶菜类蔬菜",
+      "sourceRecordID": "dishes/vegetable_dish/水油焖蔬菜.md",
+      "sourceText": "300g ~ 500g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "小米辣",
+      "sourceRecordID": "dishes/vegetable_dish/油醋爆蛋.md",
+      "sourceText": "10 g（约 3 个"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡蛋",
+      "sourceRecordID": "dishes/vegetable_dish/炸洋葱花/炸洋葱花.md",
+      "sourceText": "1 个（约 50g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "低筋面粉",
+      "sourceRecordID": "dishes/vegetable_dish/炸洋葱花/炸洋葱花.md",
+      "sourceText": "120g（其中 40g 用于第一次拍粉"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "茄子",
+      "sourceRecordID": "dishes/vegetable_dish/烤茄子/烤茄子.md",
+      "sourceText": "1 个 （大约 200g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "西红柿",
+      "sourceRecordID": "dishes/vegetable_dish/糖拌西红柿/糖拌西红柿.md",
+      "sourceText": "2 个（每个西红柿约 100g，共 200g"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "辣椒量",
+      "sourceRecordID": "dishes/vegetable_dish/茄子炖土豆.md",
+      "sourceText": "50 克（调味，所以无论多少人都放这些。）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "茄子",
+      "sourceRecordID": "dishes/vegetable_dish/茄子炖土豆.md",
+      "sourceText": "份数 * 1 个 （每个茄子约 150g）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "土豆",
+      "sourceRecordID": "dishes/vegetable_dish/茄子炖土豆.md",
+      "sourceText": "份数 * 1 个（每个土豆约 150g）"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "蒜",
+      "sourceRecordID": "dishes/vegetable_dish/茄子炖土豆.md",
+      "sourceText": "3 瓣（调味，所以无论多少人都放这些。注意是里面的小瓣 3 瓣，而不是3整头）"
+    },
+    {
+      "reason": "unmatchedIngredientName",
+      "sourceName": "辣椒的数量",
+      "sourceRecordID": "dishes/vegetable_dish/葱煎豆腐.md",
+      "sourceText": "1.5 只/三人。"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "西兰花",
+      "sourceRecordID": "dishes/vegetable_dish/蒜蓉西兰花.md",
+      "sourceText": "西兰花 1 个; 约 200 g （约 1/2 中等大小的西兰花"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "西兰花",
+      "sourceRecordID": "dishes/vegetable_dish/蒜蓉西兰花.md",
+      "sourceText": "西兰花 1 个; 约 200 g （约 1/2 中等大小的西兰花"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/vegetable_dish/蒜蓉西兰花.md",
+      "sourceText": "大蒜 3-4 瓣; 3-4 瓣"
+    },
+    {
+      "reason": "multipleSourceQuantityLines",
+      "sourceName": "大蒜",
+      "sourceRecordID": "dishes/vegetable_dish/蒜蓉西兰花.md",
+      "sourceText": "大蒜 3-4 瓣; 3-4 瓣"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "西红柿",
+      "sourceRecordID": "dishes/vegetable_dish/西红柿炒鸡蛋.md",
+      "sourceText": "1 个（约 180g） * 份数"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "盐",
+      "sourceRecordID": "dishes/vegetable_dish/西红柿炒鸡蛋.md",
+      "sourceText": "1.5-2g * 份数"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "糖（可选）",
+      "sourceRecordID": "dishes/vegetable_dish/西红柿炒鸡蛋.md",
+      "sourceText": "0-2g * 份数"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "葱花（可选）",
+      "sourceRecordID": "dishes/vegetable_dish/西红柿炒鸡蛋.md",
+      "sourceText": "0-10g * 份数"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "小米辣",
+      "sourceRecordID": "dishes/vegetable_dish/金钱蛋.md",
+      "sourceText": "6-15 g（约 2-5 个"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "小葱",
+      "sourceRecordID": "dishes/vegetable_dish/金钱蛋.md",
+      "sourceText": "3 g（约 1-2 根"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "黄瓜",
+      "sourceRecordID": "dishes/vegetable_dish/鸡蛋火腿炒黄瓜.md",
+      "sourceText": "1 根（约 200g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "火腿肠",
+      "sourceRecordID": "dishes/vegetable_dish/鸡蛋火腿炒黄瓜.md",
+      "sourceText": "1 根（约 40g"
+    },
+    {
+      "reason": "ambiguousQuantityExpression",
+      "sourceName": "鸡蛋",
+      "sourceRecordID": "dishes/vegetable_dish/鸡蛋花/鸡蛋花.md",
+      "sourceText": "1 个 （去壳后约 50 g"
+    }
+  ],
+  "rejectedCount": 7,
+  "rejections": [
+    {
+      "reason": "fewerThanTwoIngredientRows",
+      "sourceRecordID": "dishes/breakfast/空气炸锅面包片.md"
+    },
+    {
+      "reason": "fewerThanTwoIngredientRows",
+      "sourceRecordID": "dishes/semi-finished/炸薯条/炸薯条.md"
+    },
+    {
+      "reason": "fewerThanTwoIngredientRows",
+      "sourceRecordID": "dishes/semi-finished/速冻水饺.md"
+    },
+    {
+      "reason": "fewerThanTwoIngredientRows",
+      "sourceRecordID": "dishes/semi-finished/速冻汤圆/速冻汤圆.md"
+    },
+    {
+      "reason": "unsupportedCategory",
+      "sourceRecordID": "dishes/template/示例菜/示例菜.md"
+    },
+    {
+      "reason": "fewerThanTwoIngredientRows",
+      "sourceRecordID": "dishes/vegetable_dish/清蒸南瓜.md"
+    },
+    {
+      "reason": "fewerThanTwoIngredientRows",
+      "sourceRecordID": "dishes/vegetable_dish/炒青菜.md"
+    }
+  ],
+  "reviewRowCount": 112,
+  "reviewRows": [
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/aquatic/水煮鱼.md",
+      "sourceText": "量杯"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/aquatic/糖醋鲤鱼/糖醋鲤鱼.md",
+      "sourceText": "盆（两个）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/aquatic/糖醋鲤鱼/糖醋鲤鱼.md",
+      "sourceText": "菜刀一个"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/aquatic/糖醋鲤鱼/糖醋鲤鱼.md",
+      "sourceText": "笊篱一个"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/aquatic/糖醋鲤鱼/糖醋鲤鱼.md",
+      "sourceText": "锅铲一个"
+    },
+    {
+      "reason": "instructionOrNote",
+      "sourceRecordID": "dishes/aquatic/红烧鱼头.md",
+      "sourceText": "注：如果有可能，尽量另准备一把菜刀，超市或市场上均有廉价且刀片更厚的菜刀，刀片厚度在 5-7mm 为最佳。"
+    },
+    {
+      "reason": "instructionOrNote",
+      "sourceRecordID": "dishes/aquatic/红烧鱼头.md",
+      "sourceText": "注：市场直接贩卖的鱼头一般分为两种：白鲢、花鲢。前者价格便宜，后者价格略贵，但口感也更佳！"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/aquatic/葱油桂鱼/葱油桂鱼.md",
+      "sourceText": "砧板"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/aquatic/葱油桂鱼/葱油桂鱼.md",
+      "sourceText": "一次性手套"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/aquatic/葱油桂鱼/葱油桂鱼.md",
+      "sourceText": "菜刀"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/aquatic/蒜香黄油虾/蒜香黄油虾.md",
+      "sourceText": "平底煎锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/breakfast/太阳蛋.md",
+      "sourceText": "分可控火候微波炉或不可控火候微波炉（定义和分辨方式请见附加内容）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/breakfast/微波炉蒸蛋.md",
+      "sourceText": "保鲜膜或微波炉专用盖"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/breakfast/微波炉蛋糕.md",
+      "sourceText": "微波炉"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/breakfast/微波炉蛋糕.md",
+      "sourceText": "能放进微波炉的容器"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/breakfast/意式香肠北非蛋.md",
+      "sourceText": "宽口平底锅（带锅盖）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/breakfast/空气炸锅面包片.md",
+      "sourceText": "空气炸锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/breakfast/苏格兰蛋/苏格兰蛋.md",
+      "sourceText": "空气炸锅或者油锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/breakfast/蒸水蛋.md",
+      "sourceText": "锡纸或保鲜膜"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/condiment/草莓酱/草莓酱.md",
+      "sourceText": "保鲜膜"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/condiment/蔗糖糖浆/蔗糖糖浆.md",
+      "sourceText": "可密封容器（建议使用高硼硅试剂瓶，便宜）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/奥利奥冰淇淋/奥利奥冰淇淋.md",
+      "sourceText": "电动打蛋器"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/奥利奥冰淇淋/奥利奥冰淇淋.md",
+      "sourceText": "一个容量在 600 毫升以上且直径小（PS: 需要注意能放得下电动打蛋仪）深度深的容器（如准备了冰淇淋模具 容器需要有尖嘴方便转移）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/戚风蛋糕/戚风蛋糕.md",
+      "sourceText": "烤箱（电饭锅可替代，但大多情况下由于锅胆材质问题易失败）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/戚风蛋糕/戚风蛋糕.md",
+      "sourceText": "打蛋器（电动最好，手动费力且有一定失败概率）或筷子（非常不推荐）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/提拉米苏/提拉米苏.md",
+      "sourceText": "一个装成品的容器（这里用的是玻璃乐扣）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/提拉米苏/提拉米苏.md",
+      "sourceText": "打蛋器（手劲儿大的朋友也可以锻炼臂力）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/炸鲜奶/炸鲜奶.md",
+      "sourceText": "大约 20cm × 15cm 的耐热方形容器"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/烤蛋挞/烤蛋挞.md",
+      "sourceText": "烤箱 大小不限"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/烤蛋挞/烤蛋挞.md",
+      "sourceText": "搅拌器 包含且不限于筷子 打蛋器等工具"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/烤蛋挞/烤蛋挞.md",
+      "sourceText": "筛网 网孔约为 1 毫米"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/玛格丽特饼干/玛格丽特饼干.md",
+      "sourceText": "烤箱"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/红柚蛋糕/红柚蛋糕.md",
+      "sourceText": "空气炸锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/红柚蛋糕/红柚蛋糕.md",
+      "sourceText": "锡纸盘"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/芋泥雪媚娘/芋泥雪媚娘.md",
+      "sourceText": "料理搅拌机（电动打蛋器也可以）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/芋泥雪媚娘/芋泥雪媚娘.md",
+      "sourceText": "筛网"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/芋泥雪媚娘/芋泥雪媚娘.md",
+      "sourceText": "保鲜膜"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/酸奶意式奶冻/酸奶意式奶冻.md",
+      "sourceText": "筛网"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/雪花酥/雪花酥.md",
+      "sourceText": "不粘平底锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/雪花酥/雪花酥.md",
+      "sourceText": "一次性塑料手套"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/魔芋蛋糕/魔芋蛋糕.md",
+      "sourceText": "烤箱"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/魔芋蛋糕/魔芋蛋糕.md",
+      "sourceText": "电动打蛋器"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/魔芋蛋糕/魔芋蛋糕.md",
+      "sourceText": "烘焙纸"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/dessert/魔芋蛋糕/魔芋蛋糕.md",
+      "sourceText": "隔热手套"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/drink/冬瓜茶.md",
+      "sourceText": "保鲜膜"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/drink/泰国手标红茶/泰国手标红茶.md",
+      "sourceText": "带刻度容器"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/drink/牛油果拉西.md",
+      "sourceText": "搅拌机（破壁机/榨汁机）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/drink/耙耙柑茶/耙耙柑茶.md",
+      "sourceText": "搅拌机"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/drink/酒酿醪糟/酒酿醪糟.md",
+      "sourceText": "蒸锅（电饭煲即可）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/drink/酒酿醪糟/酒酿醪糟.md",
+      "sourceText": "干净密封玻璃或陶瓷容器 1 个"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/乡村啤酒鸭.md",
+      "sourceText": "32 厘米以上的炒锅一个(锅太小难炒"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/卤菜/卤菜.md",
+      "sourceText": "高压锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/奥尔良风味烤鸡腿/奥尔良风味烤鸡腿.md",
+      "sourceText": "烤箱"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/奥尔良风味烤鸡腿/奥尔良风味烤鸡腿.md",
+      "sourceText": "烤盘"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/巴基斯坦牛肉咖喱/巴基斯坦牛肉咖喱.md",
+      "sourceText": "普通的炒锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/柱候牛腩/柱候牛腩.md",
+      "sourceText": "炖煮锅，高压锅（可选，但极度推荐！）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/淄博烧烤/淄博烧烤.md",
+      "sourceText": "烤网"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/烤鸡翅.md",
+      "sourceText": "烤箱"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/煎烤羊排/煎烤羊排.md",
+      "sourceText": "高压锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/煎烤羊排/煎烤羊排.md",
+      "sourceText": "炒锅 / 煎锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/牛排/牛排.md",
+      "sourceText": "平底锅（有条件的推荐铸铁平底锅）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/甜辣烤全翅.md",
+      "sourceText": "空气炸锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/甜辣烤全翅.md",
+      "sourceText": "锡纸盘"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/甜辣烤全翅.md",
+      "sourceText": "保鲜膜"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/空气炸锅脆皮现腌炸鸡/空气炸锅脆皮现腌炸鸡.md",
+      "sourceText": "空气炸锅"
+    },
+    {
+      "reason": "instructionOrNote",
+      "sourceRecordID": "dishes/meat_dish/红烧肉/南派红烧肉.md",
+      "sourceText": "注：如果有可能，请尽量把刀磨的锋利一些。"
+    },
+    {
+      "reason": "explicitToolLine",
+      "sourceRecordID": "dishes/meat_dish/红烧肉/南派红烧肉.md",
+      "sourceText": "工具：锅（砂锅为宜，铝锅其次，高压锅也可以，最好不要铁锅、铜锅）"
+    },
+    {
+      "reason": "instructionOrNote",
+      "sourceRecordID": "dishes/meat_dish/红烧肉/简易红烧肉.md",
+      "sourceText": "注：如果有可能，请尽量把刀磨的锋利一些。"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/西红柿牛腩/西红柿牛腩.md",
+      "sourceText": "高压锅/砂锅/普通铝锅（铁锅）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/豉汁蒸白鱔/豉汁蒸白鱔.md",
+      "sourceText": "蒸锅或电蒸炉"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/豉汁蒸白鱔/豉汁蒸白鱔.md",
+      "sourceText": "刀和砧板"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/黄油鸡.md",
+      "sourceText": "炒锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/meat_dish/黄油鸡.md",
+      "sourceText": "搅拌机/料理机"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/semi-finished/凉皮.md",
+      "sourceText": "盆"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/semi-finished/凉皮.md",
+      "sourceText": "碗"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/semi-finished/半成品意面.md",
+      "sourceText": "平底锅 或 微波炉"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/semi-finished/懒人蛋挞/懒人蛋挞.md",
+      "sourceText": "需要烤箱 1 个（有上下火功能的最佳，也可以没有）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/semi-finished/懒人蛋挞/懒人蛋挞.md",
+      "sourceText": "隔热手套 1 双"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/semi-finished/炸薯条/炸薯条.md",
+      "sourceText": "1 个空气炸锅（喜欢脆的切忌小牌子）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/semi-finished/空气炸锅羊排/空气炸锅羊排.md",
+      "sourceText": "可选：空气炸锅烤架（用烤架油比较少，底下更容易熟，洗起来麻烦。不用的话比较入味。看个人选择啦）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/semi-finished/速冻汤圆/速冻汤圆.md",
+      "sourceText": "微波炉"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/soup/排骨山药玉米汤/排骨山药玉米汤.md",
+      "sourceText": "砂锅或深汤锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/soup/排骨苦瓜汤/排骨苦瓜汤.md",
+      "sourceText": "砂锅（相比于炒锅更适合炖汤）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/soup/玉米排骨汤/玉米排骨汤.md",
+      "sourceText": "砂锅（没有的话，用铁锅也行）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/soup/皮蛋瘦肉粥.md",
+      "sourceText": "电饭锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/soup/菌菇炖乳鸽/菌菇炖乳鸽.md",
+      "sourceText": "瓦罐或者高压锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/中式馅饼/中式馅饼.md",
+      "sourceText": "平底锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/中式馅饼/中式馅饼.md",
+      "sourceText": "炒锅（可以使用同一个平底锅替代）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/利提巧卡.md",
+      "sourceText": "烤箱或明火"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/印度烤饼.md",
+      "sourceText": "平底锅（不粘锅或铸铁锅）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/基础牛奶面包/基础牛奶面包.md",
+      "sourceText": "烤箱 *（不要使用不带控温的烤箱）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/基础牛奶面包/基础牛奶面包.md",
+      "sourceText": "量杯"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/基础牛奶面包/基础牛奶面包.md",
+      "sourceText": "硅油纸或模具"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/微波炉腊肠煲仔饭/微波炉腊肠煲仔饭.md",
+      "sourceText": "微波炉"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/披萨饼皮/披萨饼皮.md",
+      "sourceText": "烤箱"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/披萨饼皮/披萨饼皮.md",
+      "sourceText": "烘焙油纸"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/河南蒸面条/河南蒸面条.md",
+      "sourceText": "油 + 锅 + 菜刀 + 铲子"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/炒河粉.md",
+      "sourceText": "盆"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/米饭/煮锅蒸米饭.md",
+      "sourceText": "厚底煮锅+严丝合缝的锅盖（制作过程中不会有大量蒸汽泄漏）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/红芸豆拌饭.md",
+      "sourceText": "高压锅（推荐）或普通汤锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/蒸卤面.md",
+      "sourceText": "蒸锅，需带笼屉"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/蒸卤面.md",
+      "sourceText": "炒锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/豆角焖面/豆角焖面.md",
+      "sourceText": "菜刀"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/陕西油泼面/陕西油泼面.md",
+      "sourceText": "锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/staple/鲜肉烧卖.md",
+      "sourceText": "带孔硅油纸，传统上用草垫，现在更多用带孔硅油纸）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/vegetable_dish/印度土豆花菜.md",
+      "sourceText": "炒锅（带盖）"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/vegetable_dish/印度葫芦丸子.md",
+      "sourceText": "深锅或炒锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/vegetable_dish/椒盐玉米/椒盐玉米.md",
+      "sourceText": "若干吸油纸"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/vegetable_dish/清蒸南瓜.md",
+      "sourceText": "蒸锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/vegetable_dish/脆皮豆腐.md",
+      "sourceText": "平底锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/vegetable_dish/葱煎豆腐.md",
+      "sourceText": "平底锅"
+    },
+    {
+      "reason": "recognizedEquipmentTerm",
+      "sourceRecordID": "dishes/vegetable_dish/蒜蓉空心菜/蒜蓉空心菜.md",
+      "sourceText": "筷子"
+    }
+  ],
+  "scannedCount": 373,
+  "schemaVersion": 1,
+  "sourceID": "anduin-howtocook",
+  "sourceVersion": "5fb3140c20b2a713296696dc6fdd3b83ccc617a6",
+  "status": "PASS"
+}

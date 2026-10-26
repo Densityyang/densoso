@@ -75,32 +75,39 @@ struct PendingActionConfirmationCard: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             if case .meal(let meal) = action.payload {
+                if let consumedFraction = meal.consumedFractionEvidence {
+                    Text("按你本轮明确报告的约 \(Int((consumedFraction.fraction * 100).rounded()))% 摄入比例计算")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 8) {
-                    if let presentation = meal.caloriePresentation {
-                        Text("约 \(presentation.likelyKcal) kcal · 可信度\(presentation.confidence.displayName)")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    Text("区间详情：\(rangeText(meal.totalNutrients?.energyKcal, unit: "kcal"))")
-                    Text("蛋白质：\(rangeText(meal.totalNutrients?.proteinGrams, unit: "g")) · 脂肪：\(rangeText(meal.totalNutrients?.fatGrams, unit: "g")) · 碳水：\(rangeText(meal.totalNutrients?.carbohydrateGrams, unit: "g"))")
-                    ForEach(meal.dishes) { dish in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(dish.name).font(.subheadline.weight(.semibold))
-                            if let portion = dish.portionGrams {
-                                Text("份量约 \(rangeText(portion, unit: "g"))")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            ForEach(dish.evidence.indices, id: \.self) { index in
-                                let evidence = dish.evidence[index]
-                                Text("\(evidence.grade.rawValue)：\(evidence.summary)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                    DisclosureGroup("营养素与估算详情") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("热量区间：\(rangeText(meal.totalNutrients?.energyKcal, unit: "kcal"))")
+                            Text("蛋白质：\(rangeText(meal.totalNutrients?.proteinGrams, unit: "g")) · 脂肪：\(rangeText(meal.totalNutrients?.fatGrams, unit: "g")) · 碳水：\(rangeText(meal.totalNutrients?.carbohydrateGrams, unit: "g"))")
+                            ForEach(meal.dishes) { dish in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(dish.name).font(.subheadline.weight(.semibold))
+                                    if let portion = dish.portionGrams {
+                                        let portionLabel = meal.consumedFractionEvidence == nil
+                                            ? "份量估计"
+                                            : "摄入份量估计"
+                                        Text("\(portionLabel)：\(rangeText(portion, unit: "g"))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    ForEach(dish.evidence.indices, id: \.self) { index in
+                                        let evidence = dish.evidence[index]
+                                        Text("\(evidence.grade.rawValue)：\(evidence.summary)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.top, 4)
                             }
                         }
-                        .padding(.top, 4)
                     }
                 }
-                .font(.caption)
             }
             if case .trainingPlan(let plan) = action.payload {
                 VStack(alignment: .leading, spacing: 8) {

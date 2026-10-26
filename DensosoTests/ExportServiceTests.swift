@@ -5,6 +5,46 @@ import XCTest
 
 @MainActor
 final class ExportServiceTests: XCTestCase {
+    func testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied() async throws {
+        let (sourceContainer, source) = try makeContext()
+        let sourceGovernance = SwiftDataProviderGovernanceRepository(modelContainer: sourceContainer)
+        let policyVersionSentinel = "PRIVATE-CLOUD-POLICY-SENTINEL"
+        for provider in [ProviderID.deepSeek, .qwen] {
+            for dataClass in CloudHealthContextPolicy.dataClasses {
+                try await sourceGovernance.setConsent(
+                    provider: provider,
+                    dataClass: dataClass,
+                    granted: true,
+                    policyVersion: policyVersionSentinel
+                )
+            }
+        }
+
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let backupText = String(decoding: try Data(contentsOf: backupURL), as: UTF8.self)
+        XCTAssertFalse(backupText.contains("ConsentRecord"))
+        XCTAssertFalse(backupText.contains("consentKey"))
+        XCTAssertFalse(backupText.contains(policyVersionSentinel))
+
+        let (targetContainer, target) = try makeContext()
+        _ = try await service.restoreJSON(url: backupURL, context: target)
+        let restoredGovernance = SwiftDataProviderGovernanceRepository(modelContainer: targetContainer)
+        for provider in [ProviderID.deepSeek, .qwen] {
+            for dataClass in CloudHealthContextPolicy.dataClasses {
+                let isGranted = try await restoredGovernance.isConsentGranted(
+                    provider: provider,
+                    dataClass: dataClass
+                )
+                XCTAssertFalse(
+                    isGranted,
+                    "A backup restore without a cloud policy must leave \(provider.rawValue)/\(dataClass.rawValue) denied"
+                )
+            }
+        }
+    }
+
     func testBackupExportPagesMealHistoryAcross64RowBoundary() async throws {
         let (container, source) = try makeContext()
         _ = container
@@ -723,6 +763,7 @@ final class ExportServiceTests: XCTestCase {
             ScheduleEvent.self, WeightRecord.self, ProfileRevisionRecord.self, GoalProfileRecord.self, DailyHealthSnapshotRecord.self,
             DailyBriefRecord.self, WeeklyBriefRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
             AgentRequestRecord.self, DailyCheckInRecord.self, UserPreferenceRecord.self,
+            ConsentRecord.self,
             PendingActionRecord.self, CommittedActionReceiptRecord.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )

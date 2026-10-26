@@ -386,7 +386,7 @@ public protocol HealthStoreClient: Sendable {
     func requestAuthorization(_ scope: HealthAuthorizationScope) async throws
     func aggregate(_ request: HealthAggregateRequest) async throws -> [HealthAggregateBucket]
     func samples(_ request: HealthSampleRequest) async throws -> HealthSamplePage
-    func workoutChanges(after anchor: Data?) async throws -> HealthChangePage<WorkoutSnapshot>
+    func workoutChanges(from startDate: Date, after anchor: Data?) async throws -> HealthChangePage<WorkoutSnapshot>
     func save(_ command: HealthWriteCommand) async throws -> HealthWriteReceipt
     func deleteOwnSample(receipt: HealthWriteReceipt) async throws
     func enableBackgroundDelivery(for streams: Set<HealthMetricID>) async throws

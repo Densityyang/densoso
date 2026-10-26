@@ -38,7 +38,7 @@ def main() -> int:
             "protocol HealthStoreClient: Sendable",
             "func aggregate(_ request: HealthAggregateRequest)",
             "func samples(_ request: HealthSampleRequest)",
-            "func workoutChanges(after anchor: Data?)",
+            "func workoutChanges(from startDate: Date, after anchor: Data?)",
             "func save(_ command: HealthWriteCommand)",
             "func deleteOwnSample(receipt: HealthWriteReceipt)",
             "func enableBackgroundDelivery(for streams: Set<HealthMetricID>)",
@@ -149,6 +149,11 @@ def main() -> int:
             "applyImportedHealthSamples",
             "applyHealthAggregates",
             "resetHealthKitCursors",
+            "maskCachedHealthDataBeforeAuthorizationBoundary",
+            "private func maskCachedHealthSnapshots(",
+            "private func removeImportedWorkouts(",
+            "private func removeImportedHealthKitWeights(",
+            "private func addDailyMetricDates(",
             "func update(_ meal: MealRecord)",
             "func update(_ weight: WeightRecord",
             "func delete(_ weight: WeightRecord)",
@@ -186,6 +191,8 @@ def main() -> int:
             "SortDescriptor(\\WeightRecord.id, order: .reverse)",
             "record.id != excludedID",
             "pendingDayKeysJSON",
+            "func changedHealthSampleDays(for page: HealthSamplePage, stream: String)",
+            "func pendingHealthSampleDays(stream: String)",
             "record.isTombstoned",
             "availableDayKeys",
             "let bucketsByDay = Dictionary(",
@@ -234,21 +241,131 @@ def main() -> int:
         errors,
     )
 
+    window_policy = require_text(
+        "Densoso/Application/Health/HealthDataWindowPolicy.swift",
+        (
+            "static let analysisLookbackDays = 42",
+            "static let initialBackfillDays = 42",
+            "static let subjectiveCheckInLookbackDays = 7",
+            "static func analysisStart(",
+            "static func initialBackfillStart(",
+            "static func effectiveStart(",
+            "return max(policyStart, authorizationStart)",
+            "static func firstFullyAuthorizedDay(",
+            "static func requiresRebaseline(",
+            "protocol HealthAuthorizationBoundaryProviding: Sendable",
+        ),
+        errors,
+    )
     sync_coordinator = require_text(
         "Densoso/Application/Health/HealthKitSyncCoordinator.swift",
         (
-            "lookbackStart", "endDate: .distantFuture", "forceRebaseline", "value: -30",
+            "lookbackStart", "endDate: .distantFuture", "forceRebaseline",
             "failedStreams[metric]", "completedStreams.insert(metric)",
             "onObserverSyncCompleted", "self.onObserverSyncCompleted?()",
             "repository.affectedHealthSampleDays(for: page, stream: stream)",
             "requerySampleDays(",
             "private func requerySampleDays(",
-            "replacements: replacements",
+            "HealthDataWindowPolicy.initialBackfillStart",
+            "HealthDataWindowPolicy.effectiveStart",
+            "HealthDataWindowPolicy.requiresRebaseline",
+            "maskCachedHealthDataIfNeeded(",
+            "markHealthWindowUnknown(",
+            "changedHealthSampleDays(for: allowedPage, stream: stream)",
+            "pendingHealthSampleDays(stream: stream)",
+            "let start = min(cursor?.lookbackStart ?? plan.queryStart, plan.queryStart)",
+            "A failed authorization-boundary lookup cannot prove that cached",
+            "requiresRebaseline = true",
+            "anchorData: anchor",
+            "cursorStart: cursor?.lookbackStart",
+            "days: workoutDaysBeforeAuthorization(plan: plan, through: now)",
+            "sampleDaysBeforeAuthorization(metric: metric, plan: plan, through: now)",
+            "bucketsWithAuthorizationUnknowns(",
+            "setHealthReadState(",
+            "workoutChanges(from: start, after: anchor)",
+        ),
+        errors,
+    )
+    require_text(
+        "Densoso/Infrastructure/HealthKit/HealthKitHealthStoreClient.swift",
+        (
+            "HealthAuthorizationBoundaryProviding",
+            "func earliestAuthorizedSampleDate(for metric: HealthMetricID)",
+            "getEarliestAuthorizedSampleDate(for:",
+            "dates?.values.min()",
         ),
         errors,
     )
     if "import SwiftData" in sync_coordinator:
         errors.append("application HealthKit coordinator must depend on a persistence protocol, not SwiftData")
+
+    read_model = require_text(
+        "Densoso/Services/HealthIntelligenceReadModel.swift",
+        (
+            "HealthDataWindowPolicy.analysisStart(through: end, calendar: calendar)",
+            "projectionReadStates[metric.rawValue] = .dataUnavailableOrReadScopeUnknown",
+            "guard projectionReadStates[metric.rawValue] == .available else { return nil }",
+            "bodyMassReadState == .available",
+            "projectionReadStates[HealthMetricID.sleepAnalysis.rawValue] == .available",
+            "projectionReadStates[HealthMetricID.activeEnergy.rawValue] == .available",
+            "projectionReadStates[HealthMetricID.stepCount.rawValue] == .available",
+            "projectionReadStates[HealthMetricID.exerciseMinutes.rawValue] == .available",
+            "healthReadStates: projectionReadStates",
+        ),
+        errors,
+    )
+    if "dataUnavailableOrReadScopeUnknown" in read_model and "== .available else { return nil }" not in read_model:
+        errors.append("unknown HealthKit read states must not be consumed as observations")
+    domain_coverage = require_text(
+        "Packages/DensosoDomain/Sources/DensosoDomain/HealthIntelligence.swift",
+        (
+            "case unknown",
+            "case partial",
+            "public enum HealthDataCoverage",
+            "private func healthReadCoverage(",
+            "decodedCoverage == .unknown",
+            "guard dataCoverage == .complete else { return }",
+        ),
+        errors,
+    )
+    if "health-intelligence-v3" not in require_text(
+        "Packages/DensosoDomain/Sources/DensosoDomain/AlgorithmVersions.swift",
+        ("public static let healthIntelligence = \"health-intelligence-v3\"",),
+        errors,
+    ):
+        errors.append("health-intelligence-v3 must invalidate briefs built with the old coverage semantics")
+    require_text(
+        "Packages/DensosoDomain/Tests/DensosoDomainTests/HealthIntelligenceTests.swift",
+        (
+            "testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial",
+            "testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders",
+            "testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage",
+        ),
+        errors,
+    )
+    require_text(
+        "DensosoTests/Application/GetHealthHistoryToolTests.swift",
+        (
+            "testHistoryResponsePreservesUnknownAndPartialCoverageWithoutAbsenceOrZero",
+            "testReadModelHistoryKeepsUnknownHealthKitCoverageTypedWithoutZeroObservations",
+        ),
+        errors,
+    )
+    require_text(
+        "DensosoTests/Application/GetTodayHealthStateToolTests.swift",
+        ("testUnknownTrainingLoadOmitsZeroAndDerivedValuesAndReportsCoverage",),
+        errors,
+    )
+    require_text(
+        "Packages/DensosoDomain/Tests/DensosoDomainTests/Health/HealthStateTests.swift",
+        ("testUnknownAndPartialDomainStatusesDoNotBecomeUsableRecoveryEvidence",),
+        errors,
+    )
+    require_text(
+        "Packages/DensosoDomain/Tests/DensosoDomainTests/HealthNarrativeTests.swift",
+        ("testNarrativeContextOmitsUnknownTrainingLoadZeroPlaceholders",),
+        errors,
+    )
 
     background_refresh = require_text(
         "Densoso/Application/DailyLoop/DailyLoopBackgroundScheduler.swift",
@@ -339,6 +456,20 @@ def main() -> int:
         "DensosoTests/HealthKitSyncCoordinatorTests.swift",
         (
             "testObserverCompletionRunsAfterAnchoredWorkoutIsCommitted",
+            "testInitialHealthKitBackfillUsesTheSame42DayWindowForEveryStreamType",
+            "testLimitedHealthKitHistoryStartsAtAuthorizationBoundaryAndRecordsUnknownDays",
+            "testAuthorizationBoundaryLookupFailureMasksWindowAndResetsAnchoredCursor",
+            "testObserverBoundaryLookupFailureMasksWindowAndResetsAnchoredCursor",
+            "testReadModelHidesAggregateHealthValuesWhenTheirReadStatesAreUnknown",
+            "testAuthorizationBoundaryAdvanceRebaselinesAndExcludesPreviouslyIndexedSamples",
+            "olderSampleDay",
+            "HealthKitWeightObservationReader.latestObservation(in: context, effectiveAt: now)",
+            "staleWorkout.healthKitUUID",
+            "testSubsequentSampleSyncUsesStoredAnchorInsteadOfReplayingThe42DayWindow",
+            "testStoredSampleAnchorAppliesLateSamplesBeforeCurrentWindowStart",
+            "testDeletedSampleBeforeCurrentWindowStartRequeriesHistoricalDay",
+            "testShortExistingSampleWindowRebaselinesIdempotentlyTo42Days",
+            "testHealthDataWindowPolicyUses42InclusiveDaysAndRespectsAuthorizationBoundary",
             "self.context.fetch(FetchDescriptor<WorkoutRecord>())",
             "refreshSawCommittedWorkout",
             "testMeasuredDailyActivityAggregateFeedsProjectionWithoutWorkoutEnergy",
@@ -504,6 +635,33 @@ def main() -> int:
     report = {
         "status": "pass",
         "scope": "healthkit-sync-energy-semantics-and-v6-daily-sample-summary",
+        "windowContract": {
+            "evidenceLevel": "static-source-and-test-presence",
+            "analysisLookbackDays": 42,
+            "initialBackfillDays": 42,
+            "authorizationBoundaryContractPresent": True,
+            "anchoredIncrementalContractPresent": True,
+            "runtimeTestExecution": "NOT_MEASURED",
+            "liveHealthKitAuthorizationBoundary": "NOT_MEASURED",
+            "unknownCoverageSemantics": {
+                "sourceContract": "PASS",
+                "localSemanticTestPresence": "PASS",
+                "localTestExecution": "NOT_MEASURED",
+                "liveHealthKitAuthorizationEvidence": "NOT_MEASURED",
+                "swiftPackageFilters": [
+                    "HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial",
+                    "HealthIntelligenceTests/testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders",
+                    "HealthIntelligenceTests/testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage",
+                    "HealthStateTests/testUnknownAndPartialDomainStatusesDoNotBecomeUsableRecoveryEvidence",
+                    "HealthNarrativeTests/testNarrativeContextOmitsUnknownTrainingLoadZeroPlaceholders",
+                ],
+                "xcodebuildSelectors": [
+                    "GetHealthHistoryToolTests/testHistoryResponsePreservesUnknownAndPartialCoverageWithoutAbsenceOrZero",
+                    "GetHealthHistoryToolTests/testReadModelHistoryKeepsUnknownHealthKitCoverageTypedWithoutZeroObservations",
+                    "GetTodayHealthStateToolTests/testUnknownTrainingLoadOmitsZeroAndDerivedValuesAndReportsCoverage",
+                ],
+            },
+        },
         "protectedOCRRead": False,
         "readAuthorizationInferred": False,
         "workoutWritesEnabled": False,

@@ -90,15 +90,19 @@ struct GetHealthHistoryTool: AgentTool {
                       observations[evidenceKey] == nil else { continue }
                 observations[evidenceKey] = value
             }
-            if let ratio = point.state.trainingLoad.ratio, ratio.isFinite {
+            if point.state.trainingLoad.dataCoverage == .complete,
+               let ratio = point.state.trainingLoad.ratio,
+               ratio.isFinite {
                 observations["trainingLoad.ratio"] = ratio
             }
+            let loadCoverage = point.state.trainingLoad.dataCoverage
             let summary = HealthHistoryDayOutput(
                 date: formatter.string(from: pointDay),
                 domainStatuses: domainStatuses,
                 observations: observations,
                 recoveryStatus: point.state.recovery.status.rawValue,
-                trainingLoadBand: point.state.trainingLoad.band.rawValue
+                trainingLoadCoverage: loadCoverage.rawValue,
+                trainingLoadBand: loadCoverage == .complete ? point.state.trainingLoad.band.rawValue : nil
             )
             let tieBreakKey = String(decoding: try stableEncoder.encode(summary), as: UTF8.self)
             if let current = latestSummaryByDay[pointDay] {
@@ -117,12 +121,15 @@ struct GetHealthHistoryTool: AgentTool {
         let hasObservations = dailySummaries.contains { !$0.observations.isEmpty }
         let hasGaps = dailySummaries.contains { summary in
             summary.domainStatuses.values.contains("noData")
+                || summary.domainStatuses.values.contains(HealthDomainStatus.unknown.rawValue)
+                || summary.domainStatuses.values.contains(HealthDomainStatus.partial.rawValue)
                 || summary.domainStatuses.values.contains("learning")
                 || summary.recoveryStatus == RecoveryStatus.insufficientEvidence.rawValue
+                || summary.trainingLoadCoverage != HealthDataCoverage.complete.rawValue
         }
         let status: HealthHistoryToolStatus
         if !hasObservations {
-            status = .noData
+            status = hasGaps ? .partial : .noData
         } else if hasGaps {
             status = .partial
         } else {
@@ -197,7 +204,8 @@ private struct HealthHistoryDayOutput: Encodable {
     /// Values are keyed by evidence metric so their units remain unambiguous.
     let observations: [String: Double]
     let recoveryStatus: String
-    let trainingLoadBand: String
+    let trainingLoadCoverage: String
+    let trainingLoadBand: String?
 }
 
 private enum GetHealthHistoryToolError: Error, LocalizedError {

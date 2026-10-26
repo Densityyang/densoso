@@ -149,6 +149,8 @@ struct DailyHealthBriefCard: View {
     private func statusName(_ status: HealthDomainStatus) -> String {
         switch status {
         case .noData: "暂无数据"
+        case .unknown: "数据覆盖未知"
+        case .partial: "部分数据"
         case .learning: "学习中"
         case .withinTypicalRange: "处于个人范围"
         case .changed: "与近期不同"
@@ -187,6 +189,8 @@ struct DailyHealthBriefCard: View {
     private func color(for status: HealthDomainStatus) -> Color {
         switch status {
         case .noData: Color.secondary
+        case .unknown: Color.secondary
+        case .partial: OrbitPalette.blue
         case .learning: OrbitPalette.blue
         case .withinTypicalRange: OrbitPalette.green
         case .changed: OrbitPalette.gold
@@ -241,16 +245,24 @@ struct WeeklyHealthBriefCard: View {
 
     @ViewBuilder
     private func loadSummary(_ load: TrainingLoadSummary) -> some View {
-        if let ratio = load.ratio {
+        if load.dataCoverage == .complete, let ratio = load.ratio {
             Label(
                 "训练负荷比 \(ratio.formatted(.number.precision(.fractionLength(2)))) · \(bandName(load.band))",
                 systemImage: "figure.run"
             )
             .font(.footnote)
         } else {
-            let detail = load.unavailableEffortCount > 0
-                ? "有 \(load.unavailableEffortCount) 次运动缺少强度数据，暂不比较"
-                : "训练负荷基线：\(readinessName(load.readiness))"
+            let detail: String
+            switch load.dataCoverage {
+            case .unknown:
+                detail = "训练记录覆盖未知，暂不评估负荷。"
+            case .partial:
+                detail = "训练记录不完整，暂不评估负荷。"
+            case .complete:
+                detail = load.unavailableEffortCount > 0
+                    ? "有 \(load.unavailableEffortCount) 次运动缺少强度数据，暂不比较"
+                    : "训练负荷基线：\(readinessName(load.readiness))"
+            }
             Label(detail, systemImage: "figure.run")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -344,6 +356,8 @@ struct HealthVitalTrendsCard: View {
     private func status(_ value: HealthDomainStatus) -> String {
         switch value {
         case .noData: "无数据"
+        case .unknown: "数据覆盖未知"
+        case .partial: "部分数据"
         case .learning: "学习中"
         case .withinTypicalRange: "常见范围"
         case .changed: "变化"

@@ -16,9 +16,11 @@ struct SettingsScreen: View {
     @State private var hasSavedQwenAPIKey = false
     @State private var deepSeekTextConsent = false
     @State private var deepSeekMealImageConsent = false
+    @State private var deepSeekHealthContextClasses: Set<ProviderDataClass> = []
     @State private var qwenTextConsent = false
     @State private var qwenSpeechConsent = false
     @State private var qwenMealImageConsent = false
+    @State private var qwenHealthContextClasses: Set<ProviderDataClass> = []
     @State private var deepSeekUsage = "尚无用量"
     @State private var qwenUsage = "尚无用量"
     @State private var statusMessage: String?
@@ -145,6 +147,10 @@ struct SettingsScreen: View {
                     .onChange(of: deepSeekTextConsent) { _, value in
                         Task { await saveConsent(provider: .deepSeek, granted: value) }
                 }
+                healthContextConsentControls(provider: .deepSeek, selection: $deepSeekHealthContextClasses)
+                Text("历史健康汇总按类别单独授权。未配置类别时不会自动附加历史健康上下文；撤销后立即从后续请求与续轮中移除。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Toggle("同意向 DeepSeek 上传处理后的餐食照片", isOn: $deepSeekMealImageConsent)
                     .onChange(of: deepSeekMealImageConsent) { _, value in
                         Task {
@@ -195,6 +201,10 @@ struct SettingsScreen: View {
                     .onChange(of: qwenTextConsent) { _, value in
                         Task { await saveConsent(provider: .qwen, granted: value) }
                 }
+                healthContextConsentControls(provider: .qwen, selection: $qwenHealthContextClasses)
+                Text("历史健康汇总按类别单独授权。未配置类别时不会自动附加历史健康上下文；撤销后立即从后续请求与续轮中移除。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Toggle(
                     "本地转写失败时启用 Qwen 单次语音兜底",
                     isOn: Binding(
@@ -618,6 +628,7 @@ struct SettingsScreen: View {
             case (.qwen, .speechAudio): policyVersion = "qwen-single-audio-v1"
             case (.qwen, .mealImage): policyVersion = "qwen-sanitized-meal-image-v1"
             case (.deepSeek, .mealImage): policyVersion = "deepseek-sanitized-meal-image-v1"
+            case (_, let value) where value.isHealthContextClass: policyVersion = "cloud-health-context-v1"
             default: policyVersion = "cloud-health-text-v1"
             }
             try await dependencies.providerGovernanceRepository.setConsent(
@@ -652,8 +663,44 @@ struct SettingsScreen: View {
             provider: .qwen,
             dataClass: .mealImage
         )) == true
+        deepSeekHealthContextClasses = await grantedHealthContextClasses(provider: .deepSeek)
+        qwenHealthContextClasses = await grantedHealthContextClasses(provider: .qwen)
         deepSeekUsage = await usageText(provider: .deepSeek)
         qwenUsage = await usageText(provider: .qwen)
+    }
+
+    @ViewBuilder
+    private func healthContextConsentControls(
+        provider: ProviderID,
+        selection: Binding<Set<ProviderDataClass>>
+    ) -> some View {
+        ForEach(CloudHealthContextPolicy.dataClasses, id: \.self) { dataClass in
+            Toggle(
+                "允许上传\(dataClass.healthContextTitle ?? "健康")历史汇总",
+                isOn: Binding(
+                    get: { selection.wrappedValue.contains(dataClass) },
+                    set: { granted in
+                        var updated = selection.wrappedValue
+                        if granted { updated.insert(dataClass) } else { updated.remove(dataClass) }
+                        selection.wrappedValue = updated
+                        Task { await saveConsent(provider: provider, dataClass: dataClass, granted: granted) }
+                    }
+                )
+            )
+        }
+    }
+
+    private func grantedHealthContextClasses(provider: ProviderID) async -> Set<ProviderDataClass> {
+        var granted = Set<ProviderDataClass>()
+        for dataClass in CloudHealthContextPolicy.dataClasses {
+            if (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+                provider: provider,
+                dataClass: dataClass
+            )) == true {
+                granted.insert(dataClass)
+            }
+        }
+        return granted
     }
 
     private func usageText(provider: ProviderID) async -> String {

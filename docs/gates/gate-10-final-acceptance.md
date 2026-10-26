@@ -9,8 +9,9 @@ the product release decision defined by Gate 16.
 
 Gates 11–14 add focused contracts after this roll-up. Gate 15 remains a manual
 signed-device acceptance step, and Gate 16 remains a final human release
-decision after Gates 1–14 and Gate 15 evidence are reviewed. Simulator output
-cannot mark Gate 15 or Gate 16 passed.
+decision after the automated aggregate for Gates 1–15 and 17–19 and the manual
+Gate 15 evidence are reviewed. Simulator output cannot mark Gate 15 or Gate 16
+passed.
 
 ## Software completion contract
 

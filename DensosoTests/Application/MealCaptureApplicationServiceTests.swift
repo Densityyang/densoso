@@ -231,6 +231,9 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
         }
         XCTAssertNotNil(request.image)
         XCTAssertTrue(request.mealEvidence.isEmpty)
+        XCTAssertTrue(request.userText.contains("多个独立菜品请分别记录"))
+        XCTAssertTrue(request.userText.contains("避免重复计量"))
+        XCTAssertTrue(request.userText.contains("不要把照片估量说成精确克重"))
     }
 
     func testNutritionLabelSkipsQwenAndKeepsUnknownMacrosNil() async throws {
@@ -488,6 +491,12 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
         let review = try await harness.service.analyzePhoto(try fixtureJPEG())
 
         XCTAssertEqual(review.clarification?.kind, .portion)
+        let photoPortion = try XCTUnwrap(review.portion)
+        XCTAssertEqual(photoPortion.source, .photoWithoutScale)
+        XCTAssertFalse(photoPortion.isMeasured)
+        XCTAssertEqual(photoPortion.lowGrams, 90, accuracy: 0.001)
+        XCTAssertEqual(photoPortion.likelyGrams, 180, accuracy: 0.001)
+        XCTAssertEqual(photoPortion.highGrams, 270, accuracy: 0.001)
         do {
             _ = try await harness.service.stageMeal(
                 review: review,

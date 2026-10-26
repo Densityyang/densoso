@@ -460,9 +460,6 @@ final class WatchMessageInboxStore {
     }
 
     private func pendingInboxMessages(in context: ModelContext) throws -> [MessageRecord] {
-        let pendingIDs = try pendingMessageIDs(in: context)
-        guard !pendingIDs.isEmpty else { return [] }
-
         let inboxID = Self.conversationID
         let role = "watch-envelope"
         let sortBy = [SortDescriptor(\MessageRecord.ordinal), SortDescriptor(\MessageRecord.id)]
@@ -488,6 +485,20 @@ final class WatchMessageInboxStore {
             descriptor.fetchLimit = Self.pendingReceiptFetchBatchSize
             let page = try context.fetch(descriptor)
             guard let lastMessage = page.last else { break }
+
+            let pageMessageIDs = page.compactMap { $0.requestID?.uuidString.lowercased() }
+            let pendingIDs: Set<UUID>
+            if pageMessageIDs.isEmpty {
+                pendingIDs = []
+            } else {
+                let pending = WatchReceiptState.pending
+                let receiptPredicate = #Predicate<WatchMessageReceiptRecord> { receipt in
+                    pageMessageIDs.contains(receipt.messageID) && receipt.state == pending
+                }
+                pendingIDs = Set(try context.fetch(
+                    FetchDescriptor<WatchMessageReceiptRecord>(predicate: receiptPredicate)
+                ).compactMap { UUID(uuidString: $0.messageID) })
+            }
             messages.append(contentsOf: page.filter { message in
                 guard let requestID = message.requestID else { return false }
                 return pendingIDs.contains(requestID)
@@ -532,30 +543,4 @@ final class WatchMessageInboxStore {
         }
     }
 
-    private func pendingMessageIDs(in context: ModelContext) throws -> Set<UUID> {
-        let pending = WatchReceiptState.pending
-        let sortBy = [SortDescriptor(\WatchMessageReceiptRecord.messageID)]
-        var cursorMessageID: String?
-        var pendingIDs = Set<UUID>()
-        while true {
-            let predicate: Predicate<WatchMessageReceiptRecord>
-            if let cursorMessageID {
-                let lastMessageID = cursorMessageID
-                predicate = #Predicate<WatchMessageReceiptRecord> { receipt in
-                    receipt.state == pending && receipt.messageID > lastMessageID
-                }
-            } else {
-                predicate = #Predicate<WatchMessageReceiptRecord> { $0.state == pending }
-            }
-            var descriptor = FetchDescriptor<WatchMessageReceiptRecord>(predicate: predicate, sortBy: sortBy)
-            descriptor.fetchLimit = Self.pendingReceiptFetchBatchSize
-            let receipts = try context.fetch(descriptor)
-            guard let lastReceipt = receipts.last else { break }
-
-            pendingIDs.formUnion(receipts.compactMap { UUID(uuidString: $0.messageID) })
-            cursorMessageID = lastReceipt.messageID
-            if receipts.count < Self.pendingReceiptFetchBatchSize { break }
-        }
-        return pendingIDs
-    }
 }

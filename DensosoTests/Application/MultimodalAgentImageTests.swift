@@ -116,6 +116,72 @@ final class MultimodalAgentImageTests: XCTestCase {
         XCTAssertTrue(requestRecord.containsTransientImage)
     }
 
+    func testCompositePhotoMealKeepsSeparateDishesAndUsesLocalCalorieAccounting() async throws {
+        let provider = ScriptedTextProvider(
+            scripts: [
+                [.toolCall(compositeMealCall()), .completed(.toolUse)],
+                [.textDelta("照片中的份量区间较宽；清炖牛肉大约有多大份量？"), .completed(.completed)],
+                [.toolCall(compositeMealCall()), .completed(.toolUse)],
+                [.textDelta("我会保留低可信度估算，请检查待确认草稿。"), .completed(.completed)],
+            ],
+            capabilities: [.text, .toolCalling, .vision]
+        )
+        let harness = try makeHarness(provider: provider, grantMealImage: true)
+
+        _ = try await harness.session.send(multimodalRequest: imageRequest())
+        XCTAssertTrue(harness.session.pendingActions.isEmpty)
+        XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<PendingActionRecord>()), 0)
+        _ = try await harness.session.send(
+            multimodalRequest: imageRequest().includingSupplementalText("还是不知道，只能按照片估算")
+        )
+
+        let action = try XCTUnwrap(harness.session.pendingActions.first)
+        guard case .meal(let meal) = action.payload else {
+            return XCTFail("A composite photo meal must stage a meal draft")
+        }
+        XCTAssertEqual(meal.dishes.map(\.name), ["米饭", "清炖牛肉", "西红柿炒蛋"])
+        XCTAssertEqual(
+            meal.dishes.map { dish in
+                dish.ingredients.filter { $0.name != "烹饪用油" }.map(\.name)
+            },
+            [["米饭(熟)"], ["牛肉"], ["西红柿", "鸡蛋"]]
+        )
+        let compositeDish = try XCTUnwrap(meal.dishes.first { $0.name == "西红柿炒蛋" })
+        XCTAssertEqual(compositeDish.ingredients.filter { $0.name == "烹饪用油" }.count, 1)
+        XCTAssertTrue(meal.dishes.allSatisfy {
+            $0.ingredients.filter { $0.name == "烹饪用油" }.count == 1
+        })
+        XCTAssertTrue(meal.dishes.allSatisfy { $0.algorithmVersion == "meal-estimator-v2" })
+        for ingredient in meal.dishes.flatMap(\.ingredients).filter({ $0.name != "烹饪用油" }) {
+            XCTAssertGreaterThan(ingredient.amountGrams.low, 0)
+            XCTAssertEqual(ingredient.amountGrams.low, ingredient.amountGrams.likely * 0.35, accuracy: 0.001)
+            XCTAssertEqual(ingredient.amountGrams.high, ingredient.amountGrams.likely * 1.65, accuracy: 0.001)
+            XCTAssertFalse(ingredient.evidence.contains {
+                $0.sourceID == "portion:userReportedExact"
+            }, "Photo-estimated portions must not become exact measured grams")
+            XCTAssertTrue(ingredient.evidence.contains {
+                $0.sourceID == "portion:photoWithoutScale" && $0.grade == .weak
+            })
+        }
+        let totalEnergy = try XCTUnwrap(meal.totalNutrients?.energyKcal)
+        XCTAssertEqual(totalEnergy.likely, 581.9, accuracy: 0.001)
+        XCTAssertEqual(meal.caloriePresentation, .needsClarification(likelyKcal: 582))
+        XCTAssertEqual(
+            totalEnergy.likely,
+            meal.dishes.reduce(0) { $0 + $1.nutrients.energyKcal.likely },
+            accuracy: 0.001
+        )
+        XCTAssertEqual(meal.dishes.flatMap(\.evidence).filter {
+            $0.sourceID == "calorie-accounting"
+                && $0.sourceVersion == "calorie-accounting-v2"
+        }.count, 3)
+        XCTAssertTrue(action.payload.summary.contains("约 582 kcal，可信度低"))
+        XCTAssertFalse(action.payload.summary.contains("–"))
+        let toolResults = Self.toolResultContents(in: provider.recordedRequests())
+        XCTAssertEqual(toolResults.filter { $0.contains("clarification_required") }.count, 1)
+        XCTAssertFalse(toolResults.contains { $0.contains("clarification_limit_reached") })
+    }
+
     func testEvidenceOnlyRequestUsesEphemeralProviderMessageWithoutImageConsentOrPersistence() async throws {
         let provider = ScriptedTextProvider(
             scripts: [
@@ -464,6 +530,18 @@ final class MultimodalAgentImageTests: XCTestCase {
         )
     }
 
+    private static func toolResultContents(in requests: [ModelRequest]) -> [String] {
+        var seenToolCallIDs = Set<String>()
+        return requests
+            .flatMap(\.messages)
+            .flatMap(\.content)
+            .compactMap { (content: ModelContent) -> String? in
+                guard case .toolResult(let callID, let result) = content,
+                      seenToolCallIDs.insert(callID).inserted else { return nil }
+                return result
+            }
+    }
+
     private func mealCall() -> ToolCall {
         ToolCall(
             id: "image-meal-tool",
@@ -490,6 +568,48 @@ final class MultimodalAgentImageTests: XCTestCase {
                         ]),
                         "lowConfidence": .boolean(false),
                     ]),
+                ]),
+                "note": .null,
+            ])
+        )
+    }
+
+    private func compositeMealCall() -> ToolCall {
+        func ingredient(name: String, grams: Double) -> JSONValue {
+            .object([
+                "name": .string(name),
+                "quantityEvidence": .object([
+                    "kind": .string("photoEstimate"),
+                    "value": .number(grams),
+                    "unit": .string("g"),
+                    "gramsPerServing": .null,
+                ]),
+                "preparation": .string("cooked"),
+                "massBasis": .string("cooked"),
+            ])
+        }
+        func dish(name: String, cookingMethod: String, ingredients: [(String, Double)]) -> JSONValue {
+            .object([
+                "dishName": .string(name),
+                "cookingMethod": .string(cookingMethod),
+                "ingredients": .array(ingredients.map { ingredient(name: $0.0, grams: $0.1) }),
+                "lowConfidence": .boolean(false),
+            ])
+        }
+        return ToolCall(
+            id: UUID().uuidString,
+            name: "log_meal",
+            arguments: .object([
+                "mealType": .string("lunch"),
+                "occurredAt": .null,
+                "dishes": .array([
+                    dish(name: "米饭", cookingMethod: "steam", ingredients: [("米饭(熟)", 150)]),
+                    dish(name: "清炖牛肉", cookingMethod: "stew", ingredients: [("牛肉", 100)]),
+                    dish(
+                        name: "西红柿炒蛋",
+                        cookingMethod: "stirFry",
+                        ingredients: [("西红柿", 80), ("鸡蛋", 50)]
+                    ),
                 ]),
                 "note": .null,
             ])
@@ -550,7 +670,12 @@ final class MultimodalAgentImageTests: XCTestCase {
     }
 
     private static let foodSeed = """
-    [{"id":2,"name":"米饭(熟)","alias":"熟米饭|白米饭","preparation":"cooked","category":"谷类及制品","edible":100,"energyKcal":116,"proteinG":2.6,"fatG":0.3,"carbohydrateG":25.9,"fiberG":0.3}]
+    [
+      {"id":2,"name":"米饭(熟)","alias":"熟米饭|白米饭","preparation":"cooked","category":"谷类及制品","edible":100,"energyKcal":116,"proteinG":2.6,"fatG":0.3,"carbohydrateG":25.9,"fiberG":0.3},
+      {"id":3,"name":"牛肉","alias":"牛肉|牛肉(熟)","preparation":"cooked","category":"肉类及制品","edible":100,"energyKcal":250,"proteinG":26,"fatG":15,"carbohydrateG":0,"fiberG":0},
+      {"id":4,"name":"西红柿","alias":"番茄","preparation":"cooked","category":"蔬菜及制品","edible":100,"energyKcal":18,"proteinG":0.9,"fatG":0.2,"carbohydrateG":3.9,"fiberG":1.2},
+      {"id":5,"name":"鸡蛋","alias":"鸡蛋(熟)","preparation":"cooked","category":"蛋类及制品","edible":100,"energyKcal":143,"proteinG":13.1,"fatG":8.9,"carbohydrateG":0.7,"fiberG":0}
+    ]
     """
 }
 

@@ -12,7 +12,7 @@ struct AgentSystemPrompt {
         你的主人使用 iPhone，可通过语音、文字或单独授权的餐食照片提供运动和饮食线索；所有写入仍须经过待确认草稿。
 
         ## 核心职责
-        1. **记餐**：根据用户语音描述，将每道菜分解为食材+烹饪方式+份量估计，估算热量。
+        1. **记餐**：根据用户语音或照片观察，将每道菜分解为食材+烹饪方式+份量证据；模型只提供候选与证据，不计算或编造最终 kcal，由本机确定性估算器核算。
         2. **看运动**：已完成的运动事实只从 HealthKit 导入；你不能创建已完成运动记录。
         3. **看数据**：回答热量缺口、本周进度、营养素分析。
         4. **做计划**：单次训练安排使用 `create_workout_plan`；用户要求多个未来训练日时使用 `create_training_plan`，可包含训练日与休息日。强度和训练理由都是建议，不代表已完成运动；所有计划仍先成为待确认草稿。
@@ -22,7 +22,8 @@ struct AgentSystemPrompt {
 
         ## 中餐热量估算规则（关键）
         对每一道中式菜品，你必须：
-        1. **分解到食材**：不只要菜名，\"红烧肉\" = 五花肉 + 冰糖 + 酱油 + 食用油
+        1. **分开识别菜品并分解食材**：一张照片里有多道分开的菜时，分别列出每道菜，不要合并成一个菜名；一道复合菜则拆成其可见或有依据的主要食材，例如\"红烧肉\" = 五花肉 + 冰糖 + 酱油 + 食用油。使用现有 `log_meal` 多菜品/多食材数组结构表达，不因照片里出现多个候选而退回到单一菜品。
+           - 菜名可能匹配 canonical recipe 时，先调用只读 `get_recipe_prior`；仅在 `status=available` 且 `matchType=exact` 时，才把结果作为来源可追溯的食材拆解先验。保留可选/替代食材的不确定性；`partial` 只作候选线索，不得当作已确认配方。它的 `dataRole=recipe-prior` 且 `nutritionAuthority=false`，不能提供营养事实或 kcal，营养核算仍交给本机数据库和确定性估算器。
         2. **识别烹饪方式**：从菜名判断：
            - \"蒸/清蒸\" = steam      \"煮/水煮\" = boil    \"凉拌\" = coldDress
            - \"炒/爆炒\" = stirFry  \"红烧/焖/酱\" = braise    \"干煸/干锅\" = dryFry
@@ -34,6 +35,8 @@ struct AgentSystemPrompt {
         4. **份量线索**：只填写 `quantityEvidence`，不要直接编造 `amountGrams`。
            - `household` / `count` 使用用户说过的碗、拳头、个、片等单位，克重范围由本机先验计算。
            - `photoEstimate` 只能用于当前轮确实附有照片的视觉估量，本机会采用宽区间。
+           - 照片中的估重始终是 `photoEstimate`，绝不是 `exactGrams`；照片没有可靠份量线索时填写 `unknown`，可见多道菜也要逐道保留候选，交由本机确定性估算器核算。
+           - 菜谱先验中的 `sourceText/value/upperValue/unit` 是来源菜谱的原料用量，不是本餐摄入量；不得将其复制为 `log_meal.quantityEvidence`，也不得据此填写 `exactGrams` 或 `photoEstimate`。只有用户当前原话能验证的克重才是 `exactGrams`；照片只能提供 `photoEstimate`。否则使用 `unknown`，有歧义时追问。
            - `packageServing` 只有本机从用户原话或本机营养标签线索验证到每份克重时才可用于计算。
            - `exactGrams` 只有当前用户原话含有与食材对应的明确数字克重才可能通过本机验证；模型参数本身绝不是精确称重证据。
            - 没有可用份量时填写 `unknown` 且不提供克数；本机会先问一个高价值问题。
@@ -106,6 +109,7 @@ final class AgentSession {
     private var transientMealUserText: String?
     private var didIssueMealClarification = false
     private var transientMealClarificationWasAnswered = false
+    private var transientMealPriorClarificationField: String?
 
     init(
         providerSelector: any ProviderSelecting,
@@ -326,12 +330,14 @@ final class AgentSession {
             currentUserText: userText
         )
         transientMealClarificationWasAnswered = priorClarification.answered
+        transientMealPriorClarificationField = priorClarification.field
         defer {
             transientMealImageEvidence = []
             transientMealHasImage = false
             transientMealUserText = nil
             didIssueMealClarification = false
             transientMealClarificationWasAnswered = false
+            transientMealPriorClarificationField = nil
             conversationHistory = conversationHistory.map(Self.withoutSensitiveTransientContent)
         }
         streamedText = ""
@@ -438,6 +444,7 @@ final class AgentSession {
                     currentUserText: userText
                 )
                 transientMealClarificationWasAnswered = priorClarification.answered
+                transientMealPriorClarificationField = priorClarification.field
                 if let image = multimodalRequest.image {
                     guard let userIndex = conversationHistory.lastIndex(where: { $0.role == .user }) else {
                         throw AgentError.transientImageRequired
@@ -465,11 +472,16 @@ final class AgentSession {
             let promptUserText = conversationHistory.last(where: { $0.role == .user })
                 .flatMap { Self.visibleMessage($0)?.text }
                 ?? userText
+            let provider = try providerSelector.provider(for: intelligencePreferences.mode)
             let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(for: promptUserText)
-            let narrativeContext: HealthNarrativeContext?
-            if wantsHealthNarrative {
+            let initialCloudHealthPolicy = try await CloudHealthContextPolicy.load(
+                from: governanceRepository,
+                provider: provider.descriptor.id
+            )
+            let unfilteredNarrativeContext: HealthNarrativeContext?
+            if wantsHealthNarrative && !initialCloudHealthPolicy.allowedClasses.isEmpty {
                 do {
-                    narrativeContext = try await healthNarrativeContextProvider?()
+                    unfilteredNarrativeContext = try await healthNarrativeContextProvider?()
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
@@ -479,19 +491,24 @@ final class AgentSession {
                     )
                 }
             } else {
-                narrativeContext = nil
+                unfilteredNarrativeContext = nil
             }
+            let narrativeContext = CloudRequestPolicyGuard.filtered(
+                unfilteredNarrativeContext,
+                by: initialCloudHealthPolicy
+            )
             let healthSummary = narrativeContext?.aggregateSummary
             let allowedEvidenceKeys = Set(narrativeContext?.allowedEvidenceKeys ?? [])
 
             if wantsHealthNarrative && (healthSummary == nil || allowedEvidenceKeys.isEmpty) {
                 return try await completeDeterministicHealthResponse(
-                    HealthNarrativePolicy.deterministicFallback(narrativeContext),
+                    narrativeContext == nil
+                        ? "当前没有获准用于云端的历史健康类别；请在设置中逐类确认后，我才能结合这些记录分析。"
+                        : HealthNarrativePolicy.deterministicFallback(narrativeContext),
                     requestID: requestID
                 )
             }
 
-            let provider = try providerSelector.provider(for: intelligencePreferences.mode)
             var useStructuredHealthNarrative = wantsHealthNarrative
                 && healthSummary != nil
                 && !allowedEvidenceKeys.isEmpty
@@ -541,21 +558,43 @@ final class AgentSession {
                 budget: requestSnapshot.budget,
                 consumption: requestSnapshot.consumption
             )
+            var currentNarrativeContext = narrativeContext
+            var currentAllowedEvidenceKeys = allowedEvidenceKeys
+            var currentRoundUsesStructuredNarrative = useStructuredHealthNarrative
 
             while true {
                 guard tracker.remainingProviderRounds > 0 else {
                     throw ProviderError.budgetExceeded
                 }
+                let roundPolicy = try await CloudHealthContextPolicy.load(
+                    from: governanceRepository,
+                    provider: provider.descriptor.id
+                )
+                let roundContext = CloudRequestPolicyGuard.filtered(unfilteredNarrativeContext, by: roundPolicy)
+                let roundAllowedEvidenceKeys = Set(roundContext?.allowedEvidenceKeys ?? [])
+                if wantsHealthNarrative && (roundContext?.aggregateSummary == nil || roundAllowedEvidenceKeys.isEmpty) {
+                    let safeFallback = roundContext == nil
+                        ? "当前没有获准用于云端的历史健康类别；请在设置中逐类确认后，我才能结合这些记录分析。"
+                        : HealthNarrativePolicy.deterministicFallback(roundContext)
+                    return try await completeDeterministicHealthResponse(safeFallback, requestID: requestID)
+                }
+                currentNarrativeContext = roundContext
+                currentAllowedEvidenceKeys = roundAllowedEvidenceKeys
+                currentRoundUsesStructuredNarrative = useStructuredHealthNarrative
+                    && roundContext?.aggregateSummary != nil
+                    && !roundAllowedEvidenceKeys.isEmpty
+                let roundSummary = roundContext?.aggregateSummary
                 let providerSystemPrompt = HealthContextPromptBuilder.prompt(
                     basePrompt: systemPrompt.text,
                     userText: promptUserText,
-                    summary: healthSummary,
-                    narrativeContext: narrativeContext,
-                    structuredNarrative: useStructuredHealthNarrative
+                    summary: roundSummary,
+                    narrativeContext: roundContext,
+                    structuredNarrative: currentRoundUsesStructuredNarrative,
+                    cloudHealthPolicy: roundPolicy
                 )
-                let responseFormat = useStructuredHealthNarrative
+                let responseFormat = currentRoundUsesStructuredNarrative
                     ? HealthNarrativePolicy.responseFormat(
-                        allowedEvidenceKeys: narrativeContext?.allowedEvidenceKeys ?? []
+                        allowedEvidenceKeys: roundContext?.allowedEvidenceKeys ?? []
                     )
                     : nil
                 let request = ModelRequest(
@@ -564,7 +603,8 @@ final class AgentSession {
                     systemPrompt: providerSystemPrompt,
                     messages: try providerMessagesIncludingTransientMealEvidence(
                         systemPrompt: providerSystemPrompt,
-                        responseFormat: responseFormat
+                        responseFormat: responseFormat,
+                        cloudHealthPolicy: roundPolicy
                     ),
                     tools: registry.toolDefinitions,
                     maxOutputTokens: 2_048,
@@ -618,7 +658,9 @@ final class AgentSession {
                     provider: provider,
                     request: request,
                     providerRound: tracker.providerRounds,
-                    exposeTextDeltas: !useStructuredHealthNarrative
+                    expectedHealthPolicy: roundPolicy,
+                    includesImage: containsImage,
+                    exposeTextDeltas: !currentRoundUsesStructuredNarrative
                 )
                 for usage in result.usages {
                     tracker.record(AgentTokenUsage(
@@ -633,7 +675,7 @@ final class AgentSession {
 
                 if !result.toolCalls.isEmpty {
                     var assistantContent: [ModelContent] = []
-                    if !result.text.isEmpty && !useStructuredHealthNarrative {
+                    if !result.text.isEmpty && !currentRoundUsesStructuredNarrative {
                         assistantContent.append(.text(result.text))
                     }
                     assistantContent.append(contentsOf: result.reasoning.map(ModelContent.reasoning))
@@ -664,14 +706,14 @@ final class AgentSession {
 
                 guard !result.text.isEmpty else { throw AgentError.emptyResponse }
                 let responseText: String
-                if useStructuredHealthNarrative {
+                if currentRoundUsesStructuredNarrative {
                     if let narrative = HealthNarrativePolicy.decode(
                         result.text,
-                        allowedEvidenceKeys: allowedEvidenceKeys
+                        allowedEvidenceKeys: currentAllowedEvidenceKeys
                     ) {
                         responseText = HealthNarrativePolicy.displayText(narrative)
                     } else {
-                        responseText = HealthNarrativePolicy.deterministicFallback(narrativeContext)
+                        responseText = HealthNarrativePolicy.deterministicFallback(currentNarrativeContext)
                     }
                 } else {
                     responseText = result.text
@@ -867,7 +909,7 @@ final class AgentSession {
     private func priorMealClarification(
         in messages: [ModelMessage],
         currentUserText: String
-    ) -> (answered: Bool, subject: String?) {
+    ) -> (answered: Bool, subject: String?, field: String?) {
         guard let clarificationIndex = messages.lastIndex(where: { message in
             message.role == .tool && message.content.contains { content in
                 guard case .toolResult(_, let result) = content else { return false }
@@ -878,34 +920,71 @@ final class AgentSession {
             $0 > clarificationIndex && messages[$0].role == .assistant
         }),
         let assistantText = Self.visibleMessage(messages[lastAssistantIndex])?.text else {
-            return (false, nil)
+            return (false, nil, nil)
         }
         guard assistantText.contains("？") || assistantText.contains("?") else {
-            return (false, nil)
+            return (false, nil, nil)
         }
         let metadata = clarificationMetadata(in: messages[clarificationIndex])
         let clarificationSubject = metadata?.subject
+        let clarificationField = metadata?.field
         let normalizedUserText = FoodResolver.normalize(currentUserText)
         let clarificationTerms = ([clarificationSubject].compactMap { $0 }) + (metadata?.candidates ?? [])
         if clarificationTerms.contains(where: { term in
             let normalizedTerm = FoodResolver.normalize(term)
             return !normalizedTerm.isEmpty && normalizedUserText.contains(normalizedTerm)
         }) {
-            return (true, clarificationSubject)
+            return (true, clarificationSubject, clarificationField)
+        }
+        if clarificationField == "consumedFraction",
+           isConsumedFractionClarificationAnswer(currentUserText) {
+            return (true, clarificationSubject, clarificationField)
         }
         if metadata?.field == "foodIdentity",
            mentionsOtherKnownFood(in: currentUserText, excluding: nil) {
-            return (true, clarificationSubject)
+            return (true, clarificationSubject, clarificationField)
         }
         if mentionsOtherKnownFood(
             in: currentUserText,
             excluding: clarificationSubject
         ) {
-            return (false, nil)
+            return (false, nil, nil)
         }
-        return explicitlyAnswersMealClarification(currentUserText, field: metadata?.field)
-            ? (true, clarificationSubject)
-            : (false, nil)
+        let answered = explicitlyAnswersMealClarification(currentUserText, field: clarificationField)
+        return answered
+            ? (true, clarificationSubject, clarificationField)
+            : (false, nil, nil)
+    }
+
+    private func isConsumedFractionClarificationAnswer(_ userText: String) -> Bool {
+        let normalizedText = FoodResolver.normalize(userText)
+        let newMealMarkers = [
+            "又吃", "今天又", "另外一顿", "另一顿", "另一餐", "新的一餐", "anothermeal", "newmeal", "ateagain",
+        ]
+        guard !newMealMarkers.contains(where: { normalizedText.contains(FoodResolver.normalize($0)) }) else {
+            return false
+        }
+        let fractionMarkers = [
+            "四分之三", "三分之二", "三分之一", "四分之一", "二分之一", "一半", "半份", "half",
+            "不知道", "不清楚", "不确定", "没法确定", "无法确定", "不记得", "大约", "大概", "差不多",
+            "左右", "一些", "一点", "不清楚比例", "不知道比例", "整餐", "整顿饭", "这顿饭", "这顿", "这餐",
+            "全部菜", "所有菜", "没吃完", "没全吃", "剩下", "还剩", "not sure", "unsure", "i don't know", "dont know",
+            "一小碗", "一大碗", "半碗", "一碗", "一份", "两份", "几口", "一拳", "一掌", "一片",
+            "是的", "不是", "对", "没错", "都不是", "单独", "其中一道", "某一道", "这道菜", "yes", "no",
+        ]
+        if fractionMarkers.contains(where: { normalizedText.contains(FoodResolver.normalize($0)) }) {
+            return true
+        }
+        let range = NSRange(userText.startIndex..<userText.endIndex, in: userText)
+        let patterns = [
+            #"[0-9]+(?:\.[0-9]+)?\s*%"#,
+            #"[0-9]+\s*[/／]\s*[0-9]+"#,
+            #"[0-9]+(?:\.[0-9]+)?\s*(?:g|grams?|克|公克|碗|个|枚|片|份|杯|bowl|servings?)"#,
+        ]
+        return patterns.contains { pattern in
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+            return regex.firstMatch(in: userText, range: range) != nil
+        } || mentionsOtherKnownFood(in: userText, excluding: nil)
     }
 
     private func clarificationMetadata(in message: ModelMessage) -> (field: String?, subject: String?, candidates: [String])? {
@@ -974,25 +1053,34 @@ final class AgentSession {
 
     private func providerMessagesIncludingTransientMealEvidence(
         systemPrompt providerSystemPrompt: String,
-        responseFormat: StructuredOutputFormat?
+        responseFormat: StructuredOutputFormat?,
+        cloudHealthPolicy: CloudHealthContextPolicy
     ) throws -> [ModelMessage] {
         guard let userIndex = conversationHistory.lastIndex(where: { $0.role == .user }) else {
             throw AgentError.contextWindowExceeded
         }
-        var providerMessages = conversationHistory
+        var providerMessages = CloudRequestPolicyGuard.filterConversationHistory(
+            conversationHistory,
+            currentTurnStartIndex: userIndex,
+            by: cloudHealthPolicy
+        )
+        guard let filteredUserIndex = providerMessages.lastIndex(where: { $0.role == .user }) else {
+            throw AgentError.contextWindowExceeded
+        }
         if let evidenceMessage = Self.transientMealEvidenceMessage(transientMealImageEvidence) {
-            providerMessages.insert(evidenceMessage, at: userIndex + 1)
+            providerMessages.insert(evidenceMessage, at: filteredUserIndex + 1)
         }
         let boundedMessages = try AgentProviderContextPolicy.boundedMessages(
             providerMessages,
-            currentTurnStartIndex: userIndex,
+            currentTurnStartIndex: filteredUserIndex,
             additionalContextBytes: AgentProviderContextPolicy.fixedContextBytes(
                 systemPrompt: providerSystemPrompt,
                 tools: registry.toolDefinitions,
                 responseFormat: responseFormat
             )
         )
-        return boundedMessages.map { ModelMessage(role: $0.role, content: $0.content) }
+        return CloudRequestPolicyGuard.filterToolResults(in: boundedMessages, by: cloudHealthPolicy)
+            .map { ModelMessage(role: $0.role, content: $0.content, inputEnvelope: $0.inputEnvelope) }
     }
 
     private static func transientMealEvidenceMessage(_ evidence: [MealEvidence]) -> ModelMessage? {
@@ -1018,6 +1106,10 @@ final class AgentSession {
 
     func currentMealClarificationWasAnswered() -> Bool {
         transientMealClarificationWasAnswered
+    }
+
+    func currentMealPriorClarificationField() -> String? {
+        transientMealPriorClarificationField
     }
 
     func reset() async throws {
@@ -1086,6 +1178,8 @@ final class AgentSession {
         provider: any TextModelProvider,
         request: ModelRequest,
         providerRound: Int,
+        expectedHealthPolicy: CloudHealthContextPolicy,
+        includesImage: Bool,
         exposeTextDeltas: Bool = true
     ) async throws -> ProviderRoundResult {
         let task = Task<ProviderRoundResult, Error> {
@@ -1093,7 +1187,17 @@ final class AgentSession {
             var toolCalls: [ToolCall] = []
             var reasoning: [JSONValue] = []
             var usages: [ProviderUsage] = []
-            for try await event in provider.stream(request) {
+            let providerEvents = try await CloudHealthContextPolicy.withCurrentSendConsent(
+                from: governanceRepository,
+                provider: provider.descriptor.id,
+                expectedHealthPolicy: expectedHealthPolicy,
+                includesImage: includesImage,
+                operation: {
+                    try Task.checkCancellation()
+                    return provider.stream(request)
+                }
+            )
+            for try await event in providerEvents {
                 try Task.checkCancellation()
                 switch event {
                 case .textDelta(let delta):

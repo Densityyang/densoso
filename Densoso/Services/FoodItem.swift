@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// 本地食材库条目（对应 ChinaFoodComposition 中的一行）
+/// 本地食物成分记录。来源与许可字段用于保留可追溯信息；缺失字段表示旧测试夹具。
 struct FoodItem: Codable, FetchableRecord, PersistableRecord {
     var id: Int64
     var name: String
@@ -15,6 +15,14 @@ struct FoodItem: Codable, FetchableRecord, PersistableRecord {
     var fatG: Double?
     var carbohydrateG: Double?
     var fiberG: Double?
+    var energyRaw: String? = nil
+    var energyUnit: String? = nil
+    var sourceID: String? = nil
+    var sourceRecordID: String? = nil
+    var sourceVersion: String? = nil
+    var licenseStatus: String? = nil
+    var sourceRecordJSON: String? = nil
+    var importWarningsJSON: String? = nil
 
     static let databaseTableName = "food_items"
 

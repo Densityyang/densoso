@@ -116,15 +116,13 @@ struct LogMealTool: ConfirmationRequiredTool {
         let packageServingParser = PackageServingGramsParser()
         let userText = context.currentMealUserText()
         let agentImageEvidence = context.currentMealImageEvidence()
-        let hasPhotoPortionEstimate = context.currentMealHasImage() && arguments.dishes
-            .flatMap(\.ingredients)
-            .contains { $0.quantityEvidence.kind == .photoEstimate }
         let packageLabelTexts = agentImageEvidence
             .filter { $0.kind == .nutritionLabel }
             .map(\.value)
         let allIngredientNames = arguments.dishes.flatMap { $0.ingredients.map(\.name) }
+        var firstOccurrenceByFoodIdentity: [String: (dishIndex: Int, dishName: String)] = [:]
         var drafts: [MealDishDraft] = []
-        for rawDish in arguments.dishes {
+        for (dishIndex, rawDish) in arguments.dishes.enumerated() {
             let name = rawDish.dishName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty,
                   !rawDish.ingredients.isEmpty,
@@ -166,6 +164,31 @@ struct LogMealTool: ConfirmationRequiredTool {
                     )
                 }
                 let ingredientTerms = [ingredient.name, selectedFood.entry.name] + selectedFood.entry.aliases
+                let localFoodIDKeys = selectedFood.entry.localFoodID.map { ["id:\($0)"] } ?? []
+                let normalizedTermKeys = ingredientTerms
+                    .map { "term:\(FoodResolver.normalize($0))" }
+                    .filter { $0 != "term:" }
+                let foodIdentityKeys = Array(Set(localFoodIDKeys + normalizedTermKeys)).sorted()
+                let firstOccurrence = foodIdentityKeys
+                    .compactMap { firstOccurrenceByFoodIdentity[$0] }
+                    .first { $0.dishIndex != dishIndex }
+                if let firstOccurrence,
+                   !userExplicitlySeparatesRepeatedIngredient(in: userText, matching: ingredientTerms) {
+                    let question: String
+                    if userExplicitlySharesRepeatedIngredient(in: userText, matching: ingredientTerms) {
+                        question = "你说明“\(ingredient.name)”是同一份，但草稿把它放进了“\(firstOccurrence.dishName)”和“\(name)”两道菜。请修正草稿，只保留一次并说明合并后的份量。"
+                    } else {
+                        question = "“\(ingredient.name)”同时出现在“\(firstOccurrence.dishName)”和“\(name)”中。它们是不同份量，还是同一份食材被重复拆解？请说明是否分别计量，避免重复计入。"
+                    }
+                    throw DraftError.clarificationRequired(
+                        field: "mealEnergy",
+                        question: question,
+                        subject: ingredient.name
+                    )
+                }
+                for foodIdentityKey in foodIdentityKeys where firstOccurrenceByFoodIdentity[foodIdentityKey] == nil {
+                    firstOccurrenceByFoodIdentity[foodIdentityKey] = (dishIndex, name)
+                }
                 let validatedPackageServingGrams = uniquePackageServingGrams(
                     in: userText,
                     imageLabelTexts: packageLabelTexts,
@@ -273,15 +296,35 @@ struct LogMealTool: ConfirmationRequiredTool {
             )
         }
 
-        let mealDraft = MealDraft(
+        let unscaledMealDraft = MealDraft(
             occurredAt: date,
             mealType: arguments.mealType,
             dishes: drafts,
             note: arguments.note
         )
+        let mealDraft: MealDraft
+        let isConsumedFractionClarificationAnswer = context.currentMealPriorClarificationField() == "consumedFraction"
+        switch consumedFractionResolution(in: userText, dishes: arguments.dishes) {
+        case .resolved(let consumedFractionEvidence):
+            mealDraft = try unscaledMealDraft.applyingConsumedFraction(consumedFractionEvidence)
+        case .unresolved:
+            guard !isConsumedFractionClarificationAnswer else {
+                throw DraftError.clarificationLimitReached
+            }
+            throw DraftError.clarificationRequired(
+                field: "consumedFraction",
+                question: "你提到的摄入比例还不明确。请说明比例是指整餐还是某一道菜，并告诉我整餐实际吃下的份量；确认前我不会按全份计入。",
+                subject: "整餐摄入比例"
+            )
+        case .none:
+            guard !isConsumedFractionClarificationAnswer else {
+                // The one consumed-fraction clarification was answered without a usable whole-meal ratio.
+                throw DraftError.clarificationLimitReached
+            }
+            mealDraft = unscaledMealDraft
+        }
         if let energy = mealDraft.totalNutrients?.energyKcal,
            case .needsClarification = CaloriePresentationPolicy().presentation(for: energy),
-           !hasPhotoPortionEstimate,
            !context.hasIssuedMealClarification(),
            !context.currentMealClarificationWasAnswered() {
             let dishName = drafts.max { lhs, rhs in
@@ -343,6 +386,238 @@ struct LogMealTool: ConfirmationRequiredTool {
             let normalized = term.trimmingCharacters(in: .whitespacesAndNewlines)
             return !normalized.isEmpty && text.localizedCaseInsensitiveContains(normalized)
         }
+    }
+
+    private enum ConsumedFractionResolution {
+        case none
+        case resolved(ConsumedFractionEvidence)
+        case unresolved
+    }
+
+    private func consumedFractionResolution(
+        in userText: String,
+        dishes: [LogMealArguments.Dish]
+    ) -> ConsumedFractionResolution {
+        let consumptionMarkers = [
+            "吃了", "吃掉", "没吃", "没有吃", "未吃", "不吃", "摄入", "ate", "eat", "eaten", "consumed",
+        ]
+        let wholeMealMarkers = [
+            "这餐", "这顿", "这一餐", "这顿饭", "本餐", "整餐", "整顿饭", "全部菜", "全部食材",
+            "所有菜", "每道菜", "每一道菜",
+            "entiremeal", "wholemeal", "allmeals", "alldishes",
+        ]
+        let allDishMarkers = [
+            "全部菜", "全部食材", "所有菜", "每道菜", "每一道菜", "都吃", "allingredients", "alldishes",
+        ]
+        let distinctIngredientTerms = Set(dishes.flatMap { dish in
+            dish.ingredients.map { FoodResolver.normalize($0.name) }
+        }.filter { !$0.isEmpty })
+        let nonExactOrNegatedMarkers = [
+            "不是", "并非", "没有", "没吃", "未吃", "不吃", "不止", "超过", "多于", "至少", "至多", "不到", "少于",
+            "大约", "大概", "差不多", "左右", "约", "可能", "也许", "估计", "不太确定",
+            "not", "didnt", "didnot", "dontknow", "not sure", "unsure", "maybe", "possibly", "about", "roughly", "approx",
+        ]
+        let clauses = userText.components(separatedBy: CharacterSet(charactersIn: "，,。;；\n"))
+        var fractions: [Double] = []
+        var hasUnresolvedFractionClaim = false
+        for clause in clauses {
+            let normalizedClause = FoodResolver.normalize(clause)
+            let containsConsumptionMarker = consumptionMarkers.contains {
+                normalizedClause.contains($0)
+            }
+            let containsWholeMealMarker = wholeMealMarkers.contains {
+                normalizedClause.contains(FoodResolver.normalize($0))
+            }
+            let containsKnownFoodName = dishes.contains { dish in
+                let names = [dish.dishName] + dish.ingredients.map(\.name)
+                return names.contains { name in
+                    let normalizedName = FoodResolver.normalize(name)
+                    return normalizedName.count >= 2 && normalizedClause.contains(normalizedName)
+                }
+            }
+            let quantityContextMarkers = ["包装", "每份", "克", "公克", "份量", "配方", "食谱"]
+            let isQuantityContext = quantityContextMarkers.contains {
+                normalizedClause.contains(FoodResolver.normalize($0))
+            }
+            guard containsConsumptionMarker
+                    || (containsWholeMealMarker && !isQuantityContext)
+                    || (containsKnownFoodName && !isQuantityContext) else { continue }
+            guard containsFractionExpression(in: clause) else { continue }
+            guard !nonExactOrNegatedMarkers.contains(where: { normalizedClause.contains($0) }) else {
+                hasUnresolvedFractionClaim = true
+                continue
+            }
+            guard let fraction = explicitFractionValue(in: clause) else {
+                hasUnresolvedFractionClaim = true
+                continue
+            }
+            let explicitlyCoversAllDishes = containsWholeMealMarker && allDishMarkers.contains {
+                normalizedClause.contains(FoodResolver.normalize($0))
+            }
+            let namedDishTerms = Set(dishes.compactMap { dish -> String? in
+                let normalizedName = FoodResolver.normalize(dish.dishName)
+                return normalizedName.count >= 2 && normalizedClause.contains(normalizedName)
+                    ? normalizedName
+                    : nil
+            })
+            let namesWholeDishInClause = namedDishTerms.contains { dishTerm in
+                distinctIngredientTerms.count == 1 || !distinctIngredientTerms.contains(dishTerm)
+            }
+            let namesIngredientInClause = distinctIngredientTerms.contains { term in
+                term.count >= 2 && normalizedClause.contains(term)
+            }
+            let scopeIsWholeMeal: Bool
+            if explicitlyCoversAllDishes {
+                scopeIsWholeMeal = true
+            } else if namesWholeDishInClause {
+                scopeIsWholeMeal = dishes.count == 1
+            } else if namesIngredientInClause {
+                scopeIsWholeMeal = dishes.count == 1 && distinctIngredientTerms.count == 1
+            } else {
+                scopeIsWholeMeal = dishes.count == 1
+                    || wholeMealMarkers.contains { normalizedClause.contains($0) }
+            }
+            if !scopeIsWholeMeal {
+                hasUnresolvedFractionClaim = true
+                continue
+            }
+            fractions.append(fraction)
+        }
+        guard !hasUnresolvedFractionClaim else { return .unresolved }
+        guard let firstFraction = fractions.first else { return .none }
+        guard fractions.allSatisfy({ abs($0 - firstFraction) < 0.000_001 }) else {
+            return .unresolved
+        }
+        return .resolved(ConsumedFractionEvidence(fraction: firstFraction))
+    }
+
+    private func containsFractionExpression(in text: String) -> Bool {
+        let lowercasedText = text.lowercased()
+        if [
+            "四分之三", "三分之二", "三分之一", "四分之一", "二分之一", "一半", "半份", "half",
+        ].contains(where: { lowercasedText.contains($0) }) {
+            return true
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let patterns = [#"[0-9]+(?:\.[0-9]+)?\s*%"#, #"[0-9]+\s*[/／]\s*[0-9]+"#]
+        return patterns.contains { pattern in
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+            return regex.firstMatch(in: text, range: range) != nil
+        }
+    }
+
+    private func explicitFractionValue(in text: String) -> Double? {
+        var candidates: [Double] = []
+        let percentRegex = try? NSRegularExpression(
+            pattern: #"([0-9]+(?:\.[0-9]+)?)\s*%"#
+        )
+        let ratioRegex = try? NSRegularExpression(
+            pattern: #"([0-9]+)\s*[/／]\s*([0-9]+)"#
+        )
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        if let percentRegex {
+            for match in percentRegex.matches(in: text, range: range) {
+                guard let valueRange = Range(match.range(at: 1), in: text),
+                      let percent = Double(text[valueRange]) else { continue }
+                candidates.append(percent / 100)
+            }
+        }
+        if let ratioRegex {
+            for match in ratioRegex.matches(in: text, range: range) {
+                guard let numeratorRange = Range(match.range(at: 1), in: text),
+                      let denominatorRange = Range(match.range(at: 2), in: text),
+                      let numerator = Double(text[numeratorRange]),
+                      let denominator = Double(text[denominatorRange]),
+                      denominator > 0 else { continue }
+                candidates.append(numerator / denominator)
+            }
+        }
+        let chineseFractions: [(String, Double)] = [
+            ("四分之三", 0.75), ("三分之二", 2.0 / 3.0), ("三分之一", 1.0 / 3.0),
+            ("四分之一", 0.25), ("二分之一", 0.5), ("一半", 0.5), ("半份", 0.5),
+        ]
+        let lowercasedText = text.lowercased()
+        for (phrase, value) in chineseFractions where lowercasedText.contains(phrase) {
+            candidates.append(value)
+        }
+        if lowercasedText.contains("half") { candidates.append(0.5) }
+        guard candidates.count == 1,
+              candidates[0].isFinite,
+              candidates[0] > 0,
+              candidates[0] <= 1 else {
+            return nil
+        }
+        return candidates[0]
+    }
+
+    private func userExplicitlySeparatesRepeatedIngredient(
+        in userText: String,
+        matching ingredientTerms: [String]
+    ) -> Bool {
+        let sharedPortionMarkers = [
+            "同一份", "同一碗", "同一块", "同一批", "重复计量", "只算一次", "sameportion", "duplicate",
+        ]
+        let negatedSharedPortionMarkers = [
+            "不是同一份", "并非同一份", "不是同一碗", "不是重复", "不算重复", "notthesame", "notduplicate",
+        ]
+        let separateOccurrenceMarkers = [
+            "分别各有", "每道菜各", "每道菜都有", "各自有", "各有一份", "各自一份",
+            "分别计量", "不同份量", "每道菜分别有", "每份各有",
+            "each dish", "each serving", "separate servings", "different portions",
+        ]
+        let notSeparateMarkers = [
+            "不是分别", "并非分别", "不分别", "不是各自", "不各自", "不是各有", "不各有",
+            "notseparately", "notseparate", "noteachdish",
+        ]
+        return userText
+            .components(separatedBy: CharacterSet(charactersIn: "，,。;；\n"))
+            .contains { clause in
+                let normalizedClause = FoodResolver.normalize(clause)
+                let mentionsIngredient = ingredientTerms.contains { term in
+                    let normalizedTerm = FoodResolver.normalize(term)
+                    return !normalizedTerm.isEmpty && normalizedClause.contains(normalizedTerm)
+                }
+                guard mentionsIngredient,
+                      !notSeparateMarkers.contains(where: { normalizedClause.contains($0) }) else {
+                    return false
+                }
+                let deniesSharedPortion = negatedSharedPortionMarkers.contains {
+                    normalizedClause.contains($0)
+                }
+                if !deniesSharedPortion,
+                   sharedPortionMarkers.contains(where: { normalizedClause.contains($0) }) {
+                    return false
+                }
+                return separateOccurrenceMarkers.contains { marker in
+                    normalizedClause.contains(FoodResolver.normalize(marker))
+                }
+        }
+    }
+
+    private func userExplicitlySharesRepeatedIngredient(
+        in userText: String,
+        matching ingredientTerms: [String]
+    ) -> Bool {
+        let sharedPortionMarkers = [
+            "同一份", "同一碗", "同一块", "同一批", "重复计量", "只算一次", "sameportion", "duplicate",
+        ]
+        let negatedSharedPortionMarkers = [
+            "不是同一份", "并非同一份", "不是同一碗", "不是重复", "不算重复", "notthesame", "notduplicate",
+        ]
+        return userText
+            .components(separatedBy: CharacterSet(charactersIn: "，,。;；\n"))
+            .contains { clause in
+                let normalizedClause = FoodResolver.normalize(clause)
+                let mentionsIngredient = ingredientTerms.contains { term in
+                    let normalizedTerm = FoodResolver.normalize(term)
+                    return !normalizedTerm.isEmpty && normalizedClause.contains(normalizedTerm)
+                }
+                guard mentionsIngredient,
+                      !negatedSharedPortionMarkers.contains(where: { normalizedClause.contains($0) }) else {
+                    return false
+                }
+                return sharedPortionMarkers.contains { normalizedClause.contains($0) }
+            }
     }
 }
 

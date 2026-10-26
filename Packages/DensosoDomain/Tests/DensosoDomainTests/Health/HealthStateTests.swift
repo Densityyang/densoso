@@ -16,6 +16,40 @@ final class HealthStateTests: XCTestCase {
         XCTAssertTrue(result.evidence.isEmpty)
     }
 
+    func testUnknownAndPartialDomainStatusesDoNotBecomeUsableRecoveryEvidence() {
+        for status in [HealthDomainStatus.unknown, .partial] {
+            let result = HealthStatePolicy.recovery(
+                sleep: domain(.sleep, status: status, evidence: []),
+                restingHeartRate: nil,
+                heartRateVariability: nil,
+                trainingLoad: load(readiness: .noData, band: .unavailable, ratio: nil)
+            )
+
+            XCTAssertEqual(result.status, .insufficientEvidence)
+            XCTAssertEqual(result.recommendedAction, .collectData)
+            XCTAssertTrue(result.evidence.isEmpty)
+        }
+
+        let unknownLoad = TrainingLoadSummary(
+            recentSevenDayLoad: 0,
+            priorTwentyEightDayAverage: 100,
+            ratio: 1.5,
+            readiness: .mature,
+            band: .sharplyIncreased,
+            estimatedWorkoutCount: 3,
+            unavailableEffortCount: 0,
+            dataCoverage: .unknown
+        )
+        let recovery = HealthStatePolicy.recovery(
+            sleep: domain(.sleep, status: .unknown, evidence: []),
+            restingHeartRate: nil,
+            heartRateVariability: nil,
+            trainingLoad: unknownLoad
+        )
+        XCTAssertEqual(recovery.status, .insufficientEvidence)
+        XCTAssertTrue(recovery.evidence.isEmpty)
+    }
+
     func testSleepAttentionAndSharpTrainingLoadRecommendReducingIntensity() {
         let recovery = HealthStatePolicy.recovery(
             sleep: domain(.sleep, status: .attention, evidence: ["sleep.mainSleep.minutes"]),
@@ -77,7 +111,12 @@ final class HealthStateTests: XCTestCase {
     }
 
     private func domain(_ domain: HealthDomain, status: HealthDomainStatus, evidence: [String]) -> HealthDomainResult {
-        HealthDomainResult(
+        let coverage: HealthDataCoverage = switch status {
+        case .unknown: .unknown
+        case .partial: .partial
+        default: .complete
+        }
+        return HealthDomainResult(
             domain: domain,
             status: status,
             currentValue: status == .noData ? nil : 7,
@@ -89,7 +128,8 @@ final class HealthStateTests: XCTestCase {
                 p90: status == .noData ? nil : 8,
                 mad: status == .noData ? nil : 0.5
             ),
-            evidenceKeys: evidence
+            evidenceKeys: evidence,
+            dataCoverage: coverage
         )
     }
 

@@ -3,7 +3,7 @@ import Foundation
 import DensosoDomain
 
 /// The only HealthKit adapter used by the application. HealthKit types do not cross this boundary.
-final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient, @unchecked Sendable {
+final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuthorizationBoundaryProviding, @unchecked Sendable {
     private let store: HKHealthStore
     private let observerLock = NSLock()
     private var observerKeys: Set<String> = []
@@ -25,6 +25,24 @@ final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient,
             try await store.requestAuthorization(toShare: shareTypes, read: readTypes)
         } catch {
             throw Self.mapHealthKitError(error)
+        }
+    }
+
+    func earliestAuthorizedSampleDate(for metric: HealthMetricID) async throws -> Date? {
+        guard HKHealthStore.isHealthDataAvailable() else { throw HealthStoreClientError.unavailable }
+        guard let type = sampleTypeIfAvailable(for: metric) else {
+            throw HealthStoreClientError.unsupportedMetric(metric)
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            store.getEarliestAuthorizedSampleDate(for: [type]) { dates, error in
+                if let error {
+                    continuation.resume(throwing: Self.mapHealthKitError(error))
+                    return
+                }
+                // HealthKit omits types without limited-history authorization. That
+                // includes both full access and denied access, which remain unknown.
+                continuation.resume(returning: dates?.values.min())
+            }
         }
     }
 
@@ -117,14 +135,14 @@ final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient,
         return page
     }
 
-    func workoutChanges(after anchorData: Data?) async throws -> HealthChangePage<WorkoutSnapshot> {
+    func workoutChanges(from startDate: Date, after anchorData: Data?) async throws -> HealthChangePage<WorkoutSnapshot> {
         guard HKHealthStore.isHealthDataAvailable() else { throw HealthStoreClientError.unavailable }
         let anchor = try decodeAnchor(anchorData)
         let limit = 500
         return try await withCheckedThrowingContinuation { continuation in
             let query = HKAnchoredObjectQuery(
                 type: HKObjectType.workoutType(),
-                predicate: nil,
+                predicate: HKQuery.predicateForSamples(withStart: startDate, end: nil, options: []),
                 anchor: anchor,
                 limit: limit
             ) { _, samples, deletedObjects, newAnchor, error in

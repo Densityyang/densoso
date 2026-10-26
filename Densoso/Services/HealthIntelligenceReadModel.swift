@@ -8,7 +8,6 @@ struct HealthIntelligenceReadModel: Sendable {
     static let workoutFetchBatchSize = 64
     static let weightFetchBatchSize = 64
     static let schedulePlanFetchBatchSize = 64
-    static let subjectiveCheckInLookbackDays = 7
     static let subjectiveCheckInFetchLimit = 128
 
     private let calendar: Calendar
@@ -68,7 +67,7 @@ struct HealthIntelligenceReadModel: Sendable {
         let today = calendar.startOfDay(for: referenceDate)
         let userReportedSource = "userReported"
         var entries: [SubjectiveHealthEntry] = []
-        for daysBack in 0..<Self.subjectiveCheckInLookbackDays {
+        for daysBack in 0..<HealthDataWindowPolicy.subjectiveCheckInLookbackDays {
             guard let dayStart = calendar.date(byAdding: .day, value: -daysBack, to: today),
                   let nextDayStart = calendar.date(byAdding: .day, value: 1, to: dayStart) else {
                 continue
@@ -139,7 +138,7 @@ struct HealthIntelligenceReadModel: Sendable {
         guard (0..<HealthHistoryQueryError.maximumDays).contains(dayCount) else {
             throw HealthHistoryQueryError.rangeTooLarge
         }
-        guard let baselineStart = calendar.date(byAdding: .day, value: -41, to: startDay) else {
+        guard let baselineStart = HealthDataWindowPolicy.analysisStart(through: startDay, calendar: calendar) else {
             throw HealthHistoryQueryError.invalidRange
         }
 
@@ -185,8 +184,7 @@ struct HealthIntelligenceReadModel: Sendable {
 
     func loadDays(through date: Date, in context: ModelContext) throws -> [HealthIntelligenceDay] {
         let end = calendar.startOfDay(for: date)
-        // Preserve the complete prior baseline plus the previous Monday-based week.
-        guard let start = calendar.date(byAdding: .day, value: -41, to: end) else { return [] }
+        guard let start = HealthDataWindowPolicy.analysisStart(through: end, calendar: calendar) else { return [] }
         return try loadDays(from: start, through: end, in: context)
     }
 
@@ -364,15 +362,27 @@ struct HealthIntelligenceReadModel: Sendable {
             guard dayStart >= start && dayStart <= end else { continue }
             let snapshot = snapshotByDay[dayStart]
             let sampleSummary = snapshot?.healthKitSampleSummary
+            let projectionMetrics: [HealthMetricID] = [
+                .workout, .workoutEffort, .stepCount, .activeEnergy, .exerciseMinutes,
+                .sleepAnalysis, .heartRate, .restingHeartRate, .heartRateVariabilitySDNN,
+                .respiratoryRate, .bodyMass, .wristTemperature,
+            ]
+            var projectionReadStates = snapshot?.healthReadStates ?? [:]
+            for metric in projectionMetrics where projectionReadStates[metric.rawValue] == nil {
+                projectionReadStates[metric.rawValue] = .dataUnavailableOrReadScopeUnknown
+            }
             func availableAggregate(_ metric: HealthMetricID) -> HealthMetricSampleAggregate? {
-                if let state = snapshot?.healthReadStates?[metric.rawValue], state != .available { return nil }
+                guard projectionReadStates[metric.rawValue] == .available else { return nil }
                 return sampleSummary?.aggregate(for: metric)
             }
             func dailyAverage(_ metric: HealthMetricID) -> [Double] {
                 guard let value = availableAggregate(metric)?.averageValue else { return [] }
                 return [value]
             }
-            let localWeightPoints = (weightsByDay[dayStart] ?? []).map { (date: $0.measuredAt, value: $0.kilograms) }
+            let bodyMassReadState = projectionReadStates[HealthMetricID.bodyMass.rawValue]
+            let localWeightPoints = (weightsByDay[dayStart] ?? [])
+                .filter { $0.source != "healthKit" || bodyMassReadState == .available }
+                .map { (date: $0.measuredAt, value: $0.kilograms) }
             let healthWeightPoints: [(date: Date, value: Double)]
             if let aggregate = availableAggregate(.bodyMass),
                let date = aggregate.latestSampleAt,
@@ -382,14 +392,17 @@ struct HealthIntelligenceReadModel: Sendable {
                 healthWeightPoints = []
             }
             var weightPoints = localWeightPoints + healthWeightPoints
-            let bodyMassReadState = snapshot?.healthReadStates?[HealthMetricID.bodyMass.rawValue]
             if weightPoints.isEmpty,
-               bodyMassReadState == nil || bodyMassReadState == .available,
+               bodyMassReadState == .available,
                let fallbackWeight = snapshot?.weightKilograms {
                 weightPoints = [(date: dayStart, value: fallbackWeight)]
             }
             let weightSamples = weightPoints.sorted { $0.date < $1.date }.map { $0.value }
-            let workouts = (workoutsByDay[dayStart] ?? []).map { record in
+            let workoutReadState = projectionReadStates[HealthMetricID.workout.rawValue]
+            let workoutRecordsForDay = (workoutsByDay[dayStart] ?? []).filter {
+                $0.healthKitUUID == nil || workoutReadState == .available
+            }
+            let workouts = workoutRecordsForDay.map { record in
                 let effort = availableAggregate(.workoutEffort) != nil
                     ? sampleSummary?.effortScore(for: record.id)
                     : nil
@@ -404,19 +417,26 @@ struct HealthIntelligenceReadModel: Sendable {
             let metricReadResult = metric.map(DailyMetricsReadModelMapper.make)
             let proteinGrams = metricReadResult?.proteinG.value
             let energyIntake = metricReadResult?.intake.value?.likely
-            let dailyDeficit = metricReadResult?.deficit.value?.likely
+            let dailyDeficit = projectionReadStates[HealthMetricID.activeEnergy.rawValue] == .available
+                ? metricReadResult?.deficit.value?.likely
+                : nil
             days.append(HealthIntelligenceDay(
                 dayStart: dayStart,
                 energyIntakeKcal: energyIntake,
                 proteinGrams: proteinGrams,
                 dailyDeficitKcal: dailyDeficit,
-                activeEnergyKcal: snapshot?.activeEnergyForProjection,
-                stepCount: snapshot?.stepCountForProjection,
-                exerciseMinutes: snapshot?.exerciseMinutesForProjection,
+                activeEnergyKcal: projectionReadStates[HealthMetricID.activeEnergy.rawValue] == .available
+                    ? snapshot?.activeEnergyKcal
+                    : nil,
+                stepCount: projectionReadStates[HealthMetricID.stepCount.rawValue] == .available
+                    ? snapshot?.stepCount
+                    : nil,
+                exerciseMinutes: projectionReadStates[HealthMetricID.exerciseMinutes.rawValue] == .available
+                    ? snapshot?.exerciseMinutes
+                    : nil,
                 weightSamplesKilograms: weightSamples,
                 sleepSamples: [],
-                sleepSummary: snapshot?.healthReadStates?[HealthMetricID.sleepAnalysis.rawValue] == nil
-                    || snapshot?.healthReadStates?[HealthMetricID.sleepAnalysis.rawValue] == .available
+                sleepSummary: projectionReadStates[HealthMetricID.sleepAnalysis.rawValue] == .available
                     ? sampleSummary?.sleep
                     : nil,
                 heartRateSamples: dailyAverage(.heartRate),
@@ -424,7 +444,8 @@ struct HealthIntelligenceReadModel: Sendable {
                 heartRateVariabilitySamples: dailyAverage(.heartRateVariabilitySDNN),
                 respiratoryRateSamples: dailyAverage(.respiratoryRate),
                 wristTemperatureSamples: dailyAverage(.wristTemperature),
-                workouts: workouts
+                workouts: workouts,
+                healthReadStates: projectionReadStates
             ))
         }
         return days

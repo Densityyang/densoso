@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "sourceID": "legacy-china-food-seed",
+      "sourceURL": "https://github.com/andforce/ChinaFoodComposition",
+      "sourceVersion": "legacy-seed-snapshot-2026-10-26",
+      "retrievedAt": null,
+      "licenseSPDX": null,
+      "dataRole": "food-composition",
+      "redistributionAllowed": false,
+      "verificationStatus": "unverified",
+      "notes": "The previous importer attributed its input to this repository, but the 31 bundled seed rows have no source record IDs, pinned upstream revision, or verified data redistribution license. This version identifies only the retained in-repository snapshot; it is not an upstream version. Rows are for development/review imports only and are excluded by --production."
+    },
+    {
+      "sourceID": "usda-fdc-foundation-foods",
+      "sourceURL": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_json_2026-04-30.zip",
+      "catalogURL": "https://fdc.nal.usda.gov/download-datasets/",
+      "sourceVersion": "2026-04-30",
+      "retrievedAt": "2026-10-26",
+      "archiveSHA256": "186e988ec542e913f51ef62b86a47758e8cdd0d1dc3889e7b055581f3c09c77a",
+      "licenseSPDX": "CC0-1.0",
+      "licenseURL": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "dataType": "Foundation",
+      "dataRole": "food-composition",
+      "redistributionAllowed": true,
+      "verificationStatus": "verified",
+      "notes": "Official USDA FoodData Central Foundation Foods JSON release dated 2026-04-30. USDA documents Foundation nutrient values per 100 g of edible portion. Source names and FDC IDs are retained on each row. Energy uses nutrient 1008 when available, otherwise 2047 (Atwater General Factors); values are kcal."
+    },
+    {
+      "sourceID": "usda-fdc-sr-legacy",
+      "sourceURL": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_sr_legacy_food_json_2018-04.zip",
+      "catalogURL": "https://fdc.nal.usda.gov/download-datasets/",
+      "sourceVersion": "2018-04",
+      "retrievedAt": "2026-10-26",
+      "archiveSHA256": "0fe8ae486a2c8eb42cb96413f058deb51863a46c8fb8eeb4b1fb45006dd338ef",
+      "licenseSPDX": "CC0-1.0",
+      "licenseURL": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "dataType": "SR Legacy",
+      "dataRole": "food-composition",
+      "redistributionAllowed": true,
+      "verificationStatus": "verified",
+      "notes": "Official USDA FoodData Central SR Legacy final release dated April 2018. USDA describes SR Legacy as a final, non-updating release. Nutrient values are per 100 g edible portion. Source names and FDC IDs are retained on each row; Energy nutrient ID 1008 is recorded directly."
+    }
+  ]
+}

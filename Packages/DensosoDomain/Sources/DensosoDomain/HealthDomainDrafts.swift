@@ -1,5 +1,63 @@
 import Foundation
 
+public enum ConsumedFractionSource: String, Codable, Equatable, Sendable {
+    case currentUserReport
+}
+
+/// A meal-wide consumed fraction parsed from explicit text in the current user turn.
+public struct ConsumedFractionEvidence: Codable, Equatable, Sendable {
+    public static let currentParserVersion = "meal-consumed-fraction-v1"
+
+    public let fraction: Double
+    public let source: ConsumedFractionSource
+    public let parserVersion: String
+
+    public init?(fraction: Double) {
+        guard fraction.isFinite, fraction > 0, fraction <= 1 else { return nil }
+        self.fraction = fraction
+        source = .currentUserReport
+        parserVersion = Self.currentParserVersion
+    }
+
+    public var evidenceSnapshot: EvidenceSnapshot {
+        let percent = Int((fraction * 100).rounded())
+        return EvidenceSnapshot(
+            grade: .userReported,
+            sourceID: "meal-consumed-fraction:user-report",
+            sourceVersion: parserVersion,
+            summary: "用户本轮明确自述本餐摄入约 \(percent)%"
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case fraction
+        case source
+        case parserVersion
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let fraction = try container.decode(Double.self, forKey: .fraction)
+        let source = try container.decode(ConsumedFractionSource.self, forKey: .source)
+        let parserVersion = try container.decode(String.self, forKey: .parserVersion)
+        guard fraction.isFinite, fraction > 0, fraction <= 1,
+              !parserVersion.isEmpty, parserVersion.count <= 80 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .fraction,
+                in: container,
+                debugDescription: "Consumed fraction evidence is out of range."
+            )
+        }
+        self.fraction = fraction
+        self.source = source
+        self.parserVersion = parserVersion
+    }
+}
+
+public enum MealDraftScalingError: Error, Equatable, Sendable {
+    case consumedFractionAlreadyApplied
+}
+
 public struct MealIngredientDraft: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let foodID: String?
@@ -64,6 +122,7 @@ public struct MealDraft: Codable, Equatable, Sendable {
     public let mealType: String
     public let dishes: [MealDishDraft]
     public let note: String?
+    public let consumedFractionEvidence: ConsumedFractionEvidence?
 
     public init(
         occurredAt: Date,
@@ -75,6 +134,60 @@ public struct MealDraft: Codable, Equatable, Sendable {
         self.mealType = mealType
         self.dishes = dishes
         self.note = note
+        self.consumedFractionEvidence = nil
+    }
+
+    private init(
+        occurredAt: Date,
+        mealType: String,
+        dishes: [MealDishDraft],
+        note: String?,
+        consumedFractionEvidence: ConsumedFractionEvidence
+    ) {
+        self.occurredAt = occurredAt
+        self.mealType = mealType
+        self.dishes = dishes
+        self.note = note
+        self.consumedFractionEvidence = consumedFractionEvidence
+    }
+
+    public func applyingConsumedFraction(
+        _ evidence: ConsumedFractionEvidence
+    ) throws -> MealDraft {
+        guard consumedFractionEvidence == nil else {
+            throw MealDraftScalingError.consumedFractionAlreadyApplied
+        }
+        let fraction = evidence.fraction
+        let scaledDishes = try dishes.map { dish in
+            let scaledIngredients = try dish.ingredients.map { ingredient in
+                MealIngredientDraft(
+                    id: ingredient.id,
+                    foodID: ingredient.foodID,
+                    name: ingredient.name,
+                    amountGrams: try ingredient.amountGrams.scaled(by: fraction),
+                    nutrients: try Self.scaled(ingredient.nutrients, by: fraction),
+                    evidence: ingredient.evidence,
+                    foodResolutionScoreV2: ingredient.foodResolutionScoreV2
+                )
+            }
+            return MealDishDraft(
+                id: dish.id,
+                name: dish.name,
+                cookingMethod: dish.cookingMethod,
+                portionGrams: try dish.portionGrams.map { try $0.scaled(by: fraction) },
+                nutrients: try Self.scaled(dish.nutrients, by: fraction),
+                ingredients: scaledIngredients,
+                evidence: dish.evidence + [evidence.evidenceSnapshot],
+                algorithmVersion: dish.algorithmVersion
+            )
+        }
+        return MealDraft(
+            occurredAt: occurredAt,
+            mealType: mealType,
+            dishes: scaledDishes,
+            note: note,
+            consumedFractionEvidence: evidence
+        )
     }
 
     public var totalNutrients: NutrientEstimate? {
@@ -99,6 +212,15 @@ public struct MealDraft: Codable, Equatable, Sendable {
         let values = dishes.compactMap { $0.nutrients[keyPath: keyPath] }
         guard values.count == dishes.count else { return nil }
         return try? EstimateRange.sum(values)
+    }
+
+    private static func scaled(_ estimate: NutrientEstimate, by fraction: Double) throws -> NutrientEstimate {
+        NutrientEstimate(
+            energyKcal: try estimate.energyKcal.scaled(by: fraction),
+            proteinGrams: try estimate.proteinGrams.map { try $0.scaled(by: fraction) },
+            fatGrams: try estimate.fatGrams.map { try $0.scaled(by: fraction) },
+            carbohydrateGrams: try estimate.carbohydrateGrams.map { try $0.scaled(by: fraction) }
+        )
     }
 }
 

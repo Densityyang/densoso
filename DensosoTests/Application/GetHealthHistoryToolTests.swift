@@ -138,6 +138,85 @@ final class GetHealthHistoryToolTests: XCTestCase {
         XCTAssertEqual((object["days"] as? [Any])?.count, 0)
     }
 
+    func testHistoryResponsePreservesUnknownAndPartialCoverageWithoutAbsenceOrZero() throws {
+        let start = Date(timeIntervalSince1970: 1_780_000_000)
+        let baseline = HealthBaseline(readiness: .noData, validDays: 0, median: nil, p10: nil, p90: nil, mad: nil)
+        let state = HealthStateV2(
+            domains: [
+                HealthDomainResult(domain: .sleep, status: .unknown, currentValue: nil, baseline: baseline, evidenceKeys: []),
+                HealthDomainResult(domain: .activity, status: .partial, currentValue: 5_600, baseline: baseline, evidenceKeys: ["activity.steps"]),
+            ],
+            recovery: RecoveryAssessment(
+                status: .insufficientEvidence,
+                confidence: .low,
+                evidence: [],
+                recommendedAction: .collectData
+            ),
+            trainingLoad: TrainingLoadSummary(
+                recentSevenDayLoad: 0,
+                priorTwentyEightDayAverage: nil,
+                ratio: nil,
+                readiness: .noData,
+                band: .unavailable,
+                estimatedWorkoutCount: 0,
+                unavailableEffortCount: 0,
+                dataCoverage: .unknown
+            ),
+            tomorrowGuidance: nil
+        )
+
+        let response = try GetHealthHistoryTool().response(
+            from: start,
+            through: start,
+            points: [HealthStateHistoryPoint(date: start, state: state)]
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let day = try XCTUnwrap((object["days"] as? [[String: Any]])?.first)
+        let statuses = try XCTUnwrap(day["domainStatuses"] as? [String: String])
+        let observations = try XCTUnwrap(day["observations"] as? [String: Double])
+
+        XCTAssertEqual(object["status"] as? String, "partial")
+        XCTAssertEqual(statuses["sleep"], HealthDomainStatus.unknown.rawValue)
+        XCTAssertEqual(statuses["activity"], HealthDomainStatus.partial.rawValue)
+        XCTAssertEqual(observations["activity.steps"], 5_600)
+        XCTAssertFalse(observations.values.contains(0))
+        XCTAssertNil(observations["trainingLoad.ratio"])
+        XCTAssertEqual(day["trainingLoadCoverage"] as? String, HealthDataCoverage.unknown.rawValue)
+        XCTAssertNil(day["trainingLoadBand"])
+        XCTAssertNotEqual(object["status"] as? String, "noData")
+    }
+
+    func testReadModelHistoryKeepsUnknownHealthKitCoverageTypedWithoutZeroObservations() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let day = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: Date())))
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let projection = HealthProjectionActor(modelContainer: container, calendar: calendar)
+        let points = try await projection.healthHistory(from: day, through: day)
+        let response = try GetHealthHistoryTool(calendar: calendar).response(
+            from: day,
+            through: day,
+            points: points
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let resultDay = try XCTUnwrap((object["days"] as? [[String: Any]])?.first)
+        let statuses = try XCTUnwrap(resultDay["domainStatuses"] as? [String: String])
+        let observations = try XCTUnwrap(resultDay["observations"] as? [String: Double])
+
+        XCTAssertEqual(object["status"] as? String, "partial")
+        XCTAssertEqual(statuses["sleep"], HealthDomainStatus.unknown.rawValue)
+        XCTAssertEqual(statuses["activity"], HealthDomainStatus.unknown.rawValue)
+        XCTAssertEqual(statuses["body"], HealthDomainStatus.unknown.rawValue)
+        XCTAssertEqual(resultDay["trainingLoadCoverage"] as? String, HealthDataCoverage.unknown.rawValue)
+        XCTAssertTrue(observations.isEmpty)
+        XCTAssertNil(resultDay["trainingLoadBand"])
+        XCTAssertFalse(response.contains("trainingLoad.ratio"))
+    }
+
     func testResponseRejectsMoreThanFourteenDaysAndFutureDates() throws {
         let calendar = Calendar.current
         let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 1)))

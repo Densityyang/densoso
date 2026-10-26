@@ -77,7 +77,7 @@ is omitted.
 Historical DailyMetrics recompute scans only `requiresRecompute` rows in the
 most recent 90 local days. A shared policy checks the effective profile, the
 algorithm-required demographic fields, and the latest weight at the target
-day's `asOf` time; complete HealthKit basal/active values do not bypass these
+day's `asOf` time; complete HealthKit basal/active values cannot bypass these
 historical prerequisites. Ordinary reprojects also apply the policy to new
 historical days, persisting them as unavailable and pending when inputs are
 missing. Same-source pending rows are not rewritten on every refresh, and a
@@ -162,11 +162,18 @@ the Watch snapshot; failures keep the last successful cache for a later retry.
   `HistoricalMetricsRecomputeServiceTests.testMissingDOBDoesNotLetObservedEnergyClearRecomputeFlag`,
   `HistoricalMetricsRecomputeServiceTests.testOrdinaryHistoricalReprojectKeepsPendingFlagWhenDOBMissingWithObservedEnergy`,
   `HistoricalMetricsRecomputeServiceTests.testCurrentDayReprojectRetainsObservedEnergyBehaviorWithoutProfileOrWeight`,
+  `HistoricalMetricsRecomputeServiceTests.testNewHistoricalProjectionWithoutRequiredInputsIsPersistedAsPending`,
+  `HistoricalMetricsRecomputeServiceTests.testCurrentDayUsesProfileAndWeightAddedAfterMidnight`,
+  `HistoricalMetricsRecomputeServiceTests.testHistoricalProjectionUsesProfileAndWeightEffectiveLaterThatDay`,
+  `HistoricalMetricsRecomputeServiceTests.testProjectionReferenceUsesTodayAndHistoricalDayEndAcrossDST`,
   `HistoricalMetricsRecomputeServiceTests.testMissingWeightDoesNotLetObservedEnergyClearRecomputeFlag`,
   `HistoricalMetricsRecomputeServiceTests.testCancellationStopsAfterSavedRowAndReportsRetryableWork`,
   `DailyCheckInConfirmationTests.testSameDayCheckInsAppendIdempotentlyAndSubjectiveReadUsesLatest`,
   `HealthNarrativePolicyTests.testPromptKeepsSubjectiveCheckInsSeparateFromObjectiveHealthState`,
   `HealthNarrativePolicyTests.testDeterministicFallbackCanUseOnlyExplicitSubjectiveContext`,
+  `HealthNarrativeTests.testSubjectiveCheckInsRemainSeparateAndAddTheirOwnEvidenceKeys`,
+  `HealthIntelligenceTests.testHealthContextAveragesSignedEnergyBalanceAndReportsItsDenominator`,
+  `DailyLoopSnapshotTests.testLegacySnapshotDecodesWithUnknownProvenanceAndRefreshRequiredState`,
   `ConfirmationCoordinatorTests.testHistoricalConfirmationKeepsPendingMetricsWhenProfileAndWeightAreMissing`,
   `HealthNarrativePolicyTests`,
   `DailyLoopSnapshotCompositionTests.testComposerUsesMatchingExistingBriefAndPreservesOptionalState`,

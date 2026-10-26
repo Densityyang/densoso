@@ -385,7 +385,12 @@ final class WatchMessageInboxStoreTests: XCTestCase {
         var expectedCommandIDs: [UUID] = []
 
         for index in 0..<65 {
-            let messageID = UUID()
+            // Permute IDs relative to arrival order; index 36 is the final lexical receipt ID.
+            let messageIDValue = (index * 9) % 65 + 1
+            let messageID = UUID(uuidString: String(
+                format: "00000000-0000-0000-0000-%012d",
+                messageIDValue
+            ))!
             let envelope: WatchMessageEnvelope
             if index.isMultiple(of: 2) {
                 envelope = WatchMessageEnvelope(

@@ -8,14 +8,14 @@ final class DailyLoopSnapshotTests: XCTestCase {
         XCTAssertEqual(AlgorithmVersions.dailyMetricsProjection, "daily-metrics-projection-v1")
         XCTAssertEqual(AlgorithmVersions.mealEstimator, "meal-estimator-v2")
         XCTAssertEqual(AlgorithmVersions.portionEstimator, "portion-estimator-v2")
-        XCTAssertEqual(AlgorithmVersions.healthIntelligence, "health-intelligence-v2")
+        XCTAssertEqual(AlgorithmVersions.healthIntelligence, "health-intelligence-v3")
         XCTAssertEqual(AlgorithmVersions.recommendationPolicy, "recommendation-policy-v1")
         XCTAssertEqual(AlgorithmVersions.dailyLoop, "daily-loop-v2")
         XCTAssertEqual(RecommendationEngine.algorithmVersion, AlgorithmVersions.recommendationPolicy)
         XCTAssertEqual(DailyLoopSnapshot.currentAlgorithmVersion, AlgorithmVersions.dailyLoop)
         XCTAssertEqual(
             HealthIntelligenceEngine.dailyBriefCacheAlgorithmVersion,
-            "health-intelligence-v2+recommendation-policy-v1"
+            "health-intelligence-v3+recommendation-policy-v1"
         )
     }
 

@@ -143,7 +143,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 'public static let dailyMetricsProjection = "daily-metrics-projection-v1"',
                 'public static let mealEstimator = "meal-estimator-v2"',
                 'public static let portionEstimator = "portion-estimator-v2"',
-                'public static let healthIntelligence = "health-intelligence-v2"',
+                'public static let healthIntelligence = "health-intelligence-v3"',
                 'public static let recommendationPolicy = "recommendation-policy-v1"',
                 'public static let dailyLoop = "daily-loop-v2"',
             ),
@@ -153,7 +153,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Services/DailyMetricsProjectionFingerprint.swift",
             (
                 "struct DailyMetricsProjectionFingerprintContext",
-                "$0.profileKey == profileKey && $0.effectiveFrom <= effectiveAt",
+                "let goalPredicate = #Predicate<GoalProfileRecord> { $0.profileKey == profileKey }",
+                "let profileToken = profileRevision.map {",
                 "HealthKit cursor anchors record query progress",
                 "static func isCurrent(",
                 "!requiresRecompute",
@@ -181,7 +182,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "intensity:\\($0.intensity)",
                 "origin:\\($0.workoutOrigin)",
                 "energy-source:\\($0.energySource ?? \"none\")",
-                "projectionVersion: fingerprintContext.algorithmVersion",
+                "projectionVersion: input.fingerprintContext.algorithmVersion",
             ),
             errors,
         )
@@ -218,7 +219,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "private var dailyLoopSnapshotReadError: String?",
                 "private var isLoadingDailyLoopSnapshot = true",
-                "guard !isRefreshingDailyLoopSnapshot else { return }",
+                "guard case .start(var passRefreshesHealth) = dailyLoopSnapshotRefreshQueue.request(",
                 "isLoadingDailyLoopSnapshot = true",
                 "isLoadingDailyLoopSnapshot = false",
                 "errorMessage: dailyLoopSnapshotReadError",
@@ -440,7 +441,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "struct HealthIntelligenceReadModel",
                 "static let workoutFetchBatchSize = 64",
                 "static let weightFetchBatchSize = 64",
-                "DailyMetricsReadModelMapper.make(metric)",
+                "let metricReadResult = metric.map(DailyMetricsReadModelMapper.make)",
                 "metricReadResult?.proteinG.value",
                 "descriptor.fetchLimit = Self.workoutFetchBatchSize",
                 "descriptor.fetchLimit = Self.weightFetchBatchSize",
@@ -517,7 +518,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "focused-pr-tests",
                 "testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages",
-                "needs.final-acceptance.result == 'success'",
+                "gate-11-ai-native-health-loop:",
+                "needs: final-acceptance",
+                "if: ${{ always() }}",
             ),
             errors,
         )
@@ -752,7 +755,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "static func hasValidInputs(",
                 "profile.dateOfBirth.timeIntervalSince1970.isFinite",
                 "profile.age(in: calendar)",
-                "weight.measuredAt <= day",
+                "weight.measuredAt <= referenceDate",
                 "weight.kilograms.isFinite, weight.kilograms > 0",
             ),
             errors,
@@ -866,7 +869,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "a text-only or Qwen provider is rejected without fallback",
                 "DiagnosticsExportPrivacyTests.testProviderErrorsExportOnlyAllowlistedCodes",
                 "Agent, Narrative, Meal, and Vision prompt builders expose centralized version",
-                "New conversations persist `toolSchemaVersion=2`",
+                "New conversations persist the current `toolSchemaVersion`",
                 "migrated from V1–V6 are lazily marked as schema v1",
                 "AgentRequestResumeTests.testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn",
                 "AgentCoordinatorTests.testTypedEventStreamPreservesOrderAndRealCounts",
@@ -2384,8 +2387,19 @@ def main() -> int:
     for selector in selectors:
         if selector not in job_section:
             errors.append(f"{job_name} must run focused contract {selector}")
-    if "gate-15-real-device-acceptance:" in workflow or "gate-16-final-release-acceptance:" in workflow:
-        errors.append("Gate 15 and Gate 16 must remain manual, with no Simulator pass job")
+    if "gate-15-real-device-acceptance:" in workflow:
+        errors.append("Gate 15 must remain manual and cannot have an automated pass job")
+    if "gate-16-final-release-aggregate-report:" not in workflow:
+        errors.append("workflow must generate a Gate 16 aggregate report")
+    if "gate-16-aggregate-contracts:" not in workflow:
+        errors.append("Gate 16 contract validation must run independently of focused test scope")
+    if "scripts/aggregate_gate16_release_readiness.py" not in workflow:
+        errors.append("Gate 16 must use the fail-closed release-readiness aggregator")
+    if "scripts/validate_gate16_aggregate.py" not in workflow:
+        errors.append("Gate 16 status contracts must be exercised in GitHub Actions")
+    for new_gate in (17, 18, 19):
+        if f'--gate-result "{new_gate}=$GATE_{new_gate}"' not in workflow:
+            errors.append(f"Gate 16 must aggregate Gate {new_gate}")
 
     manual_gate15 = require(
         "docs/gates/gate-15-real-device-acceptance.md",
@@ -2394,7 +2408,14 @@ def main() -> int:
     )
     final_gate16 = require(
         "docs/gates/gate-16-final-release-acceptance.md",
-        ("Status: NOT RUN", "Gates 1–14", "manual Gate 15 device evidence", "No Simulator result", "human release decision"),
+        (
+            "Status: NOT RUN",
+            "Gates 1–15 and 17–19",
+            "manual review",
+            "cannot be satisfied by a Simulator run",
+            "human reviewer",
+            "fails closed",
+        ),
         errors,
     )
     if not manual_gate15 or not final_gate16:

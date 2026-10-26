@@ -30,7 +30,8 @@ enum HealthContextPromptBuilder {
         userText: String,
         summary: HealthContextSummary?,
         narrativeContext: HealthNarrativeContext? = nil,
-        structuredNarrative: Bool = false
+        structuredNarrative: Bool = false,
+        cloudHealthPolicy: CloudHealthContextPolicy? = nil
     ) -> String {
         guard shouldIncludeSummary(for: userText) else { return basePrompt }
         var prompt = basePrompt
@@ -44,6 +45,19 @@ enum HealthContextPromptBuilder {
             以下仅包含 7/28 日聚合、数据覆盖和可解析的建议引用；不得据此推断缺失值、生成诊断或编造指标：
             \(json)
             """
+        }
+        if let cloudHealthPolicy {
+            let restrictedClasses = CloudHealthContextPolicy.dataClasses
+                .filter { !cloudHealthPolicy.allows($0) }
+                .compactMap(\.healthContextTitle)
+            if !restrictedClasses.isEmpty {
+                prompt += """
+
+
+                ## 云端健康数据授权边界
+                当前未获准上传的健康类别：\(restrictedClasses.joined(separator: "、"))。不得从用户问题或其他数据推断这些类别的个人事实；用户询问未授权类别时，明确说明当前不能读取该类别，并只基于已授权的证据回答。
+                """
+            }
         }
         guard structuredNarrative,
               requiresNarrative(for: userText),

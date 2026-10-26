@@ -48,6 +48,14 @@ final class FoodDatabase {
                 t.column("fatG", .double)
                 t.column("carbohydrateG", .double)
                 t.column("fiberG", .double)
+                t.column("energyRaw", .text)
+                t.column("energyUnit", .text)
+                t.column("sourceID", .text)
+                t.column("sourceRecordID", .text)
+                t.column("sourceVersion", .text)
+                t.column("licenseStatus", .text)
+                t.column("sourceRecordJSON", .text)
+                t.column("importWarningsJSON", .text)
             }
             try db.create(index: "idx_food_name", on: "food_items", columns: ["name"])
             try db.create(index: "idx_food_category", on: "food_items", columns: ["category"])
@@ -187,7 +195,7 @@ final class FoodDatabase {
                     carbohydrateGramsPer100Grams: item.carbohydrateG
                 ),
                 isCookedComposite: item.isCookedComposite == true,
-                sourceVersion: "food-composition-6"
+                sourceVersion: item.sourceVersion ?? "unknown-food-data-version"
             )
         }
         catalogEntriesCache = entries

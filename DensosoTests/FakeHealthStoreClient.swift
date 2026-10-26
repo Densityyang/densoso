@@ -2,11 +2,16 @@ import Foundation
 import DensosoDomain
 @testable import Densoso
 
-actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient {
+actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuthorizationBoundaryProviding {
     private var available = true
     private var aggregateResponses: [HealthMetricID: [HealthAggregateBucket]] = [:]
     private var aggregateFailures: Set<HealthMetricID> = []
+    private var aggregateRequestLog: [HealthMetricID: [HealthAggregateRequest]] = [:]
     private var sampleResponses: [HealthMetricID: [HealthSamplePage]] = [:]
+    private var sampleRequestLog: [HealthMetricID: [HealthSampleRequest]] = [:]
+    private var workoutRequestStarts: [Date] = []
+    private var authorizedSampleStarts: [HealthMetricID: Date] = [:]
+    private var authorizationBoundaryFailures: Set<HealthMetricID> = []
     private var workoutResponses: [HealthChangePage<WorkoutSnapshot>] = []
     private var observerHandler: HealthObserverClient.UpdateHandler?
     private var observerCompletions = 0
@@ -23,6 +28,12 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient {
     func setAggregateResponse(_ values: [HealthAggregateBucket], for metric: HealthMetricID) {
         aggregateResponses[metric] = values
     }
+    func setEarliestAuthorizedSampleDate(_ date: Date, for metric: HealthMetricID) {
+        authorizedSampleStarts[metric] = date
+    }
+    func failAuthorizationBoundaryLookup(for metric: HealthMetricID) {
+        authorizationBoundaryFailures.insert(metric)
+    }
     func failAggregate(for metric: HealthMetricID) { aggregateFailures.insert(metric) }
     func setSampleResponses(_ pages: [HealthSamplePage], for metric: HealthMetricID) {
         sampleResponses[metric] = pages
@@ -34,6 +45,13 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient {
 
     func isAvailable() async -> Bool { available }
 
+    func earliestAuthorizedSampleDate(for metric: HealthMetricID) async throws -> Date? {
+        if authorizationBoundaryFailures.contains(metric) {
+            throw HealthStoreClientError.queryFailed("fake authorization boundary failure")
+        }
+        return authorizedSampleStarts[metric]
+    }
+
     func requestAuthorization(_ scope: HealthAuthorizationScope) async throws {
         guard available else { throw HealthStoreClientError.unavailable }
         authorizationScope = scope
@@ -41,6 +59,7 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient {
 
     func aggregate(_ request: HealthAggregateRequest) async throws -> [HealthAggregateBucket] {
         guard available else { throw HealthStoreClientError.unavailable }
+        aggregateRequestLog[request.metric, default: []].append(request)
         if aggregateFailures.contains(request.metric) {
             throw HealthStoreClientError.queryFailed("fake aggregate failure")
         }
@@ -49,6 +68,7 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient {
 
     func samples(_ request: HealthSampleRequest) async throws -> HealthSamplePage {
         guard available else { throw HealthStoreClientError.unavailable }
+        sampleRequestLog[request.metric, default: []].append(request)
         guard var pages = sampleResponses[request.metric], !pages.isEmpty else {
             return HealthSamplePage(
                 samples: [],
@@ -61,8 +81,9 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient {
         return page
     }
 
-    func workoutChanges(after anchor: Data?) async throws -> HealthChangePage<WorkoutSnapshot> {
+    func workoutChanges(from startDate: Date, after anchor: Data?) async throws -> HealthChangePage<WorkoutSnapshot> {
         guard available else { throw HealthStoreClientError.unavailable }
+        workoutRequestStarts.append(startDate)
         guard !workoutResponses.isEmpty else {
             return HealthChangePage(
                 added: [],
@@ -128,6 +149,13 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient {
     }
 
     func completedObserverCount() -> Int { observerCompletions }
+    func aggregateRequests(for metric: HealthMetricID) -> [HealthAggregateRequest] {
+        aggregateRequestLog[metric] ?? []
+    }
+    func sampleRequests(for metric: HealthMetricID) -> [HealthSampleRequest] {
+        sampleRequestLog[metric] ?? []
+    }
+    func workoutRequestStartDates() -> [Date] { workoutRequestStarts }
 
     func waitForObserverCompletion(after count: Int) async {
         if observerCompletions > count { return }

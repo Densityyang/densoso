@@ -63,7 +63,21 @@ jobs:
             scripts/validate_phase9_integration.py \
             scripts/validate_phase10_final_acceptance.py \
             scripts/validate_phase11_14_gates.py \
+            scripts/validate_gate17_food_data.py \
+            scripts/validate_gate19_privacy_window.py \
+            scripts/validate_recipe_priors.py \
+            scripts/aggregate_gate16_release_readiness.py \
+            scripts/validate_gate16_aggregate.py \
+            scripts/validate_xcresult_test_manifest.py \
+            scripts/validate_swiftpm_test_manifest.py \
             scripts/validate_voice_goldens.py 2>&1 | tee gate01-python-validation.log
+
+      - name: Validate fail-closed Gate 16 aggregation
+        id: validate_gate16_aggregate
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_gate16_aggregate.py 2>&1 | tee gate01-gate16-aggregate.log
 
       - name: Validate bundled food database
         id: validate_food_db
@@ -1559,6 +1573,7 @@ jobs:
             -only-testing:DensosoTests/MultimodalAgentImageTests/testInterruptedEvidenceOnlyRequestRequiresNewRequestToReprovideEvidence \
             -only-testing:DensosoTests/MultimodalAgentImageTests/testEvidenceOnlyRequestBoundsTransientEvidence \
             -only-testing:DensosoTests/MultimodalAgentImageTests/testImageRequiresVisionCapabilityAndSeparateMealImageConsent \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testCompositePhotoMealKeepsSeparateDishesAndUsesLocalCalorieAccounting \
             -only-testing:DensosoTests/AgentCoordinatorTests/testRealRoundAndToolCountsAndPendingAction \
             -only-testing:DensosoTests/AgentCoordinatorTests/testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages \
             -only-testing:DensosoTests/AgentCoordinatorTests/testTypedEventStreamPreservesOrderAndRealCounts \
@@ -1817,8 +1832,638 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  gate-17-food-data:
+    name: gate-17-food-data-provenance
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      gate_status: ${{ steps.gate17_status.outputs.gate_status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile Gate 17 validators
+        id: gate17_compile
+        if: always()
+        run: |
+          python3 -m py_compile \
+            scripts/import_food_db.py \
+            scripts/validate_food_db.py \
+            scripts/import_recipe_priors.py \
+            scripts/validate_recipe_priors.py \
+            scripts/validate_gate17_food_data.py
+
+      - name: Validate packaged food database
+        id: gate17_food_db
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_food_db.py 2>&1 | tee gate17-food-db.log
+
+      - name: Validate pinned recipe-prior catalog
+        id: gate17_recipe_priors
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_recipe_priors.py 2>&1 | tee gate17-recipe-priors.log
+
+      - name: Validate production import provenance and energy semantics
+        id: gate17_provenance
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_gate17_food_data.py 2>&1 | tee gate17-food-data-report.json
+
+      - name: Record Gate 17 result
+        id: gate17_status
+        if: always()
+        env:
+          COMPILE_OUTCOME: ${{ steps.gate17_compile.outcome }}
+          FOOD_DB_OUTCOME: ${{ steps.gate17_food_db.outcome }}
+          RECIPE_PRIORS_OUTCOME: ${{ steps.gate17_recipe_priors.outcome }}
+          PROVENANCE_OUTCOME: ${{ steps.gate17_provenance.outcome }}
+        run: |
+          if [ "$COMPILE_OUTCOME" = "success" ] \
+            && [ "$FOOD_DB_OUTCOME" = "success" ] \
+            && [ "$RECIPE_PRIORS_OUTCOME" = "success" ] \
+            && [ "$PROVENANCE_OUTCOME" = "success" ]; then
+            GATE_STATUS=PASS
+          else
+            GATE_STATUS=FAIL
+          fi
+          echo "gate_status=$GATE_STATUS" >> "$GITHUB_OUTPUT"
+          echo "Gate 17: $GATE_STATUS"
+
+      - name: Upload Gate 17 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-17-food-data-results
+          path: |
+            gate17-food-db.log
+            gate17-recipe-priors.log
+            gate17-food-data-report.json
+            docs/gates/gate-17-food-data-provenance.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-18-meal-estimates:
+    name: gate-18-meal-estimate-usefulness
+    if: ${{ always() }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    outputs:
+      gate_status: ${{ steps.gate18_report.outputs.gate_status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 18 paths
+        run: |
+          echo "GATE18_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate18DerivedData" >> "$GITHUB_ENV"
+          echo "GATE18_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate18MealEstimateTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Run deterministic meal-domain contracts
+        id: gate18_resolution_domain
+        if: always()
+        run: |
+          set +e
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter MealResolutionTests 2>&1 | tee gate18-meal-resolution-domain.log
+          TEST_EXIT=$?
+          python3 - <<'PY'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          source = Path("Packages/DensosoDomain/Tests/DensosoDomainTests/MealResolutionTests.swift").read_text(encoding="utf-8")
+          methods = re.findall(r"^\s*func\s+(test[A-Za-z0-9_]*)\s*\(", source, re.MULTILINE)
+          command = ["python3", "scripts/validate_swiftpm_test_manifest.py", "--input", "gate18-meal-resolution-domain.log", "--report", "gate18-meal-resolution-domain-manifest.json"]
+          for method in methods:
+              command.extend(["--required", f"MealResolutionTests/{method}"])
+          result = subprocess.run(command, check=False)
+          sys.exit(result.returncode)
+          PY
+          MANIFEST_EXIT=$?
+          if [ "$TEST_EXIT" -ne 0 ] || [ "$MANIFEST_EXIT" -ne 0 ]; then exit 1; fi
+
+      - name: Run deterministic meal-quantity evidence contracts
+        id: gate18_quantity_domain
+        if: always()
+        run: |
+          set +e
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter MealQuantityEvidenceTests 2>&1 | tee gate18-meal-quantity-domain.log
+          TEST_EXIT=$?
+          python3 - <<'PY'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          source = Path("Packages/DensosoDomain/Tests/DensosoDomainTests/MealQuantityEvidenceTests.swift").read_text(encoding="utf-8")
+          methods = re.findall(r"^\s*func\s+(test[A-Za-z0-9_]*)\s*\(", source, re.MULTILINE)
+          command = ["python3", "scripts/validate_swiftpm_test_manifest.py", "--input", "gate18-meal-quantity-domain.log", "--report", "gate18-meal-quantity-domain-manifest.json"]
+          for method in methods:
+              command.extend(["--required", f"MealQuantityEvidenceTests/{method}"])
+          result = subprocess.run(command, check=False)
+          sys.exit(result.returncode)
+          PY
+          MANIFEST_EXIT=$?
+          if [ "$TEST_EXIT" -ne 0 ] || [ "$MANIFEST_EXIT" -ne 0 ]; then exit 1; fi
+
+      - name: Generate project and prepare iOS Simulator
+        id: gate18_simulator
+        if: always()
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run focused meal capture and accounting integration tests
+        id: gate18_ios
+        if: ${{ always() && steps.gate18_simulator.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 1500 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$GATE18_DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testCompositePhotoMealKeepsSeparateDishesAndUsesLocalCalorieAccounting \
+            -only-testing:DensosoTests/LogMealQuantityEvidenceTests \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests/testConsumedFractionConfirmationPersistsScaledIntakeAndUserEvidence \
+            -resultBundlePath "$GATE18_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate18-meal-estimate-tests.log
+
+      - name: Verify Gate 18 executed XCTest cases
+        id: gate18_test_manifest
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          bundle = Path("Gate18MealEstimateTests.xcresult")
+          raw_path = Path("gate18-xcresult-tests.json")
+          if bundle.is_dir():
+              extraction = subprocess.run(
+                  ["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", str(bundle), "--format", "json"],
+                  check=False,
+                  capture_output=True,
+                  text=True,
+                  encoding="utf-8",
+              )
+              raw_path.write_text(extraction.stdout if extraction.returncode == 0 else "{}", encoding="utf-8")
+          else:
+              raw_path.write_text("{}", encoding="utf-8")
+
+          required = [
+              "DensosoTests/MultimodalAgentImageTests/testCompositePhotoMealKeepsSeparateDishesAndUsesLocalCalorieAccounting",
+              "DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto",
+              "DensosoTests/ConfirmationCoordinatorTests/testConsumedFractionConfirmationPersistsScaledIntakeAndUserEvidence",
+          ]
+          source = Path("DensosoTests/Application/LogMealQuantityEvidenceTests.swift").read_text(encoding="utf-8")
+          required.extend(
+              f"DensosoTests/LogMealQuantityEvidenceTests/{method}"
+              for method in re.findall(r"^\s*func\s+(test[A-Za-z0-9_]*)\s*\(", source, re.MULTILINE)
+          )
+          command = ["python3", "scripts/validate_xcresult_test_manifest.py", "--input", str(raw_path), "--report", "gate18-xctest-manifest.json"]
+          for method in required:
+              command.extend(["--required", method])
+          result = subprocess.run(command, check=False)
+          sys.exit(result.returncode)
+          PY
+
+      - name: Export Gate 18 execution status
+        id: gate18_report
+        if: always()
+        env:
+          RESOLUTION_DOMAIN_OUTCOME: ${{ steps.gate18_resolution_domain.outcome }}
+          QUANTITY_DOMAIN_OUTCOME: ${{ steps.gate18_quantity_domain.outcome }}
+          IOS_OUTCOME: ${{ steps.gate18_ios.outcome }}
+          IOS_MANIFEST_OUTCOME: ${{ steps.gate18_test_manifest.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          resolution_outcome = os.environ.get("RESOLUTION_DOMAIN_OUTCOME")
+          quantity_outcome = os.environ.get("QUANTITY_DOMAIN_OUTCOME")
+          ios_outcome = os.environ.get("IOS_OUTCOME")
+          resolution_manifest = json.loads(Path("gate18-meal-resolution-domain-manifest.json").read_text(encoding="utf-8")) if Path("gate18-meal-resolution-domain-manifest.json").is_file() else {"status": "BLOCKED"}
+          quantity_manifest = json.loads(Path("gate18-meal-quantity-domain-manifest.json").read_text(encoding="utf-8")) if Path("gate18-meal-quantity-domain-manifest.json").is_file() else {"status": "BLOCKED"}
+          ios_manifest = json.loads(Path("gate18-xctest-manifest.json").read_text(encoding="utf-8")) if Path("gate18-xctest-manifest.json").is_file() else {"status": "BLOCKED", "requiredTests": []}
+          outcomes = [resolution_outcome, quantity_outcome, ios_outcome, os.environ.get("IOS_MANIFEST_OUTCOME")]
+          manifest_statuses = [resolution_manifest.get("status"), quantity_manifest.get("status"), ios_manifest.get("status")]
+          if "FAIL" in manifest_statuses or (all(value == "PASS" for value in manifest_statuses) and any(value == "failure" for value in outcomes)):
+              status = "FAIL"
+          elif not all(value == "success" for value in outcomes) or any(value != "PASS" for value in manifest_statuses):
+              status = "BLOCKED"
+          else:
+              status = "PASS"
+          report = {
+              "schemaVersion": 1,
+              "gate": 18,
+              "status": status,
+              "headSha": os.environ.get("GITHUB_SHA"),
+              "domainTests": {
+                  "mealResolution": resolution_outcome,
+                  "mealQuantityEvidence": quantity_outcome,
+                  "mealResolutionManifest": resolution_manifest.get("status"),
+                  "mealQuantityEvidenceManifest": quantity_manifest.get("status"),
+              },
+              "iOSIntegrationTests": ios_outcome,
+              "iOSTestManifest": ios_manifest,
+              "fieldCalibration": "NOT_MEASURED",
+              "fieldCalibrationReason": "No real-world labeled meal dataset was supplied; field accuracy is not claimed.",
+          }
+          Path("gate18-meal-estimate-report.json").write_text(
+              json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"gate_status={status}\n")
+          print(json.dumps(report, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Upload Gate 18 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-18-meal-estimate-results
+          path: |
+            Gate18MealEstimateTests.xcresult
+            gate18-meal-resolution-domain.log
+            gate18-meal-resolution-domain-manifest.json
+            gate18-meal-quantity-domain.log
+            gate18-meal-quantity-domain-manifest.json
+            gate18-meal-estimate-tests.log
+            gate18-xcresult-tests.json
+            gate18-xctest-manifest.json
+            gate18-meal-estimate-report.json
+            docs/gates/gate-18-meal-estimate-usefulness.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-19-cloud-health-window:
+    name: gate-19-cloud-policy-health-window
+    if: ${{ always() }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    outputs:
+      gate_status: ${{ steps.gate19_status.outputs.gate_status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 19 paths
+        run: |
+          echo "GATE19_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate19DerivedData" >> "$GITHUB_ENV"
+          echo "GATE19_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate19PolicyHealthWindowTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Run unknown and partial health-intelligence package contracts
+        id: gate19_domain_health_intelligence
+        if: always()
+        run: |
+          set +e
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter 'HealthIntelligenceTests/(testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial|testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders|testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage)' 2>&1 | tee gate19-domain-health-intelligence.log
+          TEST_EXIT=$?
+          python3 scripts/validate_swiftpm_test_manifest.py \
+            --input gate19-domain-health-intelligence.log \
+            --required HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial \
+            --required HealthIntelligenceTests/testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders \
+            --required HealthIntelligenceTests/testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage \
+            --report gate19-domain-health-intelligence-manifest.json
+          MANIFEST_EXIT=$?
+          if [ "$TEST_EXIT" -ne 0 ] || [ "$MANIFEST_EXIT" -ne 0 ]; then exit 1; fi
+
+      - name: Run unknown and partial HealthState package contract
+        id: gate19_domain_health_state
+        if: always()
+        run: |
+          set +e
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter 'HealthStateTests/testUnknownAndPartialDomainStatusesDoNotBecomeUsableRecoveryEvidence' 2>&1 | tee gate19-domain-health-state.log
+          TEST_EXIT=$?
+          python3 scripts/validate_swiftpm_test_manifest.py \
+            --input gate19-domain-health-state.log \
+            --required HealthStateTests/testUnknownAndPartialDomainStatusesDoNotBecomeUsableRecoveryEvidence \
+            --report gate19-domain-health-state-manifest.json
+          MANIFEST_EXIT=$?
+          if [ "$TEST_EXIT" -ne 0 ] || [ "$MANIFEST_EXIT" -ne 0 ]; then exit 1; fi
+
+      - name: Run unknown training-load narrative package contract
+        id: gate19_domain_narrative
+        if: always()
+        run: |
+          set +e
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter 'HealthNarrativeTests/testNarrativeContextOmitsUnknownTrainingLoadZeroPlaceholders' 2>&1 | tee gate19-domain-narrative.log
+          TEST_EXIT=$?
+          python3 scripts/validate_swiftpm_test_manifest.py \
+            --input gate19-domain-narrative.log \
+            --required HealthNarrativeTests/testNarrativeContextOmitsUnknownTrainingLoadZeroPlaceholders \
+            --report gate19-domain-narrative-manifest.json
+          MANIFEST_EXIT=$?
+          if [ "$TEST_EXIT" -ne 0 ] || [ "$MANIFEST_EXIT" -ne 0 ]; then exit 1; fi
+
+      - name: Generate project and prepare iOS Simulator
+        id: gate19_simulator
+        if: always()
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run cloud-policy and 42-day HealthKit XCTest suites
+        id: gate19_ios
+        if: ${{ always() && steps.gate19_simulator.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 1500 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$GATE19_DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/CloudHealthContextPolicyTests \
+            -only-testing:DensosoTests/HealthKitSyncCoordinatorTests \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testProjectionInputReaderFiltersHealthKitWorkoutsByDailyReadState \
+            -only-testing:DensosoTests/GetRecentWorkoutsToolTests/testRepositoryOmitsHealthKitWorkoutsWithUnknownOrMissingReadState \
+            -only-testing:DensosoTests/HealthRepositoryTests/testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue \
+            -only-testing:DensosoTests/AgentProviderContextPolicyTests/testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies \
+            -only-testing:DensosoTests/AgentRequestResumeTests/testPolicyRevocationDuringHealthToolExecutionFiltersTheContinuationRequest \
+            -only-testing:DensosoTests/ExportServiceTests/testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied \
+            -only-testing:DensosoTests/GetHealthHistoryToolTests/testHistoryResponsePreservesUnknownAndPartialCoverageWithoutAbsenceOrZero \
+            -only-testing:DensosoTests/GetHealthHistoryToolTests/testReadModelHistoryKeepsUnknownHealthKitCoverageTypedWithoutZeroObservations \
+            -only-testing:DensosoTests/GetTodayHealthStateToolTests/testUnknownTrainingLoadOmitsZeroAndDerivedValuesAndReportsCoverage \
+            -resultBundlePath "$GATE19_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate19-cloud-health-window-tests.log
+
+      - name: Verify Gate 19 executed XCTest cases
+        id: gate19_test_manifest
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          bundle = Path("Gate19PolicyHealthWindowTests.xcresult")
+          raw_path = Path("gate19-xcresult-tests.json")
+          if bundle.is_dir():
+              extraction = subprocess.run(
+                  ["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", str(bundle), "--format", "json"],
+                  check=False,
+                  capture_output=True,
+                  text=True,
+                  encoding="utf-8",
+              )
+              raw_path.write_text(extraction.stdout if extraction.returncode == 0 else "{}", encoding="utf-8")
+          else:
+              raw_path.write_text("{}", encoding="utf-8")
+
+          sys.path.insert(0, str(Path("scripts").resolve()))
+          from validate_gate19_privacy_window import REQUIRED_TESTS
+
+          command = ["python3", "scripts/validate_xcresult_test_manifest.py", "--input", str(raw_path), "--report", "gate19-xctest-manifest.json"]
+          for method in REQUIRED_TESTS:
+              command.extend(["--required", method])
+          result = subprocess.run(command, check=False)
+          sys.exit(result.returncode)
+          PY
+
+      - name: Export Gate 19 test execution evidence
+        id: gate19_evidence
+        if: always()
+        env:
+          IOS_OUTCOME: ${{ steps.gate19_ios.outcome }}
+          HEALTH_INTELLIGENCE_OUTCOME: ${{ steps.gate19_domain_health_intelligence.outcome }}
+          HEALTH_STATE_OUTCOME: ${{ steps.gate19_domain_health_state.outcome }}
+          NARRATIVE_OUTCOME: ${{ steps.gate19_domain_narrative.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path.cwd() / "scripts"))
+          from validate_gate19_privacy_window import BEHAVIOR_CHECKS, REQUIRED_DOMAIN_TESTS, REQUIRED_TESTS
+
+          def load_report(path):
+              report_path = Path(path)
+              if not report_path.is_file():
+                  return {}
+              try:
+                  return json.loads(report_path.read_text(encoding="utf-8"))
+              except (OSError, json.JSONDecodeError):
+                  return {}
+
+          xctest_manifest = load_report("gate19-xctest-manifest.json")
+          app_results = {}
+          for item in xctest_manifest.get("requiredTests", []):
+              name = item.get("testMethod")
+              status = item.get("observedStatus")
+              if isinstance(name, str):
+                  app_results[name] = status if status in {"PASS", "FAIL", "BLOCKED", "NOT_MEASURED"} else "BLOCKED"
+
+          package_results = {}
+          for path in (
+              "gate19-domain-health-intelligence-manifest.json",
+              "gate19-domain-health-state-manifest.json",
+              "gate19-domain-narrative-manifest.json",
+          ):
+              package_results.update(load_report(path).get("swiftPackageTestResults", {}))
+
+          test_statuses = {**app_results, **package_results}
+          for name in REQUIRED_TESTS:
+              app_results.setdefault(name, "BLOCKED")
+          for selector in REQUIRED_DOMAIN_TESTS:
+              package_results.setdefault(selector, "BLOCKED")
+
+          required_statuses = [*app_results.values(), *package_results.values()]
+          if "FAIL" in required_statuses:
+              test_status = "FAIL"
+          elif required_statuses and all(value == "PASS" for value in required_statuses):
+              test_status = "PASS"
+          else:
+              test_status = "BLOCKED"
+
+          evidence_ref = "Gate19PolicyHealthWindowTests.xcresult; gate19-domain-*.log"
+
+          def behavior_evidence(check_id):
+              check = BEHAVIOR_CHECKS[check_id]
+              dependencies = [test_statuses.get(name, "BLOCKED") for name in check.required_tests]
+              if not dependencies:
+                  status = "NOT_MEASURED"
+              elif "FAIL" in dependencies:
+                  status = "FAIL"
+              elif all(value == "PASS" for value in dependencies):
+                  status = "PASS"
+              else:
+                  status = "BLOCKED"
+              value = {"status": status}
+              if status == "PASS":
+                  value["evidenceRef"] = evidence_ref
+                  value.update({field: True for field in check.required_true})
+                  for field, mode, number in check.required_numbers:
+                      value[field] = number
+                  if check.require_providers:
+                      value["providers"] = ["deepSeek", "qwen"]
+                  if check.require_health_classes:
+                      value["forbiddenClassesChecked"] = [
+                          "healthNutrition", "healthSleep", "healthActivity", "healthBody", "healthSubjective"
+                      ]
+              if check_id == "imported_backup_reconfirmation" and status == "PASS":
+                  value["policyTransferredInBackup"] = False
+                  value["restoredConsentDefaultsDenied"] = True
+              if check_id == "health_window" and status == "PASS":
+                  value["initialBackfillDays"] = 42
+                  value["sameAnalysisAndSyncWindow"] = True
+                  value["authorizationBoundaryRespected"] = True
+              return value
+
+          evidence = {
+              "schemaVersion": 1,
+              "gate": "gate-19-cloud-health-privacy-window",
+              "headSha": os.environ.get("GITHUB_SHA"),
+              "runId": os.environ.get("GITHUB_RUN_ID"),
+              "testResults": app_results,
+              "swiftPackageTestResults": package_results,
+              "behaviorChecks": {
+                  "provider_final_request_body": {"status": "NOT_MEASURED"},
+                  "provider_tool_output": {"status": "NOT_MEASURED"},
+                  "cached_and_continued_context": {"status": "NOT_MEASURED"},
+                  "consent_expansion_confirmation": {"status": "NOT_MEASURED"},
+                  "imported_backup_reconfirmation": behavior_evidence("imported_backup_reconfirmation"),
+                  "health_window": behavior_evidence("health_window"),
+                  "coverage_unknown_semantics": behavior_evidence("coverage_unknown_semantics"),
+                  "rebaseline_idempotence": behavior_evidence("rebaseline_idempotence"),
+                  "delete_recompute_idempotence": behavior_evidence("delete_recompute_idempotence"),
+              },
+          }
+          Path("gate19-evidence.json").write_text(
+              json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+          )
+          print(json.dumps({
+              "testStatus": test_status,
+              "appTestCases": len(app_results),
+              "swiftPackageTestCases": len(package_results),
+              "manifest": "gate19-evidence.json",
+          }, indent=2))
+          PY
+
+      - name: Validate Gate 19 contracts and produce status report
+        id: validate_gate19
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 -m py_compile \
+            scripts/validate_gate19_privacy_window.py \
+            scripts/validate_xcresult_test_manifest.py \
+            scripts/validate_swiftpm_test_manifest.py
+          python3 scripts/validate_gate19_privacy_window.py \
+            --evidence gate19-evidence.json \
+            --report gate19-report.json
+
+      - name: Record Gate 19 status
+        id: gate19_status
+        if: always()
+        env:
+          IOS_OUTCOME: ${{ steps.gate19_ios.outcome }}
+          HEALTH_INTELLIGENCE_OUTCOME: ${{ steps.gate19_domain_health_intelligence.outcome }}
+          HEALTH_STATE_OUTCOME: ${{ steps.gate19_domain_health_state.outcome }}
+          NARRATIVE_OUTCOME: ${{ steps.gate19_domain_narrative.outcome }}
+          MANIFEST_OUTCOME: ${{ steps.gate19_test_manifest.outcome }}
+        run: |
+          if [ -f gate19-report.json ]; then
+            GATE_STATUS="$(python3 -c 'import json; print(json.load(open("gate19-report.json", encoding="utf-8"))["status"])')"
+          else
+            GATE_STATUS=FAIL
+          fi
+          if [ "$GATE_STATUS" = "PASS" ] \
+            && { [ "$IOS_OUTCOME" = "failure" ] \
+              || [ "$HEALTH_INTELLIGENCE_OUTCOME" = "failure" ] \
+              || [ "$HEALTH_STATE_OUTCOME" = "failure" ] \
+              || [ "$NARRATIVE_OUTCOME" = "failure" ] \
+              || [ "$MANIFEST_OUTCOME" = "failure" ]; }; then
+            GATE_STATUS=FAIL
+          elif [ "$GATE_STATUS" = "PASS" ] \
+            && { [ "$IOS_OUTCOME" != "success" ] \
+              || [ "$HEALTH_INTELLIGENCE_OUTCOME" != "success" ] \
+              || [ "$HEALTH_STATE_OUTCOME" != "success" ] \
+              || [ "$NARRATIVE_OUTCOME" != "success" ] \
+              || [ "$MANIFEST_OUTCOME" != "success" ]; }; then
+            GATE_STATUS=BLOCKED
+          fi
+          echo "gate_status=$GATE_STATUS" >> "$GITHUB_OUTPUT"
+          echo "Gate 19: $GATE_STATUS"
+
+      - name: Upload Gate 19 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-19-cloud-health-window-results
+          path: |
+            Gate19PolicyHealthWindowTests.xcresult
+            gate19-cloud-health-window-tests.log
+            gate19-xcresult-tests.json
+            gate19-xctest-manifest.json
+            gate19-domain-health-intelligence.log
+            gate19-domain-health-intelligence-manifest.json
+            gate19-domain-health-state.log
+            gate19-domain-health-state-manifest.json
+            gate19-domain-narrative.log
+            gate19-domain-narrative-manifest.json
+            gate19-evidence.json
+            gate19-report.json
+            docs/gates/gate-19-cloud-policy-health-window.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-16-aggregate-contracts:
+    name: gate-16-aggregate-contracts
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Gate 16 status and release-readiness contracts
+        run: |
+          python3 -m py_compile \
+            scripts/aggregate_gate16_release_readiness.py \
+            scripts/validate_gate16_aggregate.py \
+            scripts/validate_xcresult_test_manifest.py \
+            scripts/validate_swiftpm_test_manifest.py
+          python3 scripts/validate_gate16_aggregate.py
+
   gate-status:
-    name: gate-01-to-14-aggregate
+    name: gate-16-final-release-aggregate-report
     needs:
       - foundation
       - domain-persistence
@@ -1834,12 +2479,21 @@ jobs:
       - gate-12-multimodal-agent
       - gate-13-energy-accounting
       - gate-14-watch-daily-loop
+      - gate-17-food-data
+      - gate-18-meal-estimates
+      - gate-19-cloud-health-window
+      - gate-16-aggregate-contracts
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Aggregate Gate 1-14 results
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Aggregate automated gates and Gate 16 release readiness
         env:
-          RUN_SCOPE: ${{ inputs.run_scope }}
+          RUN_SCOPE: ${{ inputs.run_scope || 'full' }}
           GATE_01: ${{ needs.foundation.result }}
           GATE_02: ${{ needs.domain-persistence.result }}
           GATE_03: ${{ needs.agent-provider.result }}
@@ -1854,107 +2508,73 @@ jobs:
           GATE_12: ${{ needs.gate-12-multimodal-agent.result }}
           GATE_13: ${{ needs.gate-13-energy-accounting.result }}
           GATE_14: ${{ needs.gate-14-watch-daily-loop.result }}
+          GATE_17: ${{ needs.gate-17-food-data.outputs.gate_status || needs.gate-17-food-data.result }}
+          GATE_18: ${{ needs.gate-18-meal-estimates.outputs.gate_status || needs.gate-18-meal-estimates.result }}
+          GATE_19: ${{ needs.gate-19-cloud-health-window.outputs.gate_status || needs.gate-19-cloud-health-window.result }}
+        run: |
+          set -euo pipefail
+          python3 scripts/aggregate_gate16_release_readiness.py \
+            --run-scope "$RUN_SCOPE" \
+            --workflow-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --gate-result "1=$GATE_01" \
+            --gate-result "2=$GATE_02" \
+            --gate-result "3=$GATE_03" \
+            --gate-result "4=$GATE_04" \
+            --gate-result "5=$GATE_05" \
+            --gate-result "6=$GATE_06" \
+            --gate-result "7=$GATE_07" \
+            --gate-result "8=$GATE_08" \
+            --gate-result "9=$GATE_09" \
+            --gate-result "10=$GATE_10" \
+            --gate-result "11=$GATE_11" \
+            --gate-result "12=$GATE_12" \
+            --gate-result "13=$GATE_13" \
+            --gate-result "14=$GATE_14" \
+            --gate-result "17=$GATE_17" \
+            --gate-result "18=$GATE_18" \
+            --gate-result "19=$GATE_19" \
+            --report gate16-release-readiness.json
+
+      - name: Write Gate 16 report summary
+        if: always()
         run: |
           python3 - <<'PY'
           import json
           import os
-          import sys
           from pathlib import Path
-
-          run_scope = os.environ.get("RUN_SCOPE") or "full"
-          selected = set(range(1, 15))
-          if run_scope == "focused-pr-tests":
-              selected = {5, 11, 12, 13, 14}
-
-          gate_jobs = {
-              1: ("foundation", "GATE_01", None),
-              2: ("domain-persistence", "GATE_02", 1),
-              3: ("agent-provider", "GATE_03", 2),
-              4: ("speech", "GATE_04", 3),
-              5: ("meal-capture", "GATE_05", 4),
-              6: ("healthkit", "GATE_06", 5),
-              7: ("health-intelligence", "GATE_07", 6),
-              8: ("watch", "GATE_08", 7),
-              9: ("integration", "GATE_09", 8),
-              10: ("final-acceptance", "GATE_10", 9),
-              11: ("gate-11-ai-native-health-loop", "GATE_11", 10),
-              12: ("gate-12-multimodal-agent", "GATE_12", 11),
-              13: ("gate-13-energy-accounting", "GATE_13", 12),
-              14: ("gate-14-watch-daily-loop", "GATE_14", 13),
-          }
-          job_outcomes = {
-              number: os.environ[env_name]
-              for number, (_, env_name, _) in gate_jobs.items()
-          }
-          gates = []
-          for number, (job, _, predecessor) in gate_jobs.items():
-              outcome = job_outcomes[number]
-              if outcome == "success":
-                  status, reason = "PASS", "job succeeded"
-              elif outcome == "failure":
-                  status, reason = "FAIL", "job failed; see its retained job artifact and logs"
-              elif outcome == "cancelled":
-                  status, reason = "BLOCKED", "job was cancelled before completion"
-              elif number not in selected:
-                  status, reason = "NOT RUN", f"not selected in {run_scope} scope"
-              else:
-                  status = "BLOCKED"
-                  if predecessor is not None and job_outcomes[predecessor] != "success":
-                      reason = f"blocked because Gate {predecessor} result was {job_outcomes[predecessor]}"
-                  else:
-                      reason = "selected job was skipped; inspect its condition and prerequisite logs"
-              gates.append({
-                  "gate": number,
-                  "job": job,
-                  "jobOutcome": outcome,
-                  "status": status,
-                  "reason": reason,
-              })
-
-          selected_results = [gate for gate in gates if gate["gate"] in selected]
-          overall = "PASS" if all(gate["status"] == "PASS" for gate in selected_results) else "FAIL"
-          report = {
-              "schemaVersion": 1,
-              "workflow": "V3 Gates",
-              "headSha": os.environ.get("GITHUB_SHA"),
-              "runId": os.environ.get("GITHUB_RUN_ID"),
-              "runAttempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
-              "runScope": run_scope,
-              "status": overall,
-              "gates": gates,
-          }
-          Path("gate-01-to-14-summary.json").write_text(
-              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-          )
+          report_path = Path("gate16-release-readiness.json")
+          if not report_path.is_file():
+              raise SystemExit("Gate 16 report was not produced")
+          report = json.loads(report_path.read_text(encoding="utf-8"))
           lines = [
-              "# Gate 1-14 aggregate",
+              "# Gate 16 final release aggregate",
               "",
-              f"Scope: `{run_scope}`",
-              f"Overall status: **{overall}**",
+              f"Automated checks: **{report['automatedChecksStatus']}**",
+              f"Release readiness: **{report['releaseReadinessStatus']}**",
+              f"Ready: **{report['ready']}**",
+              f"Field calibration: **{report['fieldCalibration']['status']}**",
               "",
-              "| Gate | Status | Job result | Reason |",
-              "| --- | --- | --- | --- |",
+              "| Gate | Status | Reason |",
+              "| --- | --- | --- |",
           ]
           lines.extend(
-              f"| {gate['gate']:02d} | {gate['status']} | {gate['jobOutcome']} | {gate['reason']} |"
-              for gate in gates
+              f"| {gate['gate']:02d} | {gate['status']} | {gate['reason']} |"
+              for gate in sorted(report["gates"], key=lambda value: value["gate"])
           )
-          markdown = "\n".join(lines) + "\n"
-          Path("gate-01-to-14-summary.md").write_text(markdown, encoding="utf-8")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-              summary.write(markdown)
-          print(json.dumps(report, indent=2, sort_keys=True))
-          if overall != "PASS":
-              sys.exit(1)
+              summary.write("\n".join(lines) + "\n")
           PY
 
-      - name: Upload aggregate status report
+      - name: Upload Gate 16 aggregate evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gate-01-to-14-aggregate-results
+          name: gate-16-final-release-aggregate-results
           path: |
-            gate-01-to-14-summary.json
-            gate-01-to-14-summary.md
+            gate16-release-readiness.json
+            docs/gates/gate-15-real-device-acceptance.md
+            docs/gates/gate-16-final-release-acceptance.md
           if-no-files-found: warn
           retention-days: 14

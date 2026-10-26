@@ -268,6 +268,8 @@ struct DashboardScreen: View {
     private func statusLabel(_ status: HealthDomainStatus) -> String {
         switch status {
         case .noData: "暂无数据"
+        case .unknown: "数据覆盖未知"
+        case .partial: "部分数据"
         case .learning: "学习中"
         case .withinTypicalRange: "处于个人范围"
         case .changed: "与近期不同"
@@ -278,6 +280,8 @@ struct DashboardScreen: View {
     private func statusColor(_ status: HealthDomainStatus) -> Color {
         switch status {
         case .noData: Color.secondary
+        case .unknown: Color.secondary
+        case .partial: OrbitPalette.blue
         case .learning: OrbitPalette.blue
         case .withinTypicalRange: OrbitPalette.green
         case .changed: OrbitPalette.gold

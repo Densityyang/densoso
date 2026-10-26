@@ -19,15 +19,26 @@ below without changing V1–V5 schema identities.
 - Daily activity energy, resting energy, steps and exercise minutes use
   `HKStatisticsCollectionQuery` with local calendar day boundaries. Discrete
   body metrics, sleep/vitals and Workout changes use sample or anchored queries.
-- Aggregate streams retain a stable 30-day lower-bound lookback and reproject
-  its daily buckets on observer sync, so late updates/deletions inside that
-  window replace prior values without changing an anchored query predicate.
+- Aggregate streams use the shared inclusive 42-day lower bound and reproject
+  their daily buckets on observer sync. Anchored sample/workout streams keep the
+  exact lower bound paired with each HealthKit anchor as the policy window moves;
+  changed samples within that predicate are applied, and affected historical
+  days are re-queried even when they fall before the current analysis window.
 - A stream cursor and the compact daily summary/sample-ID index or daily
   aggregate are saved with one SwiftData save. A failed save rolls back data
   and cursor together. Anchored sample streams keep a persisted lower bound and
   fixed open upper predicate, and advance on successful empty pages;
   a user-initiated Settings resync rebaselines cursors in case HealthKit read
   access changed while the app was not running.
+- When HealthKit reports a later limited-history boundary, cached per-metric
+  values before the first fully authorized projection day are scrubbed,
+  HealthKit-origin workouts and weight rows before that timestamp are removed,
+  and body-mass dependent historical projections are recomputed. Sleep uses the
+  wake-day window beginning at 18:00 on the prior day.
+- If the limited-history boundary lookup fails, the current 42-day projection
+  for that metric is marked unknown and anchored cursors are reset. This avoids
+  consuming cached values while scope is unresolved and makes the next successful
+  sync perform a fresh bounded read.
 - Observer updates are only wakeups. The coordinator drains the relevant query
   before calling HealthKit's completion handler, guarded to complete once; an
   observer error completes without starting a sync or advancing a cursor.
@@ -71,9 +82,20 @@ below without changing V1–V5 schema identities.
   workout on page 2.
 - Empty HealthKit reads map to “data unavailable or read scope unknown.” They do
   not claim that the user denied read access; there is no read permission denial
-  conclusion inferred from an empty result. Prior measured values remain stored
-  as history but are not used in the live projection while that metric's read
-  state is unknown.
+  conclusion inferred from an empty result. When limited-history authorization
+  begins later, cached values before that boundary are removed from the metric's
+  daily summaries, imported HealthKit workouts/weights are removed from direct
+  read paths, and affected daily projections are recomputed. Ambiguous reads
+  without a reported boundary keep cached values but mark them unusable while
+  that metric's read state is unknown.
+- The app read model now passes an explicit HealthKit read-state map into the
+  domain projection. A missing map entry is treated as unknown; `noData` is
+  emitted only when the relevant streams report an available read with no
+  observation. Domain results and vital trends carry typed `unknown` or
+  `partial` status, and training-load values are not serialized to tools or
+  narrative requests when source coverage is not complete. Legacy cached domain,
+  vital, context-summary and training-load payloads without coverage decode
+  fail-closed; the health-intelligence cache version is `health-intelligence-v3`.
 
 ## V5-to-V6 daily sample summary
 
@@ -107,6 +129,18 @@ unknown so the live projection does not reuse it as current.
 7. Delete predicates target only this application's samples, and repeated
    deletion is successful once the owned sample is absent.
 8. No-data/read-scope ambiguity never becomes a false “read denied” state.
+   Local semantic coverage includes
+   `HealthIntelligenceTests.testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial`,
+   `HealthIntelligenceTests.testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders`,
+   `HealthIntelligenceTests.testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage`,
+   `HealthStateTests.testUnknownAndPartialDomainStatusesDoNotBecomeUsableRecoveryEvidence`,
+   `HealthNarrativeTests.testNarrativeContextOmitsUnknownTrainingLoadZeroPlaceholders`,
+   `GetHealthHistoryToolTests.testHistoryResponsePreservesUnknownAndPartialCoverageWithoutAbsenceOrZero`,
+   `GetHealthHistoryToolTests.testReadModelHistoryKeepsUnknownHealthKitCoverageTypedWithoutZeroObservations`,
+   and `GetTodayHealthStateToolTests.testUnknownTrainingLoadOmitsZeroAndDerivedValuesAndReportsCoverage`.
+   Test source presence is not execution evidence; current local semantic test
+   execution remains `NOT_MEASURED` until CI reports each result. Live HealthKit
+   authorization/read-scope evidence also remains `NOT_MEASURED`.
 9. Fake observer delivery verifies anchored synchronization occurs before the
    background completion callback.
 10. Background refresh registration is allowlisted in the generated app plist,
@@ -130,6 +164,8 @@ unknown so the live projection does not reuse it as current.
     `DailyHealthSampleSummaryTests.testDailySnapshotEncodingKeepsOnlySummaryAndDropsRawSamples`,
     `DailyHealthSampleSummaryTests.testSampleDeduplicationUsesSyncVersionThenStableTieOrder`,
     `HealthKitSyncCoordinatorTests.testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor`,
+    `HealthKitSyncCoordinatorTests.testAuthorizationBoundaryLookupFailureMasksWindowAndResetsAnchoredCursor`,
+    `HealthKitSyncCoordinatorTests.testObserverBoundaryLookupFailureMasksWindowAndResetsAnchoredCursor`,
     `HealthKitSyncCoordinatorTests.testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder`,
     `HealthRepositoryTests.testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches`,
     `HealthRepositoryTests.testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown`,
@@ -158,6 +194,7 @@ unknown so the live projection does not reuse it as current.
 | Domain package | Foundation-only HealthKit contracts pass | 49 tests, 0 failures |
 | iOS tests | Repository, coordinator, outbox and energy semantics pass | 167 cumulative iOS unit tests, 0 failures |
 | Static contract | HealthKit boundary, route removal and no Workout writes | Passed in Gate 6 |
+| Unknown/partial semantics | Domain/read-tool tests preserve typed coverage and omit unknown load placeholders | Source/test contract present; CI execution `NOT_MEASURED` |
 | Artifact | `.xcresult`, summary, logs and contract report retained | [gate-06-healthkit-results, artifact 11942416503](https://github.com/Densityyang/densoso/actions/runs/38661937756/artifacts/11942416503) |
 | Device background delivery | Signed-device observer/background matrix | Not claimed; signing remains blocked |
 | User decision | Approve or reject entry to Phase 7 | Approved; Phase 7–10 implementation is now included in the cumulative V3 delivery |

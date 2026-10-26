@@ -67,7 +67,7 @@ request needs the image reattached; evidence-only input must be rescanned under
 a new request ID because OCR and candidate text are not persisted.
 
 Agent, Narrative, Meal, and Vision prompt builders expose centralized version
-identifiers. New conversations persist `toolSchemaVersion=2`; conversations
+identifiers. New conversations persist the current `toolSchemaVersion`; conversations
 migrated from V1–V6 are lazily marked as schema v1, and their stored message
 history remains readable before new turns use the current v2 tool definitions.
 

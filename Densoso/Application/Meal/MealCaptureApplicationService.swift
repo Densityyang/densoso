@@ -434,7 +434,7 @@ final class MealCaptureApplicationService {
     /// stages a pending action after the model invokes the existing meal tool.
     func prepareForAgent(
         originalData: Data,
-        userText: String = "请根据这张餐食照片协助我记录，生成待确认草稿；不确定的部分先提出一个问题。",
+        userText: String = "请识别这张餐食照片中的各道菜；多个独立菜品请分别记录，复合菜按可辨认的主要食材拆分并避免重复计量。估算可见份量但不要把照片估量说成精确克重，生成待确认草稿；不确定的食材或份量最多先问一个问题。",
         onImageStateChange: (@MainActor (MealImageCaptureState) -> Void)? = nil
     ) async throws -> MealCapturePreparation {
         onImageStateChange?(.sanitizing)

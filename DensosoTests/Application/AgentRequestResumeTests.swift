@@ -1,10 +1,187 @@
 import Foundation
+import DensosoDomain
 import SwiftData
 import XCTest
 @testable import Densoso
 
 @MainActor
 final class AgentRequestResumeTests: XCTestCase {
+    func testConsentRevokedDuringFinalProviderGatePreventsStartingStream() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000940")!
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let governance = RevokesSleepOnSecondHealthTextCheckRepository()
+        let provider = ScriptedTextProvider(
+            scripts: [[.textDelta("本机不应把已撤销的睡眠上下文交给 provider。"), .completed(.completed)]],
+            capabilities: [.text, .toolCalling, .structuredOutput]
+        )
+        let window = HealthContextWindowSummary(
+            windowDays: 7,
+            coverageDays: ["sleep": 7],
+            averageSleepMinutes: 420,
+            averageStepCount: nil,
+            averageActiveEnergyKcal: nil,
+            averageEnergyIntakeKcal: nil,
+            averageDailyDeficitKcal: nil,
+            averageProteinGrams: nil,
+            medianWeightKilograms: nil
+        )
+        let summary = HealthContextSummary(
+            sevenDay: window,
+            twentyEightDay: window,
+            targetWeightKilograms: nil,
+            dailyDeficitGoalKcal: nil,
+            dailyProteinGoalGrams: nil,
+            recommendationReferences: []
+        )
+        let narrativeContext = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [EvidenceReference(key: "sleep.pre-send-sentinel", source: "sleep")],
+            recommendationCandidates: [],
+            aggregateSummary: summary
+        )
+        let session = makeSession(
+            container: container,
+            repository: repository,
+            provider: provider,
+            conversationID: conversationID,
+            budget: AgentBudget(deadline: .distantFuture),
+            governance: governance,
+            healthNarrativeContextProvider: { narrativeContext }
+        )
+
+        do {
+            _ = try await session.send(userText: "分析我的睡眠趋势怎么样", requestID: UUID())
+            XCTFail("Revoked health context must be blocked before provider.stream is called")
+        } catch {
+            XCTAssertEqual(
+                error as? ProviderError,
+                .consentRequired(provider: .deepSeek, dataClass: .healthSleep)
+            )
+        }
+
+        XCTAssertTrue(provider.recordedRequests().isEmpty)
+    }
+
+    func testPolicyRevocationDuringHealthToolExecutionFiltersTheContinuationRequest() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000941")!
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let governance = InMemoryProviderGovernanceRepository(granted: [
+            (.deepSeek, .healthText),
+            (.deepSeek, .healthSleep),
+            (.deepSeek, .healthActivity),
+        ])
+        let now = Date()
+        let provider = ScriptedTextProvider(scripts: [
+            [
+                .toolCall(ToolCall(
+                    id: "health-history-revocation",
+                    name: "get_today_health_state",
+                    arguments: .object([:])
+                )),
+                .completed(.toolUse),
+            ],
+            [.textDelta("已按当前授权继续。"), .completed(.completed)],
+        ])
+        let baseline = HealthBaseline(
+            readiness: .mature,
+            validDays: 42,
+            median: 600,
+            p10: 500,
+            p90: 700,
+            mad: 30
+        )
+        let state = HealthStateV2(
+            domains: [
+                HealthDomainResult(
+                    domain: .sleep,
+                    status: .attention,
+                    currentValue: 919_191,
+                    baseline: baseline,
+                    evidenceKeys: ["sleep.revoked-value-sentinel"]
+                ),
+                HealthDomainResult(
+                    domain: .activity,
+                    status: .withinTypicalRange,
+                    currentValue: 606_060,
+                    baseline: baseline,
+                    evidenceKeys: ["activity.allowed-value-sentinel"]
+                ),
+            ],
+            recovery: RecoveryAssessment(
+                status: .attention,
+                confidence: .high,
+                evidence: [EvidenceReference(key: "sleep.recovery-provenance-sentinel", source: "sleep")],
+                recommendedAction: .rest
+            ),
+            trainingLoad: TrainingLoadSummary(
+                recentSevenDayLoad: 707_070,
+                priorTwentyEightDayAverage: 80,
+                ratio: 8_838.38,
+                readiness: .mature,
+                band: .sharplyIncreased,
+                estimatedWorkoutCount: 7,
+                unavailableEffortCount: 0
+            ),
+            tomorrowGuidance: NextDayGuidance(
+                expectedState: .caution,
+                confidence: .high,
+                reasons: [EvidenceReference(key: "sleep.guidance-provenance-sentinel", source: "sleep")],
+                recommendedAction: .rest,
+                conditionalNote: "sleep.revoked-derived-sentinel"
+            )
+        )
+        let registry = ToolRegistry(todayHealthStateProvider: { _ in
+            try await governance.setConsent(
+                provider: .deepSeek,
+                dataClass: .healthSleep,
+                granted: false,
+                policyVersion: "cloud-health-context-v1"
+            )
+            return state
+        })
+        let session = makeSession(
+            container: container,
+            repository: repository,
+            provider: provider,
+            conversationID: conversationID,
+            budget: AgentBudget(deadline: .distantFuture),
+            governance: governance,
+            registry: registry
+        )
+
+        let response = try await session.send(userText: "继续读取", requestID: UUID())
+
+        XCTAssertEqual(response.text, "已按当前授权继续。")
+        let requests = provider.recordedRequests()
+        XCTAssertEqual(requests.count, 2)
+        let continuationText = try XCTUnwrap(requests.last).messages
+            .flatMap { message in
+                message.content.compactMap { content -> String? in
+                    if case .text(let value) = content { return value }
+                    if case .toolResult(_, let value) = content { return value }
+                    return nil
+                }
+            }
+            .joined(separator: "\n")
+        XCTAssertFalse(continuationText.contains("sleep.revoked-value-sentinel"))
+        XCTAssertFalse(continuationText.contains("sleep.recovery-provenance-sentinel"))
+        XCTAssertFalse(continuationText.contains("sleep.guidance-provenance-sentinel"))
+        XCTAssertFalse(continuationText.contains("919191"))
+        XCTAssertFalse(continuationText.contains("sleep.revoked-derived-sentinel"))
+        XCTAssertTrue(continuationText.contains("activity.allowed-value-sentinel"))
+        XCTAssertTrue(continuationText.contains("606060"))
+    }
+
     func testPerRequestCostReservationPersistsAndCannotResetOnResume() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
@@ -400,19 +577,23 @@ final class AgentRequestResumeTests: XCTestCase {
         repository: SwiftDataAgentRepository,
         provider: any TextModelProvider,
         conversationID: UUID,
-        budget: AgentBudget
+        budget: AgentBudget,
+        governance: (any ProviderGovernanceRepository)? = nil,
+        registry: ToolRegistry? = nil,
+        healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil
     ) -> AgentSession {
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: container)
-        let governance = InMemoryProviderGovernanceRepository(granted: [(.deepSeek, .healthText)])
+        let resolvedGovernance: any ProviderGovernanceRepository = governance
+            ?? InMemoryProviderGovernanceRepository(granted: [(.deepSeek, .healthText)])
         let preferences = IntelligencePreferences()
         preferences.mode = .cloudDeepSeek
         return AgentSession(
             providerSelector: TestProviderSelector(provider),
             intelligencePreferences: preferences,
             providerConfiguration: ProviderConfigurationPreferences(),
-            governanceRepository: governance,
-            usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
-            registry: ToolRegistry(),
+            governanceRepository: resolvedGovernance,
+            usageLedger: ProviderUsageLedger(repository: resolvedGovernance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
+            registry: registry ?? ToolRegistry(),
             confirmationCoordinator: ConfirmationCoordinator(
                 repository: confirmationRepository,
                 writeGate: PersistenceWriteGate(state: .writable)
@@ -420,7 +601,8 @@ final class AgentRequestResumeTests: XCTestCase {
             readRepository: repository,
             conversationRepository: repository,
             conversationID: conversationID,
-            budgetFactory: { budget }
+            budgetFactory: { budget },
+            healthNarrativeContextProvider: healthNarrativeContextProvider
         )
     }
 
@@ -438,5 +620,62 @@ final class AgentRequestResumeTests: XCTestCase {
             ordinal: 0
         ))
         try context.save()
+    }
+}
+
+private actor RevokesSleepOnSecondHealthTextCheckRepository: ProviderGovernanceRepository {
+    private var granted = Set(CloudHealthContextPolicy.dataClasses).union([.healthText])
+    private var healthTextChecks = 0
+
+    func isConsentGranted(provider: ProviderID, dataClass: ProviderDataClass) -> Bool {
+        guard provider == .deepSeek else { return false }
+        let wasGranted = granted.contains(dataClass)
+        if dataClass == .healthText {
+            healthTextChecks += 1
+            if healthTextChecks == 2 {
+                granted.remove(.healthSleep)
+            }
+        }
+        return wasGranted
+    }
+
+    func setConsent(
+        provider: ProviderID,
+        dataClass: ProviderDataClass,
+        granted: Bool,
+        policyVersion: String
+    ) {
+        guard provider == .deepSeek else { return }
+        if granted { self.granted.insert(dataClass) } else { self.granted.remove(dataClass) }
+    }
+
+    func recordUsage(
+        usage: ProviderUsage,
+        usageKey: String,
+        requestID: UUID,
+        estimatedCostMicros: Int64?,
+        currency: String?,
+        rateVersion: String
+    ) -> Bool {
+        false
+    }
+
+    func monthlyUsage(
+        provider: ProviderID,
+        monthStart: Date,
+        monthEnd: Date
+    ) -> ProviderUsageSummary {
+        ProviderUsageSummary(
+            provider: provider,
+            inputTokens: 0,
+            cachedInputTokens: 0,
+            outputTokens: 0,
+            reasoningTokens: 0,
+            imageCount: 0,
+            audioSeconds: 0,
+            averageLatencyMilliseconds: nil,
+            estimatedCostMicros: nil,
+            currency: nil
+        )
     }
 }

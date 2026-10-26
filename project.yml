@@ -11,9 +11,16 @@ targets:
     platform: iOS
     sources:
       - path: Densoso
+        excludes:
+          - Resources/seed_foods.json
     resources:
-      - path: Densoso/Resources
-        type: folder
+      - path: Densoso/Resources/cooking_coefficients.json
+      - path: Densoso/Resources/exercise_catalog.license.json
+      - path: Densoso/Resources/FoodData/sources.json
+      - path: Densoso/Resources/FoodData/recipe_sources.json
+      - path: Densoso/Resources/FoodData/recipe_priors.json
+      - path: Densoso/Resources/food_composition.db
+        optional: true
     info:
       path: DensosoApp-Info.plist
       properties:
@@ -64,7 +71,9 @@ targets:
         script: |
           python3 "${SRCROOT}/scripts/import_food_db.py" \
             --input "${SRCROOT}/Densoso/Resources/seed_foods.json" \
-            --output "${SRCROOT}/Densoso/Resources/food_composition.db"
+            --manifest "${SRCROOT}/Densoso/Resources/FoodData/sources.json" \
+            --output "${SRCROOT}/Densoso/Resources/food_composition.db" \
+            --production
         inputFiles: []
         outputFiles:
           - ${SRCROOT}/Densoso/Resources/food_composition.db

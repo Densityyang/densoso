@@ -22,10 +22,37 @@ struct ProviderDescriptor: Codable, Equatable, Sendable {
     let capabilities: Set<ProviderCapability>
 }
 
-enum ProviderDataClass: String, Codable, CaseIterable, Sendable {
+enum ProviderDataClass: String, Codable, CaseIterable, Hashable, Sendable {
     case healthText
+    /// Granular classes for historical health context sent to cloud providers.
+    /// Absence of a consent record is restrictive by default.
+    case healthNutrition
+    case healthSleep
+    case healthActivity
+    case healthBody
+    case healthSubjective
     case mealImage
     case speechAudio
+
+    var isHealthContextClass: Bool {
+        switch self {
+        case .healthNutrition, .healthSleep, .healthActivity, .healthBody, .healthSubjective:
+            true
+        case .healthText, .mealImage, .speechAudio:
+            false
+        }
+    }
+
+    var healthContextTitle: String? {
+        switch self {
+        case .healthNutrition: "饮食与能量"
+        case .healthSleep: "睡眠"
+        case .healthActivity: "活动与训练"
+        case .healthBody: "身体测量"
+        case .healthSubjective: "主观状态自述"
+        case .healthText, .mealImage, .speechAudio: nil
+        }
+    }
 }
 
 enum ThinkingPolicy: String, Codable, Sendable {

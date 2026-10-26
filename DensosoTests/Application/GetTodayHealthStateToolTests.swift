@@ -83,6 +83,36 @@ final class GetTodayHealthStateToolTests: XCTestCase {
         XCTAssertEqual(trainingLoad["band"] as? String, TrainingLoadBand.unavailable.rawValue)
     }
 
+    func testUnknownTrainingLoadOmitsZeroAndDerivedValuesAndReportsCoverage() throws {
+        let unknownLoad = TrainingLoadSummary(
+            recentSevenDayLoad: 0,
+            priorTwentyEightDayAverage: 0,
+            ratio: 0,
+            readiness: .noData,
+            band: .unavailable,
+            estimatedWorkoutCount: 0,
+            unavailableEffortCount: 0,
+            dataCoverage: .unknown
+        )
+        let response = try GetTodayHealthStateTool().response(
+            asOf: Date(timeIntervalSince1970: 1_800_000_000),
+            state: makeState(trainingLoad: unknownLoad, unknownCoverage: true)
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let healthState = try XCTUnwrap(object["healthState"] as? [String: Any])
+        let domains = try XCTUnwrap(healthState["domains"] as? [[String: Any]])
+        let trainingLoad = try XCTUnwrap(healthState["trainingLoad"] as? [String: Any])
+
+        XCTAssertEqual(object["status"] as? String, "insufficientEvidence")
+        XCTAssertEqual(domains.first?["status"] as? String, HealthDomainStatus.unknown.rawValue)
+        XCTAssertEqual(trainingLoad["dataCoverage"] as? String, HealthDataCoverage.unknown.rawValue)
+        XCTAssertNil(trainingLoad["recentSevenDayLoad"])
+        XCTAssertNil(trainingLoad["priorTwentyEightDayAverage"])
+        XCTAssertNil(trainingLoad["ratio"])
+        XCTAssertNil(trainingLoad["estimatedWorkoutCount"])
+        XCTAssertNil(trainingLoad["unavailableEffortCount"])
+    }
+
     func testRegistryExposesStrictReadOnlyTool() throws {
         let definition = try XCTUnwrap(
             ToolRegistry().toolDefinitions.first(where: { $0.name == "get_today_health_state" })
@@ -115,38 +145,40 @@ final class GetTodayHealthStateToolTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
         let context = ModelContext(container)
 
-        XCTAssertEqual(object["status"] as? String, "noData")
+        XCTAssertEqual(object["status"] as? String, "insufficientEvidence")
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyBriefRecord>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyBriefRecord>()), 0)
     }
 
     private func makeState(
         trainingLoad: TrainingLoadSummary? = nil,
-        noData: Bool = false
+        noData: Bool = false,
+        unknownCoverage: Bool = false
     ) -> HealthStateV2 {
+        let hasMissingEvidence = noData || unknownCoverage
         let baseline = HealthBaseline(
-            readiness: noData ? .noData : .mature,
-            validDays: noData ? 0 : 28,
-            median: noData ? nil : 420,
-            p10: noData ? nil : 360,
-            p90: noData ? nil : 480,
-            mad: noData ? nil : 30
+            readiness: hasMissingEvidence ? .noData : .mature,
+            validDays: hasMissingEvidence ? 0 : 28,
+            median: hasMissingEvidence ? nil : 420,
+            p10: hasMissingEvidence ? nil : 360,
+            p90: hasMissingEvidence ? nil : 480,
+            mad: hasMissingEvidence ? nil : 30
         )
         let sleep = HealthDomainResult(
             domain: .sleep,
-            status: noData ? .noData : .attention,
-            currentValue: noData ? nil : 300,
+            status: unknownCoverage ? .unknown : (noData ? .noData : .attention),
+            currentValue: hasMissingEvidence ? nil : 300,
             baseline: baseline,
-            evidenceKeys: noData ? [] : ["sleep.mainSleep.minutes"]
+            evidenceKeys: hasMissingEvidence ? [] : ["sleep.mainSleep.minutes"]
         )
         let recovery = RecoveryAssessment(
-            status: noData ? .insufficientEvidence : .attention,
-            confidence: noData ? .low : .medium,
-            evidence: noData ? [] : [
+            status: hasMissingEvidence ? .insufficientEvidence : .attention,
+            confidence: hasMissingEvidence ? .low : .medium,
+            evidence: hasMissingEvidence ? [] : [
                 EvidenceReference(key: "sleep.mainSleep.minutes", source: "sleep"),
                 EvidenceReference(key: "trainingLoad.ratio", source: "trainingLoad"),
             ],
-            recommendedAction: noData ? .collectData : .reduceIntensity
+            recommendedAction: hasMissingEvidence ? .collectData : .reduceIntensity
         )
         let load = trainingLoad ?? TrainingLoadSummary(
             recentSevenDayLoad: 120,

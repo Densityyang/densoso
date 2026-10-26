@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import DensosoDomain
 
 struct DailyMetricsProjectionInputs {
     let meals: [MealRecord]
@@ -20,7 +21,13 @@ enum DailyMetricsProjectionInputReader {
         let day = calendar.startOfDay(for: date)
         let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
         let meals = try meals(from: day, before: nextDay, in: modelContext)
-        let workouts = try workouts(from: day, before: nextDay, in: modelContext)
+        let indexedWorkouts = try workouts(from: day, before: nextDay, in: modelContext)
+        let workoutReadState = indexedWorkouts.contains { $0.healthKitUUID != nil }
+            ? try healthKitWorkoutReadState(on: day, calendar: calendar, in: modelContext)
+            : nil
+        let workouts = indexedWorkouts.filter { workout in
+            workout.healthKitUUID == nil || workoutReadState == .available
+        }
         return DailyMetricsProjectionInputs(
             meals: meals,
             workouts: workouts,
@@ -102,5 +109,24 @@ enum DailyMetricsProjectionInputReader {
             cursorID = last.id
         }
         return results
+    }
+
+    private static func healthKitWorkoutReadState(
+        on day: Date,
+        calendar: Calendar,
+        in modelContext: ModelContext
+    ) throws -> HealthReadState? {
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
+        let key = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == key }
+        guard let record = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate)).first else {
+            return nil
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        guard let snapshot = try? decoder.decode(DailyHealthSnapshot.self, from: record.payloadData) else {
+            return nil
+        }
+        return snapshot.healthReadStates?[HealthMetricID.workout.rawValue]
     }
 }

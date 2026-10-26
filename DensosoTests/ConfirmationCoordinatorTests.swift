@@ -85,6 +85,97 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(outbox.idempotencyKey, "\(actionIdempotencyKey):health-sync")
     }
 
+    func testConsumedFractionConfirmationPersistsScaledIntakeAndUserEvidence() async throws {
+        let harness = try Harness()
+        let energy = try EstimateRange(low: 380, likely: 420, high: 500)
+        let macros = try EstimateRange(low: 18, likely: 20, high: 24)
+        let portion = try EstimateRange(low: 90, likely: 100, high: 110)
+        let ingredient = MealIngredientDraft(
+            foodID: "2",
+            name: "fixture rice",
+            amountGrams: portion,
+            nutrients: NutrientEstimate(
+                energyKcal: energy,
+                proteinGrams: macros,
+                fatGrams: macros,
+                carbohydrateGrams: macros
+            )
+        )
+        let dish = MealDishDraft(
+            name: "fixture meal",
+            portionGrams: portion,
+            nutrients: NutrientEstimate(
+                energyKcal: energy,
+                proteinGrams: macros,
+                fatGrams: macros,
+                carbohydrateGrams: macros
+            ),
+            ingredients: [ingredient],
+            evidence: [EvidenceSnapshot(grade: .databaseMatch, sourceID: "fixture", summary: "fixture")],
+            algorithmVersion: "meal-estimator-v2"
+        )
+        let fullDraft = MealDraft(
+            occurredAt: Date(timeIntervalSince1970: 1_700_000_000),
+            mealType: "lunch",
+            dishes: [dish]
+        )
+        let consumedEvidence = try XCTUnwrap(ConsumedFractionEvidence(fraction: 0.5))
+        let intakeDraft = try fullDraft.applyingConsumedFraction(consumedEvidence)
+        XCTAssertEqual(try XCTUnwrap(intakeDraft.totalNutrients?.energyKcal.likely), 210, accuracy: 0.001)
+        XCTAssertEqual(
+            try XCTUnwrap(intakeDraft.dishes.first?.ingredients.first?.amountGrams.likely),
+            50,
+            accuracy: 0.001
+        )
+
+        let action = try await harness.coordinator.stage(payload: .meal(intakeDraft), clientRequestID: UUID())
+        let pendingActions = try await harness.coordinator.activeActions()
+        let pending = try XCTUnwrap(pendingActions.first)
+        guard case .meal(let persistedDraft) = pending.payload else {
+            return XCTFail("Expected the pending payload to retain consumed-fraction evidence")
+        }
+        XCTAssertEqual(persistedDraft.consumedFractionEvidence, consumedEvidence)
+        XCTAssertEqual(
+            try XCTUnwrap(persistedDraft.totalNutrients?.energyKcal.likely),
+            210,
+            accuracy: 0.001
+        )
+        _ = try await harness.coordinator.confirm(id: action.id)
+
+        let context = ModelContext(harness.container)
+        let storedMeal = try XCTUnwrap(context.fetch(FetchDescriptor<MealRecord>()).first)
+        XCTAssertEqual(storedMeal.totalCaloriesKcal, 210)
+        XCTAssertEqual(storedMeal.energyLowKcal, 190, accuracy: 0.001)
+        XCTAssertEqual(storedMeal.energyLikelyKcal, 210, accuracy: 0.001)
+        XCTAssertEqual(storedMeal.energyHighKcal, 250, accuracy: 0.001)
+        XCTAssertEqual(storedMeal.proteinG, 10, accuracy: 0.001)
+        XCTAssertEqual(storedMeal.fatG, 10, accuracy: 0.001)
+        XCTAssertEqual(storedMeal.carbsG, 10, accuracy: 0.001)
+        let storedDish = try XCTUnwrap(storedMeal.dishes.first)
+        XCTAssertEqual(storedDish.estimatedCaloriesKcal, 210)
+        XCTAssertEqual(storedDish.estimatedProteinG, 10, accuracy: 0.001)
+        let storedIngredients = try JSONDecoder().decode(
+            [MealIngredientDraft].self,
+            from: Data(storedDish.ingredientJSON.utf8)
+        )
+        XCTAssertEqual(try XCTUnwrap(storedIngredients.first?.amountGrams.likely), 50, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(storedIngredients.first?.nutrients.energyKcal.likely), 210, accuracy: 0.001)
+        let storedEvidence = try JSONDecoder().decode(
+            [EvidenceSnapshot].self,
+            from: try XCTUnwrap(storedMeal.evidenceData)
+        )
+        XCTAssertTrue(storedEvidence.contains {
+            $0.sourceID == "meal-consumed-fraction:user-report"
+                && $0.sourceVersion == ConsumedFractionEvidence.currentParserVersion
+                && $0.grade == .userReported
+        })
+        let dailyMetrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(dailyMetrics.totalIntakeKcal, 210)
+        XCTAssertEqual(dailyMetrics.proteinG, 10, accuracy: 0.001)
+        XCTAssertEqual(dailyMetrics.fatG, 10, accuracy: 0.001)
+        XCTAssertEqual(dailyMetrics.carbsG, 10, accuracy: 0.001)
+    }
+
     func testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts() async throws {
         let harness = try Harness()
         let date = Date(timeIntervalSince1970: 1_700_000_000)

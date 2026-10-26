@@ -2,6 +2,7 @@ import Foundation
 import SwiftData
 import XCTest
 @testable import Densoso
+import DensosoDomain
 
 @MainActor
 final class GetRecentWorkoutsToolTests: XCTestCase {
@@ -105,6 +106,7 @@ final class GetRecentWorkoutsToolTests: XCTestCase {
         context.insert(latest)
         context.insert(earlier)
         context.insert(outside)
+        try insertWorkoutReadState(.available, on: latest.date, calendar: Calendar.current, in: context)
         context.insert(ScheduleEvent(
             date: try date(2026, 10, 16, 13, 0, calendar: calendar),
             title: "plan-only-workout-title",
@@ -145,6 +147,84 @@ final class GetRecentWorkoutsToolTests: XCTestCase {
         XCTAssertFalse(response.contains("sourceBundleIdentifier"))
         XCTAssertFalse(response.contains("routePointCount"))
         XCTAssertFalse(response.contains("notes"))
+    }
+
+    func testRepositoryOmitsHealthKitWorkoutsWithUnknownOrMissingReadState() async throws {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let unknownDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -2, to: today))
+        let missingStateDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        let availableDay = today
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let unknownWorkout = WorkoutRecord(
+            date: unknownDay.addingTimeInterval(3_600),
+            type: "unknown-healthkit",
+            durationMinutes: 30,
+            healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000951")!
+        )
+        let missingStateWorkout = WorkoutRecord(
+            date: missingStateDay.addingTimeInterval(3_600),
+            type: "missing-state-healthkit",
+            durationMinutes: 35,
+            healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000952")!
+        )
+        let availableWorkout = WorkoutRecord(
+            date: availableDay.addingTimeInterval(3_600),
+            type: "available-healthkit",
+            durationMinutes: 40,
+            healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000953")!
+        )
+        let localWorkout = WorkoutRecord(
+            date: unknownDay.addingTimeInterval(7_200),
+            type: "local-workout",
+            durationMinutes: 25
+        )
+        context.insert(unknownWorkout)
+        context.insert(missingStateWorkout)
+        context.insert(availableWorkout)
+        context.insert(localWorkout)
+        try insertWorkoutReadState(.dataUnavailableOrReadScopeUnknown, on: unknownDay, calendar: calendar, in: context)
+        try insertWorkoutReadState(.available, on: availableDay, calendar: calendar, in: context)
+        try context.save()
+
+        let summaries = try await SwiftDataAgentRepository(modelContainer: container).recentWorkouts(
+            from: unknownDay,
+            through: today.addingTimeInterval(86_399),
+            limit: 10
+        )
+
+        XCTAssertEqual(summaries.map(\.workoutType), ["available-healthkit", "local-workout"])
+    }
+
+    private func insertWorkoutReadState(
+        _ state: HealthReadState,
+        on date: Date,
+        calendar: Calendar,
+        in context: ModelContext
+    ) throws {
+        let day = calendar.startOfDay(for: date)
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
+        let dayKey = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            healthReadStates: [HealthMetricID.workout.rawValue: state],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey,
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "workout-read-state-\(dayKey)",
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        ))
     }
 
     private func localCalendar() -> Calendar {
