@@ -303,8 +303,8 @@ final class HealthIntelligenceTests: XCTestCase {
         let yesterday = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
         let summary = HealthIntelligenceEngine(calendar: calendar).makeContextSummary(
             days: [
-                HealthIntelligenceDay(dayStart: yesterday, dailyDeficitKcal: -100, proteinGrams: 80),
-                HealthIntelligenceDay(dayStart: today, dailyDeficitKcal: 300, proteinGrams: 100),
+                HealthIntelligenceDay(dayStart: yesterday, proteinGrams: 80, dailyDeficitKcal: -100),
+                HealthIntelligenceDay(dayStart: today, proteinGrams: 100, dailyDeficitKcal: 300),
             ],
             asOf: today,
             goals: nil,

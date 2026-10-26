@@ -53,8 +53,8 @@ final class GetMetricsToolTests: XCTestCase {
         let pending = DailyMetrics(
             date: day,
             energyQuality: EnergyQuality.unavailable.rawValue,
-            requiresRecompute: true,
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            requiresRecompute: true,
             sourceFingerprint: "pending-get-metrics"
         )
 

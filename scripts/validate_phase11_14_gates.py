@@ -1008,7 +1008,6 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "transientMealImageEvidence = multimodalRequest.mealEvidence",
                 "providerMessagesIncludingTransientMealEvidence(",
                 "transientMealEvidenceMessage",
-                "messagesWithoutLocalMetadata",
                 "inputEnvelope: message.inputEnvelope",
                 "multimodalRequest.inputEnvelope.isWellFormed",
                 "case invalidInputEnvelope",
@@ -1447,6 +1446,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "testRealRoundAndToolCountsAndPendingAction",
                 "testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages",
+                "XCTAssertNil(providerMessage.inputEnvelope)",
+                "XCTAssertEqual(storedUser.inputEnvelope, envelope)",
                 "testTypedEventStreamPreservesOrderAndRealCounts",
                 "testProviderReasoningContinuesInMemoryButIsNeverPersisted",
                 "testCloudProviderRequiresExplicitConsent",
