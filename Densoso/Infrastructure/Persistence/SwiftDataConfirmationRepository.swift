@@ -600,7 +600,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         metricsDescriptor.fetchLimit = 1
         let existingMetrics = try modelContext.fetch(metricsDescriptor).first
 
-        let targetDayKey = dayKey(for: day)
+        let targetDayKey = dayKey(for: day, calendar: calendar)
         let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == targetDayKey }
         var snapshotDescriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: snapshotPredicate)
         snapshotDescriptor.fetchLimit = 1
@@ -704,8 +704,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             .map { [$0] } ?? []
     }
 
-    private func dayKey(for day: Date) -> String {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: day)
+    private func dayKey(for day: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
@@ -836,7 +836,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         )
         weightDescriptor.fetchLimit = 1
         let latestWeight = try modelContext.fetch(weightDescriptor).first?.kilograms
-        let targetDayKey = dayKey(for: day)
+        let targetDayKey = dayKey(for: day, calendar: calendar)
         let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == targetDayKey }
         var snapshotDescriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: snapshotPredicate)
         snapshotDescriptor.fetchLimit = 1

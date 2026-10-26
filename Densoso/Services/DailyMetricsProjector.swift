@@ -33,7 +33,7 @@ enum DailyMetricsProjector {
                 calendar: calendar,
                 in: modelContext
             )
-            let healthSnapshot = try healthSnapshot(for: day, in: modelContext)
+            let healthSnapshot = try healthSnapshot(for: day, calendar: calendar, in: modelContext)
             let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
                 on: day,
                 calendar: calendar,
@@ -154,7 +154,7 @@ enum DailyMetricsProjector {
                 calendar: calendar,
                 in: modelContext
             )
-            let healthSnapshot = try healthSnapshot(for: day, in: modelContext)
+            let healthSnapshot = try healthSnapshot(for: day, calendar: calendar, in: modelContext)
             let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
                 on: day,
                 calendar: calendar,
@@ -332,8 +332,12 @@ enum DailyMetricsProjector {
             .map { [$0] } ?? []
     }
 
-    private static func healthSnapshot(for day: Date, in modelContext: ModelContext) throws -> DailyHealthSnapshot? {
-        guard let record = try healthSnapshotRecord(for: day, in: modelContext) else { return nil }
+    private static func healthSnapshot(
+        for day: Date,
+        calendar: Calendar,
+        in modelContext: ModelContext
+    ) throws -> DailyHealthSnapshot? {
+        guard let record = try healthSnapshotRecord(for: day, calendar: calendar, in: modelContext) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         return try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
@@ -341,17 +345,18 @@ enum DailyMetricsProjector {
 
     private static func healthSnapshotRecord(
         for day: Date,
+        calendar: Calendar,
         in modelContext: ModelContext
     ) throws -> DailyHealthSnapshotRecord? {
-        let targetDayKey = dayKey(for: day)
+        let targetDayKey = dayKey(for: day, calendar: calendar)
         let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == targetDayKey }
         var descriptor = FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate)
         descriptor.fetchLimit = 1
         return try modelContext.fetch(descriptor).first
     }
 
-    private static func dayKey(for day: Date) -> String {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: day)
+    private static func dayKey(for day: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
