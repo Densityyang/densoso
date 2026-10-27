@@ -121,6 +121,7 @@ REQUIRED_TESTS = (
     "testPolicyRevocationDuringHealthToolExecutionFiltersTheContinuationRequest",
     "testReadModelReportsPerMetricCoverageAcrossTheFortyTwoDayHealthWindow",
     "testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied",
+    "testRestoreInvalidatesCloudHealthAuthorizationAlreadyPresentInTargetStore",
     "testInitialHealthKitBackfillUsesTheSame42DayWindowForEveryStreamType",
     "testLimitedHealthKitHistoryStartsAtAuthorizationBoundaryAndRecordsUnknownDays",
     "testUnavailableAuthorizationBoundaryRebuildsWindowAndKeepsEmptyDaysUnknown",
@@ -134,7 +135,7 @@ REQUIRED_TESTS = (
     "testHealthBriefCacheGenerationFenceRejectsPrePurgeWrites",
     "testInvalidatedBriefCacheDoesNotReloadPrePurgeBriefs",
     "testUnavailableBoundaryRebuildsOnlyAffectedStreamsAndAggregateFailureStaysUnknown",
-    "testObserverWithUnavailableBoundaryKeepsStoredAnchorForIncrementalSync",
+    "testObserverWithUnavailableBoundaryRebuildsExistingSampleAndWorkoutAnchors",
     "testSnapshotRebuildPurgesOnlyWindowHealthKitCacheAndPreservesManualWeights",
     "testAuthorizationBoundaryMaskClearsDerivedBriefCaches",
     "testReadModelHidesAggregateHealthValuesWhenTheirReadStatesAreUnknown",
@@ -238,7 +239,10 @@ BEHAVIOR_CHECKS: dict[str, BehaviorCheck] = {
         ),
     ),
     "imported_backup_reconfirmation": BehaviorCheck(
-        required_tests=("testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied",),
+        required_tests=(
+            "testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied",
+            "testRestoreInvalidatesCloudHealthAuthorizationAlreadyPresentInTargetStore",
+        ),
     ),
     "health_window": BehaviorCheck(
         required_true=("sameAnalysisAndSyncWindow", "authorizationBoundaryRespected"),
@@ -262,7 +266,7 @@ BEHAVIOR_CHECKS: dict[str, BehaviorCheck] = {
             "testHealthBriefCacheGenerationFenceRejectsPrePurgeWrites",
             "testInvalidatedBriefCacheDoesNotReloadPrePurgeBriefs",
             "testUnavailableBoundaryRebuildsOnlyAffectedStreamsAndAggregateFailureStaysUnknown",
-            "testObserverWithUnavailableBoundaryKeepsStoredAnchorForIncrementalSync",
+            "testObserverWithUnavailableBoundaryRebuildsExistingSampleAndWorkoutAnchors",
             "testSnapshotRebuildPurgesOnlyWindowHealthKitCacheAndPreservesManualWeights",
             "testAuthorizationBoundaryMaskClearsDerivedBriefCaches",
             "testReadModelHidesAggregateHealthValuesWhenTheirReadStatesAreUnknown",
@@ -1054,7 +1058,7 @@ TEST_FILE_CONTRACTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "testLimitedHealthKitHistoryStartsAtAuthorizationBoundaryAndRecordsUnknownDays",
             "testUnavailableAuthorizationBoundaryRebuildsWindowAndKeepsEmptyDaysUnknown",
             "testUnavailableBoundaryRebuildsOnlyAffectedStreamsAndAggregateFailureStaysUnknown",
-            "testObserverWithUnavailableBoundaryKeepsStoredAnchorForIncrementalSync",
+            "testObserverWithUnavailableBoundaryRebuildsExistingSampleAndWorkoutAnchors",
             "testSnapshotRebuildPurgesOnlyWindowHealthKitCacheAndPreservesManualWeights",
             "testAuthorizationBoundaryMaskClearsDerivedBriefCaches",
             "testForegroundPurgeSupersedesAnInFlightDailyRebaselineBeforeItCanWrite",
@@ -1133,7 +1137,10 @@ TEST_FILE_CONTRACTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "backup_default_deny_test_present",
         "DensosoTests/ExportServiceTests.swift",
-        ("testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied",),
+        (
+            "testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied",
+            "testRestoreInvalidatesCloudHealthAuthorizationAlreadyPresentInTargetStore",
+        ),
     ),
     (
         "history_unknown_coverage_tool_tests_present",

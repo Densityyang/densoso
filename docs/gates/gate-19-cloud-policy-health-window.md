@@ -68,9 +68,13 @@ foreground path purges before scheduling its async rebuild, and a generation
 checked export gate blocks Agent health context until that purge succeeds. A
 failed purge keeps the gate closed; an export already reading while a new
 rebaseline starts is rejected after its generation changes. Daily background
-refresh also forces a full-window rebaseline, while ordinary observer updates
-continue from their stored anchors. This does not claim immediate detection of
-arbitrary HealthKit permission changes made outside the app. HealthKit workouts
+refresh also forces a full-window rebaseline. Observer updates continue from
+stored anchors when the per-type authorization boundary is available. When the
+stable adapter reports `authorizationBoundaryUnavailable`, observer-triggered
+sample and workout syncs also clear the bounded cache and cursor before reading
+the 42-day window; the shipped stable adapter currently takes this fallback.
+This does not claim immediate detection of arbitrary HealthKit permission
+changes made outside the app. HealthKit workouts
 are excluded from both daily-metric projection inputs and
 `get_recent_workouts` unless that day's workout read state is available; manual
 workouts remain eligible. Aggregate energy, step, and exercise values are
@@ -101,10 +105,15 @@ export across rebaseline. A new adapter integration test passes guarded
 continuation messages through both provider serializers and inspects the
 captured local `URLRequest.httpBody`; a session test revokes sleep consent
 during a health tool read and checks the next provider-bound continuation. An
-export/restore test seeds granted health consent, verifies it is absent from
-the backup document, and checks that a blank restored store defaults all five
-health classes to denied. These tests have not been run locally; Gate 19
-remains `NOT RUN` until GitHub Actions executes them.
+export/restore test verifies that health consent is absent from the backup
+document and a blank destination remains default-denied. A separate restore
+test seeds an already-authorized destination for DeepSeek and Qwen, then checks
+that restore revokes all health/history consents and advances each policy to
+`needsReconfirmation` / `backupRestore` in the same transaction. Observer tests
+start with stored sample and workout anchors, then verify a boundary-unavailable
+callback rebuilds the bounded window and clears stale records. These tests have
+not been run locally; Gate 19 remains `NOT RUN` until GitHub Actions executes
+them.
 
 The coding path now carries HealthKit read-state coverage from the application
 read model into domain states. Missing or ambiguous read states produce typed
@@ -123,10 +132,11 @@ GitHub execution result is available yet.
   attachment, not the bodies or sentinel values. This evidence does not observe
   a live network service or prove what a remote service received.
 - The export format does not include `ConsentRecord` or cloud-policy fields.
-  The new restore test covers an empty destination store remaining default
-  denied. The backup test has not run yet, and no future policy-carrying backup
-  importer exists to exercise a `needsReconfirmation` transition; retain the
-  manifest check as `NOT_MEASURED` until CI provides the safe-path evidence.
+  The importer therefore keeps a blank destination default-denied and revokes
+  authorization already present in an existing destination. CI must execute
+  both restore cases before the evidence manifest can report them as `PASS`; a
+  future policy-carrying backup format would need its own explicit
+  `needsReconfirmation` import contract.
 - Cache invalidation and explicit confirmation before expanding permission have
   no focused behavioral evidence in this gate. Keep them `NOT_MEASURED`; a
   source scan or passing XCTest suite does not establish them.
