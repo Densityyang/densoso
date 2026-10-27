@@ -677,7 +677,7 @@ final class AgentSession {
                     deadline: tracker.budget.deadline,
                     preSerializationGate: { serialize in
                         try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
-                            from: governanceRepository,
+                            from: self.governanceRepository,
                             provider: provider.descriptor.id,
                             expectedHealthPolicy: roundPolicy,
                             includesImage: containsImage,
@@ -686,7 +686,7 @@ final class AgentSession {
                     },
                     networkAttemptGate: {
                         try await CloudHealthContextPolicy.withCurrentSendConsent(
-                            from: governanceRepository,
+                            from: self.governanceRepository,
                             provider: provider.descriptor.id,
                             expectedHealthPolicy: roundPolicy,
                             includesImage: containsImage,
