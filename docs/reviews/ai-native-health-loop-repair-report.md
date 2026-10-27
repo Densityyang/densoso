@@ -4,10 +4,61 @@ Date: 2026-10-27
 Repository: `Densityyang/densoso`  
 Worktree: `E:\howtodo\densoso-ai-native-loop`  
 Branch: `codex/ai-native-health-loop`  
-Code baseline reviewed in this report: `33e5ea7908223a3316ea34f4a857d0f5537e2863`
+Original review baseline (historical): `33e5ea7908223a3316ea34f4a857d0f5537e2863`
 Associated pull request: none
 
-## Decision
+## Current continuation — 2026-10-27
+
+**Current code SHA:** `c04116d54cf89c8128f8f701715cc435b31b20aa` on
+`codex/ai-native-health-loop`. The batch is pushed to the main coding branch.
+No pull request is associated with this branch; PR #14 is unrelated.
+
+**GitHub verification:** full Build run
+[#40483900672](https://github.com/Densityyang/densoso/actions/runs/40483900672)
+targets this exact SHA through the isolated ref `codex/ci-verify-c04116d`.
+It was queued when checked; no result is reported as PASS until that run records
+it. The preceding full run
+[#40483156093](https://github.com/Densityyang/densoso/actions/runs/40483156093)
+targets the first fix commit `affd5a7`; it is still useful diagnostic evidence,
+but Gate 19's selected-test/validator names were stale for the new observer
+regression. The current SHA updates both the workflow selection and validator.
+The older run
+[#40474460120](https://github.com/Densityyang/densoso/actions/runs/40474460120)
+is still executing Gate 2 on parent SHA `68d15e7`; its Gate 1 failed 7 of 608
+unit tests (5 unexpected), while Gates 17, 18, 19, and the Gate 16 static
+contract passed. Its Gate 2 result does not verify the current SHA.
+
+**Coding completed in this batch:** Gate 1's seven reported unit-test failures
+were traced to five `FoodDatabase` fixture cases where Swift consumed embedded
+JSON quote escapes, one no-local-data health response being confused with a
+no-consent response, and a test harness releasing the weakly-held
+`FoodDatabase`. Those are corrected without weakening the product assertions.
+The HealthKit observer single-stream path now performs
+the same bounded 42-day rebaseline as full sync when the stable SDK cannot
+report a per-type authorization boundary, including clearing stale samples,
+workouts, and cursors; the new regression case starts with existing anchors.
+Gate 19 now selects that regression and validates its new method name. Backup
+restore also revokes existing cloud-health and conversation-history consents
+and invalidates provider policy snapshots in the restore transaction; Gate 19
+now selects this pre-authorized-target regression in addition to the blank
+destination default-deny case.
+
+**Coding audit boundary:** review of the current PR's food/meal, cloud-policy,
+HealthKit, Agent, Provider, Action, Outbox, and interface work found no further
+confirmed code defect. The pinned recipe catalog contains 366 source-traceable
+records, but its import report retains 3,073 unmapped ingredient rows out of
+3,262 and 3,259 unknown raw/cooked mass bases. These remain explicitly unknown;
+they are not verified ingredient nutrition. The real-meal Top-1/Top-3 and
+calorie-error benchmark remains `NOT_MEASURED` without labeled photos and
+weighed portions. Fixture tests do not prove live DeepSeek endpoint behavior.
+
+**HealthKit platform choice:** this implementation uses the stable SDK and the
+bounded unknown-safe fallback; it does not opt into the Beta HealthKit API or a
+Beta SDK. The live limited-history authorization boundary is still
+`NOT_MEASURED`. Gate 15 paired iPhone/Watch acceptance and Gate 16 owner release
+acceptance remain owner-run. Signing and release are reserved for the owner.
+
+## Historical decision at 33e5ea7 (superseded)
 
 **NOT READY.** The latest full Build run [#40341958242](https://github.com/Densityyang/densoso/actions/runs/40341958242) completed with failure on `33e5ea7`. Gate 3 static contract validation and Gate 17 passed. Gate 1 exposed two portion-parser regressions plus an iOS compile error from implicit `self`; Gate 18 exposed an initializer argument-order compile error; Gate 19's app tests were blocked by the compile failure and its HealthKit authorization-boundary behavior remains `BLOCKED` because the stable adapter does not call Apple's Beta API. Gate 13 was abandoned and the old Gate 16 aggregate parser failed to normalize that result; the repair maps `abandoned` to `BLOCKED`. The follow-up coding batch was not yet verified by Actions when this report update began. No local tests were run.
 
@@ -293,6 +344,6 @@ These are implementation statements only; final current-HEAD acceptance depends 
 - **Performance:** Gate 11/13 p50/p95 results are pending in #40275652641 on `93696c5`. Historical recompute now offloads fingerprinting/accounting from Sendable inputs; ordinary synchronous projection transactions remain on their context actor. Today initial render and end-to-end render/refresh targets are not yet measured.
 - **Pull request:** none is associated with this branch; PR #14 is a separate V3 work line.
 
-## Final status
+## Historical final status for 93696c5 (superseded)
 
 **NOT READY** at code baseline `93696c58431cdc376f8afd1e0247d4ab7badae30`. Earlier runs exposed date-validation ordering, oversized `get_metrics` output, weekday parsing, test-source argument order, simulator-preflight flakiness, a historical-profile test-fixture mismatch, and Gate 6 validator drift; the corresponding fixes are recorded above. Full same-SHA CI and performance measurements are pending in #40275652641. The real-meal field benchmark, live DeepSeek behavior, Gate 15 signed-device evidence, and Gate 16 owner acceptance remain missing. Do not convert pending or missing evidence to `PASS`.
