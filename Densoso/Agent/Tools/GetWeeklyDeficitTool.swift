@@ -108,9 +108,9 @@ struct GetWeeklyDeficitTool: AgentTool {
     private static func projectionVersion(for metrics: [DailyMetricsReadResult]) -> String {
         let versions = projectionVersions(for: metrics)
         switch versions.count {
-        case 0: "unavailable"
-        case 1: versions[0]
-        default: "mixed"
+        case 0: return "unavailable"
+        case 1: return versions[0]
+        default: return "mixed"
         }
     }
 
