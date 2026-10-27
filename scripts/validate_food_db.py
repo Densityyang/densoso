@@ -61,6 +61,36 @@ def _verify_energy_rejection(temp: Path, seed_item: dict[str, Any], marker: Any,
         raise SystemExit(f"importer accepted unavailable energy marker {label!r}")
 
 
+def _verify_per_serving_requires_normalization(
+    temp: Path,
+    seed_item: dict[str, Any],
+    *,
+    serving_grams: float | None,
+    label: str,
+) -> None:
+    item = dict(seed_item)
+    item.update({
+        "id": 9005 if serving_grams is None else 9006,
+        "energyKcal": 52,
+        "energyUnit": "kcal/serving",
+        "nutrientBasis": "perServing",
+    })
+    if serving_grams is None:
+        item.pop("servingGrams", None)
+    else:
+        item["servingGrams"] = serving_grams
+    input_path = temp / f"per-serving-{label}.json"
+    output_path = temp / f"per-serving-{label}.db"
+    input_path.write_text(json.dumps([item], ensure_ascii=False), encoding="utf-8")
+    result = _import(input_path, output_path)
+    if result.returncode == 0:
+        raise SystemExit(
+            f"importer treated per-serving energy as per-100g without normalization ({label})"
+        )
+    if "nutrientBasis 'perServing' is unsupported" not in result.stderr:
+        raise SystemExit(f"per-serving input did not fail with an explicit basis error ({label})")
+
+
 def _verify_unicode_alias_collision_is_reported(
     temp: Path, seed_item: dict[str, Any]
 ) -> None:
@@ -199,6 +229,13 @@ def main() -> None:
             ("Tr", "trace"),
         ]:
             _verify_energy_rejection(temporary, items[0], marker, label)
+
+        _verify_per_serving_requires_normalization(
+            temporary, items[0], serving_grams=None, label="missing-serving-mass"
+        )
+        _verify_per_serving_requires_normalization(
+            temporary, items[0], serving_grams=40, label="explicit-serving-mass-not-normalized"
+        )
 
         _verify_unicode_alias_collision_is_reported(temporary, items[0])
         _verify_incomplete_verified_manifest_is_rejected(temporary)

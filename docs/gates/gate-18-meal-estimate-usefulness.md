@@ -2,9 +2,14 @@
 
 Gate status: NOT RUN — evaluate this implementation SHA in GitHub Actions.
 
-`fieldCalibration`: `BLOCKED/MISSING_EVIDENCE`. No real labeled meal set,
-measurement protocol, or held-out field measurements are included. Synthetic
-fixtures cannot establish real-world food-resolution accuracy or calorie error.
+`fieldCalibration`: `NOT_MEASURED` and non-blocking for the deterministic
+engineering gate. No real labeled meal set, measurement protocol, or held-out
+field measurements are included. Synthetic fixtures cannot establish
+real-world food-resolution accuracy or calorie error. Keep this metric status
+separate from the Gate 18 software-contract status in the CI report.
+
+The frozen food-resolution fixture reports Top-1/Top-3 separately in Gate 5;
+those fixture measurements do not establish field calibration.
 
 The deterministic meal-domain suite and focused iOS integration tests should
 verify these contracts:
@@ -40,5 +45,6 @@ verify these contracts:
 The gate must not claim field-calibrated Top-1/Top-3 accuracy or calorie error
 from synthetic fixtures. The existing real-world targets remain Top-1 at least
 80%, Top-3 at least 90%, median absolute percentage calorie error at most 25%,
-and P90 at most 50%; until supported by labeled field evidence, report
-`BLOCKED/MISSING_EVIDENCE`.
+and P90 at most 50%. Until supported by labeled field evidence, report field
+calibration as `NOT_MEASURED`; do not convert that metric status into a Gate
+failure or an accuracy `PASS`.

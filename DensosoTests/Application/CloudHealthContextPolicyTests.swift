@@ -212,6 +212,149 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         XCTAssertEqual(reconfirmed.allowedClasses, initial.allowedClasses)
     }
 
+    func testImageRequestPersistsHealthRevocationBeforeProviderSerialization() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let governance = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await governance.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        try await governance.setConsent(
+            provider: .deepSeek,
+            dataClass: .mealImage,
+            granted: true,
+            policyVersion: "deepseek-sanitized-meal-image-v1"
+        )
+        let initialPolicy = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep, .healthActivity],
+            repository: governance,
+            confirmedAt: Date(timeIntervalSince1970: 1_798_400_000),
+            changeSource: .settings
+        )
+
+        let provider = ScriptedTextProvider(
+            scripts: [[.textDelta("已在更新后的授权策略下处理图片。"), .completed(.completed)]],
+            capabilities: [.text, .toolCalling, .structuredOutput, .vision]
+        )
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let preferences = IntelligencePreferences()
+        preferences.mode = .cloudDeepSeek
+        let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: container)
+        let session = AgentSession(
+            providerSelector: TestProviderSelector(provider),
+            intelligencePreferences: preferences,
+            providerConfiguration: ProviderConfigurationPreferences(),
+            governanceRepository: governance,
+            usageLedger: ProviderUsageLedger(repository: governance),
+            registry: ToolRegistry(),
+            confirmationCoordinator: ConfirmationCoordinator(
+                repository: confirmationRepository,
+                writeGate: PersistenceWriteGate(state: .writable)
+            ),
+            readRepository: repository,
+            conversationRepository: repository,
+            conversationID: UUID(),
+            budgetFactory: { AgentBudget(deadline: .distantFuture) }
+        )
+
+        let response = try await session.send(
+            multimodalRequest: try MultimodalModelRequest(
+                userText: "识别图片里的午餐，不要上传睡眠数据。",
+                imageJPEG: Data([0xFF, 0xD8, 0xFF, 0xD9]),
+                mealEvidence: []
+            ),
+            requestID: UUID()
+        )
+
+        XCTAssertTrue(response.text.contains("已立即撤销睡眠类别"))
+        XCTAssertTrue(response.text.contains("更新后的授权策略"))
+        let currentPolicy = try await CloudHealthContextPolicy.load(from: governance, provider: .deepSeek)
+        XCTAssertEqual(currentPolicy.allowedClasses, [.healthActivity])
+        XCTAssertEqual(currentPolicy.snapshot.revision, initialPolicy.revision + 1)
+
+        let request = try XCTUnwrap(provider.recordedRequests().first)
+        XCTAssertTrue(request.messages.contains { message in
+            message.content.contains { content in
+                if case .image = content { return true }
+                return false
+            }
+        })
+        let serializationGate = try XCTUnwrap(request.preSerializationGate)
+        let serialized = try await serializationGate { Data("current-policy-body".utf8) }
+        XCTAssertEqual(String(decoding: serialized, as: UTF8.self), "current-policy-body")
+        let networkAttemptGate = try XCTUnwrap(request.networkAttemptGate)
+        try await networkAttemptGate()
+        try await networkAttemptGate()
+    }
+
+    func testImageRequestCannotBypassHealthExpansionConfirmation() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let governance = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await governance.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        try await governance.setConsent(
+            provider: .deepSeek,
+            dataClass: .mealImage,
+            granted: true,
+            policyVersion: "deepseek-sanitized-meal-image-v1"
+        )
+        let provider = ScriptedTextProvider(
+            scripts: [],
+            capabilities: [.text, .toolCalling, .structuredOutput, .vision]
+        )
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let preferences = IntelligencePreferences()
+        preferences.mode = .cloudDeepSeek
+        let session = AgentSession(
+            providerSelector: TestProviderSelector(provider),
+            intelligencePreferences: preferences,
+            providerConfiguration: ProviderConfigurationPreferences(),
+            governanceRepository: governance,
+            usageLedger: ProviderUsageLedger(repository: governance),
+            registry: ToolRegistry(),
+            confirmationCoordinator: ConfirmationCoordinator(
+                repository: SwiftDataConfirmationRepository(modelContainer: container),
+                writeGate: PersistenceWriteGate(state: .writable)
+            ),
+            readRepository: repository,
+            conversationRepository: repository,
+            conversationID: UUID(),
+            budgetFactory: { AgentBudget(deadline: .distantFuture) }
+        )
+
+        let response = try await session.send(
+            multimodalRequest: try MultimodalModelRequest(
+                userText: "允许使用睡眠数据并识别这张晚餐图片。",
+                imageJPEG: Data([0xFF, 0xD8, 0xFF, 0xD9]),
+                mealEvidence: []
+            ),
+            requestID: UUID()
+        )
+
+        XCTAssertTrue(response.text.contains("回复“确认”启用"))
+        let draft = try await governance.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+        XCTAssertEqual(draft.state, .draft)
+        XCTAssertEqual(draft.allowedClasses, [.healthSleep])
+        let effectivePolicy = try await CloudHealthContextPolicy.load(from: governance, provider: .deepSeek)
+        XCTAssertFalse(effectivePolicy.allows(.healthSleep))
+        XCTAssertTrue(provider.recordedRequests().isEmpty)
+    }
+
     func testUnconfiguredPolicyOmitsAutomaticHistoricalContext() {
         let policy = CloudHealthContextPolicy(provider: .deepSeek, allowedClasses: [])
         let context = makeContext()

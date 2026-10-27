@@ -435,7 +435,7 @@ final class AgentSession {
             }
 
             let provider = try providerSelector.provider(for: intelligencePreferences.mode)
-            let initialCloudHealthPolicy = try await CloudHealthContextPolicy.load(
+            var initialCloudHealthPolicy = try await CloudHealthContextPolicy.load(
                 from: governanceRepository,
                 provider: provider.descriptor.id
             )
@@ -492,15 +492,37 @@ final class AgentSession {
                 .flatMap { Self.visibleMessage($0)?.text }
                 ?? userText
             let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(for: promptUserText)
-            if !containsImage,
-               let policyAlignmentResponse = try await handleCloudHealthPolicyAlignment(
-                   promptUserText,
-                   provider: provider.descriptor.id
-               ) {
-                return try await completeDeterministicHealthResponse(
-                    policyAlignmentResponse,
-                    requestID: requestID
-                )
+            let policyAlignmentIntent = CloudHealthContextPolicyAlignmentIntent.parse(promptUserText)
+            var policyAlignmentAcknowledgement: String?
+            func responseIncludingPolicyAcknowledgement(_ text: String) -> String {
+                guard let policyAlignmentAcknowledgement else { return text }
+                return "\(policyAlignmentAcknowledgement)\n\n\(text)"
+            }
+            if !containsImage || policyAlignmentIntent != nil {
+                if let policyAlignmentResponse = try await handleCloudHealthPolicyAlignment(
+                    promptUserText,
+                    provider: provider.descriptor.id
+                ) {
+                    if containsImage, case .some(.revoke) = policyAlignmentIntent {
+                        // A restrictive image turn can continue after the local
+                        // policy write, but all context and send gates must use
+                        // the newly persisted revision.
+                        initialCloudHealthPolicy = try await CloudHealthContextPolicy.load(
+                            from: governanceRepository,
+                            provider: provider.descriptor.id
+                        )
+                        activeCloudHealthPolicy = initialCloudHealthPolicy
+                        policyAlignmentAcknowledgement = policyAlignmentResponse
+                    } else {
+                        // Expansion stays a deterministic confirmation step. The
+                        // attached image is not sent until the user confirms in a
+                        // separate turn under the resulting policy.
+                        return try await completeDeterministicHealthResponse(
+                            policyAlignmentResponse,
+                            requestID: requestID
+                        )
+                    }
+                }
             }
             let unfilteredNarrativeContext: HealthNarrativeContext?
             if wantsHealthNarrative && !initialCloudHealthPolicy.allowedClasses.isEmpty {
@@ -510,7 +532,9 @@ final class AgentSession {
                     throw CancellationError()
                 } catch {
                     return try await completeDeterministicHealthResponse(
-                        "读取本机健康状态失败，请重试；数据读取失败不代表没有健康数据。",
+                        responseIncludingPolicyAcknowledgement(
+                            "读取本机健康状态失败，请重试；数据读取失败不代表没有健康数据。"
+                        ),
                         requestID: requestID
                     )
                 }
@@ -526,9 +550,11 @@ final class AgentSession {
 
             if wantsHealthNarrative && (healthSummary == nil || allowedEvidenceKeys.isEmpty) {
                 return try await completeDeterministicHealthResponse(
-                    narrativeContext == nil
-                        ? "当前没有获准用于云端的历史健康类别；请在设置中逐类确认后，我才能结合这些记录分析。"
-                        : HealthNarrativePolicy.deterministicFallback(narrativeContext),
+                    responseIncludingPolicyAcknowledgement(
+                        narrativeContext == nil
+                            ? "当前没有获准用于云端的历史健康类别；请在设置中逐类确认后，我才能结合这些记录分析。"
+                            : HealthNarrativePolicy.deterministicFallback(narrativeContext)
+                    ),
                     requestID: requestID,
                     healthContextPolicyProvenance: narrativeContext.map { _ in
                         Self.healthContextProvenance(for: initialCloudHealthPolicy)
@@ -545,7 +571,9 @@ final class AgentSession {
 
             if wantsHealthNarrative && !useStructuredHealthNarrative {
                 return try await completeDeterministicHealthResponse(
-                    HealthNarrativePolicy.deterministicFallback(narrativeContext),
+                    responseIncludingPolicyAcknowledgement(
+                        HealthNarrativePolicy.deterministicFallback(narrativeContext)
+                    ),
                     requestID: requestID
                 )
             }
@@ -605,7 +633,7 @@ final class AgentSession {
                         ? "当前没有获准用于云端的历史健康类别；请在设置中逐类确认后，我才能结合这些记录分析。"
                         : HealthNarrativePolicy.deterministicFallback(roundContext)
                     return try await completeDeterministicHealthResponse(
-                        safeFallback,
+                        responseIncludingPolicyAcknowledgement(safeFallback),
                         requestID: requestID,
                         healthContextPolicyProvenance: roundContext.map { _ in
                             Self.healthContextProvenance(for: roundPolicy)
@@ -771,19 +799,20 @@ final class AgentSession {
                 }
 
                 guard !result.text.isEmpty else { throw AgentError.emptyResponse }
-                let responseText: String
+                let providerResponseText: String
                 if currentRoundUsesStructuredNarrative {
                     if let narrative = HealthNarrativePolicy.decode(
                         result.text,
                         allowedEvidenceKeys: currentAllowedEvidenceKeys
                     ) {
-                        responseText = HealthNarrativePolicy.displayText(narrative)
+                        providerResponseText = HealthNarrativePolicy.displayText(narrative)
                     } else {
-                        responseText = HealthNarrativePolicy.deterministicFallback(currentNarrativeContext)
+                        providerResponseText = HealthNarrativePolicy.deterministicFallback(currentNarrativeContext)
                     }
                 } else {
-                    responseText = result.text
+                    providerResponseText = result.text
                 }
+                let responseText = responseIncludingPolicyAcknowledgement(providerResponseText)
                 try await append(
                     ModelMessage(
                         role: .assistant,

@@ -4,6 +4,31 @@ import GRDB
 
 /// 本地食材库（只读 SQLite + FTS5）
 final class FoodDatabase {
+    private struct FoodCompositionSourceRecord: Decodable {
+        let nutrientBasis: String?
+        let massBasis: String?
+        let dataQuality: String?
+        let sourceName: String?
+        let sourceDataType: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case nutrientBasis
+            case massBasis
+            case dataQuality
+            case sourceName
+            case sourceDataType
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            nutrientBasis = try? values.decodeIfPresent(String.self, forKey: .nutrientBasis)
+            massBasis = try? values.decodeIfPresent(String.self, forKey: .massBasis)
+            dataQuality = try? values.decodeIfPresent(String.self, forKey: .dataQuality)
+            sourceName = try? values.decodeIfPresent(String.self, forKey: .sourceName)
+            sourceDataType = try? values.decodeIfPresent(String.self, forKey: .sourceDataType)
+        }
+    }
+
     struct FoodMatch {
         let item: FoodItem
         let score: Double
@@ -178,7 +203,13 @@ final class FoodDatabase {
 
         let items = try dbQueue.read { db in try FoodItem.order(Column("id")).fetchAll(db) }
         let entries = items.map { item in
-            FoodCatalogEntry(
+            let sourceRecord = item.sourceRecordJSON
+                .flatMap { $0.data(using: .utf8) }
+                .flatMap { try? JSONDecoder().decode(FoodCompositionSourceRecord.self, from: $0) }
+            let importWarnings = item.importWarningsJSON
+                .flatMap { $0.data(using: .utf8) }
+                .flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+            return FoodCatalogEntry(
                 id: "food:\(item.id)",
                 localFoodID: String(item.id),
                 name: item.name,
@@ -195,7 +226,18 @@ final class FoodDatabase {
                     carbohydrateGramsPer100Grams: item.carbohydrateG
                 ),
                 isCookedComposite: item.isCookedComposite == true,
-                sourceVersion: item.sourceVersion ?? "unknown-food-data-version"
+                sourceVersion: item.sourceVersion ?? "unknown-food-data-version",
+                sourceID: item.sourceID,
+                sourceRecordID: item.sourceRecordID,
+                licenseStatus: item.licenseStatus,
+                dataQuality: sourceRecord?.dataQuality,
+                nutrientBasis: sourceRecord?.nutrientBasis,
+                massBasis: sourceRecord?.massBasis,
+                energyRaw: item.energyRaw,
+                energyUnit: item.energyUnit,
+                sourceName: sourceRecord?.sourceName,
+                sourceDataType: sourceRecord?.sourceDataType,
+                importWarnings: importWarnings
             )
         }
         catalogEntriesCache = entries

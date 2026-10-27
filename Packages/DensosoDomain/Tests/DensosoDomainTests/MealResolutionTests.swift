@@ -169,6 +169,80 @@ final class MealResolutionTests: XCTestCase {
         XCTAssertNil(dish.nutrients.carbohydrateGrams)
     }
 
+    func testFoodCatalogEntryDecodesLegacyPayloadWithoutImportWarnings() throws {
+        let legacyPayload = Data(
+            #"{"id":"food:legacy","name":"legacy food","preparation":"unknown","category":"test","nutrients":{"energyKcalPer100Grams":125},"sourceVersion":"fixture-v1"}"#.utf8
+        )
+
+        let entry = try JSONDecoder().decode(FoodCatalogEntry.self, from: legacyPayload)
+
+        XCTAssertEqual(entry.id, "food:legacy")
+        XCTAssertEqual(entry.importWarnings, [])
+        XCTAssertEqual(entry.aliases, [])
+        XCTAssertEqual(entry.edibleFraction, 1)
+    }
+
+    func testFoodCompositionProvenanceReachesPersistableEstimateEvidence() throws {
+        let entry = FoodCatalogEntry(
+            id: "food:101",
+            localFoodID: "101",
+            name: "鸡胸肉",
+            aliases: ["鸡胸"],
+            preparation: .cooked,
+            category: "肉类",
+            edibleFraction: 1,
+            nutrients: FoodNutrientProfile(energyKcalPer100Grams: 133, proteinGramsPer100Grams: 19.4),
+            sourceVersion: "fixture-v1",
+            sourceID: "usda-fdc-sr-legacy",
+            sourceRecordID: "169757",
+            licenseStatus: "verified",
+            dataQuality: "source-reported",
+            nutrientBasis: "per100g",
+            massBasis: "cooked",
+            energyRaw: "133",
+            energyUnit: "kcal/100g",
+            sourceName: "Chicken breast, cooked",
+            sourceDataType: "SR Legacy",
+            importWarnings: ["fixture review warning"]
+        )
+        let v2Resolution = FoodResolverV2(catalog: [entry]).resolve(
+            FoodResolutionV2Query(label: "鸡胸肉", preparation: .cooked, massBasis: .cooked)
+        )
+        let resolution = v2Resolution.mealEstimatorResolution
+        let portion = try PortionEstimator().estimate(evidence: [.approximateGrams(grams: 100)])
+        let dish = try MealEstimator().estimateDish(
+            MealDishEstimationInput(
+                name: "鸡胸肉",
+                ingredients: [
+                    MealIngredientEstimationInput(
+                        label: "鸡胸肉",
+                        resolution: resolution,
+                        portion: portion,
+                        massBasis: .cooked
+                    ),
+                ]
+            )
+        )
+
+        let sourceEvidence = try XCTUnwrap(dish.ingredients.first?.evidence.first {
+            $0.sourceID == "food-composition:usda-fdc-sr-legacy"
+        })
+        XCTAssertEqual(sourceEvidence.sourceVersion, "fixture-v1")
+        XCTAssertTrue(sourceEvidence.summary.contains("sourceRecordID=169757"))
+        XCTAssertTrue(sourceEvidence.summary.contains("licenseStatus=verified"))
+        XCTAssertTrue(sourceEvidence.summary.contains("dataQuality=source-reported"))
+        XCTAssertTrue(sourceEvidence.summary.contains("nutrientBasis=per100g"))
+        XCTAssertTrue(sourceEvidence.summary.contains("massBasis=cooked"))
+        XCTAssertTrue(sourceEvidence.summary.contains("energyRaw=133"))
+        XCTAssertTrue(sourceEvidence.summary.contains("importWarnings=fixture review warning"))
+
+        let restored = try JSONDecoder().decode(MealDishDraft.self, from: JSONEncoder().encode(dish))
+        XCTAssertEqual(
+            restored.ingredients.first?.evidence.first { $0.sourceID == sourceEvidence.sourceID },
+            sourceEvidence
+        )
+    }
+
     func testOnlyLocalFoodCatalogCandidatesWriteLocalFoodIDs() throws {
         let localEntry = FoodCatalogEntry(
             id: "food:local-1",

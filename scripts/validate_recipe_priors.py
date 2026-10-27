@@ -24,6 +24,21 @@ DEFAULT_VERIFIED_FOOD_RECORDS = ROOT / "Densoso/Resources/FoodData/verified_food
 PROJECT_SPEC = ROOT / "project.yml"
 MINIMUM_RECIPES = 100
 REQUIRED_CATEGORIES = {"vegetable", "meat", "aquatic", "breakfast", "staple", "soup"}
+SUPPORTED_COOKING_METHODS = {
+    "coldDress", "deepFry", "dryFry", "stirFry", "braise", "steam", "boil", "roast", "stew", "unknown",
+}
+REQUIRED_COOKING_METHOD_GROUPS = {
+    "stir-fry-or-pan-fry": {"stirFry", "dryFry"},
+    "steam": {"steam"},
+    "boil-stew-soup": {"boil", "stew"},
+    "braise": {"braise"},
+    "cold-dress": {"coldDress"},
+    "deep-fry": {"deepFry"},
+}
+NOODLE_SUFFIXES = (
+    "面条", "拉面", "刀削面", "意大利面", "意面", "方便面", "热干面", "炸酱面",
+    "汤面", "炒面", "烩面", "河粉", "米粉", "粉丝", "米线", "粉条", "凉粉", "面",
+)
 EXPECTED_SOURCE_VERSION = "5fb3140c20b2a713296696dc6fdd3b83ccc617a6"
 QUANTITY_KINDS = {
     "notSpecifiedInSource",
@@ -282,6 +297,12 @@ def validate(
     records: set[str] = set()
     names: Counter[str] = Counter()
     categories: Counter[str] = Counter()
+    cooking_methods: Counter[str] = Counter()
+    unknown_method_records: list[str] = []
+    rice_count = 0
+    noodle_count = 0
+    porridge_count = 0
+    composite_count = 0
     for index, recipe in enumerate(recipes):
         prefix = f"recipes[{index}]"
         if not isinstance(recipe, dict):
@@ -322,6 +343,46 @@ def validate(
             errors.append(f"{prefix}.category is missing")
         else:
             categories[category] += 1
+        method = recipe.get("cookingMethod")
+        method_evidence = recipe.get("cookingMethodEvidence")
+        if not isinstance(method, str) or method not in SUPPORTED_COOKING_METHODS:
+            errors.append(f"{prefix}.cookingMethod is unsupported: {method!r}")
+        else:
+            cooking_methods[method] += 1
+            if method == "unknown":
+                if isinstance(record_id, str):
+                    unknown_method_records.append(record_id)
+                if not isinstance(method_evidence, str) or not method_evidence.startswith(
+                    ("ambiguous-title:", "no-specific-title-cue:")
+                ):
+                    errors.append(f"{prefix}.unknown cooking method must retain its source-based reason")
+            elif not (
+                isinstance(method_evidence, str)
+                and (
+                    method_evidence.startswith("dish-title:")
+                    or (method == "stew" and method_evidence == "category-prior:soup")
+                )
+            ):
+                errors.append(f"{prefix}.cookingMethod must be backed by a dish-title or soup-category cue")
+        if isinstance(name, str):
+            rice_count += int("饭" in name)
+            noodle_count += int(
+                any(name.endswith(suffix) for suffix in NOODLE_SUFFIXES)
+                and not name.endswith("面包")
+            )
+            porridge_count += int("粥" in name or "稀饭" in name)
+        recipe_ingredients = recipe.get("ingredients")
+        if isinstance(recipe_ingredients, list):
+            distinct_main_ingredients = {
+                normalize(ingredient.get("sourceName", ""))
+                for ingredient in recipe_ingredients
+                if isinstance(ingredient, dict)
+                and ingredient.get("role") == "ingredient"
+                and ingredient.get("isOptional") is False
+                and ingredient.get("isAlternative") is False
+                and isinstance(ingredient.get("sourceName"), str)
+            }
+            composite_count += int(len(distinct_main_ingredients) >= 2)
         cuisine_region = recipe.get("cuisineRegion")
         if "cuisineRegion" not in recipe or (cuisine_region is not None and (
             not isinstance(cuisine_region, str) or not cuisine_region.strip()
@@ -543,6 +604,24 @@ def validate(
     missing_categories = sorted(REQUIRED_CATEGORIES - set(categories))
     if missing_categories:
         errors.append("missing category coverage: " + ", ".join(missing_categories))
+    missing_method_groups = sorted(
+        label
+        for label, methods in REQUIRED_COOKING_METHOD_GROUPS.items()
+        if not any(cooking_methods.get(method, 0) > 0 for method in methods)
+    )
+    if missing_method_groups:
+        errors.append("missing source-backed cooking-method coverage: " + ", ".join(missing_method_groups))
+    recipe_coverage_counts = {
+        "rice": rice_count,
+        "noodles": noodle_count,
+        "porridge": porridge_count,
+        "composite": composite_count,
+    }
+    missing_recipe_families = sorted(
+        family for family, count in recipe_coverage_counts.items() if count <= 0
+    )
+    if missing_recipe_families:
+        errors.append("missing canonical recipe-family coverage: " + ", ".join(missing_recipe_families))
 
     if report.get("schemaVersion") != 1 or report.get("sourceVersion") != EXPECTED_SOURCE_VERSION:
         errors.append("import review report is missing the pinned provenance")
@@ -560,6 +639,14 @@ def validate(
         errors.append("import review report source/license/status does not match the catalog")
     if report.get("acceptedCount") != len(recipes):
         errors.append("import review report acceptedCount does not match catalog size")
+    if report.get("cookingMethodCounts") != dict(sorted(cooking_methods.items())):
+        errors.append("import report cookingMethodCounts do not match the source-backed recipe methods")
+    if report.get("unknownCookingMethodRecords") != sorted(unknown_method_records):
+        errors.append("import report must enumerate every recipe whose method remains unknown")
+    if report.get("unknownCookingMethodCount") != len(unknown_method_records):
+        errors.append("import report unknownCookingMethodCount does not match its review list")
+    if report.get("recipeCoverageCounts") != recipe_coverage_counts:
+        errors.append("import report recipeCoverageCounts do not match canonical recipe-family coverage")
     ingredient_count = 0
     quantity_counts: Counter[str] = Counter()
     for recipe in recipes:
@@ -733,6 +820,43 @@ def main() -> int:
         return 1
     source = catalog.get("source")
     recipes = catalog.get("recipes")
+    safe_recipes = [recipe for recipe in recipes if isinstance(recipe, dict)] if isinstance(recipes, list) else []
+    summary_method_counts = Counter(
+        recipe.get("cookingMethod") if isinstance(recipe.get("cookingMethod"), str) else "invalid"
+        for recipe in safe_recipes
+    )
+    summary_recipe_coverage = {
+        "rice": sum("饭" in recipe.get("canonicalDishName", "") for recipe in safe_recipes
+                    if isinstance(recipe.get("canonicalDishName"), str)),
+        "noodles": sum(
+            isinstance(recipe.get("canonicalDishName"), str)
+            and any(recipe["canonicalDishName"].endswith(suffix) for suffix in NOODLE_SUFFIXES)
+            and not recipe["canonicalDishName"].endswith("面包")
+            for recipe in safe_recipes
+        ),
+        "porridge": sum(
+            isinstance(recipe.get("canonicalDishName"), str)
+            and ("粥" in recipe["canonicalDishName"] or "稀饭" in recipe["canonicalDishName"])
+            for recipe in safe_recipes
+        ),
+        "composite": sum(
+            len({
+                normalize(ingredient.get("sourceName", ""))
+                for ingredient in (
+                    recipe.get("ingredients")
+                    if isinstance(recipe.get("ingredients"), list)
+                    else []
+                )
+                if isinstance(ingredient, dict)
+                and ingredient.get("role") == "ingredient"
+                and ingredient.get("isOptional") is False
+                and ingredient.get("isAlternative") is False
+                and isinstance(ingredient.get("sourceName"), str)
+            }) >= 2
+            for recipe in safe_recipes
+            if isinstance(recipe.get("ingredients"), list)
+        ),
+    }
     summary = {
         "status": "FAIL" if errors else "PASS",
         "sourceVersion": source.get("sourceVersion") if isinstance(source, dict) else None,
@@ -742,6 +866,9 @@ def main() -> int:
             for recipe in (recipes if isinstance(recipes, list) else [])
             if isinstance(recipe, dict)
         ).items())),
+        "cookingMethodCounts": dict(sorted(summary_method_counts.items())),
+        "unknownCookingMethodCount": summary_method_counts.get("unknown", 0),
+        "recipeCoverageCounts": summary_recipe_coverage,
         "errors": errors,
     }
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True))

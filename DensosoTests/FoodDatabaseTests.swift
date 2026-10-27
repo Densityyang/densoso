@@ -31,6 +31,16 @@ final class FoodDatabaseTests: XCTestCase {
 
         XCTAssertEqual(firstRead.map(\.id), secondRead.map(\.id))
         XCTAssertEqual(firstRead.first?.name, "鸡胸肉")
+        let entry = try XCTUnwrap(firstRead.first)
+        XCTAssertEqual(entry.sourceID, "fixture-food-source")
+        XCTAssertEqual(entry.sourceRecordID, "fixture-chicken-breast")
+        XCTAssertEqual(entry.licenseStatus, "verified")
+        XCTAssertEqual(entry.dataQuality, "fixture-reviewed")
+        XCTAssertEqual(entry.nutrientBasis, "per100g")
+        XCTAssertEqual(entry.massBasis, "edibleRaw")
+        XCTAssertEqual(entry.energyRaw, "133")
+        XCTAssertEqual(entry.energyUnit, "kcal/100g")
+        XCTAssertEqual(entry.importWarnings, ["fixture review warning"])
     }
 
     func testFoodSourceProvenanceSurvivesSeedDatabaseImport() throws {
@@ -41,7 +51,19 @@ final class FoodDatabaseTests: XCTestCase {
         XCTAssertEqual(item.sourceRecordID, "fixture-chicken-breast")
         XCTAssertEqual(item.sourceVersion, "fixture-v1")
         XCTAssertEqual(item.licenseStatus, "verified")
-        XCTAssertEqual(try database.catalogEntries().first?.sourceVersion, "fixture-v1")
+        let entry = try XCTUnwrap(database.catalogEntries().first)
+        XCTAssertEqual(entry.sourceVersion, "fixture-v1")
+        XCTAssertEqual(entry.sourceID, "fixture-food-source")
+        XCTAssertEqual(entry.sourceRecordID, "fixture-chicken-breast")
+        XCTAssertEqual(entry.licenseStatus, "verified")
+        XCTAssertEqual(entry.dataQuality, "fixture-reviewed")
+        XCTAssertEqual(entry.nutrientBasis, "per100g")
+        XCTAssertEqual(entry.massBasis, "edibleRaw")
+        XCTAssertEqual(entry.energyRaw, "133")
+        XCTAssertEqual(entry.energyUnit, "kcal/100g")
+        XCTAssertEqual(entry.sourceName, "Chicken breast, cooked")
+        XCTAssertEqual(entry.sourceDataType, "fixture")
+        XCTAssertEqual(entry.importWarnings, ["fixture review warning"])
     }
 
     private var seedData: Data {
@@ -61,6 +83,8 @@ final class FoodDatabaseTests: XCTestCase {
                 "sourceRecordID": "fixture-chicken-breast",
                 "sourceVersion": "fixture-v1",
                 "licenseStatus": "verified",
+                "sourceRecordJSON": "{\"nutrientBasis\":\"per100g\",\"massBasis\":\"edibleRaw\",\"dataQuality\":\"fixture-reviewed\",\"sourceName\":\"Chicken breast, cooked\",\"sourceDataType\":\"fixture\"}",
+                "importWarningsJSON": "[\"fixture review warning\"]",
                 "proteinG": 19.4,
                 "fatG": 5.0,
                 "carbohydrateG": 2.5,

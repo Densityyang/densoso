@@ -97,8 +97,9 @@ QUANTITY_RE = re.compile(
 RANGE_RE = re.compile(r"(?P<low>\d+(?:\.\d+)?)\s*(?:-|–|~|～|至|到)\s*(?P<high>\d+(?:\.\d+)?)")
 COOKING_METHODS = (
     ("coldDress", ("凉拌", "拌菜")),
-    ("deepFry", ("油炸", "炸", "煎炸")),
-    ("stirFry", ("炒", "爆炒", "干煸")),
+    ("deepFry", ("油炸", "煎炸", "炸鸡", "炸鱼", "炸虾", "炸肉", "炸鲜奶", "炸饼", "炸薯", "炸丸子", "炸洋葱")),
+    ("dryFry", ("煎", "干煸", "干锅")),
+    ("stirFry", ("爆炒", "炒")),
     ("braise", ("红烧", "卤", "焖", "酱烧")),
     ("steam", ("蒸",)),
     ("boil", ("水煮", "煮", "汆")),
@@ -912,6 +913,13 @@ def cooking_method(text: str, category: str) -> tuple[str, str]:
     title_match = re.search(r"^#\s+(.+?)\s*$", text, re.MULTILINE)
     title = clean_markdown(title_match.group(1)) if title_match else ""
     matched = [method for method, terms in COOKING_METHODS if any(term in title for term in terms)]
+    # “煎炸” is a deep-frying cue, not simultaneous pan-frying and deep-frying.
+    if "煎炸" in title:
+        matched = [method for method in matched if method != "dryFry"]
+    # Air-fryer recipes are not evidence of deep-frying; preserve them as unknown
+    # until this catalog has an explicit air-fry cooking-method contract.
+    if "空气炸锅" in title:
+        matched = [method for method in matched if method != "deepFry"]
     if len(matched) == 1:
         return matched[0], f"dish-title:{title}"
     if len(matched) > 1:
@@ -919,6 +927,49 @@ def cooking_method(text: str, category: str) -> tuple[str, str]:
     if category == "soup":
         return "stew", f"category-prior:{category}"
     return "unknown", f"no-specific-title-cue:{title or 'missing-title'}"
+
+
+def recipe_coverage_summary(recipes: list[dict[str, Any]]) -> dict[str, Any]:
+    cooking_method_counts = Counter(recipe["cookingMethod"] for recipe in recipes)
+    rice_count = sum("饭" in recipe["canonicalDishName"] for recipe in recipes)
+    noodle_suffixes = (
+        "面条", "拉面", "刀削面", "意大利面", "意面", "方便面", "热干面", "炸酱面",
+        "汤面", "炒面", "烩面", "河粉", "米粉", "粉丝", "米线", "粉条", "凉粉", "面",
+    )
+    noodle_count = sum(
+        any(recipe["canonicalDishName"].endswith(suffix) for suffix in noodle_suffixes)
+        and not recipe["canonicalDishName"].endswith("面包")
+        for recipe in recipes
+    )
+    porridge_count = sum(
+        "粥" in recipe["canonicalDishName"] or "稀饭" in recipe["canonicalDishName"]
+        for recipe in recipes
+    )
+    composite_count = sum(
+        len({
+            normalized_text(ingredient["sourceName"])
+            for ingredient in recipe["ingredients"]
+            if ingredient["role"] == "ingredient"
+            and not ingredient["isOptional"]
+            and not ingredient["isAlternative"]
+        }) >= 2
+        for recipe in recipes
+    )
+    return {
+        "cookingMethodCounts": dict(sorted(cooking_method_counts.items())),
+        "unknownCookingMethodCount": cooking_method_counts.get("unknown", 0),
+        "unknownCookingMethodRecords": sorted(
+            recipe["sourceRecordID"]
+            for recipe in recipes
+            if recipe["cookingMethod"] == "unknown"
+        ),
+        "recipeCoverageCounts": {
+            "rice": rice_count,
+            "noodles": noodle_count,
+            "porridge": porridge_count,
+            "composite": composite_count,
+        },
+    }
 
 
 def canonical_name(text: str, source_path: Path) -> str:
@@ -1097,6 +1148,7 @@ def main() -> int:
             "massBasisCounts": dict(sorted(mass_basis_counts.items())),
             "edibleFractionEvidenceCounts": dict(sorted(edible_fraction_evidence_counts.items())),
             "ingredientRoleCounts": dict(sorted(ingredient_role_counts.items())),
+            **recipe_coverage_summary(recipes),
             "reviewRowCount": len(review_rows),
             "reviewRows": review_rows,
             "quantityReviewRowCount": len(quantity_review_rows),
@@ -1131,6 +1183,9 @@ def main() -> int:
             "massBasisCounts",
             "edibleFractionEvidenceCounts",
             "ingredientRoleCounts",
+            "cookingMethodCounts",
+            "recipeCoverageCounts",
+            "unknownCookingMethodCount",
             "reviewRowCount",
             "quantityReviewRowCount",
         )}, ensure_ascii=False, sort_keys=True))

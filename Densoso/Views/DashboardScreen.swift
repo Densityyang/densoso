@@ -6,10 +6,12 @@ import SwiftUI
 struct DashboardScreen: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(Dependencies.self) private var dependencies
+    @Environment(\.scenePhase) private var scenePhase
     @Query private var profiles: [UserProfile]
 
     @State private var metrics: DailyMetrics?
     @State private var weekly: WeeklyAnalyticsSnapshot?
+    @State private var healthSnapshotStatus: String?
     @State private var loadError: String?
 
     var body: some View {
@@ -87,6 +89,12 @@ struct DashboardScreen: View {
                             .foregroundStyle(OrbitPalette.coral)
                             .orbitCard()
                     }
+                    if let healthSnapshotStatus {
+                        Label(healthSnapshotStatus, systemImage: "heart.text.square")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .orbitCard()
+                    }
                 }
                 .padding()
             }
@@ -94,6 +102,19 @@ struct DashboardScreen: View {
             .navigationTitle("趋势")
             .navigationBarTitleDisplayMode(.inline)
             .task { await loadData() }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                // Clear this view's value-type snapshot synchronously when the
+                // app foregrounds; AppRoot then purges the HealthKit window.
+                weekly = nil
+                if dependencies.healthKitService.hasRequestedAuthorization {
+                    healthSnapshotStatus = "最近 42 天的健康数据正在重新验证；旧趋势已隐藏。"
+                }
+                Task { await loadData() }
+            }
+            .onChange(of: dependencies.healthIntelligenceService.weeklyBrief) { _, _ in
+                Task { await loadWeeklyProjection() }
+            }
         }
     }
 
@@ -232,18 +253,45 @@ struct DashboardScreen: View {
 
     private func loadData() async {
         loadError = nil
+        weekly = nil
+        if dependencies.healthContextExportGate.isOpen {
+            do {
+                _ = try await dependencies.healthIntelligenceService.refresh()
+            } catch {
+                loadError = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .projectionFailedFallback
+                ).userMessage
+            }
+        }
+        await loadWeeklyProjection()
+    }
+
+    private func loadWeeklyProjection() async {
+        weekly = nil
         do {
-            _ = try await dependencies.healthIntelligenceService.refresh()
             let calendar = Calendar.current
             let today = calendar.startOfDay(for: Date())
             let predicate = #Predicate<DailyMetrics> { $0.date == today }
             metrics = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: predicate)).first
+            guard dependencies.healthContextExportGate.isOpen else {
+                weekly = nil
+                healthSnapshotStatus = "健康数据缓存尚未完成安全清理，趋势暂不可用；手工记录仍保留。"
+                return
+            }
+            let goal = try await dependencies.healthIntelligenceService.goalProfile(asOf: today)
+            guard dependencies.healthContextExportGate.isOpen else {
+                weekly = nil
+                healthSnapshotStatus = "健康数据缓存尚未完成安全清理，趋势暂不可用；手工记录仍保留。"
+                return
+            }
             weekly = try WeeklyAnalyticsService(calendar: calendar).load(
                 referenceDate: today,
                 profile: profiles.first,
-                goal: try await dependencies.healthIntelligenceService.goalProfile(asOf: today),
+                goal: goal,
                 in: modelContext
             )
+            healthSnapshotStatus = nil
         } catch {
             loadError = SharedErrorDescriptor.mapped(
                 from: error,

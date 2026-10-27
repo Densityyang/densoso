@@ -15,7 +15,7 @@ final class DailyLoopSnapshotTests: XCTestCase {
         XCTAssertEqual(DailyLoopSnapshot.currentAlgorithmVersion, AlgorithmVersions.dailyLoop)
         XCTAssertEqual(
             HealthIntelligenceEngine.dailyBriefCacheAlgorithmVersion,
-            "health-intelligence-v3+recommendation-policy-v1"
+            "health-intelligence-v3+recommendation-policy-v1+metric-window-coverage-v1"
         )
     }
 

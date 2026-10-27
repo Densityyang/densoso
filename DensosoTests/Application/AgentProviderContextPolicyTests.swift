@@ -124,6 +124,7 @@ final class AgentProviderContextPolicyTests: XCTestCase {
         ]
         let payloadData = try JSONSerialization.data(withJSONObject: payloadObject, options: [.sortedKeys])
         let payload = String(decoding: payloadData, as: UTF8.self)
+        var sanitizedRequestObservations: [[String: Any]] = []
 
         for providerID in [ProviderID.deepSeek, .qwen] {
             for scenario in scenarios {
@@ -182,11 +183,25 @@ final class AgentProviderContextPolicyTests: XCTestCase {
 
                 let capturedRequests = await transport.recordedRequests()
                 let captured = try XCTUnwrap(capturedRequests.first)
-                let body = String(decoding: try XCTUnwrap(captured.httpBody), as: UTF8.self)
+                let bodyData = try XCTUnwrap(captured.httpBody)
+                let body = String(decoding: bodyData, as: UTF8.self)
+                let forbiddenSentinelMatchCount = scenario.sentinels.filter {
+                    body.localizedCaseInsensitiveContains($0)
+                }.count
+                let forbiddenSentinelsAbsent = forbiddenSentinelMatchCount == 0
+                var conditionalDerivedSentinelsAbsent = true
+                if scenario.removesRecovery {
+                    conditionalDerivedSentinelsAbsent = conditionalDerivedSentinelsAbsent &&
+                        !body.contains("recovery.derived.SENTINEL")
+                }
+                if scenario.removesTrainingLoad {
+                    conditionalDerivedSentinelsAbsent = conditionalDerivedSentinelsAbsent &&
+                        !body.contains("trainingLoad.derived.SENTINEL")
+                }
                 for sentinel in scenario.sentinels {
                     XCTAssertFalse(
                         body.localizedCaseInsensitiveContains(sentinel),
-                        "Denied \(scenario.denied.rawValue) sentinel reached \(providerID.rawValue) HTTP body: \(sentinel)"
+                        "Denied \(scenario.denied.rawValue) health content reached \(providerID.rawValue) HTTP body"
                     )
                 }
                 XCTAssertTrue(
@@ -200,7 +215,36 @@ final class AgentProviderContextPolicyTests: XCTestCase {
                 if scenario.removesTrainingLoad {
                     XCTAssertFalse(body.contains("trainingLoad.derived.SENTINEL"))
                 }
+                sanitizedRequestObservations.append([
+                    "provider": providerID.rawValue,
+                    "deniedHealthClass": scenario.denied.rawValue,
+                    "requestCaptured": true,
+                    "requestBodyByteCount": bodyData.count,
+                    "forbiddenSentinelCount": scenario.sentinels.count,
+                    "forbiddenSentinelMatchCount": forbiddenSentinelMatchCount,
+                    "forbiddenSentinelsAbsent": forbiddenSentinelsAbsent,
+                    "allowedCategoryControlPresent": body.localizedCaseInsensitiveContains(scenario.allowedSentinel),
+                    "rootMessageSentinelAbsent": !body.contains("unfiltered-root-message-sentinel"),
+                    "conditionalDerivedSentinelsAbsent": conditionalDerivedSentinelsAbsent,
+                ])
             }
         }
+
+        let sanitizedEvidence: [String: Any] = [
+            "schemaVersion": 1,
+            "gate": "gate-19-cloud-health-privacy-window",
+            "testMethod": "AgentProviderContextPolicyTests/testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies",
+            "captureSource": "scripted-local-http-transport",
+            "rawRequestBodyIncluded": false,
+            "sentinelValuesIncluded": false,
+            "observations": sanitizedRequestObservations,
+        ]
+        let attachment = XCTAttachment(
+            data: try JSONSerialization.data(withJSONObject: sanitizedEvidence, options: [.sortedKeys]),
+            uniformTypeIdentifier: "public.json"
+        )
+        attachment.name = "gate19-sanitized-provider-request-evidence.json"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 }

@@ -2280,6 +2280,70 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             test 2>&1 | tee gate19-cloud-health-window-tests.log
 
+      - name: Export sanitized provider request evidence from XCTest attachments
+        id: gate19_sanitized_request_export
+        if: always()
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          export_dir="$RUNNER_TEMP/Gate19AttachmentExport"
+          destination="gate19-sanitized-provider-request-evidence.json"
+          rm -rf "$export_dir"
+          rm -f "$destination"
+          mkdir -p "$export_dir"
+          if [ ! -d Gate19PolicyHealthWindowTests.xcresult ]; then
+            echo "Gate 19 XCTest result bundle is unavailable; sanitized request evidence is missing."
+            exit 1
+          fi
+          xcrun xcresulttool export attachments \
+            --path Gate19PolicyHealthWindowTests.xcresult \
+            --output-path "$export_dir"
+          python3 - "$export_dir" "$destination" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          export_root = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          expected_attachment = "gate19-sanitized-provider-request-evidence"
+          expected_test = "testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies"
+          manifest_path = export_root / "manifest.json"
+          if not manifest_path.is_file():
+              raise SystemExit("xcresult attachment manifest is missing")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if not isinstance(manifest, list):
+              raise SystemExit("xcresult attachment manifest has an unexpected schema")
+          candidates = []
+          for test_result in manifest:
+              if not isinstance(test_result, dict):
+                  continue
+              test_identifier = test_result.get("testIdentifier", "")
+              if not isinstance(test_identifier, str) or expected_test not in test_identifier:
+                  continue
+              for attachment in test_result.get("attachments", []):
+                  if not isinstance(attachment, dict):
+                      continue
+                  suggested_name = attachment.get("suggestedHumanReadableName", "")
+                  exported_name = attachment.get("exportedFileName", "")
+                  uniform_type = attachment.get("uniformTypeIdentifier", "")
+                  if (
+                      isinstance(suggested_name, str)
+                      and expected_attachment in suggested_name
+                      and isinstance(exported_name, str)
+                      and exported_name.endswith(".json")
+                      and uniform_type == "public.json"
+                  ):
+                      candidates.append(export_root / exported_name)
+          if len(candidates) != 1:
+              raise SystemExit(
+                  f"expected one Gate 19 sanitized request attachment, found {len(candidates)}"
+              )
+          if not candidates[0].is_file():
+              raise SystemExit("the Gate 19 sanitized request attachment file is missing")
+          destination.write_bytes(candidates[0].read_bytes())
+          print(f"Exported sanitized Gate 19 request evidence to {destination}.")
+          PY
+
       - name: Verify Gate 19 executed XCTest cases
         id: gate19_test_manifest
         if: always()
@@ -2372,6 +2436,7 @@ jobs:
               test_status = "BLOCKED"
 
           evidence_ref = "Gate19PolicyHealthWindowTests.xcresult; gate19-domain-*.log"
+          sanitized_request_artifact = "gate19-sanitized-provider-request-evidence.json"
 
           def behavior_evidence(check_id):
               check = BEHAVIOR_CHECKS[check_id]
@@ -2384,21 +2449,19 @@ jobs:
                   status = "PASS"
               else:
                   status = "BLOCKED"
-              if check_id == "health_window" and status in {"PASS", "BLOCKED"}:
-                  adapter = Path("Densoso/Infrastructure/HealthKit/HealthKitHealthStoreClient.swift").read_text(encoding="utf-8")
-                  if "throw HealthStoreClientError.authorizationBoundaryUnavailable" in adapter:
-                      return {
-                          "status": "BLOCKED",
-                          "evidenceRef": "Densoso/Infrastructure/HealthKit/HealthKitHealthStoreClient.swift",
-                          "blockingReason": (
-                              "The stable HealthKit SDK does not expose a reliable per-user authorized-history boundary. "
-                              "The real adapter still fails closed, so the 42-day analysis coverage cases exercised by "
-                              "fake boundary providers do not prove a usable real-device sync window."
-                          ),
-                      }
+              if (
+                  check_id == "provider_final_request_body"
+                  and status == "PASS"
+                  and not Path(sanitized_request_artifact).is_file()
+              ):
+                  status = "BLOCKED"
               value = {"status": status}
               if status == "PASS":
-                  value["evidenceRef"] = evidence_ref
+                  value["evidenceRef"] = (
+                      sanitized_request_artifact
+                      if check_id == "provider_final_request_body"
+                      else evidence_ref
+                  )
                   value.update({field: True for field in check.required_true})
                   for field, mode, number in check.required_numbers:
                       value[field] = number
@@ -2459,6 +2522,7 @@ jobs:
             scripts/validate_swiftpm_test_manifest.py
           python3 scripts/validate_gate19_privacy_window.py \
             --evidence gate19-evidence.json \
+            --sanitized-provider-request-artifact gate19-sanitized-provider-request-evidence.json \
             --report gate19-report.json
 
       - name: Record Gate 19 status
@@ -2470,6 +2534,7 @@ jobs:
           HEALTH_STATE_OUTCOME: ${{ steps.gate19_domain_health_state.outcome }}
           NARRATIVE_OUTCOME: ${{ steps.gate19_domain_narrative.outcome }}
           MANIFEST_OUTCOME: ${{ steps.gate19_test_manifest.outcome }}
+          SANITIZED_REQUEST_EXPORT_OUTCOME: ${{ steps.gate19_sanitized_request_export.outcome }}
         run: |
           if [ -f gate19-report.json ]; then
             GATE_STATUS="$(python3 -c 'import json; print(json.load(open("gate19-report.json", encoding="utf-8"))["status"])')"
@@ -2481,14 +2546,15 @@ jobs:
               || [ "$HEALTH_INTELLIGENCE_OUTCOME" = "failure" ] \
               || [ "$HEALTH_STATE_OUTCOME" = "failure" ] \
               || [ "$NARRATIVE_OUTCOME" = "failure" ] \
-              || [ "$MANIFEST_OUTCOME" = "failure" ]; }; then
+            || [ "$MANIFEST_OUTCOME" = "failure" ]; }; then
             GATE_STATUS=FAIL
           elif [ "$GATE_STATUS" = "PASS" ] \
             && { [ "$IOS_OUTCOME" != "success" ] \
               || [ "$HEALTH_INTELLIGENCE_OUTCOME" != "success" ] \
               || [ "$HEALTH_STATE_OUTCOME" != "success" ] \
               || [ "$NARRATIVE_OUTCOME" != "success" ] \
-              || [ "$MANIFEST_OUTCOME" != "success" ]; }; then
+              || [ "$MANIFEST_OUTCOME" != "success" ] \
+              || [ "$SANITIZED_REQUEST_EXPORT_OUTCOME" != "success" ]; }; then
             GATE_STATUS=BLOCKED
           fi
           echo "gate_status=$GATE_STATUS" >> "$GITHUB_OUTPUT"
@@ -2510,6 +2576,7 @@ jobs:
             gate19-domain-health-state-manifest.json
             gate19-domain-narrative.log
             gate19-domain-narrative-manifest.json
+            gate19-sanitized-provider-request-evidence.json
             gate19-evidence.json
             gate19-report.json
             docs/gates/gate-19-cloud-policy-health-window.md
@@ -2566,6 +2633,7 @@ jobs:
       - name: Aggregate automated gates and Gate 16 release readiness
         env:
           RUN_SCOPE: ${{ inputs.run_scope || 'full' }}
+          GATE_16_AGGREGATE_CONTRACTS: ${{ needs.gate-16-aggregate-contracts.result }}
           GATE_01: ${{ needs.foundation.result }}
           GATE_02: ${{ needs.domain-persistence.result }}
           GATE_03: ${{ needs.agent-provider.result }}
@@ -2587,6 +2655,7 @@ jobs:
           set -euo pipefail
           python3 scripts/aggregate_gate16_release_readiness.py \
             --run-scope "$RUN_SCOPE" \
+            --aggregate-contracts-result "$GATE_16_AGGREGATE_CONTRACTS" \
             --workflow-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" \
             --run-url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
@@ -2626,6 +2695,7 @@ jobs:
               f"Automated checks: **{report['automatedChecksStatus']}**",
               f"Release readiness: **{report['releaseReadinessStatus']}**",
               f"Ready: **{report['ready']}**",
+              f"Gate 16 contract validator: **{report['aggregateContractCheck']['status']}**",
               f"Field calibration: **{report['fieldCalibration']['status']}**",
               "",
               "| Gate | Status | Reason |",

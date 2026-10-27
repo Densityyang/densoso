@@ -62,8 +62,19 @@ public struct MealPortionPriorCorrection: Codable, Equatable, Sendable {
     ) -> MealPortionPriorCorrection? {
         var relations: [MealPortionPriorCorrection] = []
         for clause in clauses(in: userText) {
-            guard let grams = gramsParser.exactGrams(in: clause, matching: ingredientTerms),
-                  let unitMatch = explicitUnitMatch(in: clause),
+            guard let unitMatch = explicitUnitMatch(in: clause) else { continue }
+            // The exact-grams parser intentionally accepts an ingredient followed
+            // by an exact mass, but a household quantity between them can make
+            // that relation ambiguous to its narrower grammar (for example,
+            // “米饭一碗180克”). Remove only the separately verified household
+            // quantity and re-run the same user-text-only parser. Uncertainty,
+            // alternate masses, and ingredient matching are still checked there.
+            let grams = gramsParser.exactGrams(in: clause, matching: ingredientTerms)
+                ?? gramsParser.exactGrams(
+                    in: clause.replacingCharacters(in: unitMatch.range, with: " "),
+                    matching: ingredientTerms
+                )
+            guard let grams,
                   let correction = MealPortionPriorCorrection(
                     unit: unitMatch.unit,
                     unitCount: unitMatch.count,
@@ -77,7 +88,8 @@ public struct MealPortionPriorCorrection: Codable, Equatable, Sendable {
     }
 
     public static func explicitHouseholdQuantity(in userText: String) -> (unit: String, count: Double)? {
-        explicitUnitMatch(in: userText)
+        guard let match = explicitUnitMatch(in: userText) else { return nil }
+        return (match.unit, match.count)
     }
 
     public static func explicitHouseholdQuantity(
@@ -92,7 +104,8 @@ public struct MealPortionPriorCorrection: Codable, Equatable, Sendable {
             guard normalizedTerms.contains(where: { clause.localizedCaseInsensitiveContains($0) }) else {
                 return nil
             }
-            return explicitUnitMatch(in: clause)
+            guard let match = explicitUnitMatch(in: clause) else { return nil }
+            return (match.unit, match.count)
         }
         return matches.count == 1 ? matches.first : nil
     }
@@ -121,7 +134,9 @@ public struct MealPortionPriorCorrection: Codable, Equatable, Sendable {
         return aliases[normalized]
     }
 
-    private static func explicitUnitMatch(in text: String) -> (unit: String, count: Double)? {
+    private static func explicitUnitMatch(
+        in text: String
+    ) -> (unit: String, count: Double, range: Range<String.Index>)? {
         let unitAlternatives: [(String, String)] = [
             ("smallbowl", "small\\s*bowls?"), ("largebowl", "large\\s*bowls?"),
             ("bowl", "bowls?"), ("fist", "fists?"), ("palm", "palms?"),
@@ -141,6 +156,7 @@ public struct MealPortionPriorCorrection: Codable, Equatable, Sendable {
         let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
         let matches = regex.matches(in: text, range: fullRange)
         guard matches.count == 1,
+              let matchRange = Range(matches[0].range(at: 0), in: text),
               let countRange = Range(matches[0].range(at: 1), in: text),
               let unitRange = Range(matches[0].range(at: 2), in: text) else {
             return nil
@@ -164,7 +180,7 @@ public struct MealPortionPriorCorrection: Codable, Equatable, Sendable {
         guard let unit = Self.normalizeSupportedUnit(rawUnit) else {
             return nil
         }
-        return (unit, unitCount)
+        return (unit, unitCount, matchRange)
     }
 
     private static func clauses(in text: String) -> [String] {

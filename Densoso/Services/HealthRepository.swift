@@ -415,6 +415,10 @@ final class HealthRepository: HealthSyncRepository {
             }
 
             try removeHealthIntelligenceBriefCaches()
+            try removeWeeklyReportCaches(
+                overlappingFrom: firstDay,
+                before: dayAfterLast
+            )
 
             for metric in orderedMetrics {
                 let stream = metric == .workout ? "workouts" : metric.rawValue
@@ -961,6 +965,15 @@ final class HealthRepository: HealthSyncRepository {
         }
         for brief in try modelContext.fetch(FetchDescriptor<WeeklyBriefRecord>()) {
             modelContext.delete(brief)
+        }
+    }
+
+    private func removeWeeklyReportCaches(overlappingFrom start: Date, before end: Date) throws {
+        let predicate = #Predicate<WeeklyReport> {
+            $0.weekStartDate < end && $0.weekEndDate >= start
+        }
+        for report in try modelContext.fetch(FetchDescriptor<WeeklyReport>(predicate: predicate)) {
+            modelContext.delete(report)
         }
     }
 

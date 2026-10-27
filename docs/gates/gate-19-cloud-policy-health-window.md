@@ -16,11 +16,34 @@ expansion, backup reconfirmation, a shared 42-day analysis/initial-sync window,
 authorization-boundary handling, unknown-versus-absence coverage, and
 idempotent rebaseline and deletion recompute.
 
+The production HealthKit adapter does not depend on Apple's Beta
+`getEarliestAuthorizedSampleDate` API. The stable path rebuilds only the bounded
+42-day snapshot when that per-type boundary is unavailable; empty reads remain
+unknown and stale HealthKit-derived cache rows are purged before the export gate
+opens. Gate 19's software check reports the coordinator contract separately
+from `liveHealthKitAuthorizationBoundary`, which remains `NOT_MEASURED` until a
+signed-device authorization matrix is supplied. This device evidence is owned
+by Gate 15 and is not inferred from simulator/fake-provider tests.
+
 The report must keep uncovered or unexecuted behavior `BLOCKED` or
 `NOT_MEASURED`; source-text presence cannot be promoted to runtime `PASS`. It
 does not inspect provider traffic. A sanitized request artifact must be
 produced and checked by the CI evidence producer before it can support a
 runtime `PASS` claim.
+
+For `provider_final_request_body`, Gate 19 exports the JSON attachment
+`gate19-sanitized-provider-request-evidence.json` from the current run's
+`Gate19PolicyHealthWindowTests.xcresult`. The attachment is emitted by the
+scripted-transport XCTest that inspects the actual locally serialized request
+bodies. It records only the provider, denied health class, capture/absence
+booleans, sentinel match counts, and body byte count; it contains neither
+request bodies nor sentinel values. CI checks exactly two providers against all
+five denied health classes, rejects additional fields, and binds the attachment
+to the same run's passing test result before the behavior check can be `PASS`.
+Missing or incomplete
+attachment coverage remains `BLOCKED`; a failed privacy assertion is `FAIL`.
+This is evidence about local serialization before transport, not evidence about
+what a live remote service received.
 
 ## Current implementation review
 
@@ -95,11 +118,10 @@ GitHub execution result is available yet.
 
 ## Remaining evidence and implementation gaps
 
-- The new adapter test captures local serialized request bodies from both
-  provider adapters with a scripted transport, but it has not executed in CI
-  and does not observe a live network service. Runtime request-body evidence
-  remains `NOT_MEASURED` until the GitHub test result and sanitized artifact
-  are attached to the evidence manifest.
+- The adapter test captures local serialized request bodies from both provider
+  adapters with a scripted transport. CI retains only its sanitized result
+  attachment, not the bodies or sentinel values. This evidence does not observe
+  a live network service or prove what a remote service received.
 - The export format does not include `ConsentRecord` or cloud-policy fields.
   The new restore test covers an empty destination store remaining default
   denied. The backup test has not run yet, and no future policy-carrying backup

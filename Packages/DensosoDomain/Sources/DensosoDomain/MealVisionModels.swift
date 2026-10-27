@@ -42,6 +42,41 @@ public struct FoodCatalogEntry: Codable, Equatable, Identifiable, Sendable {
     public let nutrients: FoodNutrientProfile
     public let isCookedComposite: Bool
     public let sourceVersion: String
+    public let sourceID: String?
+    public let sourceRecordID: String?
+    public let licenseStatus: String?
+    public let dataQuality: String?
+    public let nutrientBasis: String?
+    public let massBasis: String?
+    public let energyRaw: String?
+    public let energyUnit: String?
+    public let sourceName: String?
+    public let sourceDataType: String?
+    public let importWarnings: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case localFoodID
+        case name
+        case aliases
+        case preparation
+        case category
+        case edibleFraction
+        case nutrients
+        case isCookedComposite
+        case sourceVersion
+        case sourceID
+        case sourceRecordID
+        case licenseStatus
+        case dataQuality
+        case nutrientBasis
+        case massBasis
+        case energyRaw
+        case energyUnit
+        case sourceName
+        case sourceDataType
+        case importWarnings
+    }
 
     public init(
         id: String,
@@ -53,7 +88,18 @@ public struct FoodCatalogEntry: Codable, Equatable, Identifiable, Sendable {
         edibleFraction: Double = 1,
         nutrients: FoodNutrientProfile,
         isCookedComposite: Bool = false,
-        sourceVersion: String
+        sourceVersion: String,
+        sourceID: String? = nil,
+        sourceRecordID: String? = nil,
+        licenseStatus: String? = nil,
+        dataQuality: String? = nil,
+        nutrientBasis: String? = nil,
+        massBasis: String? = nil,
+        energyRaw: String? = nil,
+        energyUnit: String? = nil,
+        sourceName: String? = nil,
+        sourceDataType: String? = nil,
+        importWarnings: [String] = []
     ) {
         self.id = id
         self.localFoodID = localFoodID
@@ -65,6 +111,44 @@ public struct FoodCatalogEntry: Codable, Equatable, Identifiable, Sendable {
         self.nutrients = nutrients
         self.isCookedComposite = isCookedComposite
         self.sourceVersion = sourceVersion
+        self.sourceID = sourceID
+        self.sourceRecordID = sourceRecordID
+        self.licenseStatus = licenseStatus
+        self.dataQuality = dataQuality
+        self.nutrientBasis = nutrientBasis
+        self.massBasis = massBasis
+        self.energyRaw = energyRaw
+        self.energyUnit = energyUnit
+        self.sourceName = sourceName
+        self.sourceDataType = sourceDataType
+        self.importWarnings = importWarnings
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try values.decode(String.self, forKey: .id),
+            localFoodID: try values.decodeIfPresent(String.self, forKey: .localFoodID),
+            name: try values.decode(String.self, forKey: .name),
+            aliases: try values.decodeIfPresent([String].self, forKey: .aliases) ?? [],
+            preparation: try values.decode(FoodPreparation.self, forKey: .preparation),
+            category: try values.decode(String.self, forKey: .category),
+            edibleFraction: try values.decodeIfPresent(Double.self, forKey: .edibleFraction) ?? 1,
+            nutrients: try values.decode(FoodNutrientProfile.self, forKey: .nutrients),
+            isCookedComposite: try values.decodeIfPresent(Bool.self, forKey: .isCookedComposite) ?? false,
+            sourceVersion: try values.decode(String.self, forKey: .sourceVersion),
+            sourceID: try values.decodeIfPresent(String.self, forKey: .sourceID),
+            sourceRecordID: try values.decodeIfPresent(String.self, forKey: .sourceRecordID),
+            licenseStatus: try values.decodeIfPresent(String.self, forKey: .licenseStatus),
+            dataQuality: try values.decodeIfPresent(String.self, forKey: .dataQuality),
+            nutrientBasis: try values.decodeIfPresent(String.self, forKey: .nutrientBasis),
+            massBasis: try values.decodeIfPresent(String.self, forKey: .massBasis),
+            energyRaw: try values.decodeIfPresent(String.self, forKey: .energyRaw),
+            energyUnit: try values.decodeIfPresent(String.self, forKey: .energyUnit),
+            sourceName: try values.decodeIfPresent(String.self, forKey: .sourceName),
+            sourceDataType: try values.decodeIfPresent(String.self, forKey: .sourceDataType),
+            importWarnings: try values.decodeIfPresent([String].self, forKey: .importWarnings) ?? []
+        )
     }
 }
 

@@ -188,8 +188,8 @@ struct AppRoot: View {
         let rebuild = preparedHealthSnapshotRebuild
         _ = try? await dependencies.healthKitSyncCoordinator.syncAvailableData(
             using: repository,
-            forceRebaseline: true,
             now: rebuild?.through ?? Date(),
+            forceRebaseline: true,
             preparedSnapshotRebuild: rebuild
         )
         preparedHealthSnapshotRebuild = nil

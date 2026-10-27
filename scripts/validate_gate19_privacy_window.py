@@ -4,6 +4,7 @@
 Usage:
   python scripts/validate_gate19_privacy_window.py \
       --evidence artifacts/gate19-evidence.json \
+      --sanitized-provider-request-artifact artifacts/gate19-sanitized-provider-request-evidence.json \
       --report artifacts/gate19-report.json
 
 The optional evidence manifest is JSON with this shape (status values are exact):
@@ -48,17 +49,19 @@ Required behaviorChecks IDs and PASS fields:
   delete_recompute_idempotence: deletionRecomputeStable=true
 
 Each PASS behavioral check also needs a non-empty evidenceRef. The evidence
-manifest must bind to the checked-out HEAD. References should point to
-sanitized, non-PHI artifacts. This validator checks manifest structure and
-source anchors; it does not independently execute XCTest or inspect provider
-traffic. An adapter test may inspect a locally serialized URLRequest body
-through a scripted transport; that does not prove what a live remote service
-received. A PASS in the manifest remains a claim backed by external evidence.
+manifest must bind to the checked-out HEAD. The provider-request check requires
+the sanitized JSON attachment exported from the current XCTest result bundle;
+its exact schema and provider/class coverage are read and checked. Other
+evidenceRef targets are not opened. This validator does not independently
+execute XCTest or inspect provider traffic. An adapter test may inspect a
+locally serialized URLRequest body through a scripted transport; that does not
+prove what a live remote service received.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -70,6 +73,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_ID = "gate-19-cloud-health-privacy-window"
+SANITIZED_PROVIDER_REQUEST_ARTIFACT = "gate19-sanitized-provider-request-evidence.json"
+SANITIZED_PROVIDER_REQUEST_TEST_METHOD = "testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies"
+SANITIZED_PROVIDER_REQUEST_TEST = f"AgentProviderContextPolicyTests/{SANITIZED_PROVIDER_REQUEST_TEST_METHOD}"
 STATUSES = {"PASS", "FAIL", "BLOCKED", "NOT_MEASURED"}
 PROVIDERS = {"deepSeek", "qwen"}
 HEALTH_CLASSES = {
@@ -1374,6 +1380,7 @@ def validate_behavior_check(
     raw: Any,
     evidence_head: str | None,
     test_statuses: dict[str, str],
+    sanitized_provider_artifact_status: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return status_record(check_id, "NOT_MEASURED", "no structured behavioral evidence was supplied", evidenceLevel="runtime-evidence")
@@ -1404,6 +1411,22 @@ def validate_behavior_check(
     evidence_ref = raw.get("evidenceRef")
     if not isinstance(evidence_ref, str) or not evidence_ref.strip():
         return status_record(check_id, "FAIL", "PASS requires a non-empty evidenceRef", evidenceLevel="runtime-evidence")
+    if check_id == "provider_final_request_body":
+        if evidence_ref != SANITIZED_PROVIDER_REQUEST_ARTIFACT:
+            return status_record(
+                check_id,
+                "FAIL",
+                f"PASS must reference {SANITIZED_PROVIDER_REQUEST_ARTIFACT}",
+                evidenceLevel="runtime-evidence",
+            )
+        if sanitized_provider_artifact_status != "PASS":
+            status = sanitized_provider_artifact_status or "BLOCKED"
+            reason = (
+                "the runtime sanitized provider-request artifact is not verified"
+                if status == "BLOCKED"
+                else "the runtime sanitized provider-request artifact is invalid"
+            )
+            return status_record(check_id, status, reason, evidenceLevel="runtime-evidence")
 
     check = BEHAVIOR_CHECKS[check_id]
     missing = [field for field in check.required_true if raw.get(field) is not True]
@@ -1454,13 +1477,243 @@ def validate_behavior_check(
     return status_record(
         check_id,
         "PASS",
-        "structured evidence fields satisfy the check contract; artifact contents are not inspected",
+        "structured evidence fields satisfy the check contract",
         evidenceLevel="runtime-evidence",
         evidenceReferencePresent=True,
     )
 
 
-def build_report(root: Path, evidence_path: Path | None, expected_head: str | None) -> dict[str, Any]:
+def validate_sanitized_provider_request_artifact(
+    path: Path | None,
+    *,
+    evidence_head: str | None,
+    test_statuses: dict[str, str],
+) -> dict[str, Any]:
+    if path is None:
+        return status_record(
+            "sanitized_provider_request_artifact",
+            "BLOCKED",
+            "the exported XCTest attachment was not supplied",
+            evidenceLevel="runtime-evidence",
+        )
+    if path.name != SANITIZED_PROVIDER_REQUEST_ARTIFACT:
+        return status_record(
+            "sanitized_provider_request_artifact",
+            "FAIL",
+            f"artifact filename must be {SANITIZED_PROVIDER_REQUEST_ARTIFACT}",
+            evidenceLevel="runtime-evidence",
+        )
+    class DuplicateJSONKeyError(ValueError):
+        pass
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise DuplicateJSONKeyError
+            result[key] = value
+        return result
+
+    try:
+        encoded = path.read_bytes()
+        artifact = json.loads(encoded.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except FileNotFoundError:
+        return status_record(
+            "sanitized_provider_request_artifact",
+            "BLOCKED",
+            "the exported XCTest attachment is missing",
+            evidenceLevel="runtime-evidence",
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        return status_record(
+            "sanitized_provider_request_artifact",
+            "FAIL",
+            f"the exported XCTest attachment is not valid UTF-8 JSON ({type(error).__name__})",
+            evidenceLevel="runtime-evidence",
+        )
+    except DuplicateJSONKeyError:
+        return status_record(
+            "sanitized_provider_request_artifact",
+            "FAIL",
+            "the exported XCTest attachment contains duplicate JSON object keys",
+            evidenceLevel="runtime-evidence",
+        )
+
+    required_fields = {
+        "schemaVersion",
+        "gate",
+        "testMethod",
+        "captureSource",
+        "rawRequestBodyIncluded",
+        "sentinelValuesIncluded",
+        "observations",
+    }
+    if not isinstance(artifact, dict) or set(artifact) != required_fields:
+        return status_record(
+            "sanitized_provider_request_artifact",
+            "FAIL",
+            "the attachment has unexpected or missing fields; raw request content is not permitted",
+            evidenceLevel="runtime-evidence",
+        )
+    if (
+        isinstance(artifact.get("schemaVersion"), bool)
+        or artifact.get("schemaVersion") != 1
+        or artifact.get("gate") != GATE_ID
+        or artifact.get("testMethod") != SANITIZED_PROVIDER_REQUEST_TEST
+        or artifact.get("captureSource") != "scripted-local-http-transport"
+        or artifact.get("rawRequestBodyIncluded") is not False
+        or artifact.get("sentinelValuesIncluded") is not False
+    ):
+        return status_record(
+            "sanitized_provider_request_artifact",
+            "FAIL",
+            "the attachment header is invalid or does not declare a sanitized local transport capture",
+            evidenceLevel="runtime-evidence",
+        )
+    observations = artifact.get("observations")
+    if not isinstance(observations, list):
+        return status_record(
+            "sanitized_provider_request_artifact",
+            "FAIL",
+            "observations must be a JSON array",
+            evidenceLevel="runtime-evidence",
+        )
+    observation_fields = {
+        "provider",
+        "deniedHealthClass",
+        "requestCaptured",
+        "requestBodyByteCount",
+        "forbiddenSentinelCount",
+        "forbiddenSentinelMatchCount",
+        "forbiddenSentinelsAbsent",
+        "allowedCategoryControlPresent",
+        "rootMessageSentinelAbsent",
+        "conditionalDerivedSentinelsAbsent",
+    }
+    expected_pairs = {(provider, health_class) for provider in PROVIDERS for health_class in HEALTH_CLASSES}
+    observed_pairs: set[tuple[str, str]] = set()
+    for observation in observations:
+        if not isinstance(observation, dict) or set(observation) != observation_fields:
+            return status_record(
+                "sanitized_provider_request_artifact",
+                "FAIL",
+                "an observation has unexpected or missing fields; request bodies and sentinels are forbidden",
+                evidenceLevel="runtime-evidence",
+            )
+        provider = observation.get("provider")
+        health_class = observation.get("deniedHealthClass")
+        if (
+            not isinstance(provider, str)
+            or provider not in PROVIDERS
+            or not isinstance(health_class, str)
+            or health_class not in HEALTH_CLASSES
+        ):
+            return status_record(
+                "sanitized_provider_request_artifact",
+                "FAIL",
+                "an observation names an unsupported provider or health class",
+                evidenceLevel="runtime-evidence",
+            )
+        pair = (provider, health_class)
+        if pair in observed_pairs:
+            return status_record(
+                "sanitized_provider_request_artifact",
+                "FAIL",
+                "the attachment contains duplicate provider/class observations",
+                evidenceLevel="runtime-evidence",
+            )
+        observed_pairs.add(pair)
+        body_size = observation.get("requestBodyByteCount")
+        expected_sentinel_count = observation.get("forbiddenSentinelCount")
+        sentinel_match_count = observation.get("forbiddenSentinelMatchCount")
+        if (
+            observation.get("requestCaptured") is not True
+            or isinstance(body_size, bool)
+            or not isinstance(body_size, int)
+            or body_size <= 0
+            or isinstance(expected_sentinel_count, bool)
+            or not isinstance(expected_sentinel_count, int)
+            or expected_sentinel_count <= 0
+            or isinstance(sentinel_match_count, bool)
+            or not isinstance(sentinel_match_count, int)
+            or sentinel_match_count < 0
+        ):
+            return status_record(
+                "sanitized_provider_request_artifact",
+                "BLOCKED",
+                "an observation does not prove that a non-empty serialized request was captured",
+                evidenceLevel="runtime-evidence",
+            )
+        if any(
+            observation.get(field) is not True
+            for field in (
+                "forbiddenSentinelsAbsent",
+                "allowedCategoryControlPresent",
+                "rootMessageSentinelAbsent",
+                "conditionalDerivedSentinelsAbsent",
+            )
+        ):
+            return status_record(
+                "sanitized_provider_request_artifact",
+                "FAIL",
+                f"the runtime request observation failed its privacy control for {provider}/{health_class}",
+                evidenceLevel="runtime-evidence",
+            )
+        if sentinel_match_count != 0:
+            return status_record(
+                "sanitized_provider_request_artifact",
+                "FAIL",
+                f"the runtime request contains {sentinel_match_count} forbidden sentinel matches for {provider}/{health_class}",
+                evidenceLevel="runtime-evidence",
+            )
+
+    if observed_pairs != expected_pairs:
+        missing = sorted(expected_pairs - observed_pairs)
+        return status_record(
+            "sanitized_provider_request_artifact",
+            "BLOCKED",
+            f"provider/class coverage is incomplete ({len(missing)} of {len(expected_pairs)} observations missing)",
+            evidenceLevel="runtime-evidence",
+            missingObservationCount=len(missing),
+        )
+    if evidence_head is None:
+        return status_record(
+            "sanitized_provider_request_artifact",
+            "BLOCKED",
+            "the attachment cannot be bound to a verified CI evidence commit",
+            evidenceLevel="runtime-evidence",
+        )
+    producer_test_status = test_statuses.get(SANITIZED_PROVIDER_REQUEST_TEST_METHOD, "BLOCKED")
+    if producer_test_status != "PASS":
+        return status_record(
+            "sanitized_provider_request_artifact",
+            "FAIL" if producer_test_status == "FAIL" else "BLOCKED",
+            "the XCTest that emitted this attachment did not pass in the current run",
+            evidenceLevel="runtime-evidence",
+            producerTestStatus=producer_test_status,
+        )
+    return status_record(
+        "sanitized_provider_request_artifact",
+        "PASS",
+        "the current-run XCTest attachment contains sanitized captured-request results for every provider and denied health class",
+        evidenceLevel="runtime-evidence",
+        sha256=hashlib.sha256(encoded).hexdigest(),
+        headSha=evidence_head.lower(),
+        producerTestStatus=producer_test_status,
+        observationCount=len(observations),
+        providers=sorted(PROVIDERS),
+        forbiddenHealthClasses=sorted(HEALTH_CLASSES),
+        rawRequestBodyIncluded=False,
+        sentinelValuesIncluded=False,
+    )
+
+
+def build_report(
+    root: Path,
+    evidence_path: Path | None,
+    expected_head: str | None,
+    sanitized_provider_artifact_path: Path | None = None,
+) -> dict[str, Any]:
     source_checks = [source_check(root, *contract) for contract in SOURCE_CONTRACTS]
     source_checks.extend(test_presence_check(root, *contract) for contract in TEST_FILE_CONTRACTS)
 
@@ -1489,6 +1742,13 @@ def build_report(root: Path, evidence_path: Path | None, expected_head: str | No
             if header_status in {"FAIL", "BLOCKED"}:
                 evidence = None
 
+    evidence_head = evidence.get("headSha") if evidence is not None else None
+    current_test_statuses = test_result_statuses(evidence)
+    sanitized_provider_artifact = validate_sanitized_provider_request_artifact(
+        sanitized_provider_artifact_path,
+        evidence_head=evidence_head if isinstance(evidence_head, str) else None,
+        test_statuses=current_test_statuses,
+    )
     test_checks = validate_test_results(evidence)
     behavior_values = evidence.get("behaviorChecks", {}) if evidence is not None else {}
     if not isinstance(behavior_values, dict):
@@ -1499,8 +1759,9 @@ def build_report(root: Path, evidence_path: Path | None, expected_head: str | No
             validate_behavior_check(
                 check_id,
                 behavior_values.get(check_id),
-                evidence.get("headSha") if evidence else None,
-                test_result_statuses(evidence),
+                evidence_head if isinstance(evidence_head, str) else None,
+                current_test_statuses,
+                sanitized_provider_artifact["status"] if check_id == "provider_final_request_body" else None,
             )
             for check_id in BEHAVIOR_CHECKS
         ]
@@ -1515,7 +1776,7 @@ def build_report(root: Path, evidence_path: Path | None, expected_head: str | No
                 )
             )
 
-    checks = source_checks + [manifest_result] + test_checks + behavior_checks
+    checks = source_checks + [manifest_result] + test_checks + behavior_checks + [sanitized_provider_artifact]
     overall = aggregate_status(checks)
     expected_head_sha = expected_head or git_head(root)
     summary = {
@@ -1539,14 +1800,25 @@ def build_report(root: Path, evidence_path: Path | None, expected_head: str | No
             "swiftPackageTestFilters": list(SWIFT_PACKAGE_TEST_FILTERS),
             "runtimeCoverageBehaviorRequiresAllListedTestsPass": True,
         },
+        "sanitizedProviderRequestArtifact": sanitized_provider_artifact,
+        "liveHealthKitAuthorizationBoundary": {
+            "status": "NOT_MEASURED",
+            "reason": (
+                "No signed-device authorization matrix was supplied. The software contract tests verify "
+                "bounded 42-day rebuilding, explicit unknown coverage, and coordinator behavior when a "
+                "boundary is available; the production adapter does not depend on Apple's Beta boundary API."
+            ),
+            "evidenceLevel": "device-evidence",
+        },
         "checks": checks,
         "summary": summary,
         "limitations": [
             "Source-anchor PASS means only that expected code markers exist; it does not prove runtime enforcement.",
             "XCTest PASS is reported from the supplied CI manifest and is not rerun by this validator.",
             "Swift package XCTest results are read from swiftPackageTestResults using exact Suite/testMethod filter keys.",
-            "Behavior evidence references and asserted fields are schema-validated, but referenced artifact contents are not opened or independently verified.",
+            "The sanitized provider-request attachment is opened and checked for its exact schema and all provider/class observations; no raw request body or sentinel values are retained.",
             "Adapter-body XCTest captures the locally serialized URLRequest before transport; it cannot prove what a live remote service received.",
+            "Live HealthKit limited-history authorization behavior is reported separately as NOT_MEASURED; simulator/fake-provider tests do not establish a signed-device boundary.",
             "A clean Gate 19 PASS requires executed tests and explicit behavioral evidence for every listed runtime check.",
         ],
     }
@@ -1557,6 +1829,11 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=ROOT, help="repository root (defaults to this script's repository)")
     parser.add_argument("--evidence", type=Path, help="structured CI evidence manifest JSON")
     parser.add_argument("--head-sha", help="expected full commit id; otherwise the checked-out HEAD is used")
+    parser.add_argument(
+        "--sanitized-provider-request-artifact",
+        type=Path,
+        help="sanitized request-evidence JSON exported from the current Gate 19 xcresult bundle",
+    )
     parser.add_argument("--report", type=Path, help="write the JSON report to this path")
     args = parser.parse_args()
 
@@ -1565,7 +1842,7 @@ def main() -> int:
     if expected_head is not None and not re.fullmatch(r"[0-9a-f]{40,64}", expected_head):
         parser.error("--head-sha must be a full hexadecimal commit id")
     evidence_path = args.evidence.resolve() if args.evidence else None
-    report = build_report(root, evidence_path, expected_head)
+    report = build_report(root, evidence_path, expected_head, args.sanitized_provider_request_artifact)
     encoded = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.report:
         try:

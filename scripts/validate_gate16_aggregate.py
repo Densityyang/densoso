@@ -15,6 +15,7 @@ from aggregate_gate16_release_readiness import (
     aggregate_status,
     build_report,
     manual_gate15_status,
+    normalize_gate_status,
     parse_gate_results,
 )
 
@@ -105,6 +106,23 @@ def gate15_shell_document() -> str:
 
 
 def main() -> int:
+    workflow_path = Path(__file__).resolve().parents[1] / ".github/workflows/build.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    require(
+        "GATE_16_AGGREGATE_CONTRACTS: ${{ needs.gate-16-aggregate-contracts.result }}" in workflow,
+        "workflow supplies the aggregate-contract validator result",
+    )
+    require(
+        '--aggregate-contracts-result "$GATE_16_AGGREGATE_CONTRACTS"' in workflow,
+        "workflow passes the aggregate-contract validator result to Gate 16",
+    )
+    require(normalize_gate_status("success") == "PASS", "successful aggregate validator maps to PASS")
+    require(normalize_gate_status("failure") == "FAIL", "failed aggregate validator maps to FAIL")
+    require(normalize_gate_status("cancelled") == "BLOCKED", "cancelled aggregate validator blocks")
+    require(normalize_gate_status("abandoned") == "BLOCKED", "abandoned aggregate validator blocks")
+    require(normalize_gate_status("skipped") == "NOT RUN", "skipped aggregate validator remains not run")
+    require(normalize_gate_status(None) == "BLOCKED", "missing aggregate validator result blocks")
+    require(normalize_gate_status("unrecognized") == "BLOCKED", "unknown aggregate validator result blocks")
     require(aggregate_status(["PASS", "PASS"]) == "PASS", "all required gates passing")
     require(aggregate_status([]) == "BLOCKED", "empty status input fails closed")
     require(aggregate_status(["UNKNOWN"]) == "BLOCKED", "unknown status fails closed")
@@ -124,6 +142,7 @@ def main() -> int:
             workflow_sha=current_workflow_sha,
             run_id="12345",
             run_url="https://github.com/example/repo/actions/runs/12345",
+            aggregate_contract_status="success",
             repository_root=repository,
         )
         require(report["automatedChecksStatus"] == "PASS", "automated checks pass independently")
@@ -142,11 +161,38 @@ def main() -> int:
             workflow_sha=current_workflow_sha,
             run_id="12346",
             run_url="https://github.com/example/repo/actions/runs/12346",
+            aggregate_contract_status="success",
             repository_root=repository,
         )
         require(report["releaseReadinessStatus"] == "PASS", "complete SHA-256-linked scenario evidence permits readiness")
         require(report["ready"] is True, "ready is true only when all required inputs pass")
         require(report["fieldCalibration"]["status"] == "NOT_MEASURED", "field calibration is non-blocking")
+        failed_contract_report = build_report(
+            run_scope="full",
+            results=all_passing,
+            gate15_document=gate15_path,
+            workflow_sha=current_workflow_sha,
+            run_id="12348",
+            run_url="https://github.com/example/repo/actions/runs/12348",
+            aggregate_contract_status="failure",
+            repository_root=repository,
+        )
+        require(failed_contract_report["aggregateContractCheck"]["status"] == "FAIL", "failed Gate 16 contract validator is recorded")
+        require(failed_contract_report["automatedChecksStatus"] == "FAIL", "failed Gate 16 contract validator blocks automated status")
+        require(failed_contract_report["releaseReadinessStatus"] == "FAIL", "failed Gate 16 contract validator blocks readiness")
+        require(failed_contract_report["ready"] is False, "failed Gate 16 contract validator never yields ready")
+        missing_contract_report = build_report(
+            run_scope="full",
+            results=all_passing,
+            gate15_document=gate15_path,
+            workflow_sha=current_workflow_sha,
+            run_id="12349",
+            run_url="https://github.com/example/repo/actions/runs/12349",
+            aggregate_contract_status=None,
+            repository_root=repository,
+        )
+        require(missing_contract_report["aggregateContractCheck"]["status"] == "BLOCKED", "missing aggregate contract result fails closed")
+        require(missing_contract_report["ready"] is False, "missing aggregate contract result never yields ready")
         gate15_evidence = report["gates"][-1]["evidence"]
         require(gate15_evidence["testedSourceSHA"] == tested_source_sha, "Gate 15 report records the tested source SHA")
         require(gate15_evidence["currentWorkflowSHA"] == current_workflow_sha, "Gate 15 report records the aggregate workflow SHA")
@@ -229,6 +275,7 @@ def main() -> int:
             workflow_sha=focused_current_sha,
             run_id="12347",
             run_url="https://github.com/example/repo/actions/runs/12347",
+            aggregate_contract_status="success",
             repository_root=focused_repository,
         )
         require(focused["automatedChecksStatus"] == "PASS", "focused selected gates can pass")

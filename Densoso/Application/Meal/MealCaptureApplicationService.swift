@@ -357,7 +357,7 @@ final class MealCaptureApplicationService {
             locale: locale,
             serializationGate: { serialize in
                 try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
-                    from: governanceRepository,
+                    from: self.governanceRepository,
                     provider: .qwen,
                     expectedHealthPolicy: expectedImagePolicy,
                     includesImage: true,

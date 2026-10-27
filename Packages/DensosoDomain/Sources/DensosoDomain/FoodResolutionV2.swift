@@ -266,6 +266,7 @@ public struct FoodResolverV2: Sendable {
         score: FoodResolutionScore,
         barcodeMatch: Bool
     ) -> [EvidenceSnapshot] {
+        let compositionProvenance = compositionProvenanceEvidence(for: entry)
         if barcodeMatch {
             return [EvidenceSnapshot(
                 grade: .label,
@@ -273,7 +274,7 @@ public struct FoodResolverV2: Sendable {
                 sourceVersion: entry.sourceVersion,
                 summary: "本地条码精确命中",
                 confidence: 1
-            )]
+            )] + compositionProvenance
         }
         let matchedEvidence = query.evidence.compactMap { evidence -> EvidenceSnapshot? in
             guard evidence.kind == .nutritionLabel || evidence.kind == .foodCandidate else { return nil }
@@ -287,13 +288,43 @@ public struct FoodResolverV2: Sendable {
                 confidence: evidence.confidence
             )
         }
-        if !matchedEvidence.isEmpty { return matchedEvidence }
+        if !matchedEvidence.isEmpty { return matchedEvidence + compositionProvenance }
         return [EvidenceSnapshot(
             grade: score.lexical >= 0.99 ? .databaseMatch : .estimated,
             sourceID: "food-resolver-v2:\(entry.id)",
             sourceVersion: entry.sourceVersion,
             summary: "本地候选：\(entry.name)",
             confidence: score.finalScore
+        )] + compositionProvenance
+    }
+
+    private func compositionProvenanceEvidence(for entry: FoodCatalogEntry) -> [EvidenceSnapshot] {
+        guard entry.sourceID != nil || entry.sourceRecordID != nil else { return [] }
+
+        let warnings = entry.importWarnings.isEmpty ? "none" : entry.importWarnings.joined(separator: "；")
+        let summary = [
+            "食品成分来源记录",
+            "sourceID=\(entry.sourceID ?? "not-provided")",
+            "sourceRecordID=\(entry.sourceRecordID ?? "not-provided")",
+            "licenseStatus=\(entry.licenseStatus ?? "not-provided")",
+            "dataQuality=\(entry.dataQuality ?? "not-provided")",
+            "nutrientBasis=\(entry.nutrientBasis ?? "not-provided")",
+            "massBasis=\(entry.massBasis ?? "not-provided")",
+            "preparation=\(entry.preparation.rawValue)",
+            "edibleFraction=\(entry.edibleFraction)",
+            "energyRaw=\(entry.energyRaw ?? "not-provided")",
+            "energyUnit=\(entry.energyUnit ?? "not-provided")",
+            "sourceName=\(entry.sourceName ?? "not-provided")",
+            "sourceDataType=\(entry.sourceDataType ?? "not-provided")",
+            "importWarnings=\(warnings)",
+        ].joined(separator: "; ")
+
+        return [EvidenceSnapshot(
+            grade: .databaseMatch,
+            sourceID: "food-composition:\(entry.sourceID ?? "unknown-source")",
+            sourceVersion: entry.sourceVersion,
+            summary: summary,
+            confidence: nil
         )]
     }
 

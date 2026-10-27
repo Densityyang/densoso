@@ -1,17 +1,19 @@
 # AI-Native Health Loop Repair Report
 
-Date: 2026-10-26
+Date: 2026-10-27
 Repository: `Densityyang/densoso`  
 Worktree: `E:\howtodo\densoso-ai-native-loop`  
 Branch: `codex/ai-native-health-loop`  
-Code baseline reviewed in this report: `93696c58431cdc376f8afd1e0247d4ab7badae30`
+Code baseline reviewed in this report: `33e5ea7908223a3316ea34f4a857d0f5537e2863`
 Associated pull request: none
 
 ## Decision
 
-**NOT READY.** Full Build run [#40275652641](https://github.com/Densityyang/densoso/actions/runs/40275652641) is the current-code verification for `93696c5`; it is in progress and Gate 1 is running. Obsolete diagnostic run #40270533384 targeted `ac25bfa`, before the simulator-preflight, historical-profile fixture, and Gate 6 validator repairs, and was force-cancelled when the current run started. Its first six gates reported failures at Gate 1 simulator preparation, the Gate 2/5 historical snapshot fixture, and Gate 6's obsolete Watch confirmation assertion; Gates 3 and 4 passed. Gate 7 domain tests passed, but its app test had not completed when cancelled. It provides no later-gate or current-code acceptance evidence. Earlier runs and fixes are recorded below. Same-SHA Actions results for the current code are pending; no local tests were run.
+**NOT READY.** The latest full Build run [#40341958242](https://github.com/Densityyang/densoso/actions/runs/40341958242) completed with failure on `33e5ea7`. Gate 3 static contract validation and Gate 17 passed. Gate 1 exposed two portion-parser regressions plus an iOS compile error from implicit `self`; Gate 18 exposed an initializer argument-order compile error; Gate 19's app tests were blocked by the compile failure and its HealthKit authorization-boundary behavior remains `BLOCKED` because the stable adapter does not call Apple's Beta API. Gate 13 was abandoned and the old Gate 16 aggregate parser failed to normalize that result; the repair maps `abandoned` to `BLOCKED`. The follow-up coding batch was not yet verified by Actions when this report update began. No local tests were run.
 
-The real-meal field benchmark remains `BLOCKED/MISSING_EVIDENCE`. Gate 15 signed iPhone/Watch evidence and Gate 16 owner acceptance remain unperformed. Provider fixture tests do not establish live DeepSeek multimodal/structured API behavior. Gate 11/13 now contain p50/p95 performance measurements for a 42-day health refresh and a 12-ingredient meal estimate; current-code results are pending. No local heavy tests were run; tests are assigned to GitHub Actions.
+The follow-up coding batch also separates the Gate 19 software contract from live signed-device authorization evidence: bounded 42-day rebuild and unknown coverage are verified by the coordinator tests, while the actual HealthKit limited-history boundary stays `NOT_MEASURED`. It does not add the Beta API or a Beta SDK dependency. The batch includes the Gate 19 XCTest attachment manifest lookup, Gate 16 abandoned-result handling, food provenance propagation/coverage, and legacy Codable compatibility; all await a new full Actions run.
+
+The real-meal field benchmark remains `NOT_MEASURED`. Gate 15 signed iPhone/Watch evidence and Gate 16 owner acceptance remain unperformed and are for the device owner. Provider fixtures do not establish live DeepSeek multimodal/structured API behavior. Gate 11/13 include p50/p95 performance measurements for a 42-day health refresh and a 12-ingredient meal estimate; the latest implementation SHA still needs a complete Actions run. The successful Build IPA run #39716002512 was on an earlier SHA and does not package or verify the current code. No local heavy tests were run; tests are assigned to GitHub Actions.
 
 ## CI evidence and boundaries
 
@@ -33,7 +35,8 @@ The real-meal field benchmark remains `BLOCKED/MISSING_EVIDENCE`. Gate 15 signed
 - Run [#40266448669](https://github.com/Densityyang/densoso/actions/runs/40266448669) was manually dispatched with `run_scope=full` for `d684811` and cancelled before jobs started after the weekday defect was found.
 - Run [#40267935485](https://github.com/Densityyang/densoso/actions/runs/40267935485) was manually dispatched with `run_scope=full` for `6ef976d`. It was an earlier incomplete run and is not evidence for the current code baseline.
 - Run [#40270533384](https://github.com/Densityyang/densoso/actions/runs/40270533384) was manually dispatched with `run_scope=full` for `ac25bfa` and force-cancelled after the successor run started. Gate 1 failed simulator preparation after a redundant post-boot device enumeration timed out; its build steps passed and simulator unit/UI tests were skipped. Gate 2 and Gate 5 each exposed the historical snapshot fixture with no effective profile revision. Gate 3 and Gate 4 passed. Gate 6 stopped at a static assertion that incorrectly required Watch confirmation/rejection controls. Gate 7 domain tests passed; its app test had not completed. It provides no later-gate or current-code evidence.
-- Run [#40275652641](https://github.com/Densityyang/densoso/actions/runs/40275652641) is the current full Build run for `93696c5`; it is in progress, with Gate 1 running.
+- Run [#40275652641](https://github.com/Densityyang/densoso/actions/runs/40275652641) targeted `93696c5`; its results were superseded by the later current-code run and are not current acceptance evidence.
+- Run [#40341958242](https://github.com/Densityyang/densoso/actions/runs/40341958242) was manually dispatched with `run_scope=full` for `33e5ea7908223a3316ea34f4a857d0f5537e2863` and completed with failure. Gate 3 static contract validation, Gate 16 aggregate-contract validation, and Gate 17 passed. Gate 1 failed on the main-PR algorithm-version assertion, two Chinese household-unit/grams parser cases, and `MealCaptureApplicationService`'s implicit capture of `governanceRepository`. Gate 18 failed to compile because `now` followed `forceRebaseline` in a call. Gate 19's application suite could not compile and its health-window evidence was `BLOCKED` because the stable HealthKit adapter reports no authorization-boundary API. Gate 13 was abandoned; the final Gate 16 report rejected that CI result as unsupported. Fixes for these findings are in the current uncommitted batch and await a new full Actions run.
 - The last known full Build CI pass before this repair series was `3628d42`, earlier than the reviewed HEAD.
 
 ## Findings addressed

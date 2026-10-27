@@ -13,6 +13,7 @@ final class HealthRepositoryTests: XCTestCase {
             for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self,
                 DailyHealthSnapshotRecord.self, WeightRecord.self, ProfileRevisionRecord.self,
                 HealthSyncOutboxEntry.self, HealthKitImportCursor.self, HealthKitSampleIndexRecord.self,
+                WeeklyReport.self, DailyBriefRecord.self, WeeklyBriefRecord.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
         context = ModelContext(container)
@@ -35,6 +36,53 @@ final class HealthRepositoryTests: XCTestCase {
             HealthRepository.affectedProjectionDays(from: affectedDates, calendar: calendar),
             [firstDay, secondDay]
         )
+    }
+
+    func testHealthKitSnapshotRebuildInvalidatesOverlappingWeeklyReportsAndPreservesManualSources() throws {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let start = try XCTUnwrap(calendar.date(byAdding: .day, value: -41, to: today))
+        let end = today
+        let inWindowDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -3, to: today))
+        let outsideDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -14, to: start))
+        let inWindowWeek = try XCTUnwrap(calendar.dateInterval(of: .weekOfYear, for: inWindowDay))
+        let outsideWeek = try XCTUnwrap(calendar.dateInterval(of: .weekOfYear, for: outsideDay))
+        let overlappingReport = WeeklyReport(
+            weekStartDate: inWindowWeek.start,
+            weekEndDate: inWindowWeek.end.addingTimeInterval(-1),
+            totalDeficitKcal: 4_200
+        )
+        let outsideReport = WeeklyReport(
+            weekStartDate: outsideWeek.start,
+            weekEndDate: outsideWeek.end.addingTimeInterval(-1),
+            totalDeficitKcal: 2_100
+        )
+        let meal = MealRecord(date: inWindowDay, totalCaloriesKcal: 500)
+        let manualWeight = WeightRecord(
+            sourceActionKey: "snapshot-rebuild-manual-weight",
+            measuredAt: inWindowDay,
+            kilograms: 68,
+            source: "manual",
+            algorithmVersion: "weight-v3"
+        )
+        context.insert(overlappingReport)
+        context.insert(outsideReport)
+        context.insert(meal)
+        context.insert(manualWeight)
+        try context.save()
+
+        try HealthRepository(modelContext: context).prepareHealthKitSnapshotRebuild(
+            for: [.stepCount],
+            from: start,
+            through: end
+        )
+
+        let reports = try context.fetch(FetchDescriptor<WeeklyReport>())
+        XCTAssertEqual(reports.map(\.weekStartDate), [outsideWeek.start])
+        XCTAssertTrue(try context.fetch(FetchDescriptor<MealRecord>()).contains(where: { $0.id == meal.id }))
+        XCTAssertTrue(try context.fetch(FetchDescriptor<WeightRecord>()).contains(where: {
+            $0.id == manualWeight.id && $0.source == "manual"
+        }))
     }
 
     override func tearDown() {

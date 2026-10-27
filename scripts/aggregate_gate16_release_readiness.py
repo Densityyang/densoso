@@ -25,6 +25,7 @@ CI_RESULT_STATUS = {
     "success": "PASS",
     "failure": "FAIL",
     "cancelled": "BLOCKED",
+    "abandoned": "BLOCKED",
     "skipped": "NOT RUN",
 }
 VALID_GATE_STATUSES = {"PASS", "FAIL", "BLOCKED", "NOT RUN", "NOT_MEASURED"}
@@ -377,6 +378,16 @@ def aggregate_status(statuses: list[str]) -> str:
     return "PASS" if all(status == "PASS" for status in statuses) else "BLOCKED"
 
 
+def normalize_gate_status(value: str | None) -> str:
+    """Normalize a required CI result, treating missing/unknown values as blocked."""
+    if not isinstance(value, str) or not value.strip():
+        return "BLOCKED"
+    normalized = value.strip().upper()
+    if normalized in VALID_GATE_STATUSES:
+        return normalized
+    return CI_RESULT_STATUS.get(value.strip().lower(), "BLOCKED")
+
+
 def build_report(
     *,
     run_scope: str,
@@ -385,13 +396,15 @@ def build_report(
     workflow_sha: str,
     run_id: str,
     run_url: str,
+    aggregate_contract_status: str | None = None,
     repository_root: Path = ROOT,
 ) -> dict[str, Any]:
+    contract_status = normalize_gate_status(aggregate_contract_status)
     selected = selected_gates(run_scope)
     gate_records = gate_status_records(results, selected)
     automated_status = aggregate_status([
         record["status"] for record in gate_records if record["gate"] in selected
-    ])
+    ] + [contract_status])
     gate15, gate15_reason, gate15_evidence = manual_gate15_status(
         gate15_document,
         workflow_sha,
@@ -399,6 +412,7 @@ def build_report(
     )
     release_inputs = [record["status"] for record in gate_records]
     release_inputs.append(gate15)
+    release_inputs.append(contract_status)
     release_status = aggregate_status(release_inputs)
     return {
         "schemaVersion": 1,
@@ -411,6 +425,10 @@ def build_report(
         "automatedChecksStatus": automated_status,
         "releaseReadinessStatus": release_status,
         "ready": release_status == "PASS",
+        "aggregateContractCheck": {
+            "status": contract_status,
+            "reason": "Gate 16 aggregate contract validator must pass before readiness can be true.",
+        },
         "fieldCalibration": {
             "status": "NOT_MEASURED",
             "reason": "No real-world labeled meal dataset was supplied; accuracy is not claimed.",
@@ -434,6 +452,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-scope", choices=("full", "focused-pr-tests"), default="full")
     parser.add_argument("--gate-result", action="append", default=[], metavar="GATE=RESULT")
+    parser.add_argument(
+        "--aggregate-contracts-result",
+        required=True,
+        help="result of the required gate-16-aggregate-contracts workflow job",
+    )
     parser.add_argument("--gate15-document", type=Path, default=ROOT / "docs/gates/gate-15-real-device-acceptance.md")
     parser.add_argument("--workflow-sha", default="unavailable")
     parser.add_argument("--run-id", default="unavailable")
@@ -450,6 +473,7 @@ def main() -> int:
             workflow_sha=args.workflow_sha,
             run_id=args.run_id,
             run_url=args.run_url,
+            aggregate_contract_status=args.aggregate_contracts_result,
         )
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -461,9 +485,9 @@ def main() -> int:
         "Gate 16 release readiness: "
         f"{report['releaseReadinessStatus']} (automated checks: {report['automatedChecksStatus']})"
     )
-    # Keep test CI status actionable while preserving Gate 16's fail-closed
-    # release state in the report. The automated aggregate fails on test-gate
-    # failures; a missing manual device gate leaves releaseReadinessStatus BLOCKED.
+    # Keep CI status actionable while preserving Gate 16's fail-closed release
+    # state. Automated test or aggregate-contract failures fail this job; a
+    # missing manual device gate leaves releaseReadinessStatus BLOCKED.
     return 0 if report["automatedChecksStatus"] == "PASS" else 1
 
 
