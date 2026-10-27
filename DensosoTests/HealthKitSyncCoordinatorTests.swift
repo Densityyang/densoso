@@ -1250,7 +1250,11 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
 
     func testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor() async throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
-        let day = Calendar.current.startOfDay(for: date)
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        let backfillStart = try XCTUnwrap(
+            HealthDataWindowPolicy.initialBackfillStart(through: date, calendar: calendar)
+        )
         let deletedID = UUID(uuidString: "00000000-0000-0000-0000-000000000057")!
         let replacementID = UUID(uuidString: "00000000-0000-0000-0000-000000000058")!
         let existing = HealthSampleSnapshot(
@@ -1272,7 +1276,10 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             HealthSamplePage(samples: [existing], nextAnchorData: Data([1]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: date,
-            lookbackStart: day,
+            // The stored anchor was created with the current 42-day predicate.
+            // A shorter cursor would correctly force a full rebaseline, which
+            // purges this cached index before the incremental deletion arrives.
+            lookbackStart: backfillStart,
             replacements: [HealthSampleDaySnapshot(dayStart: day, samples: [existing], readState: .available)]
         )
         let fake = FakeHealthStoreClient()
@@ -1295,6 +1302,12 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(result.completedStreams.contains(.bodyMass))
         XCTAssertEqual(try repository.cursor(for: HealthMetricID.bodyMass.rawValue)?.anchorData, Data([2]))
+        let requests = await fake.sampleRequests(for: .bodyMass)
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].startDate, backfillStart)
+        XCTAssertEqual(requests[0].anchorData, Data([1]))
+        XCTAssertEqual(requests[1].startDate, day)
+        XCTAssertNil(requests[1].anchorData)
         let dayKey = Self.dayKey(day, calendar: Calendar.current)
         let record = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
             .first(where: { $0.dayKey == dayKey }))

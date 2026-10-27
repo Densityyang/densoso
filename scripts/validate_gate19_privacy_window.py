@@ -1045,7 +1045,6 @@ TEST_FILE_CONTRACTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         "health_context_export_gate_manual_only_test_present",
         "DensosoTests/HealthKitSyncCoordinatorTests.swift",
         ("testHealthContextExportGateCanAllowManualOnlyContextWithoutHealthKitCache",),
-        (),
     ),
     (
         "health_window_sync_tests_present",
