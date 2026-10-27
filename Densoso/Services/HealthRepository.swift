@@ -397,8 +397,6 @@ final class HealthRepository: HealthSyncRepository {
                 }
                 snapshot = Self.replacing(
                     snapshot,
-                    healthKitSamples: .some(legacySamples),
-                    healthKitSampleSummary: .some(filteredSummary),
                     activeEnergyKcal: metrics.contains(.activeEnergy) ? .some(nil) : nil,
                     restingEnergyKcal: metrics.contains(.restingEnergy) ? .some(nil) : nil,
                     stepCount: metrics.contains(.stepCount) ? .some(nil) : nil,
@@ -406,6 +404,8 @@ final class HealthRepository: HealthSyncRepository {
                     weightKilograms: metrics.contains(.bodyMass)
                         ? .some(try latestLocalWeightKilograms(on: day))
                         : nil,
+                    healthKitSamples: .some(legacySamples),
+                    healthKitSampleSummary: .some(filteredSummary),
                     healthReadStates: .some(readStates)
                 )
                 try upsertHealthSnapshot(snapshot, for: day)
