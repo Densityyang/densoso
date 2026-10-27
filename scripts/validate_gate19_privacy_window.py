@@ -1040,7 +1040,6 @@ TEST_FILE_CONTRACTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "testHealthBriefCacheGenerationFenceRejectsPrePurgeWrites",
             "testInvalidatedBriefCacheDoesNotReloadPrePurgeBriefs",
         ),
-        (),
     ),
     (
         "health_context_export_gate_manual_only_test_present",

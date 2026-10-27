@@ -10,6 +10,13 @@ final class ExportServiceTests: XCTestCase {
         let sourceGovernance = SwiftDataProviderGovernanceRepository(modelContainer: sourceContainer)
         let policyVersionSentinel = "PRIVATE-CLOUD-POLICY-SENTINEL"
         for provider in [ProviderID.deepSeek, .qwen] {
+            _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+                provider: provider,
+                allowedClasses: Set(CloudHealthContextPolicy.dataClasses),
+                repository: sourceGovernance,
+                confirmedAt: Date(),
+                changeSource: .settings
+            )
             for dataClass in CloudHealthContextPolicy.dataClasses {
                 try await sourceGovernance.setConsent(
                     provider: provider,

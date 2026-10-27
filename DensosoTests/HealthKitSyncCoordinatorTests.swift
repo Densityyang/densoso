@@ -97,7 +97,9 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
 
         let report = try await coordinator.syncAvailableData(using: HealthRepository(modelContext: context), now: now)
 
-        let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first {
+            Calendar.current.startOfDay(for: $0.date) == day
+        })
         XCTAssertEqual(metrics.activeCaloriesKcal, 0)
         XCTAssertEqual(try XCTUnwrap(metrics.activeEnergyKcal), 640)
         XCTAssertEqual(metrics.workoutCount, 1)
@@ -1063,10 +1065,18 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertNil(request.anchorData)
         XCTAssertEqual(try repository.cursor(for: HealthMetricID.bodyMass.rawValue)?.lookbackStart, targetStart)
         let indexRecords = try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>())
-        XCTAssertEqual(indexRecords.filter { $0.sampleID == sample.id }.count, 1)
+        XCTAssertFalse(indexRecords.contains { $0.sampleID == sample.id })
 
         let firstSnapshot = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
             .first(where: { $0.dayKey == Self.dayKey(oldStart, calendar: calendar) }))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let firstSnapshotPayload = try decoder.decode(DailyHealthSnapshot.self, from: firstSnapshot.payloadData)
+        XCTAssertEqual(
+            firstSnapshotPayload.healthReadStates?[HealthMetricID.bodyMass.rawValue],
+            .dataUnavailableOrReadScopeUnknown
+        )
+        XCTAssertNil(firstSnapshotPayload.healthKitSampleSummary?.aggregate(for: .bodyMass))
         let firstSnapshotHash = firstSnapshot.snapshotHash
         let repeatedResult = try await coordinator.syncAvailableData(
             using: repository,
@@ -1080,11 +1090,8 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(requestsAfterRepeat.last?.startDate, targetStart)
         XCTAssertNil(requestsAfterRepeat.last?.anchorData)
         XCTAssertEqual(try repository.cursor(for: HealthMetricID.bodyMass.rawValue)?.lookbackStart, targetStart)
-        XCTAssertEqual(
-            try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>())
-                .filter { $0.sampleID == sample.id }.count,
-            1
-        )
+        XCTAssertFalse(try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>())
+            .contains { $0.sampleID == sample.id })
         let repeatedSnapshot = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
             .first(where: { $0.dayKey == Self.dayKey(oldStart, calendar: calendar) }))
         XCTAssertEqual(repeatedSnapshot.snapshotHash, firstSnapshotHash)
@@ -1234,7 +1241,9 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertTrue(failure.diagnosticSafeDetail.contains("reason=healthKitQueryFailed"))
         XCTAssertTrue(failure.diagnosticSafeDetail.contains("requestID=\(requestID.uuidString.lowercased())"))
         XCTAssertFalse(failure.diagnosticSafeDetail.contains("fake aggregate failure"))
-        let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first {
+            Calendar.current.startOfDay(for: $0.date) == day
+        })
         XCTAssertEqual(metrics.activeCaloriesKcal, 0)
         XCTAssertEqual(try XCTUnwrap(metrics.activeEnergyKcal), 610)
     }
@@ -1286,7 +1295,9 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(result.completedStreams.contains(.bodyMass))
         XCTAssertEqual(try repository.cursor(for: HealthMetricID.bodyMass.rawValue)?.anchorData, Data([2]))
-        let record = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let dayKey = Self.dayKey(day, calendar: Calendar.current)
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .first(where: { $0.dayKey == dayKey }))
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
@@ -1340,7 +1351,9 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let firstResult = try await coordinator.syncAvailableData(using: repository, now: date)
 
         XCTAssertTrue(firstResult.completedStreams.contains(.bodyMass))
-        let firstRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let dayKey = Self.dayKey(date, calendar: Calendar.current)
+        let firstRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .first(where: { $0.dayKey == dayKey }))
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let firstSnapshot = try decoder.decode(DailyHealthSnapshot.self, from: firstRecord.payloadData)
@@ -1364,7 +1377,8 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let secondResult = try await coordinator.syncAvailableData(using: repository, now: date.addingTimeInterval(60))
 
         XCTAssertTrue(secondResult.completedStreams.contains(.bodyMass))
-        let persistedRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let persistedRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .first(where: { $0.dayKey == dayKey }))
         let persistedSnapshot = try decoder.decode(DailyHealthSnapshot.self, from: persistedRecord.payloadData)
         XCTAssertEqual(persistedSnapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.sampleCount, 2)
         XCTAssertEqual(persistedSnapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestSampleID, secondID)

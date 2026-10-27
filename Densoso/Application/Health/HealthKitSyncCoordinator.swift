@@ -796,8 +796,11 @@ final class HealthKitSyncCoordinator {
                 hasMore: page.hasMore,
                 readState: page.readState
             )
+            // The anchored query keeps its original lower bound so HealthKit can
+            // return late changes to previously indexed days outside the current
+            // analysis window. Requery those affected days too; the analysis
+            // window remains bounded separately by HealthDataWindowPolicy.
             let affectedDays = try repository.affectedHealthSampleDays(for: allowedPage, stream: stream)
-                .filter { $0 >= plan.targetStart }
             let replacements = try await requerySampleDays(
                 metric: metric,
                 days: affectedDays,
