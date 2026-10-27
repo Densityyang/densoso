@@ -680,7 +680,7 @@ final class AgentSession {
                             from: governanceRepository,
                             provider: provider.descriptor.id,
                             expectedHealthPolicy: roundPolicy,
-                            includesImage: includesImage,
+                            includesImage: containsImage,
                             operation: serialize
                         )
                     },
@@ -689,7 +689,7 @@ final class AgentSession {
                             from: governanceRepository,
                             provider: provider.descriptor.id,
                             expectedHealthPolicy: roundPolicy,
-                            includesImage: includesImage,
+                            includesImage: containsImage,
                             operation: {}
                         )
                     }
