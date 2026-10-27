@@ -149,7 +149,7 @@ public struct MealPortionPriorCorrection: Codable, Equatable, Sendable {
         ]
         let alternatives = unitAlternatives.map { $0.1 }.joined(separator: "|")
         let count = "([0-9]+(?:\\.[0-9]+)?|one|a|an|一|两|二|三|半)"
-        let pattern = "(?<![A-Za-z0-9一二三四五六七八九十百千两半])\(count)\\s*(?:个|枚|根|只)?\\s*(\(alternatives))(半)?(?![A-Za-z0-9一二三四五六七八九十百千两半多左右上下])"
+        let pattern = "(?<![A-Za-z0-9一二三四五六七八九十百千两半])\(count)\\s*(?:个|枚|根|只)?\\s*(\(alternatives))(半)?(?![A-Za-z一二三四五六七八九十百千两半多左右上下])"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
             return nil
         }
@@ -162,6 +162,11 @@ public struct MealPortionPriorCorrection: Codable, Equatable, Sendable {
             return nil
         }
         let hasTrailingHalf = matches[0].range(at: 3).location != NSNotFound
+        if let nextCharacter = text[matchRange.upperBound...].first,
+           "0123456789".contains(nextCharacter),
+           !hasExplicitGramsSuffix(in: text, after: matchRange) {
+            return nil
+        }
         let rawCount = text[countRange].lowercased()
         var unitCount: Double
         switch rawCount {
@@ -181,6 +186,21 @@ public struct MealPortionPriorCorrection: Codable, Equatable, Sendable {
             return nil
         }
         return (unit, unitCount, matchRange)
+    }
+
+    private static func hasExplicitGramsSuffix(
+        in text: String,
+        after range: Range<String.Index>
+    ) -> Bool {
+        let suffix = String(text[range.upperBound...])
+        guard let regex = try? NSRegularExpression(
+            pattern: #"^[0-9]+(?:\.[0-9]+)?\s*(?:grams?|g|公克|克)"#,
+            options: [.caseInsensitive]
+        ) else {
+            return false
+        }
+        let fullRange = NSRange(suffix.startIndex..<suffix.endIndex, in: suffix)
+        return regex.firstMatch(in: suffix, range: fullRange) != nil
     }
 
     private static func clauses(in text: String) -> [String] {

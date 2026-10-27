@@ -10,7 +10,7 @@ actor HealthProjectionActor {
     private static let confirmedPlanFetchBatchSize = 64
     private static let watchPlanSummaryLimit = 10
     private var calendar: Calendar = .current
-    private let briefCacheGenerationFence: HealthBriefCacheGenerationFence
+    private var briefCacheGenerationFence = HealthBriefCacheGenerationFence()
 
     private enum WatchPlanCandidate {
         case workout(ConfirmedWorkoutPlanEntry)
