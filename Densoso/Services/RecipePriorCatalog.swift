@@ -174,7 +174,7 @@ struct RecipePriorMatch: Equatable, Sendable {
 
 enum RecipePriorCatalogError: Error, Equatable {
     case resourceMissing
-    case malformedCatalog
+    case malformedCatalog(String)
 }
 
 struct RecipePriorCatalog: Sendable {
@@ -194,8 +194,13 @@ struct RecipePriorCatalog: Sendable {
         verifiedFoodSources: [String: RecipePriorFoodSource]? = nil,
         verifiedFoodRecords: [Int64: RecipePriorVerifiedFoodRecord]? = nil
     ) throws {
-        guard let file = try? JSONDecoder().decode(RecipePriorCatalogFile.self, from: data),
-              file.schemaVersion == Self.currentSchemaVersion,
+        let file: RecipePriorCatalogFile
+        do {
+            file = try JSONDecoder().decode(RecipePriorCatalogFile.self, from: data)
+        } catch {
+            throw RecipePriorCatalogError.malformedCatalog("recipe-prior JSON decoding failed: \(error)")
+        }
+        guard file.schemaVersion == Self.currentSchemaVersion,
               file.dataRole == "recipe-prior",
               file.source.dataRole == "recipe-prior",
               file.source.sourceID == Self.pinnedSourceID,
@@ -203,38 +208,50 @@ struct RecipePriorCatalog: Sendable {
               file.source.verificationStatus == "verified",
               file.source.redistributionAllowed,
               !file.recipes.isEmpty,
-              Set(file.recipes.map(\.id)).count == file.recipes.count,
-              file.recipes.allSatisfy({ recipe in
-                  recipe.sourceID == file.source.sourceID
-                      && recipe.sourceVersion == file.source.sourceVersion
-                      && recipe.licenseStatus == "verified"
-                      && recipe.licenseSPDX == file.source.licenseSPDX
-                      && !recipe.isNutritionAuthority
-                      && !recipe.id.isEmpty
-                      && !recipe.sourceRecordID.isEmpty
-                      && Self.isSHA256(recipe.sourceRecordSHA256)
-                      && !recipe.ingredients.isEmpty
-                      && recipe.ingredients.allSatisfy({ ingredient in
-                          ingredient.sourceProvenance.sourceID == recipe.sourceID
-                              && ingredient.sourceProvenance.sourceRecordID == recipe.sourceRecordID
-                              && ingredient.sourceProvenance.sourceVersion == recipe.sourceVersion
-                              && !ingredient.sourceProvenance.sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                              && Self.hasValidFoodMapping(ingredient)
-                              && Self.hasValidEdibleFractionEvidence(
-                                  ingredient,
-                                  verifiedFoodSources: verifiedFoodSources,
-                                  verifiedFoodRecords: verifiedFoodRecords
-                              )
-                              && Self.hasValidMassBasisEvidence(ingredient)
-                              && !ingredient.roleEvidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                      })
-              }) else {
-            throw RecipePriorCatalogError.malformedCatalog
+              Set(file.recipes.map(\.id)).count == file.recipes.count else {
+            throw RecipePriorCatalogError.malformedCatalog("invalid recipe-prior envelope or source metadata")
+        }
+        for recipe in file.recipes {
+            guard recipe.sourceID == file.source.sourceID,
+                  recipe.sourceVersion == file.source.sourceVersion,
+                  recipe.licenseStatus == "verified",
+                  recipe.licenseSPDX == file.source.licenseSPDX,
+                  !recipe.isNutritionAuthority,
+                  !recipe.id.isEmpty,
+                  !recipe.sourceRecordID.isEmpty,
+                  Self.isSHA256(recipe.sourceRecordSHA256),
+                  !recipe.ingredients.isEmpty else {
+                throw RecipePriorCatalogError.malformedCatalog("invalid recipe record metadata")
+            }
+            for ingredient in recipe.ingredients {
+                guard ingredient.sourceProvenance.sourceID == recipe.sourceID,
+                      ingredient.sourceProvenance.sourceRecordID == recipe.sourceRecordID,
+                      ingredient.sourceProvenance.sourceVersion == recipe.sourceVersion,
+                      !ingredient.sourceProvenance.sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw RecipePriorCatalogError.malformedCatalog("ingredient source provenance does not match its recipe")
+                }
+                guard Self.hasValidFoodMapping(ingredient) else {
+                    throw RecipePriorCatalogError.malformedCatalog("ingredient food mapping is invalid")
+                }
+                guard Self.hasValidEdibleFractionEvidence(
+                    ingredient,
+                    verifiedFoodSources: verifiedFoodSources,
+                    verifiedFoodRecords: verifiedFoodRecords
+                ) else {
+                    throw RecipePriorCatalogError.malformedCatalog("ingredient edible-fraction evidence does not match a verified food row")
+                }
+                guard Self.hasValidMassBasisEvidence(ingredient) else {
+                    throw RecipePriorCatalogError.malformedCatalog("ingredient mass-basis evidence is invalid")
+                }
+                guard !ingredient.roleEvidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw RecipePriorCatalogError.malformedCatalog("ingredient role evidence is empty")
+                }
+            }
         }
         if let validFoodIDs {
             let mappedFoodIDs = Set(file.recipes.flatMap { $0.ingredients.compactMap(\.foodID) })
             guard mappedFoodIDs.isSubset(of: validFoodIDs) else {
-                throw RecipePriorCatalogError.malformedCatalog
+                throw RecipePriorCatalogError.malformedCatalog("recipe food IDs are outside the verified food manifest")
             }
         }
         self.source = file.source
@@ -270,13 +287,13 @@ struct RecipePriorCatalog: Sendable {
               let actualFoodSourceManifestSHA256 = canonicalSHA256(foodSourcesData),
               actualFoodDataSHA256 == verifiedIDs.foodDataSHA256,
               actualFoodSourceManifestSHA256 == verifiedIDs.foodSourceManifestSHA256 else {
-            throw RecipePriorCatalogError.malformedCatalog
+            throw RecipePriorCatalogError.malformedCatalog("food-data manifests do not match their pinned checksums")
         }
         var verifiedSources: [String: RecipePriorFoodSource] = [:]
         var seenSourceIDs = Set<String>()
         for source in foodSourceManifest.sources {
             guard !source.sourceID.isEmpty, seenSourceIDs.insert(source.sourceID).inserted else {
-                throw RecipePriorCatalogError.malformedCatalog
+                throw RecipePriorCatalogError.malformedCatalog("food-source manifest contains an empty or duplicate source ID")
             }
             guard source.verificationStatus == "verified",
                   source.dataRole == "food-composition",
@@ -290,7 +307,7 @@ struct RecipePriorCatalog: Sendable {
             verifiedSources[source.sourceID] = source
         }
         guard !verifiedSources.isEmpty else {
-            throw RecipePriorCatalogError.malformedCatalog
+            throw RecipePriorCatalogError.malformedCatalog("food-source manifest has no verified redistributable food-composition sources")
         }
         var foodRecordByID: [Int64: RecipePriorVerifiedFoodRecord] = [:]
         var seenFoodSourceRecordIDs = Set<String>()
@@ -312,13 +329,13 @@ struct RecipePriorCatalog: Sendable {
                   source.licenseSPDX == record.licenseSPDX,
                   foodRecordByID[record.id] == nil,
                   seenFoodSourceRecordIDs.insert(sourceRecordKey).inserted else {
-                throw RecipePriorCatalogError.malformedCatalog
+                throw RecipePriorCatalogError.malformedCatalog("verified food record does not match its source manifest")
             }
             foodRecordByID[record.id] = record
         }
         guard verifiedIDs.foodIDs == foodRecords.records.map(\.id),
               Set(foodRecordByID.keys) == Set(verifiedIDs.foodIDs) else {
-            throw RecipePriorCatalogError.malformedCatalog
+            throw RecipePriorCatalogError.malformedCatalog("verified food IDs do not match the food-record manifest")
         }
         return try RecipePriorCatalog(
             data: data,

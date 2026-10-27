@@ -20,7 +20,10 @@ from pathlib import Path
 from typing import Any
 
 
-CONTAINER_NODE_TYPES = {"Test Plan", "Test Suite"}
+# Xcode 26 wraps the test plan tree in a Unit test bundle node. It is a
+# structural container only; test outcomes still come exclusively from the
+# descendant Test Case nodes.
+CONTAINER_NODE_TYPES = {"Unit test bundle", "Test Plan", "Test Suite"}
 CASE_NODE_TYPE = "Test Case"
 
 

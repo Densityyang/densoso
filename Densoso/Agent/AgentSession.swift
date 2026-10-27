@@ -1024,10 +1024,13 @@ final class AgentSession {
         let assistantText = Self.visibleMessage(messages[lastAssistantIndex])?.text else {
             return (false, nil, nil)
         }
-        guard assistantText.contains("？") || assistantText.contains("?") else {
+        let metadata = clarificationMetadata(in: messages[clarificationIndex])
+        // The structured tool result is authoritative. Requiring punctuation in
+        // the model's follow-up text makes restored clarifications disappear
+        // when the provider phrases a question without a question mark.
+        guard metadata?.field != nil || assistantText.contains("？") || assistantText.contains("?") else {
             return (false, nil, nil)
         }
-        let metadata = clarificationMetadata(in: messages[clarificationIndex])
         let clarificationSubject = metadata?.subject
         let clarificationField = metadata?.field
         let normalizedUserText = FoodResolver.normalize(currentUserText)
