@@ -402,7 +402,7 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
             }
         }
         guard !relevant.isEmpty else { return .unconfigured(provider: provider) }
-        let allowed = Set(relevant.compactMap { record in
+        let allowed = Set<ProviderDataClass>(relevant.compactMap { record -> ProviderDataClass? in
             guard record.granted,
                   let dataClass = policyClasses.first(where: {
                       consentKey(provider: provider, dataClass: $0) == record.consentKey
