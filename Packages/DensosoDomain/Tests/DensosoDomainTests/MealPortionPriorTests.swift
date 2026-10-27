@@ -23,6 +23,14 @@ final class MealPortionPriorTests: XCTestCase {
             userText: "我吃了一碗米饭，大约180克",
             matching: ["米饭"]
         ))
+        XCTAssertNil(MealPortionPriorCorrection.parse(
+            userText: "米饭一碗180克以内",
+            matching: ["米饭"]
+        ))
+        XCTAssertNil(MealPortionPriorCorrection.parse(
+            userText: "米饭一碗180克以上",
+            matching: ["米饭"]
+        ))
         let riceCorrection = MealPortionPriorCorrection.parse(
             userText: "1碗米饭180g，2碗面条300g",
             matching: ["米饭"]

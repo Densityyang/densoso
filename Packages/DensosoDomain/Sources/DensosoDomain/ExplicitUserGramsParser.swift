@@ -82,8 +82,11 @@ public struct ExplicitUserGramsParser: Sendable {
         let suffixClause = String(suffix.prefix { !"，,。.;；\n".contains($0) }.prefix(16))
         let context = "\(prefixContext)\(text[match])\(suffixClause)".lowercased()
         let uncertainTerms = [
-            "大约", "大概", "大致", "估计", "差不多", "左右", "约", "maybe", "about", "around",
-            "roughly", "approx", "approximately", "不是", "没有", "没称", "未称", "没量", "不确定",
+            "大约", "大概", "大致", "估计", "差不多", "左右", "上下", "以内", "以上", "以下",
+            "不超过", "不多于", "至少", "多于", "少于", "超过", "不足", "大于", "小于",
+            "不低于", "不高于", "之间", "约", "maybe", "about", "around", "up to", "at least",
+            "at most", "no more than", "less than", "more than", "under", "over", "roughly",
+            "approx", "approximately", "不是", "没有", "没称", "未称", "没量", "不确定",
             "不要按", "别按", "别写", "不要记", "没说", "未提供", "not", "isn't", "wasn't",
         ]
         return uncertainTerms.contains(where: context.contains)
