@@ -68,7 +68,7 @@ final class FoodDatabaseTests: XCTestCase {
 
     private var seedData: Data {
         Data(
-            """
+            #"""
             [
               {
                 "id": 1,
@@ -91,7 +91,7 @@ final class FoodDatabaseTests: XCTestCase {
                 "fiberG": null
               }
             ]
-            """.utf8
+            """#.utf8
         )
     }
 }

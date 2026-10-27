@@ -520,7 +520,7 @@ final class HealthKitSyncCoordinator {
                 policyStart: plan.targetStart,
                 authorizationStart: plan.authorizationStart
             )
-            if needsRebaseline {
+            if plan.authorizationBoundaryUnavailable || needsRebaseline {
                 let generations = try prepareHealthKitSnapshotRebuild(
                     for: [metric],
                     from: plan.targetStart,
@@ -608,7 +608,7 @@ final class HealthKitSyncCoordinator {
                 policyStart: anchorPolicyStart(for: metric, targetStart: plan.targetStart),
                 authorizationStart: plan.authorizationStart
             )
-            if needsRebaseline {
+            if plan.authorizationBoundaryUnavailable || needsRebaseline {
                 let generations = try prepareHealthKitSnapshotRebuild(
                     for: [metric],
                     from: plan.targetStart,

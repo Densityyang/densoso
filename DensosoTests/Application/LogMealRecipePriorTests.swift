@@ -93,6 +93,7 @@ final class LogMealRecipePriorTests: XCTestCase {
             0,
             "The meal must remain a draft until the user confirms it."
         )
+        XCTAssertTrue(harness.session.foodDatabase === harness.foodDatabase)
     }
 
     private func recipeMealCall(recipeID: String, dishName: String = "响油鳝丝") -> ToolCall {
@@ -159,7 +160,7 @@ final class LogMealRecipePriorTests: XCTestCase {
         )
         let database = try FoodDatabase(seedJSON: Data(Self.foodSeed.utf8))
         session.foodDatabase = database
-        return RecipePriorHarness(container: container, session: session)
+        return RecipePriorHarness(container: container, session: session, foodDatabase: database)
     }
 
     private static let foodSeed = #"""
@@ -174,4 +175,6 @@ final class LogMealRecipePriorTests: XCTestCase {
 private struct RecipePriorHarness {
     let container: ModelContainer
     let session: AgentSession
+    // AgentSession intentionally keeps its food database weakly.
+    let foodDatabase: FoodDatabase
 }

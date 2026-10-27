@@ -550,10 +550,13 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertNil(try repository.cursor(for: HealthMetricID.activeEnergy.rawValue)?.lookbackStart)
     }
 
-    func testObserverWithUnavailableBoundaryKeepsStoredAnchorForIncrementalSync() async throws {
+    func testObserverWithUnavailableBoundaryRebuildsExistingSampleAndWorkoutAnchors() async throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
+        let targetStart = try XCTUnwrap(
+            HealthDataWindowPolicy.initialBackfillStart(through: now, calendar: calendar)
+        )
         let sampleDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -5, to: today))
         let sample = HealthSampleSnapshot(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000740")!,
@@ -562,27 +565,56 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             endDate: sampleDay.addingTimeInterval(3_600),
             value: 71
         )
+        let workout = try WorkoutSnapshot(
+            healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000743")!,
+            startedAt: sampleDay.addingTimeInterval(7_200),
+            duration: 1_800,
+            activityType: "running",
+            energyInput: .init(measuredKilocalories: 250),
+            origin: .externalHealthKit,
+            dataQuality: .complete
+        )
         let repository = HealthRepository(modelContext: context)
         try repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [sample], nextAnchorData: Data([8]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: now,
-            lookbackStart: calendar.date(byAdding: .day, value: -41, to: today),
+            lookbackStart: targetStart,
             replacements: [HealthSampleDaySnapshot(dayStart: sampleDay, samples: [sample], readState: .available)]
+        )
+        try repository.applyImportedWorkouts(
+            [workout],
+            deletedHealthKitUUIDs: [],
+            nextAnchorData: Data([9]),
+            lookbackStart: targetStart
         )
         let fake = FakeHealthStoreClient()
         await fake.failAuthorizationBoundaryLookup(for: .bodyMass)
+        await fake.failAuthorizationBoundaryLookup(for: .workout)
         let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
         try await coordinator.startBackgroundObservers(using: repository)
 
         await fake.triggerObserver(.bodyMass)
         await fake.waitForObserverCompletion(after: 0)
+        await fake.triggerObserver(.workout)
+        await fake.waitForObserverCompletion(after: 1)
 
         let cursor = try XCTUnwrap(repository.cursor(for: HealthMetricID.bodyMass.rawValue))
-        XCTAssertEqual(cursor.anchorData, Data([8]))
-        XCTAssertEqual(cursor.lookbackStart, calendar.date(byAdding: .day, value: -41, to: today))
+        XCTAssertEqual(cursor.anchorData, Data([0]))
+        XCTAssertEqual(cursor.lookbackStart, targetStart)
         let requests = await fake.sampleRequests(for: .bodyMass)
-        XCTAssertEqual(requests.first?.anchorData, Data([8]))
+        XCTAssertEqual(requests.first?.startDate, targetStart)
+        XCTAssertNil(requests.first?.anchorData)
+        let workoutCursor = try XCTUnwrap(repository.cursor(for: "workouts"))
+        XCTAssertEqual(workoutCursor.anchorData, Data([0]))
+        XCTAssertEqual(workoutCursor.lookbackStart, targetStart)
+        let workoutStarts = await fake.workoutRequestStartDates()
+        XCTAssertEqual(workoutStarts.first, targetStart)
+
+        XCTAssertFalse(try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>())
+            .contains(where: { $0.sampleID == sample.id }))
+        XCTAssertFalse(try context.fetch(FetchDescriptor<WorkoutRecord>())
+            .contains(where: { $0.healthKitUUID == workout.healthKitUUID }))
         let dayKey = Self.dayKey(sampleDay, calendar: calendar)
         let record = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
             .first(where: { $0.dayKey == dayKey }))
@@ -591,7 +623,11 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
         XCTAssertEqual(
             snapshot.healthReadStates?[HealthMetricID.bodyMass.rawValue],
-            .available
+            .dataUnavailableOrReadScopeUnknown
+        )
+        XCTAssertEqual(
+            snapshot.healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown
         )
     }
 

@@ -988,6 +988,7 @@ final class ExportService {
                 report.generatedAt = source.generatedAt
                 context.insert(report)
             }
+            try invalidateCloudHealthPoliciesForRestore(in: context)
             try context.save()
 
             return ImportSummary(
@@ -1020,6 +1021,93 @@ final class ExportService {
         let userPreferences: Int
         let mealPortionPriors: Int
         let scheduledPlans: Int
+    }
+
+    /// Restoring a backup replaces the data a previously confirmed cloud-health
+    /// policy was meant to describe. Revoke that authorization in the same
+    /// ModelContext transaction as the restored data, so a failed restore cannot
+    /// leave either half of the replacement committed.
+    private func invalidateCloudHealthPoliciesForRestore(in context: ModelContext) throws {
+        let healthPolicyClasses = CloudHealthContextPolicy.dataClasses + [.conversationHistory]
+        let relevantConsentKeysByProvider = Dictionary(uniqueKeysWithValues: ProviderID.allCases.map { provider in
+            (
+                provider,
+                Set(healthPolicyClasses.map { "provider|\(provider.rawValue)|\($0.rawValue)" })
+            )
+        })
+        let consentRecords = try context.fetch(FetchDescriptor<ConsentRecord>())
+        let policyRecords = try context.fetch(FetchDescriptor<CloudHealthContextPolicyRecord>())
+        let now = Date()
+
+        for provider in ProviderID.allCases {
+            let policyKey = "cloud-health-context-policy|\(provider.rawValue)"
+            let policyRecord = policyRecords.first { $0.policyKey == policyKey }
+            let relevantKeys = relevantConsentKeysByProvider[provider] ?? []
+            let providerConsents = consentRecords.filter { relevantKeys.contains($0.consentKey) }
+            let hasPersistedAuthorization = providerConsents.contains { $0.granted }
+            let hasPolicyAuthorization = policyRecord.map {
+                $0.stateRaw == CloudHealthPolicyState.active.rawValue
+                    || $0.stateRaw == CloudHealthPolicyState.draft.rawValue
+                    || !$0.allowedClassesRaw.isEmpty
+            } ?? false
+
+            guard hasPersistedAuthorization || hasPolicyAuthorization else { continue }
+
+            for record in providerConsents {
+                record.granted = false
+                record.policyVersion = record.kind == ProviderDataClass.conversationHistory.rawValue
+                    ? "cloud-conversation-history-v1"
+                    : "cloud-health-context-v1"
+                record.decidedAt = now
+                record.revokedAt = now
+            }
+
+            let priorRevision = max(policyRecord?.revision ?? 0, 0)
+            let nextRevision = priorRevision == Int.max ? Int.max : priorRevision + 1
+            let policyID = policyRecord?.policyID
+                ?? CloudHealthContextPolicySnapshot.unconfigured(provider: provider).policyID
+            let createdAt = policyRecord?.createdAt ?? now
+            let snapshot = CloudHealthContextPolicySnapshot.make(
+                provider: provider,
+                policyID: policyID,
+                revision: nextRevision,
+                state: .needsReconfirmation,
+                allowedClasses: [],
+                createdAt: createdAt,
+                updatedAt: now,
+                confirmedAt: nil,
+                changeSource: .backupRestore
+            )
+
+            if let policyRecord {
+                policyRecord.schemaVersion = snapshot.schemaVersion
+                policyRecord.policyID = snapshot.policyID
+                policyRecord.providerRaw = snapshot.provider.rawValue
+                policyRecord.revision = snapshot.revision
+                policyRecord.stateRaw = snapshot.state.rawValue
+                policyRecord.allowedClassesRaw = ""
+                policyRecord.createdAt = snapshot.createdAt
+                policyRecord.updatedAt = snapshot.updatedAt
+                policyRecord.confirmedAt = snapshot.confirmedAt
+                policyRecord.policyHash = snapshot.policyHash
+                policyRecord.changeSourceRaw = snapshot.changeSource.rawValue
+            } else {
+                context.insert(CloudHealthContextPolicyRecord(
+                    policyKey: policyKey,
+                    schemaVersion: snapshot.schemaVersion,
+                    policyID: snapshot.policyID,
+                    providerRaw: snapshot.provider.rawValue,
+                    revision: snapshot.revision,
+                    stateRaw: snapshot.state.rawValue,
+                    allowedClassesRaw: "",
+                    createdAt: snapshot.createdAt,
+                    updatedAt: snapshot.updatedAt,
+                    confirmedAt: snapshot.confirmedAt,
+                    policyHash: snapshot.policyHash,
+                    changeSourceRaw: snapshot.changeSource.rawValue
+                ))
+            }
+        }
     }
 
     func validateTrainingPlanBackupEvents(_ events: [BackupPayload.ScheduleEventExport]?) throws {

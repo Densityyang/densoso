@@ -52,6 +52,58 @@ final class ExportServiceTests: XCTestCase {
         }
     }
 
+    func testRestoreInvalidatesCloudHealthAuthorizationAlreadyPresentInTargetStore() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let (targetContainer, target) = try makeContext()
+        let targetGovernance = SwiftDataProviderGovernanceRepository(modelContainer: targetContainer)
+        for provider in [ProviderID.deepSeek, .qwen] {
+            _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+                provider: provider,
+                allowedClasses: Set(CloudHealthContextPolicy.dataClasses),
+                repository: targetGovernance,
+                confirmedAt: Date(),
+                changeSource: .settings
+            )
+            _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+                provider: provider,
+                allowed: true,
+                repository: targetGovernance,
+                confirmedAt: Date(),
+                changeSource: .settings
+            )
+        }
+
+        _ = try await service.restoreJSON(url: backupURL, context: target)
+
+        for provider in [ProviderID.deepSeek, .qwen] {
+            let restoredPolicy = try await CloudHealthContextPolicy.load(
+                from: targetGovernance,
+                provider: provider
+            )
+            XCTAssertTrue(restoredPolicy.allowedClasses.isEmpty)
+            XCTAssertFalse(restoredPolicy.allowsConversationHistory)
+            XCTAssertTrue(restoredPolicy.snapshot.allowedClasses.isEmpty)
+            XCTAssertEqual(restoredPolicy.snapshot.state, .needsReconfirmation)
+            XCTAssertEqual(restoredPolicy.snapshot.changeSource, .backupRestore)
+
+            for dataClass in CloudHealthContextPolicy.dataClasses + [.conversationHistory] {
+                let isGranted = try await targetGovernance.isConsentGranted(
+                    provider: provider,
+                    dataClass: dataClass
+                )
+                XCTAssertFalse(
+                    isGranted,
+                    "Restoring a backup must revoke \(provider.rawValue)/\(dataClass.rawValue) until reconfirmed"
+                )
+            }
+        }
+    }
+
     func testBackupExportPagesMealHistoryAcross64RowBoundary() async throws {
         let (container, source) = try makeContext()
         _ = container
@@ -794,6 +846,7 @@ final class ExportServiceTests: XCTestCase {
             AgentRequestRecord.self, DailyCheckInRecord.self, UserPreferenceRecord.self,
             PersonalMealPortionPriorRecord.self,
             ConsentRecord.self,
+            CloudHealthContextPolicyRecord.self,
             PendingActionRecord.self, CommittedActionReceiptRecord.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )

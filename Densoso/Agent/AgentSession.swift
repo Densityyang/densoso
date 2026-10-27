@@ -551,7 +551,7 @@ final class AgentSession {
             if wantsHealthNarrative && (healthSummary == nil || allowedEvidenceKeys.isEmpty) {
                 return try await completeDeterministicHealthResponse(
                     responseIncludingPolicyAcknowledgement(
-                        narrativeContext == nil
+                        initialCloudHealthPolicy.allowedClasses.isEmpty
                             ? "当前没有获准用于云端的历史健康类别；请在设置中逐类确认后，我才能结合这些记录分析。"
                             : HealthNarrativePolicy.deterministicFallback(narrativeContext)
                     ),
