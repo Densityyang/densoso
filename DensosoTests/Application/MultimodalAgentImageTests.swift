@@ -26,7 +26,13 @@ final class MultimodalAgentImageTests: XCTestCase {
                     .usage(usage),
                     .completed(.toolUse),
                 ],
-                [.textDelta("照片餐食草稿已准备，请确认。"), .completed(.completed)],
+                [.textDelta("照片份量不确定；请补充大约吃了多少。"), .completed(.completed)],
+                [
+                    .toolCall(mealCall()),
+                    .usage(usage),
+                    .completed(.toolUse),
+                ],
+                [.textDelta("我会保留低可信度估算，请检查待确认草稿。"), .completed(.completed)],
             ],
             capabilities: [.text, .toolCalling, .vision]
         )
@@ -43,6 +49,24 @@ final class MultimodalAgentImageTests: XCTestCase {
             if case .completed(let completed) = event { response = completed }
         }
         XCTAssertEqual(response?.toolCallsCount, 1)
+        XCTAssertTrue(harness.session.pendingActions.isEmpty)
+        let clarificationResults = provider.recordedRequests()[1].messages
+            .flatMap(\.content)
+            .compactMap { content -> String? in
+                guard case .toolResult(_, let result) = content else { return nil }
+                return result
+            }
+        XCTAssertTrue(clarificationResults.contains { $0.contains("clarification_required") })
+
+        let followUp = try imageRequest().includingSupplementalText(
+            "还是不知道，只能按照片估算。",
+            source: .qwenASR
+        )
+        var followUpResponse: AgentResponse?
+        for try await event in harness.session.sendEvents(multimodalRequest: followUp) {
+            if case .completed(let completed) = event { followUpResponse = completed }
+        }
+        XCTAssertEqual(followUpResponse?.toolCallsCount, 1)
 
         XCTAssertEqual(harness.session.pendingActions.count, 1)
         guard case .meal(let meal) = try XCTUnwrap(harness.session.pendingActions.first).payload else {
@@ -54,7 +78,7 @@ final class MultimodalAgentImageTests: XCTestCase {
         XCTAssertEqual(imageEvidence.summary, "本机图像线索已附加，提取文本未保存")
 
         let requests = provider.recordedRequests()
-        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.count, 4)
         XCTAssertTrue(requests[0].messages.contains { message in
             message.content.contains { content in
                 if case .image = content { return true }
@@ -544,7 +568,7 @@ final class MultimodalAgentImageTests: XCTestCase {
 
     private func mealCall() -> ToolCall {
         ToolCall(
-            id: "image-meal-tool",
+            id: UUID().uuidString,
             name: "log_meal",
             arguments: .object([
                 "mealType": .string("lunch"),

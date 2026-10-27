@@ -290,7 +290,7 @@ final class RecipePriorCatalogTests: XCTestCase {
                     "sourceProvenance": [
                         "sourceID": "anduin-howtocook",
                         "sourceRecordID": "dishes/vegetable_dish/番茄炒蛋.md",
-                        "sourceVersion": "5fb3140c20b2a713296696dcf6dd3b83ccc617a6",
+                        "sourceVersion": "5fb3140c20b2a713296696dc6fdd3b83ccc617a6",
                         "sourceText": "番茄 1个（约180g）*份数",
                     ],
                     "isOptional": false,
@@ -325,7 +325,7 @@ final class RecipePriorCatalogTests: XCTestCase {
                     "sourceProvenance": [
                         "sourceID": "anduin-howtocook",
                         "sourceRecordID": "dishes/vegetable_dish/番茄炒蛋.md",
-                        "sourceVersion": "5fb3140c20b2a713296696dcf6dd3b83ccc617a6",
+                        "sourceVersion": "5fb3140c20b2a713296696dc6fdd3b83ccc617a6",
                         "sourceText": "鸡蛋：2个",
                     ],
                     "isOptional": false,

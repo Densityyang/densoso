@@ -159,6 +159,12 @@ final class AgentCoordinatorTests: XCTestCase {
                 return nil
             }
         )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: harness.governance,
+            changeSource: .settings
+        )
 
         _ = try await harness.session.send(userText: "给我讲一个笑话")
         let unrelatedReadCount = await readCounter.value()
@@ -182,6 +188,12 @@ final class AgentCoordinatorTests: XCTestCase {
             healthNarrativeContextProvider: {
                 throw HealthContextReadTestFailure.injected
             }
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: harness.governance,
+            changeSource: .settings
         )
 
         let response = try await harness.session.send(userText: "我的睡眠状态如何？")
@@ -574,7 +586,10 @@ private struct Harness {
         let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: modelContainer)
         let agentRepository = SwiftDataAgentRepository(modelContainer: modelContainer)
-        let governance = InMemoryProviderGovernanceRepository(granted: [(.deepSeek, .healthText)])
+        let governance = InMemoryProviderGovernanceRepository(granted: [
+            (.deepSeek, .healthText),
+            (.deepSeek, .healthSleep),
+        ])
         let preferences = IntelligencePreferences()
         preferences.mode = .cloudDeepSeek
         let session = AgentSession(

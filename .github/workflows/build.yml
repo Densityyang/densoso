@@ -2300,13 +2300,16 @@ jobs:
             --output-path "$export_dir"
           python3 - "$export_dir" "$destination" <<'PY'
           import json
+          import re
           import sys
           from pathlib import Path
 
           export_root = Path(sys.argv[1])
           destination = Path(sys.argv[2])
-          expected_attachment = "gate19-sanitized-provider-request-evidence"
-          expected_test = "testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies"
+          expected_attachment_stem = "gate19-sanitized-provider-request-evidence"
+          expected_test_class = "AgentProviderContextPolicyTests"
+          expected_test_method = "testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies"
+          exported_name_suffix = re.compile(r"_\d+_[0-9A-Fa-f-]+$")
           manifest_path = export_root / "manifest.json"
           if not manifest_path.is_file():
               raise SystemExit("xcresult attachment manifest is missing")
@@ -2318,29 +2321,56 @@ jobs:
               if not isinstance(test_result, dict):
                   continue
               test_identifier = test_result.get("testIdentifier", "")
-              if not isinstance(test_identifier, str) or expected_test not in test_identifier:
+              if not isinstance(test_identifier, str):
                   continue
-              for attachment in test_result.get("attachments", []):
+              test_parts = test_identifier.split("/")
+              if len(test_parts) < 2:
+                  continue
+              test_class, test_method = test_parts[-2:]
+              if (
+                  test_class != expected_test_class
+                  or test_method.removesuffix("()") != expected_test_method
+              ):
+                  continue
+              test_attachments = test_result.get("attachments", [])
+              if not isinstance(test_attachments, list):
+                  raise SystemExit("target XCTest attachment list has an unexpected schema")
+              for attachment in test_attachments:
                   if not isinstance(attachment, dict):
-                      continue
+                      raise SystemExit("target XCTest attachment entry has an unexpected schema")
                   suggested_name = attachment.get("suggestedHumanReadableName", "")
                   exported_name = attachment.get("exportedFileName", "")
                   uniform_type = attachment.get("uniformTypeIdentifier", "")
-                  if (
-                      isinstance(suggested_name, str)
-                      and expected_attachment in suggested_name
-                      and isinstance(exported_name, str)
-                      and exported_name.endswith(".json")
-                      and uniform_type == "public.json"
+                  if not all(
+                      isinstance(value, str)
+                      for value in (suggested_name, exported_name, uniform_type)
                   ):
-                      candidates.append(export_root / exported_name)
+                      raise SystemExit("target XCTest attachment metadata has an unexpected schema")
+                  if Path(suggested_name).name == suggested_name and suggested_name.endswith(".json"):
+                      suggested_stem = Path(suggested_name).stem
+                      suggested_stem = exported_name_suffix.sub("", suggested_stem)
+                  else:
+                      suggested_stem = ""
+                  if suggested_stem == expected_attachment_stem:
+                      candidates.append((suggested_name, exported_name, uniform_type))
           if len(candidates) != 1:
               raise SystemExit(
                   f"expected one Gate 19 sanitized request attachment, found {len(candidates)}"
               )
-          if not candidates[0].is_file():
+          _, exported_name, uniform_type = candidates[0]
+          if (
+              not isinstance(exported_name, str)
+              or not exported_name
+              or "/" in exported_name
+              or "\\" in exported_name
+              or Path(exported_name).suffix.lower() != ".json"
+              or uniform_type != "public.json"
+          ):
+              raise SystemExit("the Gate 19 sanitized request attachment is not a JSON file")
+          attachment_path = export_root / exported_name
+          if not attachment_path.is_file():
               raise SystemExit("the Gate 19 sanitized request attachment file is missing")
-          destination.write_bytes(candidates[0].read_bytes())
+          destination.write_bytes(attachment_path.read_bytes())
           print(f"Exported sanitized Gate 19 request evidence to {destination}.")
           PY
 

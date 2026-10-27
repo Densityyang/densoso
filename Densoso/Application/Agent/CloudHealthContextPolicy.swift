@@ -726,7 +726,7 @@ enum CloudRequestPolicyGuard {
             if isCurrentTurn {
                 output.append(contentsOf: allHealthClassesAllowed
                     ? turn
-                    : turn.compactMap(restrictCurrentTurnAssistantMessage))
+                    : turn.compactMap { restrictCurrentTurnAssistantMessage($0, by: policy) })
             } else if policy.allowsConversationHistory,
                       !containsStaleHealthProvenance,
                       !containsUnprovenancedConversationMessage,
@@ -748,8 +748,24 @@ enum CloudRequestPolicyGuard {
         return output
     }
 
-    private static func restrictCurrentTurnAssistantMessage(_ message: ModelMessage) -> ModelMessage? {
+    private static func restrictCurrentTurnAssistantMessage(
+        _ message: ModelMessage,
+        by policy: CloudHealthContextPolicy
+    ) -> ModelMessage? {
         guard message.role == .assistant else { return message }
+        if let provenance = message.healthContextPolicyProvenance,
+           provenance.provider == policy.provider,
+           provenance.policyRevision == policy.revision,
+           provenance.allowedClasses.isSubset(of: policy.allowedClasses) {
+            // Same-turn provider continuation is safe when it was produced under
+            // this exact policy revision. Tool results are filtered again before
+            // every serialization; stale prose/reasoning is never carried over.
+            return ModelMessage(
+                role: message.role,
+                content: message.content,
+                healthContextPolicyProvenance: provenance
+            )
+        }
         // Earlier provider prose or opaque reasoning may repeat health facts from
         // a round whose policy was broader. Only tool-call structure may cross a
         // later, narrower policy boundary; results are filtered separately.
@@ -758,7 +774,11 @@ enum CloudRequestPolicyGuard {
             return nil
         }
         guard !toolCalls.isEmpty else { return nil }
-        return ModelMessage(role: .assistant, content: toolCalls)
+        return ModelMessage(
+            role: .assistant,
+            content: toolCalls,
+            healthContextPolicyProvenance: message.healthContextPolicyProvenance
+        )
     }
 
     static func filterToolResults(in messages: [ModelMessage], by policy: CloudHealthContextPolicy) -> [ModelMessage] {

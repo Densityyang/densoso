@@ -223,7 +223,8 @@ actor FakeCloudSpeechProvider: CloudSpeechProvider {
         beforeNetworkAttempt: @escaping @Sendable () async throws -> Void
     ) async throws -> CloudTranscript {
         try await beforeNetworkAttempt()
-        return try await self.transcribe(audio: audio, locale: locale, requestID: requestID)
+        capturedRequestIDs.append(requestID)
+        return try transcribe(audio: audio, locale: locale)
     }
 
     func callCount() -> Int { capturedAudio.count }

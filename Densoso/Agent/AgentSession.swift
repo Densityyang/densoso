@@ -1189,7 +1189,6 @@ final class AgentSession {
                 ModelMessage(
                     role: $0.role,
                     content: $0.content,
-                    inputEnvelope: $0.inputEnvelope,
                     healthContextPolicyProvenance: $0.healthContextPolicyProvenance
                 )
             }

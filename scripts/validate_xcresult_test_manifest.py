@@ -20,10 +20,11 @@ from pathlib import Path
 from typing import Any
 
 
-# Xcode 26 wraps the test plan tree in a Unit test bundle node. It is a
-# structural container only; test outcomes still come exclusively from the
-# descendant Test Case nodes.
+# Xcode 26 wraps the test plan tree in a Unit test bundle node and emits
+# Failure Message nodes beneath failed cases. These are recognized schema
+# nodes only; test outcomes still come exclusively from Test Case nodes.
 CONTAINER_NODE_TYPES = {"Unit test bundle", "Test Plan", "Test Suite"}
+KNOWN_NON_CASE_NODE_TYPES = CONTAINER_NODE_TYPES | {"Failure Message"}
 CASE_NODE_TYPE = "Test Case"
 
 
@@ -96,7 +97,7 @@ def walk_node(node: Any, cases: list[TestCase], recognized_types: set[str]) -> N
         if not isinstance(identifier, str):
             raise ManifestError(f"Test Case {name!r} has a non-string nodeIdentifier")
         cases.append(TestCase(name=name.strip(), identifier=identifier.strip(), result=result.strip()))
-    elif node_type not in CONTAINER_NODE_TYPES:
+    elif node_type not in KNOWN_NON_CASE_NODE_TYPES:
         raise ManifestError(f"unsupported xcresult test nodeType {node_type!r}")
 
     children = node.get("children", [])

@@ -291,7 +291,7 @@ final class DensosoMigrationTests: XCTestCase {
         )
         XCTAssertTrue(sampleIndex.needsRequery)
         XCTAssertFalse(sampleIndex.isTombstoned)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "9.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "10.0.0")
     }
 
     func testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity() async throws {
@@ -333,7 +333,7 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "8.0.0")
 
         container = try openCurrentStore(at: location.storeURL)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "9.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "10.0.0")
         let migratedUsage = try XCTUnwrap(
             container!.mainContext.fetch(FetchDescriptor<ProviderUsageRecord>()).first
         )

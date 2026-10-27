@@ -796,6 +796,7 @@ final class HealthRepositoryTests: XCTestCase {
         try context.save()
 
         try repository.applyImportedWorkouts([first, updated], deletedHealthKitUUIDs: [], nextAnchorData: Data([1]))
+        try repository.setHealthReadState(.available, metric: .workout, days: [date, unrelatedDay])
 
         let workouts = try context.fetch(FetchDescriptor<WorkoutRecord>())
         let importedWorkouts = workouts.filter { $0.healthKitUUID == healthKitUUID }

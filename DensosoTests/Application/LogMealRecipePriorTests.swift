@@ -47,7 +47,7 @@ final class LogMealRecipePriorTests: XCTestCase {
         let call = recipeMealCall(recipeID: recipe.id)
         let provider = ScriptedTextProvider(
             scripts: [
-                [ProviderEvent.toolCall(call), .completed(.toolUse)],
+                [ProviderEvent.toolCall(recipeMealCall(recipeID: recipe.id)), .completed(.toolUse)],
                 [.textDelta("这道菜的份量范围较宽；请补充大约吃了多少。"), .completed(.completed)],
                 [ProviderEvent.toolCall(call), .completed(.toolUse)],
                 [.textDelta("已准备待确认餐食草稿。"), .completed(.completed)],

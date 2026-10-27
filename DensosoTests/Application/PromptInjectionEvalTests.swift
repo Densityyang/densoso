@@ -173,7 +173,16 @@ private struct PromptInjectionHarness {
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: container)
         let conversationRepository = SwiftDataAgentRepository(modelContainer: container)
-        let governance = InMemoryProviderGovernanceRepository(granted: [(.deepSeek, .healthText)])
+        let governance = InMemoryProviderGovernanceRepository(granted: [
+            (.deepSeek, .healthText),
+            (.deepSeek, .healthActivity),
+        ])
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity],
+            repository: governance,
+            changeSource: .settings
+        )
         let preferences = IntelligencePreferences()
         preferences.mode = .cloudDeepSeek
 
