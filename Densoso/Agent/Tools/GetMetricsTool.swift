@@ -146,8 +146,15 @@ struct GetMetricsTool: AgentTool {
 }
 
 private struct NutrientAggregate: Encodable {
-    let total: MetricAggregate<Double>
-    let average: MetricAggregate<Double>
+    let total: MetricValue<Double>
+    let average: MetricValue<Double>
+    let coverage: MetricCoverage
+
+    init(total: MetricAggregate<Double>, average: MetricAggregate<Double>) {
+        self.total = total.total
+        self.average = average.total
+        coverage = total.coverage
+    }
 }
 
 private struct DailyMetricBreakdown: Encodable {
