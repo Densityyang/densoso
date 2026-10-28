@@ -1,6 +1,10 @@
 # Gate 05 — Meal Capture
 
-Status: approved by user after successful macOS CI
+Status: Historical V3 Gate 5 result; approved by user after successful macOS CI.
+
+This document records the earlier V3 meal-capture gate and Draft PR #14. PR #14
+is not associated with the current `codex/ai-native-health-loop` main coding
+branch, and this historical CI result is not current-branch verification.
 
 Gate 5 extends Draft PR #14 after Gate 4 approval on 2026-09-08. It implements
 meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
@@ -21,8 +25,9 @@ meal capture and confirmation only; HealthKit delivery workers remain Phase 6.
 - Open dishes may use the independent Beijing
   `qwen3.7-flash-2026-07-15` adapter only when the feature flag, `.mealImage`
   consent and quality gate all allow it.
-  Production defaults this quality gate to unavailable/closed because the
-  checked-in synthetic set does not prove real-photo VLM accuracy.
+  The optional Qwen review path defaults this quality gate to unavailable/closed
+  because the checked-in synthetic set does not prove real-photo VLM accuracy.
+  This optional review gate does not control the default DeepSeek Agent route.
 - In the cumulative main PR, the default open-photo route is the explicitly
   selected DeepSeek multimodal Agent path with its separate `.mealImage`
   consent. The optional Qwen review adapter is only available when Qwen is
@@ -125,13 +130,14 @@ synthetic-only source boundary.
 protected OCR source. It contains 100 expanded food-resolution cases and 50
 synthetic calibration references. The latter exercise interval coverage math but
 are not represented as real kitchen-scale measurements. Real photo and scale
-field validation remains an evidence gap and does not remove `blocked-by-signing`.
-The field benchmark status is `BLOCKED/MISSING_EVIDENCE`; passing these
+field calibration remains `NOT_MEASURED`; this is non-blocking for deterministic
+engineering acceptance and does not claim a field accuracy `PASS`. Passing these
 synthetic checks is only evidence for the deterministic software contracts.
-The current 31-row app seed has only one `raw` and one `cooked` food entry; the
-remaining 29 are `unknown`. Synthetic resolver coverage therefore does not prove
-production-catalog raw/cooked coverage. Open-photo Qwen remains unavailable until
-both real-photo quality and catalog coverage are independently evidenced.
+Current production food provenance and catalog coverage are evaluated separately
+by Gate 17, not by this historical Gate 5 resolver fixture. Open-photo Qwen
+remains unavailable until both real-photo quality and catalog coverage are
+independently evidenced. Signed-device acceptance and owner signing remain
+separate release boundaries.
 
 If any quality threshold fails, open-photo Qwen vision must remain disabled;
 barcode, OCR, voice and text paths may continue.
@@ -151,5 +157,5 @@ current `codex/ai-native-health-loop` branch or a PR associated with that branch
 | Confirmation | zero pre-confirm writes; atomic Meal/receipt/outbox | Passed in Gate 5 tests |
 | Privacy | no raw image or protected OCR source use | Passed in Gate 5 tests; protected local OCR files were not read |
 | Artifact | `.xcresult`, logs, fixture summary and eval manifest | [gate-05-meal-capture-results, artifact 11869028384](https://github.com/Densityyang/densoso/actions/runs/38504626897/artifacts/11869028384) |
-| Field benchmark | real photos and kitchen-scale samples | `BLOCKED/MISSING_EVIDENCE` |
+| Historical field benchmark | real photos and kitchen-scale samples | `BLOCKED/MISSING_EVIDENCE` in that V3 snapshot; current main-branch field calibration is `NOT_MEASURED` |
 | Historical V3 decision | Entry to Phase 6 on that separate review | Approved in the V3 review; does not describe this branch |

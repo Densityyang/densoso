@@ -22,7 +22,7 @@ final class MealPortionPriorTests: XCTestCase {
         XCTAssertTrue(pendingPriors.isEmpty)
         let pendingDishPriors = try await priorRepository.allDishPriors()
         XCTAssertTrue(pendingDishPriors.isEmpty)
-        let receipt = try await harness.coordinator.confirm(id: action.id)
+        let receipt = try await harness.coordinator.confirm(action: action)
         let priors = try await priorRepository.all()
         XCTAssertEqual(priors.count, 1)
         XCTAssertEqual(priors.first?.foodName, "米饭")
@@ -36,7 +36,7 @@ final class MealPortionPriorTests: XCTestCase {
         )
         XCTAssertEqual(try XCTUnwrap(englishUnitLookup).p50Grams, 180, accuracy: 0.001)
 
-        let replay = try await harness.coordinator.confirm(id: action.id)
+        let replay = try await harness.coordinator.confirm(action: action)
         XCTAssertEqual(replay.id, receipt.id)
         let replayedPriors = try await priorRepository.all()
         XCTAssertEqual(replayedPriors.count, 1)
@@ -56,7 +56,7 @@ final class MealPortionPriorTests: XCTestCase {
                 payload: .meal(try Self.mealDraft(evidence: [evidence])),
                 clientRequestID: UUID()
             )
-            _ = try await harness.coordinator.confirm(id: action.id)
+            _ = try await harness.coordinator.confirm(action: action)
         }
 
         let priors = try await priorRepository.all()
@@ -78,7 +78,7 @@ final class MealPortionPriorTests: XCTestCase {
             )),
             clientRequestID: UUID()
         )
-        _ = try await harness.coordinator.confirm(id: first.id)
+        _ = try await harness.coordinator.confirm(action: first)
 
         let learnedOnce = try await repository.allDishPriors()
         XCTAssertEqual(learnedOnce.first?.observationCount, 1)
@@ -93,7 +93,7 @@ final class MealPortionPriorTests: XCTestCase {
             )),
             clientRequestID: UUID()
         )
-        _ = try await harness.coordinator.confirm(id: second.id)
+        _ = try await harness.coordinator.confirm(action: second)
 
         let foundAvailable = try await repository.dishPrior(named: "番茄炒蛋", cookingMethod: "stirFry")
         let available = try XCTUnwrap(foundAvailable)
@@ -133,7 +133,7 @@ final class MealPortionPriorTests: XCTestCase {
             )),
             clientRequestID: UUID()
         )
-        _ = try await harness.coordinator.confirm(id: ordinaryConfirmation.id)
+        _ = try await harness.coordinator.confirm(action: ordinaryConfirmation)
 
         let foundPreservedTemplate = try await repository.dishPrior(named: "豆腐汤", cookingMethod: "boil")
         let preservedTemplate = try XCTUnwrap(foundPreservedTemplate)
@@ -172,7 +172,7 @@ final class MealPortionPriorTests: XCTestCase {
                 )),
                 clientRequestID: UUID()
             )
-            _ = try await harness.coordinator.confirm(id: action.id)
+            _ = try await harness.coordinator.confirm(action: action)
         }
 
         let priors = try await repository.allDishPriors()
@@ -240,7 +240,7 @@ final class MealPortionPriorTests: XCTestCase {
                 payload: .meal(try Self.mealDraft(evidence: evidence)),
                 clientRequestID: UUID()
             )
-            _ = try await harness.coordinator.confirm(id: action.id)
+            _ = try await harness.coordinator.confirm(action: action)
         }
 
         let priors = try await repository.allDishPriors()

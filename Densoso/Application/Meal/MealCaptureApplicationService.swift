@@ -262,6 +262,7 @@ final class MealCaptureApplicationService {
     private let providerConfiguration: ProviderConfigurationPreferences
     private let usageLedger: ProviderUsageLedger
     private let confirmationCoordinator: ConfirmationCoordinator
+    private let conversationID: UUID
     private let qualityGate: MealVisionQualityGate
     private let portionEstimator: PortionEstimator
     private let mealEstimator: MealEstimator
@@ -280,6 +281,7 @@ final class MealCaptureApplicationService {
         providerConfiguration: ProviderConfigurationPreferences,
         usageLedger: ProviderUsageLedger,
         confirmationCoordinator: ConfirmationCoordinator,
+        conversationID: UUID = ConfirmationConversationIdentity.defaultID,
         qualityGate: MealVisionQualityGate = .unavailable,
         portionEstimator: PortionEstimator = .init(),
         mealEstimator: MealEstimator = .init(),
@@ -297,6 +299,7 @@ final class MealCaptureApplicationService {
         self.providerConfiguration = providerConfiguration
         self.usageLedger = usageLedger
         self.confirmationCoordinator = confirmationCoordinator
+        self.conversationID = conversationID
         self.qualityGate = qualityGate
         self.portionEstimator = portionEstimator
         self.mealEstimator = mealEstimator
@@ -721,7 +724,8 @@ final class MealCaptureApplicationService {
         )
         return try await confirmationCoordinator.stage(
             payload: payload,
-            clientRequestID: clientRequestID ?? review.id
+            clientRequestID: clientRequestID ?? review.id,
+            conversationID: conversationID
         )
     }
 

@@ -93,6 +93,7 @@ public enum SharedErrorReason: String, Codable, CaseIterable, Sendable {
     case agentEmptyResponse
     case requestAlreadyRunning
     case requestAlreadyCompleted
+    case requestNotResumable
     case unsupportedToolSchemaVersion
 }
 

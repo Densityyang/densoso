@@ -23,6 +23,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertFalse(ConfirmationError.expired.isRetryable)
         XCTAssertFalse(ConfirmationError.rejected.isRetryable)
         XCTAssertFalse(ConfirmationError.payloadCorrupt.isRetryable)
+        XCTAssertFalse(ConfirmationError.payloadHashMismatch.isRetryable)
         XCTAssertFalse(ConfirmationError.unsupportedAction.isRetryable)
         XCTAssertFalse(ConfirmationError.invariantViolation("terminal").isRetryable)
         XCTAssertFalse(ConfirmationError.commitFailed(retryable: false).isRetryable)
@@ -38,8 +39,8 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         let staged = try await [firstStage, secondStage]
         XCTAssertEqual(Set(staged.map(\.id)).count, 1)
 
-        async let firstConfirm = harness.coordinator.confirm(id: staged[0].id)
-        async let secondConfirm = harness.coordinator.confirm(id: staged[0].id)
+        async let firstConfirm = harness.coordinator.confirm(action: staged[0])
+        async let secondConfirm = harness.coordinator.confirm(action: staged[0])
         let receipts = try await [firstConfirm, secondConfirm]
         XCTAssertEqual(Set(receipts.map(\.id)).count, 1)
 
@@ -52,6 +53,257 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 1)
     }
 
+    func testConfirmationRejectsDifferentConversationOwner() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        let otherConversationID = UUID()
+
+        await XCTAssertThrowsErrorAsync(
+            try await harness.coordinator.confirm(action: action, conversationID: otherConversationID)
+        ) { error in
+            XCTAssertEqual(error as? ConfirmationError, .notFound)
+        }
+        let otherActions = try await harness.coordinator.activeActions(conversationID: otherConversationID)
+        XCTAssertTrue(otherActions.isEmpty)
+        try assertNoCommittedWrites(in: harness.container)
+    }
+
+    func testConfirmationRejectsPayloadHashDifferentFromDisplayedAction() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        let changedDisplayedAction = PendingAction(
+            id: action.id,
+            idempotencyKey: action.idempotencyKey,
+            clientRequestID: action.clientRequestID,
+            createdAt: action.createdAt,
+            expiresAt: action.expiresAt,
+            payload: action.payload,
+            state: action.state,
+            conversationID: action.conversationID,
+            canonicalPayloadHash: String(repeating: "0", count: 64)
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await harness.coordinator.confirm(action: changedDisplayedAction)
+        ) { error in
+            XCTAssertEqual(error as? ConfirmationError, .payloadHashMismatch)
+        }
+        try assertNoCommittedWrites(in: harness.container)
+    }
+
+    func testConfirmationRejectsDisplayedPayloadThatDoesNotMatchItsHash() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        let alteredDisplayedAction = PendingAction(
+            id: action.id,
+            idempotencyKey: action.idempotencyKey,
+            clientRequestID: action.clientRequestID,
+            createdAt: action.createdAt,
+            expiresAt: action.expiresAt,
+            payload: Self.sampleWeight(),
+            state: action.state,
+            conversationID: action.conversationID,
+            canonicalPayloadHash: action.canonicalPayloadHash
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await harness.coordinator.confirm(action: alteredDisplayedAction)
+        ) { error in
+            XCTAssertEqual(error as? ConfirmationError, .payloadHashMismatch)
+        }
+        try assertNoCommittedWrites(in: harness.container)
+    }
+
+    func testConfirmationRejectsUnsupportedActionSchemaVersion() async throws {
+        let payload = try Self.sampleMeal()
+        XCTAssertThrowsError(try payload.canonicalData(schemaVersion: 99)) { error in
+            XCTAssertEqual(error as? CanonicalizationError, .unsupportedSchemaVersion(99))
+        }
+
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(payload: payload, clientRequestID: UUID())
+        let context = ModelContext(harness.container)
+        let actionID = action.id
+        let predicate = #Predicate<PendingActionRecord> { $0.id == actionID }
+        let storedAction = try XCTUnwrap(
+            context.fetch(FetchDescriptor<PendingActionRecord>(predicate: predicate)).first
+        )
+        storedAction.schemaVersion = 99
+        try context.save()
+
+        await XCTAssertThrowsErrorAsync(try await harness.coordinator.confirm(action: action)) { error in
+            XCTAssertEqual(error as? ConfirmationError, .unsupportedAction)
+        }
+        try assertNoCommittedWrites(in: harness.container)
+    }
+
+    func testConfirmationRejectsUnsupportedStoredEnvelopeVersion() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        let context = ModelContext(harness.container)
+        let actionID = action.id
+        let predicate = #Predicate<PendingActionRecord> { $0.id == actionID }
+        let storedAction = try XCTUnwrap(
+            context.fetch(FetchDescriptor<PendingActionRecord>(predicate: predicate)).first
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let storedEnvelope = try decoder.decode(TestStoredPendingActionEnvelope.self, from: storedAction.payloadData)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        storedAction.payloadData = try encoder.encode(TestStoredPendingActionEnvelope(
+            version: TestStoredPendingActionEnvelope.currentVersion + 1,
+            conversationID: storedEnvelope.conversationID,
+            canonicalPayloadHash: storedEnvelope.canonicalPayloadHash,
+            payload: storedEnvelope.payload
+        ))
+        try context.save()
+
+        await XCTAssertThrowsErrorAsync(try await harness.coordinator.confirm(action: action)) { error in
+            XCTAssertEqual(error as? ConfirmationError, .unsupportedAction)
+        }
+        try assertNoCommittedWrites(in: harness.container)
+    }
+
+    func testConfirmationRejectsCanonicalBytesThatNoLongerMatchStoredPayloadHash() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        let context = ModelContext(harness.container)
+        let actionID = action.id
+        let predicate = #Predicate<PendingActionRecord> { $0.id == actionID }
+        let storedAction = try XCTUnwrap(
+            context.fetch(FetchDescriptor<PendingActionRecord>(predicate: predicate)).first
+        )
+        storedAction.canonicalPayloadData = Data("changed-canonical-bytes".utf8)
+        try context.save()
+
+        await XCTAssertThrowsErrorAsync(try await harness.coordinator.confirm(action: action)) { error in
+            XCTAssertEqual(error as? ConfirmationError, .payloadHashMismatch)
+        }
+        try assertNoCommittedWrites(in: harness.container)
+    }
+
+    func testConfirmationRejectsStoredActionTypeThatDoesNotMatchEnvelopePayload() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        let context = ModelContext(harness.container)
+        let actionID = action.id
+        let predicate = #Predicate<PendingActionRecord> { $0.id == actionID }
+        let storedAction = try XCTUnwrap(
+            context.fetch(FetchDescriptor<PendingActionRecord>(predicate: predicate)).first
+        )
+        storedAction.actionTypeRaw = ActionType.weight.rawValue
+        try context.save()
+
+        await XCTAssertThrowsErrorAsync(try await harness.coordinator.confirm(action: action)) { error in
+            XCTAssertEqual(error as? ConfirmationError, .payloadCorrupt)
+        }
+        try assertNoCommittedWrites(in: harness.container)
+    }
+
+    func testRecoveryDoesNotUseMismatchedStoredActionTypeForSourceRecordLookup() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        let context = ModelContext(harness.container)
+        let actionID = action.id
+        let predicate = #Predicate<PendingActionRecord> { $0.id == actionID }
+        let storedAction = try XCTUnwrap(
+            context.fetch(FetchDescriptor<PendingActionRecord>(predicate: predicate)).first
+        )
+        storedAction.actionTypeRaw = ActionType.weight.rawValue
+        storedAction.stateRaw = PendingActionState.committing.rawValue
+        context.insert(MealRecord(
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            sourceActionKey: action.idempotencyKey
+        ))
+        try context.save()
+
+        try await harness.repository.recoverInterruptedCommits(
+            now: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+
+        let verificationContext = ModelContext(harness.container)
+        let recoveredAction = try XCTUnwrap(
+            verificationContext.fetch(FetchDescriptor<PendingActionRecord>(predicate: predicate)).first
+        )
+        XCTAssertEqual(recoveredAction.stateRaw, PendingActionState.failed.rawValue)
+        XCTAssertEqual(recoveredAction.failureCode, "corrupt_action_payload")
+        XCTAssertEqual(try verificationContext.fetchCount(FetchDescriptor<MealRecord>()), 1)
+        XCTAssertEqual(try verificationContext.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 0)
+    }
+
+    func testActiveActionsIsolatesLegacyAndCorruptPayloadRows() async throws {
+        let harness = try Harness()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let payload = try Self.sampleMeal()
+        let encoder = JSONEncoder()
+        let legacyPayloadData = try encoder.encode(payload)
+        let canonicalData = try payload.canonicalData()
+        let context = ModelContext(harness.container)
+        let legacy = PendingActionRecord(
+            idempotencyKey: "legacy-unbound-active-action",
+            actionTypeRaw: ActionType.meal.rawValue,
+            canonicalPayloadData: canonicalData,
+            payloadData: legacyPayloadData,
+            clientRequestID: UUID(),
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(3_600)
+        )
+        let corrupt = PendingActionRecord(
+            idempotencyKey: "corrupt-active-action",
+            actionTypeRaw: ActionType.meal.rawValue,
+            canonicalPayloadData: canonicalData,
+            payloadData: Data("not-json".utf8),
+            clientRequestID: UUID(),
+            createdAt: now.addingTimeInterval(1),
+            expiresAt: now.addingTimeInterval(3_600)
+        )
+        context.insert(legacy)
+        context.insert(corrupt)
+        try context.save()
+
+        let actions = try await harness.coordinator.activeActions()
+
+        XCTAssertTrue(actions.isEmpty)
+        let verificationContext = ModelContext(harness.container)
+        let legacyID = legacy.id
+        let corruptID = corrupt.id
+        let legacyPredicate = #Predicate<PendingActionRecord> { $0.id == legacyID }
+        let corruptPredicate = #Predicate<PendingActionRecord> { $0.id == corruptID }
+        let verifiedLegacy = try XCTUnwrap(
+            verificationContext.fetch(FetchDescriptor<PendingActionRecord>(predicate: legacyPredicate)).first
+        )
+        let verifiedCorrupt = try XCTUnwrap(
+            verificationContext.fetch(FetchDescriptor<PendingActionRecord>(predicate: corruptPredicate)).first
+        )
+        XCTAssertEqual(verifiedLegacy.stateRaw, PendingActionState.failed.rawValue)
+        XCTAssertEqual(verifiedLegacy.failureCode, "legacy_unbound_action")
+        XCTAssertEqual(verifiedCorrupt.stateRaw, PendingActionState.failed.rawValue)
+        XCTAssertEqual(verifiedCorrupt.failureCode, "corrupt_action_payload")
+        XCTAssertEqual(try verificationContext.fetchCount(FetchDescriptor<PendingActionRecord>()), 2)
+    }
+
     func testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox() async throws {
         let harness = try Harness()
         let action = try await harness.coordinator.stage(
@@ -59,7 +311,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
             clientRequestID: UUID()
         )
 
-        let receipt = try await harness.coordinator.confirm(id: action.id)
+        let receipt = try await harness.coordinator.confirm(action: action)
         let context = ModelContext(harness.container)
         let actionID = action.id
         let actionIdempotencyKey = action.idempotencyKey
@@ -140,7 +392,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
             210,
             accuracy: 0.001
         )
-        _ = try await harness.coordinator.confirm(id: action.id)
+        _ = try await harness.coordinator.confirm(action: action)
 
         let context = ModelContext(harness.container)
         let storedMeal = try XCTUnwrap(context.fetch(FetchDescriptor<MealRecord>()).first)
@@ -225,7 +477,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         try context.save()
 
         let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
-        _ = try await harness.coordinator.confirm(id: action.id)
+        _ = try await harness.coordinator.confirm(action: action)
 
         let confirmationContext = ModelContext(harness.container)
         let confirmationMetric = try XCTUnwrap(confirmationContext.fetch(FetchDescriptor<DailyMetrics>()).first)
@@ -285,7 +537,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         try context.save()
 
         let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
-        _ = try await harness.coordinator.confirm(id: action.id)
+        _ = try await harness.coordinator.confirm(action: action)
 
         let resultContext = ModelContext(harness.container)
         let record = try XCTUnwrap(resultContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
@@ -318,7 +570,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         try context.save()
 
         let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
-        _ = try await harness.coordinator.confirm(id: action.id)
+        _ = try await harness.coordinator.confirm(action: action)
 
         let snapshotRecord = try XCTUnwrap(
             ModelContext(harness.container).fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first
@@ -415,7 +667,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         try context.save()
 
         let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
-        _ = try await harness.coordinator.confirm(id: action.id)
+        _ = try await harness.coordinator.confirm(action: action)
 
         let resultContext = ModelContext(harness.container)
         let metrics = try XCTUnwrap(resultContext.fetch(FetchDescriptor<DailyMetrics>()).first)
@@ -475,7 +727,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         try context.save()
 
         let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
-        _ = try await harness.coordinator.confirm(id: action.id)
+        _ = try await harness.coordinator.confirm(action: action)
 
         let resultContext = ModelContext(harness.container)
         let result = try XCTUnwrap(resultContext.fetch(FetchDescriptor<DailyMetrics>()).first)
@@ -551,7 +803,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(standaloneMetric.weightKg, 85)
 
         let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
-        _ = try await harness.coordinator.confirm(id: action.id)
+        _ = try await harness.coordinator.confirm(action: action)
 
         let confirmationContext = ModelContext(harness.container)
         let confirmationMetric = try XCTUnwrap(
@@ -575,7 +827,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
             payload: .weight(WeightDraft(measuredAt: measuredAt, kilograms: 62.5)),
             clientRequestID: UUID()
         )
-        _ = try await harness.coordinator.confirm(id: action.id)
+        _ = try await harness.coordinator.confirm(action: action)
 
         let resultContext = ModelContext(harness.container)
         let profiles = try resultContext.fetch(FetchDescriptor<UserProfile>())
@@ -612,7 +864,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         try context.save()
 
         let action = try await harness.coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
-        _ = try await harness.coordinator.confirm(id: action.id)
+        _ = try await harness.coordinator.confirm(action: action)
 
         let verificationContext = ModelContext(harness.container)
         let weeklyMetrics = try verificationContext.fetch(FetchDescriptor<DailyMetrics>()).filter {
@@ -642,8 +894,8 @@ final class ConfirmationCoordinatorTests: XCTestCase {
             clientRequestID: UUID()
         )
 
-        let first = try await harness.coordinator.confirm(id: action.id)
-        let replay = try await harness.coordinator.confirm(id: action.id)
+        let first = try await harness.coordinator.confirm(action: action)
+        let replay = try await harness.coordinator.confirm(action: action)
         XCTAssertEqual(first, replay)
         XCTAssertEqual(first.actionType, .workoutPlan)
         XCTAssertEqual(first.localRecordID, action.id)
@@ -737,7 +989,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
             clientRequestID: UUID()
         )
         try await rejectedHarness.coordinator.reject(id: rejected.id)
-        await XCTAssertThrowsErrorAsync(try await rejectedHarness.coordinator.confirm(id: rejected.id)) { error in
+        await XCTAssertThrowsErrorAsync(try await rejectedHarness.coordinator.confirm(action: rejected)) { error in
             XCTAssertEqual(error as? ConfirmationError, .rejected)
         }
         try assertNoCommittedWrites(in: rejectedHarness.container)
@@ -747,7 +999,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
             payload: Self.sampleWeight(),
             clientRequestID: UUID()
         )
-        await XCTAssertThrowsErrorAsync(try await expiredHarness.coordinator.confirm(id: expired.id)) { error in
+        await XCTAssertThrowsErrorAsync(try await expiredHarness.coordinator.confirm(action: expired)) { error in
             XCTAssertEqual(error as? ConfirmationError, .expired)
         }
         let expiredForReject = try await expiredHarness.coordinator.stage(
@@ -797,7 +1049,10 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         }
         try context.save()
 
-        let activeActions = try await harness.repository.activeActions(now: now)
+        let activeActions = try await harness.repository.activeActions(
+            conversationID: ConfirmationCoordinator.defaultConversationID,
+            now: now
+        )
         let statesByID = Dictionary(uniqueKeysWithValues: activeActions.map { ($0.id, $0.state) })
 
         XCTAssertEqual(statesByID[activeAction.id], .pending)
@@ -826,7 +1081,15 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         let payload = try Self.sampleMeal()
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
-        let payloadData = try encoder.encode(payload)
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let canonicalData = try payload.canonicalData()
+        let canonicalHash = try payload.canonicalPayloadHash()
+        let payloadData = try encoder.encode(TestStoredPendingActionEnvelope(
+            version: TestStoredPendingActionEnvelope.currentVersion,
+            conversationID: ConfirmationCoordinator.defaultConversationID,
+            canonicalPayloadHash: canonicalHash,
+            payload: payload
+        ))
         let context = ModelContext(harness.container)
         let activeActionCount = SwiftDataConfirmationRepository.activeActionBatchSize + 1
 
@@ -835,7 +1098,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
             context.insert(PendingActionRecord(
                 idempotencyKey: String(format: "active-page-%03d", index),
                 actionTypeRaw: ActionType.meal.rawValue,
-                canonicalPayloadData: payloadData,
+                canonicalPayloadData: canonicalData,
                 payloadData: payloadData,
                 clientRequestID: UUID(),
                 stateRaw: state.rawValue,
@@ -847,7 +1110,10 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         }
         try context.save()
 
-        let actions = try await harness.repository.activeActions(now: now)
+        let actions = try await harness.repository.activeActions(
+            conversationID: ConfirmationCoordinator.defaultConversationID,
+            now: now
+        )
 
         XCTAssertEqual(actions.count, activeActionCount)
         XCTAssertEqual(actions.map(\.idempotencyKey), (0..<activeActionCount).map {
@@ -862,7 +1128,18 @@ final class ConfirmationCoordinatorTests: XCTestCase {
     func testRecoveryPagesCommittingActionsAndSendingOutboxAcrossBoundaries() async throws {
         let harness = try Harness()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let payloadData = try JSONEncoder().encode(Self.sampleMeal())
+        let payload = try Self.sampleMeal()
+        let canonicalPayloadData = try payload.canonicalData()
+        let canonicalPayloadHash = try payload.canonicalPayloadHash()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let payloadData = try encoder.encode(TestStoredPendingActionEnvelope(
+            version: TestStoredPendingActionEnvelope.currentVersion,
+            conversationID: ConfirmationCoordinator.defaultConversationID,
+            canonicalPayloadHash: canonicalPayloadHash,
+            payload: payload
+        ))
         let context = ModelContext(harness.container)
         let recordCount = SwiftDataConfirmationRepository.recoveryBatchSize + 1
 
@@ -871,9 +1148,11 @@ final class ConfirmationCoordinatorTests: XCTestCase {
             context.insert(PendingActionRecord(
                 idempotencyKey: String(format: "recover-action-%03d", index),
                 actionTypeRaw: ActionType.meal.rawValue,
-                canonicalPayloadData: payloadData,
+                canonicalPayloadData: canonicalPayloadData,
+                canonicalPayloadHash: canonicalPayloadHash,
                 payloadData: payloadData,
                 clientRequestID: UUID(),
+                conversationID: ConfirmationCoordinator.defaultConversationID,
                 stateRaw: PendingActionState.committing.rawValue,
                 createdAt: createdAt,
                 expiresAt: now.addingTimeInterval(3_600)
@@ -905,7 +1184,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         let action = try await harness.coordinator.stage(payload: try Self.sampleMeal(), clientRequestID: UUID())
         await harness.repository.setFaultPoint(.afterOutbox)
 
-        await XCTAssertThrowsErrorAsync(try await harness.coordinator.confirm(id: action.id)) { error in
+        await XCTAssertThrowsErrorAsync(try await harness.coordinator.confirm(action: action)) { error in
             XCTAssertEqual(error as? ConfirmationInjectedFailure, .fault(.afterOutbox))
         }
 
@@ -921,7 +1200,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         try await harness.coordinator.recoverInterruptedCommits()
         let recovered = try await harness.coordinator.activeActions()
         XCTAssertEqual(recovered.first?.state, .pending)
-        _ = try await harness.coordinator.confirm(id: action.id)
+        _ = try await harness.coordinator.confirm(action: action)
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 1)
     }
 
@@ -935,7 +1214,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         await repository!.setFaultPoint(.afterTransactionCommitted)
 
         do {
-            _ = try await coordinator!.confirm(id: action.id)
+            _ = try await coordinator!.confirm(action: action)
             XCTFail("Expected an injected post-commit failure")
         } catch {
             XCTAssertEqual(error as? ConfirmationInjectedFailure, .fault(.afterTransactionCommitted))
@@ -948,7 +1227,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         container = try makeDiskContainer(at: location.storeURL)
         repository = SwiftDataConfirmationRepository(modelContainer: container!)
         coordinator = makeCoordinator(repository: repository!)
-        let receipt = try await coordinator!.confirm(id: action.id)
+        let receipt = try await coordinator!.confirm(action: action)
 
         let context = ModelContext(container!)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeightRecord>()), 1)
@@ -974,7 +1253,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         var repository: SwiftDataConfirmationRepository? = SwiftDataConfirmationRepository(modelContainer: container!)
         var coordinator: ConfirmationCoordinator? = makeCoordinator(repository: repository!)
         let action = try await coordinator!.stage(payload: Self.sampleWeight(), clientRequestID: UUID())
-        _ = try await coordinator!.confirm(id: action.id)
+        _ = try await coordinator!.confirm(action: action)
         do {
             let context = ModelContext(container!)
             let entry = try XCTUnwrap(context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).first)
@@ -1115,6 +1394,15 @@ private struct TemporaryConfirmationStore {
     func remove() {
         try? FileManager.default.removeItem(at: directoryURL)
     }
+}
+
+private struct TestStoredPendingActionEnvelope: Codable {
+    static let currentVersion = 1
+
+    let version: Int
+    let conversationID: UUID
+    let canonicalPayloadHash: String
+    let payload: ActionPayload
 }
 
 @MainActor

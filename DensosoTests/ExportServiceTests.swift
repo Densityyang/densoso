@@ -104,6 +104,395 @@ final class ExportServiceTests: XCTestCase {
         }
     }
 
+    func testRestoreDiscardsActionsAndReceiptsFromReplacedDataset() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let (_, target) = try makeContext()
+        let now = Date()
+        let pendingActionID = UUID()
+        target.insert(PendingActionRecord(
+            id: pendingActionID,
+            idempotencyKey: "pre-restore-pending-action",
+            actionTypeRaw: ActionType.weight.rawValue,
+            canonicalPayloadData: Data("old-canonical-payload".utf8),
+            payloadData: Data("old-payload".utf8),
+            clientRequestID: UUID(),
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(60 * 60)
+        ))
+        target.insert(CommittedActionReceiptRecord(
+            actionID: UUID(),
+            idempotencyKey: "pre-restore-committed-action",
+            actionTypeRaw: ActionType.weight.rawValue,
+            localRecordID: UUID(),
+            outboxIDsData: Data("[]".utf8),
+            committedAt: now,
+            healthSyncStateRaw: HealthSyncState.notApplicable.rawValue
+        ))
+        try target.save()
+
+        _ = try await service.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<PendingActionRecord>()), 0)
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 0)
+    }
+
+    func testBackupRoundTripsAgentRequestLedgerWithoutRestoringResumableRequests() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000971")!
+        let completedRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000972")!
+        let interruptedRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000973")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        source.insert(AgentRequestRecord(
+            requestID: completedRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            providerRoundsUsed: 2,
+            toolCallsUsed: 1,
+            inputTokens: 120,
+            outputTokens: 36,
+            stateRaw: AgentRequestState.completed.rawValue,
+            updatedAt: startedAt.addingTimeInterval(30)
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: interruptedRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt.addingTimeInterval(60),
+            absoluteDeadline: startedAt.addingTimeInterval(360),
+            maximumProviderRounds: 5,
+            maximumToolCalls: 10,
+            providerRoundsUsed: 1,
+            resumeCount: 1,
+            containsTransientImage: true,
+            stateRaw: AgentRequestState.interrupted.rawValue,
+            updatedAt: startedAt.addingTimeInterval(90)
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: completedRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000,
+            reservedCostMicros: 8_000,
+            currency: "USD",
+            providerRaw: ProviderID.deepSeek.rawValue,
+            model: "deepseek-flash",
+            pricingVersion: "2026-10",
+            costStateRaw: AgentCostBudgetState.estimated.rawValue,
+            lastReservedProviderRound: 2,
+            lastReservedCostMicros: 4_000,
+            updatedAt: startedAt.addingTimeInterval(30)
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: interruptedRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 60_000,
+            reservedCostMicros: 3_000,
+            currency: "USD",
+            providerRaw: ProviderID.deepSeek.rawValue,
+            model: "deepseek-flash",
+            pricingVersion: "2026-10",
+            costStateRaw: AgentCostBudgetState.estimated.rawValue,
+            lastReservedProviderRound: 1,
+            lastReservedCostMicros: 3_000,
+            updatedAt: startedAt.addingTimeInterval(90)
+        ))
+        source.insert(MessageRecord(
+            conversationID: conversationID,
+            roleRaw: ModelRole.user.rawValue,
+            contentData: Data("TRANSCRIPT-MUST-NOT-ENTER-BACKUP".utf8),
+            ordinal: 0,
+            requestID: completedRequestID
+        ))
+        try source.save()
+
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let backupText = String(decoding: try Data(contentsOf: backupURL), as: UTF8.self)
+        let normalizedBackupText = backupText.lowercased()
+        XCTAssertTrue(normalizedBackupText.contains(completedRequestID.uuidString.lowercased()))
+        XCTAssertTrue(normalizedBackupText.contains(interruptedRequestID.uuidString.lowercased()))
+        XCTAssertFalse(normalizedBackupText.contains("transcript-must-not-enter-backup"))
+
+        let (_, target) = try makeContext()
+        let summary = try await service.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(summary.agentRequests, 2)
+        XCTAssertEqual(summary.agentRequestCostBudgets, 2)
+        let restoredRequests = try target.fetch(FetchDescriptor<AgentRequestRecord>())
+        XCTAssertEqual(restoredRequests.count, 2)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: restoredRequests.map { ($0.requestID, $0.stateRaw) }),
+            [
+                completedRequestID: AgentRequestState.completed.rawValue,
+                interruptedRequestID: AgentRequestState.failed.rawValue,
+            ]
+        )
+        let restoredByID = Dictionary(uniqueKeysWithValues: restoredRequests.map { ($0.requestID, $0) })
+        let restoredCompleted = try XCTUnwrap(restoredByID[completedRequestID])
+        XCTAssertEqual(restoredCompleted.absoluteDeadline, startedAt.addingTimeInterval(300))
+        XCTAssertEqual(restoredCompleted.maximumProviderRounds, 4)
+        XCTAssertEqual(restoredCompleted.maximumToolCalls, 8)
+        XCTAssertEqual(restoredCompleted.providerRoundsUsed, 2)
+        XCTAssertEqual(restoredCompleted.toolCallsUsed, 1)
+        XCTAssertEqual(restoredCompleted.inputTokens, 120)
+        XCTAssertEqual(restoredCompleted.cachedInputTokens, 0)
+        XCTAssertEqual(restoredCompleted.outputTokens, 36)
+        XCTAssertEqual(restoredCompleted.reasoningTokens, 0)
+        XCTAssertEqual(restoredCompleted.updatedAt, startedAt.addingTimeInterval(30))
+        let restoredInterrupted = try XCTUnwrap(restoredByID[interruptedRequestID])
+        XCTAssertEqual(restoredInterrupted.resumeCount, 1)
+        XCTAssertTrue(restoredInterrupted.containsTransientImage)
+        let restoredBudgets = try target.fetch(FetchDescriptor<AgentRequestCostBudgetRecord>())
+        XCTAssertEqual(restoredBudgets.count, 2)
+        let restoredBudgetsByID = Dictionary(uniqueKeysWithValues: restoredBudgets.map { ($0.requestID, $0) })
+        let restoredCompletedBudget = try XCTUnwrap(restoredBudgetsByID[completedRequestID])
+        XCTAssertEqual(restoredCompletedBudget.maximumCostMicros, 50_000)
+        XCTAssertEqual(restoredCompletedBudget.reservedCostMicros, 8_000)
+        XCTAssertEqual(restoredCompletedBudget.currency, "USD")
+        XCTAssertEqual(restoredCompletedBudget.providerRaw, ProviderID.deepSeek.rawValue)
+        XCTAssertEqual(restoredCompletedBudget.model, "deepseek-flash")
+        XCTAssertEqual(restoredCompletedBudget.pricingVersion, "2026-10")
+        XCTAssertEqual(restoredCompletedBudget.costStateRaw, AgentCostBudgetState.estimated.rawValue)
+        XCTAssertEqual(restoredCompletedBudget.lastReservedProviderRound, 2)
+        XCTAssertEqual(restoredCompletedBudget.lastReservedCostMicros, 4_000)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: restoredBudgets.map { ($0.requestID, $0.reservedCostMicros) }),
+            [completedRequestID: 8_000, interruptedRequestID: 3_000]
+        )
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<MessageRecord>()), 0)
+    }
+
+    func testRestoreQuarantinesInvalidAgentRequestWithoutDroppingValidLedgerRows() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000974")!
+        let validRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000975")!
+        let invalidRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000976")!
+        let invalidCostRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000977")!
+        let overLimitRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000978")!
+        let invalidTokenUsageRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000981")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_100_000)
+        source.insert(AgentRequestRecord(
+            requestID: validRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: invalidRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            stateRaw: "unsupported-state"
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: invalidCostRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: overLimitRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            providerRoundsUsed: 5,
+            toolCallsUsed: 9,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: invalidTokenUsageRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            inputTokens: 10,
+            cachedInputTokens: 11,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: invalidRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: invalidCostRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000,
+            costStateRaw: "unsupported-cost-state"
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: validRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000,
+            reservedCostMicros: 60_000,
+            currency: "USD",
+            providerRaw: ProviderID.deepSeek.rawValue,
+            model: "deepseek-flash",
+            pricingVersion: "2026-10",
+            costStateRaw: AgentCostBudgetState.estimated.rawValue,
+            lastReservedProviderRound: 1,
+            lastReservedCostMicros: 60_000
+        ))
+        try source.save()
+
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let (_, target) = try makeContext()
+
+        let summary = try await service.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(summary.agentRequests, 2)
+        XCTAssertEqual(summary.agentRequestCostBudgets, 0)
+        XCTAssertEqual(
+            Set(summary.quarantinedAgentRequestIDs),
+            Set([invalidRequestID, overLimitRequestID, invalidTokenUsageRequestID])
+        )
+        XCTAssertEqual(
+            Set(summary.quarantinedAgentRequestCostBudgetIDs),
+            Set([invalidRequestID, invalidCostRequestID, validRequestID])
+        )
+        XCTAssertEqual(
+            Set(summary.quarantinedAgentLedgerEntries),
+            Set([
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .request,
+                    requestID: invalidRequestID,
+                    reason: .unsupportedRequestState
+                ),
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .request,
+                    requestID: overLimitRequestID,
+                    reason: .invalidCounter
+                ),
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .request,
+                    requestID: invalidTokenUsageRequestID,
+                    reason: .invalidCounter
+                ),
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .costBudget,
+                    requestID: invalidRequestID,
+                    reason: .missingRequest
+                ),
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .costBudget,
+                    requestID: invalidCostRequestID,
+                    reason: .unsupportedCostState
+                ),
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .costBudget,
+                    requestID: validRequestID,
+                    reason: .invalidCounter
+                ),
+            ])
+        )
+        let restoredRequests = try target.fetch(FetchDescriptor<AgentRequestRecord>())
+        XCTAssertEqual(
+            Set(restoredRequests.map(\.requestID)),
+            Set([validRequestID, invalidCostRequestID])
+        )
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<AgentRequestCostBudgetRecord>()), 0)
+    }
+
+    func testRestoreQuarantinesEntireDuplicateAgentLedgerGroups() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000978")!
+        let duplicateRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000979")!
+        let validRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000980")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_200_000)
+        source.insert(AgentRequestRecord(
+            requestID: duplicateRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: validRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: validRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000,
+            reservedCostMicros: 1_000,
+            costStateRaw: AgentCostBudgetState.estimated.rawValue
+        ))
+        try source.save()
+
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let originalDocument = try JSONDecoder().decode(
+            ExportService.BackupDocument.self,
+            from: Data(contentsOf: backupURL)
+        )
+        let rootObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: backupURL)) as? [String: Any]
+        )
+        var payloadObject = try XCTUnwrap(rootObject["payload"] as? [String: Any])
+        var requestEntries = try XCTUnwrap(payloadObject["agentRequests"] as? [[String: Any]])
+        let duplicateRequestEntry = try XCTUnwrap(requestEntries.first {
+            ($0["requestID"] as? String)?.lowercased() == duplicateRequestID.uuidString.lowercased()
+        })
+        requestEntries.append(duplicateRequestEntry)
+        payloadObject["agentRequests"] = requestEntries
+        var budgetEntries = try XCTUnwrap(payloadObject["agentRequestCostBudgets"] as? [[String: Any]])
+        let duplicateBudgetEntry = try XCTUnwrap(budgetEntries.first)
+        budgetEntries.append(duplicateBudgetEntry)
+        payloadObject["agentRequestCostBudgets"] = budgetEntries
+        let modifiedPayloadData = try JSONSerialization.data(withJSONObject: payloadObject)
+        let modifiedPayload = try JSONDecoder().decode(
+            ExportService.BackupPayload.self,
+            from: modifiedPayloadData
+        )
+        let duplicatedDocument = ExportService.BackupDocument(
+            formatVersion: originalDocument.formatVersion,
+            checksum: try service.checksum(for: modifiedPayload),
+            payload: modifiedPayload
+        )
+        try JSONEncoder().encode(duplicatedDocument).write(to: backupURL, options: .atomic)
+        let (_, target) = try makeContext()
+
+        let summary = try await service.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(summary.agentRequests, 1)
+        XCTAssertEqual(summary.agentRequestCostBudgets, 0)
+        XCTAssertEqual(summary.quarantinedAgentRequestIDs, [duplicateRequestID])
+        XCTAssertEqual(summary.quarantinedAgentRequestCostBudgetIDs, [validRequestID])
+        XCTAssertEqual(summary.quarantinedAgentLedgerEntries.count, 4)
+        XCTAssertTrue(summary.quarantinedAgentLedgerEntries.allSatisfy { $0.reason == .duplicateIdentifier })
+    }
+
     func testBackupExportPagesMealHistoryAcross64RowBoundary() async throws {
         let (container, source) = try makeContext()
         _ = container
@@ -175,6 +564,11 @@ final class ExportServiceTests: XCTestCase {
             maximumToolCalls: 8,
             stateRaw: AgentRequestState.completed.rawValue
         ))
+        target.insert(AgentRequestCostBudgetRecord(
+            requestID: completedRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000
+        ))
         target.insert(MessageRecord(
             conversationID: conversationID,
             roleRaw: ModelRole.assistant.rawValue,
@@ -193,6 +587,7 @@ final class ExportServiceTests: XCTestCase {
         _ = try await service.restoreJSON(url: backupURL, context: target)
 
         XCTAssertEqual(try target.fetchCount(FetchDescriptor<AgentRequestRecord>()), 0)
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<AgentRequestCostBudgetRecord>()), 0)
         let restoredMessages = try target.fetch(FetchDescriptor<MessageRecord>())
         XCTAssertEqual(Set(restoredMessages.map { String(decoding: $0.contentData, as: UTF8.self) }), Set([
             "completed-history", "legacy-history",
@@ -887,7 +1282,8 @@ final class ExportServiceTests: XCTestCase {
             for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, WeeklyReport.self,
             ScheduleEvent.self, WeightRecord.self, ProfileRevisionRecord.self, GoalProfileRecord.self, DailyHealthSnapshotRecord.self,
             DailyBriefRecord.self, WeeklyBriefRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
-            AgentRequestRecord.self, DailyCheckInRecord.self, UserPreferenceRecord.self,
+            AgentRequestRecord.self, AgentRequestCostBudgetRecord.self,
+            DailyCheckInRecord.self, UserPreferenceRecord.self,
             PersonalMealPortionPriorRecord.self,
             PersonalMealDishPriorRecord.self,
             ConsentRecord.self,

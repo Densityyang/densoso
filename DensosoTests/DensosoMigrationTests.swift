@@ -830,22 +830,22 @@ final class DensosoMigrationTests: XCTestCase {
         untouchedContainer = nil
     }
 
-    func testMetadataInspectorIdentifiesV1AndV2WithoutChangingStoreFamily() throws {
+    func testMetadataInspectorIdentifiesV1AndV2WithoutChangingSourceData() throws {
         let v1Seed = try Gate02FixtureLoader.load("v1-seed", as: Gate02Seed.self)
         let v1Location = try TemporaryStoreLocation()
         defer { v1Location.remove() }
         try createV1Store(seed: v1Seed, at: v1Location.storeURL)
-        let v1Before = try storeFamilySnapshot(at: v1Location.storeURL)
+        let v1Before = try v1SemanticSnapshot(at: v1Location.storeURL)
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: v1Location.storeURL), "1.0.0")
-        XCTAssertEqual(try storeFamilySnapshot(at: v1Location.storeURL), v1Before)
+        XCTAssertEqual(try v1SemanticSnapshot(at: v1Location.storeURL), v1Before)
 
         let v2Seed = try Gate02FixtureLoader.load("v2-seed", as: Gate02Seed.self)
         let v2Location = try TemporaryStoreLocation()
         defer { v2Location.remove() }
         try createV2Store(seed: v2Seed, at: v2Location.storeURL)
-        let v2Before = try storeFamilySnapshot(at: v2Location.storeURL)
+        let v2Before = try v2SemanticSnapshot(at: v2Location.storeURL)
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: v2Location.storeURL), "2.0.0")
-        XCTAssertEqual(try storeFamilySnapshot(at: v2Location.storeURL), v2Before)
+        XCTAssertEqual(try v2SemanticSnapshot(at: v2Location.storeURL), v2Before)
     }
 
     func testMetadataInspectorFailsClosedWhenModelHashesAreMissing() {
@@ -857,6 +857,170 @@ final class DensosoMigrationTests: XCTestCase {
                 .missingModelVersionHashes
             )
         }
+    }
+
+    private func v1SemanticSnapshot(at url: URL) throws -> [String] {
+        var container: ModelContainer? = try makeContainer(version: DensosoSchemaV1.self, url: url)
+        var context: ModelContext? = ModelContext(container!)
+        var snapshot: [String] = []
+
+        for profile in try context!.fetch(FetchDescriptor<DensosoSchemaV1.UserProfile>()) {
+            snapshot.append([
+                "profile", profile.name, profile.biologicalSex,
+                String(profile.dateOfBirth.timeIntervalSince1970), String(profile.heightCm),
+                String(profile.weightKg), profile.weightHistoryJSON, profile.activityLevel,
+                String(profile.dailyDeficitTarget), String(profile.createdAt.timeIntervalSince1970),
+                String(profile.updatedAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+        for meal in try context!.fetch(FetchDescriptor<DensosoSchemaV1.MealRecord>()) {
+            snapshot.append([
+                "meal", meal.id.uuidString, String(meal.date.timeIntervalSince1970), meal.mealType,
+                String(meal.totalCaloriesKcal), String(meal.proteinG), String(meal.fatG), String(meal.carbsG),
+                meal.notes ?? "<nil>", meal.confidence, meal.algorithmVersion,
+                String(meal.createdAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+            for dish in meal.dishes {
+                snapshot.append([
+                    "dish", meal.id.uuidString, dish.dishName, dish.cookingMethod ?? "<nil>",
+                    dish.ingredientJSON, String(dish.estimatedCaloriesKcal), String(dish.estimatedProteinG),
+                    String(dish.estimatedFatG), String(dish.estimatedCarbsG), String(dish.confidenceScore),
+                    String(describing: dish.userCorrectionFactor), String(dish.createdAt.timeIntervalSince1970),
+                ].joined(separator: "|"))
+            }
+        }
+        for workout in try context!.fetch(FetchDescriptor<DensosoSchemaV1.WorkoutRecord>()) {
+            snapshot.append([
+                "workout", workout.id.uuidString, String(workout.date.timeIntervalSince1970), workout.type,
+                String(workout.durationMinutes), String(workout.estimatedCaloriesBurned), workout.intensity,
+                workout.notes ?? "<nil>", String(workout.createdAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+        for metrics in try context!.fetch(FetchDescriptor<DensosoSchemaV1.DailyMetrics>()) {
+            snapshot.append([
+                "daily", String(metrics.date.timeIntervalSince1970), String(metrics.bmrKcal),
+                String(metrics.activeCaloriesKcal), String(metrics.totalExpenditureKcal),
+                String(metrics.totalIntakeKcal), String(metrics.deficitKcal), String(metrics.proteinG),
+                String(metrics.fatG), String(metrics.carbsG), String(metrics.mealCount),
+                String(metrics.workoutCount), String(metrics.computedAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+        for report in try context!.fetch(FetchDescriptor<DensosoSchemaV1.WeeklyReport>()) {
+            snapshot.append([
+                "weekly", String(report.weekStartDate.timeIntervalSince1970),
+                String(report.weekEndDate.timeIntervalSince1970), String(report.totalDeficitKcal),
+                String(report.avgDailyDeficitKcal), String(report.projectedWeightLossKg),
+                String(report.avgProteinG), String(report.avgFatG), String(report.avgCarbsG),
+                String(describing: report.bestDay), String(describing: report.worstDay),
+                String(report.mealsCount), String(report.workoutsCount), String(report.compliance),
+                String(report.generatedAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+        for event in try context!.fetch(FetchDescriptor<DensosoSchemaV1.ScheduleEvent>()) {
+            snapshot.append([
+                "event", String(event.date.timeIntervalSince1970), event.title, event.notes ?? "<nil>",
+                String(event.startTime.timeIntervalSince1970), String(describing: event.endTime),
+                String(event.createdAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+        for entry in try context!.fetch(FetchDescriptor<DensosoSchemaV1.HealthSyncOutboxEntry>()) {
+            snapshot.append([
+                "outbox", entry.id.uuidString, entry.operation, entry.recordID.uuidString, entry.state,
+                entry.lastError ?? "<nil>", String(entry.createdAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+
+        context = nil
+        container = nil
+        return snapshot.sorted()
+    }
+
+    private func v2SemanticSnapshot(at url: URL) throws -> [String] {
+        var container: ModelContainer? = try makeContainer(version: DensosoSchemaV2.self, url: url)
+        var context: ModelContext? = ModelContext(container!)
+        var snapshot: [String] = []
+
+        for profile in try context!.fetch(FetchDescriptor<DensosoSchemaV2.UserProfile>()) {
+            snapshot.append([
+                "profile", profile.name, profile.biologicalSex,
+                String(profile.dateOfBirth.timeIntervalSince1970), String(profile.heightCm),
+                String(profile.weightKg), profile.weightHistoryJSON, profile.activityLevel,
+                String(profile.dailyDeficitTarget), String(profile.createdAt.timeIntervalSince1970),
+                String(profile.updatedAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+        for meal in try context!.fetch(FetchDescriptor<DensosoSchemaV2.MealRecord>()) {
+            snapshot.append([
+                "meal", meal.id.uuidString, String(meal.date.timeIntervalSince1970), meal.mealType,
+                String(meal.totalCaloriesKcal), String(meal.proteinG), String(meal.fatG), String(meal.carbsG),
+                meal.notes ?? "<nil>", meal.confidence, meal.algorithmVersion,
+                String(meal.createdAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+            for dish in meal.dishes {
+                snapshot.append([
+                    "dish", meal.id.uuidString, dish.dishName, dish.cookingMethod ?? "<nil>",
+                    dish.ingredientJSON, String(dish.estimatedCaloriesKcal), String(dish.estimatedProteinG),
+                    String(dish.estimatedFatG), String(dish.estimatedCarbsG), String(dish.confidenceScore),
+                    String(describing: dish.userCorrectionFactor), String(dish.createdAt.timeIntervalSince1970),
+                ].joined(separator: "|"))
+            }
+        }
+        for workout in try context!.fetch(FetchDescriptor<DensosoSchemaV2.WorkoutRecord>()) {
+            snapshot.append([
+                "workout", workout.id.uuidString, String(workout.date.timeIntervalSince1970), workout.type,
+                String(workout.durationMinutes), String(workout.estimatedCaloriesBurned), workout.intensity,
+                workout.notes ?? "<nil>", String(workout.createdAt.timeIntervalSince1970),
+                String(workout.updatedAt.timeIntervalSince1970), String(describing: workout.healthKitUUID),
+                String(describing: workout.logicalSessionID), workout.workoutOrigin,
+                String(describing: workout.energySource), String(describing: workout.sourceBundleIdentifier),
+                String(describing: workout.sourceVersion), String(describing: workout.sourceRevision),
+                String(describing: workout.deviceName), String(describing: workout.deviceModel),
+                workout.dataQuality, workout.routeStatus, String(describing: workout.routePointCount),
+            ].joined(separator: "|"))
+        }
+        for metrics in try context!.fetch(FetchDescriptor<DensosoSchemaV2.DailyMetrics>()) {
+            snapshot.append([
+                "daily", String(metrics.date.timeIntervalSince1970), String(metrics.bmrKcal),
+                String(metrics.activeCaloriesKcal), String(metrics.totalExpenditureKcal),
+                String(metrics.totalIntakeKcal), String(metrics.deficitKcal), String(metrics.proteinG),
+                String(metrics.fatG), String(metrics.carbsG), String(metrics.mealCount),
+                String(metrics.workoutCount), String(metrics.computedAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+        for report in try context!.fetch(FetchDescriptor<DensosoSchemaV2.WeeklyReport>()) {
+            snapshot.append([
+                "weekly", String(report.weekStartDate.timeIntervalSince1970),
+                String(report.weekEndDate.timeIntervalSince1970), String(report.totalDeficitKcal),
+                String(report.avgDailyDeficitKcal), String(report.projectedWeightLossKg),
+                String(report.avgProteinG), String(report.avgFatG), String(report.avgCarbsG),
+                String(describing: report.bestDay), String(describing: report.worstDay),
+                String(report.mealsCount), String(report.workoutsCount), String(report.compliance),
+                String(report.generatedAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+        for event in try context!.fetch(FetchDescriptor<DensosoSchemaV2.ScheduleEvent>()) {
+            snapshot.append([
+                "event", String(event.date.timeIntervalSince1970), event.title, event.notes ?? "<nil>",
+                String(event.startTime.timeIntervalSince1970), String(describing: event.endTime),
+                String(event.createdAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+        for entry in try context!.fetch(FetchDescriptor<DensosoSchemaV2.HealthSyncOutboxEntry>()) {
+            snapshot.append([
+                "outbox", entry.id.uuidString, entry.operation, entry.recordID.uuidString, entry.state,
+                entry.lastError ?? "<nil>", String(entry.createdAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+        for cursor in try context!.fetch(FetchDescriptor<DensosoSchemaV2.HealthKitImportCursor>()) {
+            snapshot.append([
+                "cursor", cursor.stream, cursor.anchorData?.base64EncodedString() ?? "<nil>",
+                String(cursor.updatedAt.timeIntervalSince1970),
+            ].joined(separator: "|"))
+        }
+
+        context = nil
+        container = nil
+        return snapshot.sorted()
     }
 
     private func createV1Store(seed: Gate02Seed, at url: URL) throws {

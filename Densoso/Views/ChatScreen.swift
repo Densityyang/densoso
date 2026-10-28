@@ -993,7 +993,7 @@ struct ChatScreen: View {
         setAgentUIState(.committing)
         Task {
             do {
-                let message = try await dependencies.agentSession.confirmPendingAction(id: action.id)
+                let message = try await dependencies.agentSession.confirmPendingAction(action)
                 _ = try? await dependencies.healthIntelligenceService.refresh()
                 await refreshDailyLoopSnapshot()
                 dependencies.watchConnectivityCoordinator.refreshApplicationContext()

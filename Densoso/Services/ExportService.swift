@@ -38,6 +38,8 @@ final class ExportService {
         let userPreferences: [UserPreferenceExport]?
         let mealPortionPriors: [MealPortionPriorExport]?
         let mealDishPriors: [MealDishPriorExport]?
+        let agentRequests: [AgentRequestExport]?
+        let agentRequestCostBudgets: [AgentRequestCostBudgetExport]?
 
         struct UserProfileExport: Codable {
             let name: String
@@ -417,6 +419,42 @@ final class ExportService {
             let requiresRecompute: Bool
         }
 
+        /// Request ledger metadata only. Conversation messages and transient media
+        /// are deliberately excluded from portable backups.
+        struct AgentRequestExport: Codable {
+            let requestID: UUID
+            let conversationID: UUID
+            let startedAt: Date
+            let absoluteDeadline: Date
+            let maximumProviderRounds: Int
+            let maximumToolCalls: Int
+            let providerRoundsUsed: Int
+            let toolCallsUsed: Int
+            let inputTokens: Int
+            let cachedInputTokens: Int
+            let outputTokens: Int
+            let reasoningTokens: Int
+            let resumeCount: Int
+            let containsTransientImage: Bool
+            let stateRaw: String
+            let updatedAt: Date
+        }
+
+        struct AgentRequestCostBudgetExport: Codable {
+            let requestID: UUID
+            let conversationID: UUID
+            let maximumCostMicros: Int64
+            let reservedCostMicros: Int64
+            let currency: String
+            let providerRaw: String
+            let model: String
+            let pricingVersion: String
+            let costStateRaw: String
+            let lastReservedProviderRound: Int
+            let lastReservedCostMicros: Int64
+            let updatedAt: Date
+        }
+
         struct GoalProfileExport: Codable {
             let id: UUID
             let profileKey: String
@@ -572,6 +610,153 @@ final class ExportService {
             }
             return source
         }
+        var requestConversationIDs: [UUID: UUID] = [:]
+        var requestMaximumProviderRounds: [UUID: Int] = [:]
+        var quarantinedAgentLedgerEntries: [QuarantinedAgentLedgerEntry] = []
+        var agentRequests: [BackupPayload.AgentRequestExport] = []
+        let requestEntries = document.payload.agentRequests ?? []
+        let requestIDCounts = Dictionary(grouping: requestEntries, by: \.requestID).mapValues(\.count)
+        for source in requestEntries {
+            let counts = [
+                source.maximumProviderRounds,
+                source.maximumToolCalls,
+                source.providerRoundsUsed,
+                source.toolCallsUsed,
+                source.inputTokens,
+                source.cachedInputTokens,
+                source.outputTokens,
+                source.reasoningTokens,
+                source.resumeCount,
+            ]
+            guard requestIDCounts[source.requestID] == 1 else {
+                quarantinedAgentLedgerEntries.append(.init(
+                    recordType: .request,
+                    requestID: source.requestID,
+                    reason: .duplicateIdentifier
+                ))
+                continue
+            }
+            guard source.updatedAt >= source.startedAt,
+                  source.absoluteDeadline >= source.startedAt else {
+                quarantinedAgentLedgerEntries.append(.init(
+                    recordType: .request,
+                    requestID: source.requestID,
+                    reason: .invalidDateRange
+                ))
+                continue
+            }
+            guard counts.allSatisfy({ $0 >= 0 }),
+                  source.cachedInputTokens <= source.inputTokens,
+                  source.providerRoundsUsed <= source.maximumProviderRounds,
+                  source.toolCallsUsed <= source.maximumToolCalls else {
+                quarantinedAgentLedgerEntries.append(.init(
+                    recordType: .request,
+                    requestID: source.requestID,
+                    reason: .invalidCounter
+                ))
+                continue
+            }
+            guard let state = AgentRequestState(rawValue: source.stateRaw) else {
+                quarantinedAgentLedgerEntries.append(.init(
+                    recordType: .request,
+                    requestID: source.requestID,
+                    reason: .unsupportedRequestState
+                ))
+                continue
+            }
+            requestConversationIDs[source.requestID] = source.conversationID
+            requestMaximumProviderRounds[source.requestID] = source.maximumProviderRounds
+            // A backup contains request metadata, not the transcript needed to
+            // resume work. Imported running/interrupted requests become terminal.
+            let restoredState: AgentRequestState = switch state {
+            case .running, .interrupted: .failed
+            case .completed, .failed, .expired: state
+            }
+            agentRequests.append(BackupPayload.AgentRequestExport(
+                requestID: source.requestID,
+                conversationID: source.conversationID,
+                startedAt: source.startedAt,
+                absoluteDeadline: source.absoluteDeadline,
+                maximumProviderRounds: source.maximumProviderRounds,
+                maximumToolCalls: source.maximumToolCalls,
+                providerRoundsUsed: source.providerRoundsUsed,
+                toolCallsUsed: source.toolCallsUsed,
+                inputTokens: source.inputTokens,
+                cachedInputTokens: source.cachedInputTokens,
+                outputTokens: source.outputTokens,
+                reasoningTokens: source.reasoningTokens,
+                resumeCount: source.resumeCount,
+                containsTransientImage: source.containsTransientImage,
+                stateRaw: restoredState.rawValue,
+                updatedAt: source.updatedAt
+            ))
+        }
+        var agentRequestCostBudgets: [BackupPayload.AgentRequestCostBudgetExport] = []
+        let costBudgetEntries = document.payload.agentRequestCostBudgets ?? []
+        let costBudgetRequestIDCounts = Dictionary(
+            grouping: costBudgetEntries,
+            by: \.requestID
+        ).mapValues(\.count)
+        for source in costBudgetEntries {
+            guard costBudgetRequestIDCounts[source.requestID] == 1 else {
+                quarantinedAgentLedgerEntries.append(.init(
+                    recordType: .costBudget,
+                    requestID: source.requestID,
+                    reason: .duplicateIdentifier
+                ))
+                continue
+            }
+            guard let requestConversationID = requestConversationIDs[source.requestID] else {
+                quarantinedAgentLedgerEntries.append(.init(
+                    recordType: .costBudget,
+                    requestID: source.requestID,
+                    reason: .missingRequest
+                ))
+                continue
+            }
+            guard requestConversationID == source.conversationID else {
+                quarantinedAgentLedgerEntries.append(.init(
+                    recordType: .costBudget,
+                    requestID: source.requestID,
+                    reason: .conversationMismatch
+                ))
+                continue
+            }
+            guard source.maximumCostMicros >= 0,
+                  source.reservedCostMicros >= 0,
+                  source.lastReservedProviderRound >= 0,
+                  source.lastReservedCostMicros >= 0,
+                  source.reservedCostMicros <= source.maximumCostMicros,
+                  source.lastReservedCostMicros <= source.reservedCostMicros,
+                  source.lastReservedProviderRound <= (requestMaximumProviderRounds[source.requestID] ?? 0) else {
+                quarantinedAgentLedgerEntries.append(.init(
+                    recordType: .costBudget,
+                    requestID: source.requestID,
+                    reason: .invalidCounter
+                ))
+                continue
+            }
+            guard source.currency.count <= 16,
+                  source.providerRaw.count <= 80,
+                  source.model.count <= 160,
+                  source.pricingVersion.count <= 160 else {
+                quarantinedAgentLedgerEntries.append(.init(
+                    recordType: .costBudget,
+                    requestID: source.requestID,
+                    reason: .oversizedField
+                ))
+                continue
+            }
+            guard AgentCostBudgetState(rawValue: source.costStateRaw) != nil else {
+                quarantinedAgentLedgerEntries.append(.init(
+                    recordType: .costBudget,
+                    requestID: source.requestID,
+                    reason: .unsupportedCostState
+                ))
+                continue
+            }
+            agentRequestCostBudgets.append(source)
+        }
         let userPreferences = try (document.payload.userPreferences ?? []).map { source in
             let statement = source.statement.trimmingCharacters(in: .whitespacesAndNewlines)
             guard source.sourceRaw == UserPreferenceSource.userReported.rawValue,
@@ -709,9 +894,9 @@ final class ExportService {
         } ?? []
 
         do {
-            // Request budgets are deliberately not part of backups: their resumable
-            // transcript is not exported. Remove unfinished request fragments and all
-            // request ledger rows so restore cannot leave orphan resumable work.
+            // Transcripts are deliberately not part of backups. Remove unfinished
+            // request fragments and replace the request ledger/cost budgets below;
+            // imported running or interrupted requests are terminal and cannot resume.
             let requestRecords = try fetchAllRecords(
                 of: AgentRequestRecord.self,
                 in: context,
@@ -738,6 +923,14 @@ final class ExportService {
                 }
             }
             for request in requestRecords { context.delete(request) }
+            try context.delete(model: AgentRequestCostBudgetRecord.self)
+
+            // Pending confirmations and their receipts belong to the dataset being
+            // replaced. Backups do not carry executable actions, so retaining either
+            // record could let an old confirmation apply to the restored dataset or
+            // replay a receipt for data that is no longer present.
+            try context.delete(model: PendingActionRecord.self)
+            try context.delete(model: CommittedActionReceiptRecord.self)
 
             try context.delete(model: UserProfile.self)
             try context.delete(model: ProfileRevisionRecord.self)
@@ -1094,6 +1287,42 @@ final class ExportService {
                 report.generatedAt = source.generatedAt
                 context.insert(report)
             }
+            for source in agentRequests {
+                context.insert(AgentRequestRecord(
+                    requestID: source.requestID,
+                    conversationID: source.conversationID,
+                    startedAt: source.startedAt,
+                    absoluteDeadline: source.absoluteDeadline,
+                    maximumProviderRounds: source.maximumProviderRounds,
+                    maximumToolCalls: source.maximumToolCalls,
+                    providerRoundsUsed: source.providerRoundsUsed,
+                    toolCallsUsed: source.toolCallsUsed,
+                    inputTokens: source.inputTokens,
+                    cachedInputTokens: source.cachedInputTokens,
+                    outputTokens: source.outputTokens,
+                    reasoningTokens: source.reasoningTokens,
+                    resumeCount: source.resumeCount,
+                    containsTransientImage: source.containsTransientImage,
+                    stateRaw: source.stateRaw,
+                    updatedAt: source.updatedAt
+                ))
+            }
+            for source in agentRequestCostBudgets {
+                context.insert(AgentRequestCostBudgetRecord(
+                    requestID: source.requestID,
+                    conversationID: source.conversationID,
+                    maximumCostMicros: source.maximumCostMicros,
+                    reservedCostMicros: source.reservedCostMicros,
+                    currency: source.currency,
+                    providerRaw: source.providerRaw,
+                    model: source.model,
+                    pricingVersion: source.pricingVersion,
+                    costStateRaw: source.costStateRaw,
+                    lastReservedProviderRound: source.lastReservedProviderRound,
+                    lastReservedCostMicros: source.lastReservedCostMicros,
+                    updatedAt: source.updatedAt
+                ))
+            }
             try invalidateCloudHealthPoliciesForRestore(in: context)
             try context.save()
 
@@ -1107,6 +1336,17 @@ final class ExportService {
                 userPreferences: userPreferences.count,
                 mealPortionPriors: mealPortionPriors.count,
                 mealDishPriors: mealDishPriors.count,
+                agentRequests: agentRequests.count,
+                agentRequestCostBudgets: agentRequestCostBudgets.count,
+                quarantinedAgentRequestIDs: Array(Set(quarantinedAgentLedgerEntries
+                    .filter { $0.recordType == .request }
+                    .map(\.requestID)))
+                    .sorted { $0.uuidString < $1.uuidString },
+                quarantinedAgentRequestCostBudgetIDs: Array(Set(quarantinedAgentLedgerEntries
+                    .filter { $0.recordType == .costBudget }
+                    .map(\.requestID)))
+                    .sorted { $0.uuidString < $1.uuidString },
+                quarantinedAgentLedgerEntries: quarantinedAgentLedgerEntries,
                 scheduledPlans: (document.payload.scheduleEvents ?? []).filter {
                     ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) != nil
                         || ConfirmedTrainingPlanEntry.decode(notes: $0.notes) != nil
@@ -1128,7 +1368,34 @@ final class ExportService {
         let userPreferences: Int
         let mealPortionPriors: Int
         let mealDishPriors: Int
+        let agentRequests: Int
+        let agentRequestCostBudgets: Int
+        let quarantinedAgentRequestIDs: [UUID]
+        let quarantinedAgentRequestCostBudgetIDs: [UUID]
+        let quarantinedAgentLedgerEntries: [QuarantinedAgentLedgerEntry]
         let scheduledPlans: Int
+    }
+
+    struct QuarantinedAgentLedgerEntry: Equatable, Hashable, Sendable {
+        enum RecordType: String, Equatable, Hashable, Sendable {
+            case request
+            case costBudget
+        }
+
+        enum Reason: String, Equatable, Hashable, Sendable {
+            case duplicateIdentifier
+            case invalidDateRange
+            case invalidCounter
+            case unsupportedRequestState
+            case missingRequest
+            case conversationMismatch
+            case oversizedField
+            case unsupportedCostState
+        }
+
+        let recordType: RecordType
+        let requestID: UUID
+        let reason: Reason
     }
 
     /// Restoring a backup replaces the data a previously confirmed cloud-health
@@ -1395,6 +1662,20 @@ final class ExportService {
             sortedBy: [SortDescriptor(\DailyMetrics.date)]
         )
             .sorted { $0.date < $1.date }
+        let agentRequestRecords = try fetchAllRecords(
+            of: AgentRequestRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\AgentRequestRecord.requestID)]
+        )
+        let requestConversationIDs = Dictionary(
+            uniqueKeysWithValues: agentRequestRecords.map { ($0.requestID, $0.conversationID) }
+        )
+        let agentRequestCostBudgets = try fetchAllRecords(
+            of: AgentRequestCostBudgetRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\AgentRequestCostBudgetRecord.requestID)]
+        )
+            .filter { requestConversationIDs[$0.requestID] == $0.conversationID }
 
         return BackupPayload(
             exportedAt: Date(),
@@ -1646,7 +1927,43 @@ final class ExportService {
                     updatedAt: source.updatedAt
                 )
             },
-            mealDishPriors: mealDishPriors
+            mealDishPriors: mealDishPriors,
+            agentRequests: agentRequestRecords.map { source in
+                .init(
+                    requestID: source.requestID,
+                    conversationID: source.conversationID,
+                    startedAt: source.startedAt,
+                    absoluteDeadline: source.absoluteDeadline,
+                    maximumProviderRounds: source.maximumProviderRounds,
+                    maximumToolCalls: source.maximumToolCalls,
+                    providerRoundsUsed: source.providerRoundsUsed,
+                    toolCallsUsed: source.toolCallsUsed,
+                    inputTokens: source.inputTokens,
+                    cachedInputTokens: source.cachedInputTokens,
+                    outputTokens: source.outputTokens,
+                    reasoningTokens: source.reasoningTokens,
+                    resumeCount: source.resumeCount,
+                    containsTransientImage: source.containsTransientImage,
+                    stateRaw: source.stateRaw,
+                    updatedAt: source.updatedAt
+                )
+            },
+            agentRequestCostBudgets: agentRequestCostBudgets.map { source in
+                .init(
+                    requestID: source.requestID,
+                    conversationID: source.conversationID,
+                    maximumCostMicros: source.maximumCostMicros,
+                    reservedCostMicros: source.reservedCostMicros,
+                    currency: source.currency,
+                    providerRaw: source.providerRaw,
+                    model: source.model,
+                    pricingVersion: source.pricingVersion,
+                    costStateRaw: source.costStateRaw,
+                    lastReservedProviderRound: source.lastReservedProviderRound,
+                    lastReservedCostMicros: source.lastReservedCostMicros,
+                    updatedAt: source.updatedAt
+                )
+            }
         )
     }
 

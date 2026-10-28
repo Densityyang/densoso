@@ -257,7 +257,7 @@ def main() -> int:
     if "FoodResolver(catalog:" in application_service or "FoodResolutionQuery(" in application_service:
         errors.append("photo candidate routes must use the shared FoodResolverV2 contract")
     if "qualityGate: MealVisionQualityGate = .unavailable" not in application_service:
-        errors.append("production open-photo quality gate must default closed")
+        errors.append("optional Qwen photo-review quality gate must default closed")
     if "if barcode != nil { return manualReview" not in application_service:
         errors.append("valid barcode miss/error must not fall through to Qwen vision")
     require_text(
@@ -317,10 +317,17 @@ def main() -> int:
         if manifest.get("fieldMeasurementClaimed") is not False:
             errors.append("synthetic portion fixtures cannot claim field measurements")
         if manifest.get("fieldBenchmark") != {
-            "status": "BLOCKED",
-            "reason": "MISSING_EVIDENCE",
+            "status": "NOT_MEASURED",
+            "reason": "NO_LABELED_FIELD_DATA",
         }:
-            errors.append("Gate 5 field benchmark must remain BLOCKED/MISSING_EVIDENCE without field data")
+            errors.append("Gate 5 field benchmark must remain NOT_MEASURED without labeled field data")
+        photo_gate = manifest.get("openPhotoFeatureGate")
+        if (
+            not isinstance(photo_gate, str)
+            or "optional Qwen review remains disabled without measured field calibration" not in photo_gate
+            or "default DeepSeek Agent photo flow uses separate consent and explicit user send" not in photo_gate
+        ):
+            errors.append("Gate 5 must distinguish the optional Qwen review gate from the default DeepSeek Agent photo flow")
         thresholds = manifest.get("thresholds", {})
         expected = {
             "exactAliasAccuracy": 1.0,
@@ -420,7 +427,10 @@ def main() -> int:
     require_text(
         ROOT / "docs/gates/gate-05-meal-capture.md",
         [
-            "BLOCKED/MISSING_EVIDENCE",
+            "NOT_MEASURED",
+            "optional Qwen review path",
+            "default open-photo route",
+            "DeepSeek multimodal Agent path",
             "qwen3.7-flash-2026-07-15",
             "strict JSON Schema",
             "response contract",
@@ -463,7 +473,7 @@ def main() -> int:
         "fieldMeasurementClaimed": (manifest or {}).get("fieldMeasurementClaimed"),
         "fieldBenchmark": (manifest or {}).get(
             "fieldBenchmark",
-            {"status": "BLOCKED", "reason": "MISSING_EVIDENCE"},
+            {"status": "NOT_MEASURED", "reason": "NO_LABELED_FIELD_DATA"},
         ),
         "protectedOCRSourceUsed": (manifest or {}).get("protectedOCRSourceUsed"),
     }

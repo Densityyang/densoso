@@ -6,6 +6,108 @@ import XCTest
 
 @MainActor
 final class CloudHealthContextPolicyTests: XCTestCase {
+    func testConsentRevocationOnlyAffectsRequestsUsingThatDataClass() {
+        let snapshot = CloudHealthContextPolicySnapshot.unconfigured(provider: .qwen)
+        let request = ModelMessage(role: .user, text: "随便聊聊")
+        let policy = CloudHealthContextPolicy(provider: .qwen, allowedClasses: [.healthSleep, .healthActivity])
+        let textDependencies = AgentSession.outboundConsentDependencies(
+            messages: [request],
+            includesImage: false,
+            includesConversationHistory: false,
+            summary: nil,
+            structuredContext: nil,
+            policy: policy
+        )
+        let imageDependencies = AgentSession.outboundConsentDependencies(
+            messages: [request],
+            includesImage: true,
+            includesConversationHistory: false,
+            summary: nil,
+            structuredContext: nil,
+            policy: policy
+        )
+        let sleepContext = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [EvidenceReference(key: "sleep.mainSleep.minutes", source: "sleep")],
+            recommendationCandidates: [],
+            aggregateSummary: nil
+        )
+        let sleepDependencies = AgentSession.outboundConsentDependencies(
+            messages: [request],
+            includesImage: false,
+            includesConversationHistory: false,
+            summary: nil,
+            structuredContext: sleepContext,
+            policy: policy
+        )
+        let historyDependencies = AgentSession.outboundConsentDependencies(
+            messages: [request],
+            includesImage: false,
+            includesConversationHistory: true,
+            summary: nil,
+            structuredContext: nil,
+            policy: policy
+        )
+        let goalCall = ToolCall(
+            id: "goal-dependency",
+            name: "get_goal",
+            arguments: .object([:])
+        )
+        let goalPolicy = CloudHealthContextPolicy(
+            provider: .qwen,
+            allowedClasses: [.healthNutrition, .healthBody, .healthActivity]
+        )
+        let goalDependencies = AgentSession.outboundConsentDependencies(
+            messages: [
+                ModelMessage(role: .assistant, content: [.toolCall(goalCall)]),
+                ModelMessage(
+                    role: .tool,
+                    content: [.toolResult(toolCallID: goalCall.id, content: #"{"goal":{"dailyDeficitKcal":500}}"#)]
+                ),
+            ],
+            includesImage: false,
+            includesConversationHistory: false,
+            summary: nil,
+            structuredContext: nil,
+            policy: goalPolicy
+        )
+
+        XCTAssertEqual(textDependencies, [.healthText])
+        XCTAssertTrue(imageDependencies.contains(.mealImage))
+        XCTAssertFalse(textDependencies.contains(.mealImage))
+        XCTAssertFalse(textDependencies.contains(.speechAudio))
+        XCTAssertTrue(sleepDependencies.contains(.healthSleep))
+        XCTAssertFalse(sleepDependencies.contains(.healthActivity))
+        XCTAssertTrue(historyDependencies.contains(.conversationHistory))
+        XCTAssertTrue(goalDependencies.contains(.healthActivity))
+
+        let imageRevocation = CloudHealthContextPolicyChange(
+            provider: .qwen,
+            snapshot: snapshot,
+            revokedClasses: [.mealImage]
+        )
+        let speechRevocation = CloudHealthContextPolicyChange(
+            provider: .qwen,
+            snapshot: snapshot,
+            revokedClasses: [.speechAudio]
+        )
+        let sleepRevocation = CloudHealthContextPolicyChange(
+            provider: .qwen,
+            snapshot: snapshot,
+            revokedClasses: [.healthSleep]
+        )
+        let activityRevocation = CloudHealthContextPolicyChange(
+            provider: .qwen,
+            snapshot: snapshot,
+            revokedClasses: [.healthActivity]
+        )
+        XCTAssertFalse(imageRevocation.affects(requestDataClasses: textDependencies))
+        XCTAssertFalse(speechRevocation.affects(requestDataClasses: textDependencies))
+        XCTAssertTrue(imageRevocation.affects(requestDataClasses: imageDependencies))
+        XCTAssertTrue(sleepRevocation.affects(requestDataClasses: sleepDependencies))
+        XCTAssertTrue(activityRevocation.affects(requestDataClasses: goalDependencies))
+    }
+
     func testGranularConsentPersistsPerProviderAndDefaultsToDenied() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV11.self)
         let container = try ModelContainer(

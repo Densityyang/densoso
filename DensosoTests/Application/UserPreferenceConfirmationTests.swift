@@ -37,7 +37,7 @@ final class UserPreferenceConfirmationTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
         XCTAssertEqual(outbox.processCount, 0)
 
-        let receipt = try await coordinator.confirm(id: pending.id)
+        let receipt = try await coordinator.confirm(action: pending)
 
         XCTAssertEqual(receipt.actionType, .userPreference)
         XCTAssertEqual(receipt.healthSyncState, .notApplicable)

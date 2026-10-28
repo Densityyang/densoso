@@ -89,6 +89,8 @@ final class AgentSession {
     private let healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)?
     private let confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)?
     private let conversationID: UUID
+    var confirmationConversationID: UUID { conversationID }
+    var hasActiveRequest: Bool { activeAgentTask != nil }
     private let budgetFactory: @Sendable () -> AgentBudget
 
     weak var foodDatabase: FoodDatabase?
@@ -123,7 +125,7 @@ final class AgentSession {
         confirmationCoordinator: ConfirmationCoordinator,
         readRepository: any AgentReadRepository,
         conversationRepository: any ConversationRepository,
-        conversationID: UUID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+        conversationID: UUID = ConfirmationConversationIdentity.defaultID,
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
         confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)? = nil,
         healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil,
@@ -150,11 +152,11 @@ final class AgentSession {
         let persisted = try await conversationRepository.messageData(conversationID: conversationID)
         conversationHistory = try persisted.map(Self.decodePersistedMessage)
         restoredVisibleMessages = conversationHistory.compactMap(Self.visibleMessage)
-        pendingActions = try await confirmationCoordinator.activeActions()
+        pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
     }
 
     func reloadPendingActions() async throws {
-        pendingActions = try await confirmationCoordinator.activeActions()
+        pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
     }
 
     func confirmedFoodIDs(matching label: String) async -> Set<String> {
@@ -357,6 +359,16 @@ final class AgentSession {
         var requestRecordStarted = false
         do {
             try Task.checkCancellation()
+            let existingRequest = try await conversationRepository.agentRequest(
+                requestID: requestID,
+                conversationID: conversationID
+            )
+            if existingRequest?.state == .failed {
+                throw AgentError.requestNotResumable
+            }
+            if existingRequest?.state == .expired {
+                throw ProviderError.timeout
+            }
             let hasPersistedHistory = try await conversationRepository.containsRequestID(
                 requestID,
                 conversationID: conversationID
@@ -371,7 +383,7 @@ final class AgentSession {
                         conversationID: conversationID,
                         state: .completed
                     )
-                    pendingActions = try await confirmationCoordinator.activeActions()
+                    pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
                     let response = AgentResponse(
                         text: "这条请求已在本机完成，不会因 Watch 重放而重复处理；请检查已有消息和待确认草稿。",
                         toolCallsCount: 0,
@@ -382,10 +394,7 @@ final class AgentSession {
                 }
             }
 
-            if let existingRequest = try await conversationRepository.agentRequest(
-                requestID: requestID,
-                conversationID: conversationID
-            ),
+            if let existingRequest,
                existingRequest.containsTransientImage,
                (existingRequest.state == .running || existingRequest.state == .interrupted),
                multimodalRequest.image == nil {
@@ -420,7 +429,7 @@ final class AgentSession {
                 throw AgentError.requestAlreadyCompleted
             case .failed:
                 requestRecordStarted = false
-                throw ProviderError.budgetExceeded
+                throw AgentError.requestNotResumable
             case .expired:
                 requestRecordStarted = false
                 throw ProviderError.timeout
@@ -618,9 +627,10 @@ final class AgentSession {
             var currentNarrativeContext = narrativeContext
             var currentAllowedEvidenceKeys = allowedEvidenceKeys
             var currentRoundUsesStructuredNarrative = useStructuredHealthNarrative
+            var retryingUnsentProviderRound = false
 
             while true {
-                guard tracker.remainingProviderRounds > 0 else {
+                guard retryingUnsentProviderRound || tracker.remainingProviderRounds > 0 else {
                     throw ProviderError.budgetExceeded
                 }
                 let roundPolicy = try await CloudHealthContextPolicy.load(
@@ -661,15 +671,27 @@ final class AgentSession {
                         allowedEvidenceKeys: roundContext?.allowedEvidenceKeys ?? []
                     )
                     : nil
+                let sendAttempt = CloudHealthPolicySendAttempt()
+                let preparedMessages = try providerMessagesIncludingTransientMealEvidence(
+                    systemPrompt: providerSystemPrompt,
+                    responseFormat: responseFormat,
+                    cloudHealthPolicy: roundPolicy
+                )
+                let includesSummary = roundSummary != nil
+                    && HealthContextPromptBuilder.shouldIncludeSummary(for: promptUserText)
+                let requestDataClasses = Self.outboundConsentDependencies(
+                    messages: preparedMessages.messages,
+                    includesImage: containsImage,
+                    includesConversationHistory: preparedMessages.includesConversationHistory,
+                    summary: includesSummary ? roundSummary : nil,
+                    structuredContext: currentRoundUsesStructuredNarrative ? roundContext : nil,
+                    policy: roundPolicy
+                )
                 let request = ModelRequest(
                     requestID: requestID,
                     conversationID: conversationID,
                     systemPrompt: providerSystemPrompt,
-                    messages: try providerMessagesIncludingTransientMealEvidence(
-                        systemPrompt: providerSystemPrompt,
-                        responseFormat: responseFormat,
-                        cloudHealthPolicy: roundPolicy
-                    ),
+                    messages: preparedMessages.messages,
                     tools: registry.toolDefinitions,
                     maxOutputTokens: 2_048,
                     thinking: provider.descriptor.capabilities.contains(.reasoning)
@@ -678,13 +700,15 @@ final class AgentSession {
                     responseFormat: responseFormat,
                     deadline: tracker.budget.deadline,
                     preSerializationGate: { serialize in
-                        try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
+                        let data = try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
                             from: self.governanceRepository,
                             provider: provider.descriptor.id,
                             expectedHealthPolicy: roundPolicy,
                             includesImage: containsImage,
                             operation: serialize
                         )
+                        await sendAttempt.markSerializationGateReleased()
+                        return data
                     },
                     networkAttemptGate: {
                         try await CloudHealthContextPolicy.withCurrentSendConsent(
@@ -694,6 +718,7 @@ final class AgentSession {
                             includesImage: containsImage,
                             operation: {}
                         )
+                        await sendAttempt.markNetworkAttemptAllowed()
                     }
                 )
                 try tracker.requireTime()
@@ -701,9 +726,9 @@ final class AgentSession {
                     provider: provider.descriptor,
                     request: request
                 )
-                let nextProviderRound = tracker.providerRounds == Int.max
-                    ? Int.max
-                    : tracker.providerRounds + 1
+                let nextProviderRound = retryingUnsentProviderRound
+                    ? tracker.providerRounds
+                    : (tracker.providerRounds == Int.max ? Int.max : tracker.providerRounds + 1)
                 do {
                     _ = try await conversationRepository.reserveAgentRequestCost(
                         requestID: requestID,
@@ -727,23 +752,57 @@ final class AgentSession {
                         throw error
                     }
                 }
-                try tracker.consumeProviderRound()
-                try await persist(consumption: tracker.consumption, requestID: requestID)
-                emit(
-                    .providerRoundStarted(
-                        provider: provider.descriptor.id,
-                        round: tracker.providerRounds
+                if !retryingUnsentProviderRound {
+                    try tracker.consumeProviderRound()
+                    try await persist(consumption: tracker.consumption, requestID: requestID)
+                    emit(
+                        .providerRoundStarted(
+                            provider: provider.descriptor.id,
+                            round: tracker.providerRounds
+                        )
                     )
-                )
-                if containsImage { emit(.imageVision) }
-                let result = try await performProviderRound(
-                    provider: provider,
-                    request: request,
-                    providerRound: tracker.providerRounds,
-                    expectedHealthPolicy: roundPolicy,
-                    includesImage: containsImage,
-                    exposeTextDeltas: !currentRoundUsesStructuredNarrative
-                )
+                    if containsImage { emit(.imageVision) }
+                }
+                let result: ProviderRoundResult
+                do {
+                    result = try await performProviderRound(
+                        provider: provider,
+                        request: request,
+                        providerRound: tracker.providerRounds,
+                        expectedHealthPolicy: roundPolicy,
+                        includesImage: containsImage,
+                        requestDataClasses: requestDataClasses,
+                        sendAttempt: sendAttempt,
+                        exposeTextDeltas: !currentRoundUsesStructuredNarrative
+                    )
+                } catch {
+                    let attemptState = await sendAttempt.state()
+                    let providerError = error as? ProviderError
+                    let isConsentGateFailure: Bool
+                    switch providerError {
+                    case .consentPolicyChanged(let failedProvider),
+                         .consentRequired(let failedProvider, _):
+                        isConsentGateFailure = failedProvider == provider.descriptor.id
+                    default:
+                        isConsentGateFailure = false
+                    }
+                    if (attemptState.restrictiveChangeObserved || isConsentGateFailure),
+                       !attemptState.networkAttemptAllowed,
+                       let latestPolicy = try? await CloudHealthContextPolicy.load(
+                           from: governanceRepository,
+                           provider: provider.descriptor.id
+                       ),
+                       latestPolicy.isMoreRestrictive(than: roundPolicy) {
+                        // The logical provider round and its cost reservation stay in place.
+                        // A formed body is still local until the network-attempt gate releases it,
+                        // so discard it and rebuild without duplicating a sent request or cost.
+                        retryingUnsentProviderRound = true
+                        activeCloudHealthPolicy = latestPolicy
+                        continue
+                    }
+                    throw error
+                }
+                retryingUnsentProviderRound = false
                 for usage in result.usages {
                     tracker.record(AgentTokenUsage(
                         inputTokens: usage.inputTokens,
@@ -1183,7 +1242,7 @@ final class AgentSession {
         systemPrompt providerSystemPrompt: String,
         responseFormat: StructuredOutputFormat?,
         cloudHealthPolicy: CloudHealthContextPolicy
-    ) throws -> [ModelMessage] {
+    ) throws -> (messages: [ModelMessage], includesConversationHistory: Bool) {
         guard let userIndex = conversationHistory.lastIndex(where: { $0.role == .user }) else {
             throw AgentError.contextWindowExceeded
         }
@@ -1207,7 +1266,9 @@ final class AgentSession {
                 responseFormat: responseFormat
             )
         )
-        return CloudRequestPolicyGuard.filterToolResults(in: boundedMessages, by: cloudHealthPolicy)
+        let currentTurnMessageCount = providerMessages.count - filteredUserIndex
+        let includesConversationHistory = boundedMessages.count > currentTurnMessageCount
+        let filteredMessages = CloudRequestPolicyGuard.filterToolResults(in: boundedMessages, by: cloudHealthPolicy)
             .map {
                 ModelMessage(
                     role: $0.role,
@@ -1215,6 +1276,173 @@ final class AgentSession {
                     healthContextPolicyProvenance: $0.healthContextPolicyProvenance
                 )
             }
+        return (messages: filteredMessages, includesConversationHistory: includesConversationHistory)
+    }
+
+    static func outboundConsentDependencies(
+        messages: [ModelMessage],
+        includesImage: Bool,
+        includesConversationHistory: Bool,
+        summary: HealthContextSummary?,
+        structuredContext: HealthNarrativeContext?,
+        policy: CloudHealthContextPolicy
+    ) -> Set<ProviderDataClass> {
+        var required: Set<ProviderDataClass> = [.healthText]
+        if includesImage || messages.contains(where: { message in
+            message.content.contains { if case .image = $0 { return true }; return false }
+        }) {
+            required.insert(.mealImage)
+        }
+        if includesConversationHistory { required.insert(.conversationHistory) }
+        if let summary { required.formUnion(healthDataClasses(in: summary)) }
+        if let structuredContext { required.formUnion(healthDataClasses(in: structuredContext)) }
+
+        var toolCallsByID: [String: Set<ProviderDataClass>] = [:]
+        for message in messages where message.role != .user {
+            for content in message.content {
+                if case .toolCall(let call) = content {
+                    let classes = healthToolDataClasses(named: call.name, policy: policy)
+                    if !classes.isEmpty { toolCallsByID[call.id] = classes }
+                }
+            }
+        }
+        for message in messages {
+            for content in message.content {
+                if case .toolResult(let id, _) = content,
+                   let classes = toolCallsByID[id] {
+                    required.formUnion(classes)
+                }
+            }
+        }
+
+        // A previous assistant explanation can contain health facts even when
+        // its original source was a tool rather than the structured context.
+        // Preserve its captured classes as dependencies only when that history
+        // is actually present in this provider payload.
+        if includesConversationHistory {
+            for message in messages where message.role == .assistant {
+                guard let provenance = message.healthContextPolicyProvenance,
+                      message.content.contains(where: { content in
+                          if case .text(let text) = content {
+                              return HealthContextPromptBuilder.shouldIncludeSummary(for: text)
+                          }
+                          return false
+                      }) else { continue }
+                required.formUnion(provenance.allowedClasses)
+            }
+        }
+        return required
+    }
+
+    private static func healthToolDataClasses(
+        named name: String,
+        policy: CloudHealthContextPolicy
+    ) -> Set<ProviderDataClass> {
+        return switch name {
+        case "get_today_health_state", "get_health_history":
+            policy.allowedClasses
+        case "get_recent_meals":
+            Set([.healthNutrition]).intersection(policy.allowedClasses)
+        case "get_metrics", "get_weekly_deficit":
+            Set([.healthNutrition, .healthActivity]).intersection(policy.allowedClasses)
+        case "get_recent_workouts", "get_schedule", "get_today_plan":
+            Set([.healthActivity]).intersection(policy.allowedClasses)
+        case "get_goal":
+            Set([.healthNutrition, .healthBody, .healthActivity]).intersection(policy.allowedClasses)
+        default:
+            []
+        }
+    }
+
+    private static func healthDataClasses(in context: HealthNarrativeContext) -> Set<ProviderDataClass> {
+        var classes = Set<ProviderDataClass>()
+        if let state = context.healthState {
+            for domain in state.domains {
+                classes.insert(healthDataClass(for: domain.domain))
+            }
+            classes.insert(.healthActivity)
+            for evidence in state.recovery.evidence {
+                if let dataClass = healthDataClass(for: evidence.source) { classes.insert(dataClass) }
+            }
+        }
+        for evidence in context.evidence {
+            if let dataClass = healthDataClass(for: evidence.source) { classes.insert(dataClass) }
+        }
+        for recommendation in context.recommendationCandidates {
+            classes.insert(healthDataClass(for: recommendation.domain))
+            if let dataClass = healthDataClass(for: recommendation.evidenceKey) { classes.insert(dataClass) }
+        }
+        if context.subjectiveContext != nil { classes.insert(.healthSubjective) }
+        if let summary = context.aggregateSummary { classes.formUnion(healthDataClasses(in: summary)) }
+        return classes
+    }
+
+    private static func healthDataClasses(in summary: HealthContextSummary) -> Set<ProviderDataClass> {
+        var classes = Set<ProviderDataClass>()
+        for window in [summary.sevenDay, summary.twentyEightDay] {
+            let keys = Set(window.coverageDays.keys)
+                .union(window.dataCoverage.keys)
+                .union(window.metricWindowCoverage.keys)
+            for key in keys {
+                classes.formUnion(healthDataClasses(for: key))
+            }
+            if window.averageSleepMinutes != nil { classes.insert(.healthSleep) }
+            if window.averageStepCount != nil || window.averageActiveEnergyKcal != nil {
+                classes.insert(.healthActivity)
+            }
+            if window.averageEnergyIntakeKcal != nil || window.averageProteinGrams != nil {
+                classes.insert(.healthNutrition)
+            }
+            if window.averageDailyDeficitKcal != nil {
+                classes.formUnion([.healthNutrition, .healthActivity])
+            }
+            if window.medianWeightKilograms != nil { classes.insert(.healthBody) }
+        }
+        for key in summary.analysisWindowCoverage.keys { classes.formUnion(healthDataClasses(for: key)) }
+        if summary.targetWeightKilograms != nil { classes.insert(.healthBody) }
+        if summary.dailyDeficitGoalKcal != nil {
+            classes.formUnion([.healthNutrition, .healthActivity])
+        }
+        if summary.dailyProteinGoalGrams != nil { classes.insert(.healthNutrition) }
+        for reference in summary.recommendationReferences {
+            if let dataClass = healthDataClass(for: reference) { classes.insert(dataClass) }
+        }
+        return classes
+    }
+
+    private static func healthDataClasses(for key: String) -> Set<ProviderDataClass> {
+        let normalized = key.lowercased()
+        if normalized.contains("deficit") { return [.healthNutrition, .healthActivity] }
+        if let dataClass = healthDataClass(for: normalized) { return [dataClass] }
+        return []
+    }
+
+    private static func healthDataClass(for domain: HealthDomain) -> ProviderDataClass {
+        return switch domain {
+        case .nutrition: .healthNutrition
+        case .sleep: .healthSleep
+        case .activity: .healthActivity
+        case .body: .healthBody
+        }
+    }
+
+    private static func healthDataClass(for rawValue: String) -> ProviderDataClass? {
+        let normalized = rawValue.lowercased()
+        if normalized.hasPrefix("nutrition") || normalized.contains("protein") || normalized.contains("energyintake") {
+            return .healthNutrition
+        }
+        if normalized.hasPrefix("sleep") { return .healthSleep }
+        if normalized.hasPrefix("activity") || normalized.hasPrefix("trainingload")
+            || normalized.contains("steps") || normalized.contains("activeenergy") {
+            return .healthActivity
+        }
+        if normalized.hasPrefix("body") || normalized.hasPrefix("vitals") || normalized.contains("weight") {
+            return .healthBody
+        }
+        if normalized.hasPrefix("subjective") || normalized.hasPrefix("userreported") {
+            return .healthSubjective
+        }
+        return nil
     }
 
     private static func transientMealEvidenceMessage(_ evidence: [MealEvidence]) -> ModelMessage? {
@@ -1255,18 +1483,22 @@ final class AgentSession {
     func stageAction(_ payload: ActionPayload, clientRequestID: UUID) async throws -> PendingAction {
         let action = try await confirmationCoordinator.stage(
             payload: payload,
-            clientRequestID: clientRequestID
+            clientRequestID: clientRequestID,
+            conversationID: conversationID
         )
-        pendingActions = try await confirmationCoordinator.activeActions()
+        pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
         emit(.pendingAction(action))
         return action
     }
 
-    func confirmPendingAction(id: UUID) async throws -> String {
-        let pendingPlan = pendingActions.first(where: { $0.id == id })
-        emit(.committing(actionID: id))
-        let receipt = try await confirmationCoordinator.confirm(id: id)
-        pendingActions = try await confirmationCoordinator.activeActions()
+    func confirmPendingAction(_ action: PendingAction) async throws -> String {
+        let pendingPlan = pendingActions.first(where: { $0.id == action.id })
+        emit(.committing(actionID: action.id))
+        let receipt = try await confirmationCoordinator.confirm(
+            action: action,
+            conversationID: conversationID
+        )
+        pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
         switch receipt.actionType {
         case .meal:
             return "已保存到 Densoso，Apple 健康同步待处理。"
@@ -1314,8 +1546,13 @@ final class AgentSession {
         providerRound: Int,
         expectedHealthPolicy: CloudHealthContextPolicy,
         includesImage: Bool,
+        requestDataClasses: Set<ProviderDataClass>,
+        sendAttempt: CloudHealthPolicySendAttempt,
         exposeTextDeltas: Bool = true
     ) async throws -> ProviderRoundResult {
+        let policyChanges = await CloudHealthContextPolicy.restrictiveChanges(
+            for: provider.descriptor.id
+        )
         let task = Task<ProviderRoundResult, Error> {
             var text = ""
             var toolCalls: [ToolCall] = []
@@ -1328,6 +1565,7 @@ final class AgentSession {
                 includesImage: includesImage,
                 operation: {
                     try Task.checkCancellation()
+                    await sendAttempt.markProviderStreamStarted()
                     return provider.stream(request)
                 }
             )
@@ -1404,18 +1642,37 @@ final class AgentSession {
             try Task.checkCancellation()
             return ProviderRoundResult(text: text, toolCalls: toolCalls, reasoning: reasoning, usages: usages)
         }
+        let policyChangeTask = Task {
+            for await change in policyChanges {
+                guard change.affects(requestDataClasses: requestDataClasses) else { continue }
+                guard await sendAttempt.observeRestrictiveChangeWhileActive() else { return }
+                // This stops local work only; a provider may already have received request bytes.
+                task.cancel()
+                return
+            }
+        }
         activeProviderTask = task
-        defer { activeProviderTask = nil }
-        return try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
+        defer {
+            policyChangeTask.cancel()
+            activeProviderTask = nil
+        }
+        do {
+            let result = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            await sendAttempt.markFinished()
+            return result
+        } catch {
+            await sendAttempt.markFinished()
+            throw error
         }
     }
 
     func rejectPendingAction(id: UUID) async throws {
-        try await confirmationCoordinator.reject(id: id)
-        pendingActions = try await confirmationCoordinator.activeActions()
+        try await confirmationCoordinator.reject(id: id, conversationID: conversationID)
+        pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
     }
 
     func dailyMetrics(from startDate: Date, through endDate: Date) async throws -> [AgentDailyMetric] {
@@ -1746,6 +2003,7 @@ enum AgentError: Equatable, Sendable, SharedErrorDescribing {
     case emptyResponse
     case requestAlreadyRunning
     case requestAlreadyCompleted
+    case requestNotResumable
     case transientImageRequired
     case invalidInputEnvelope
     case contextWindowExceeded
@@ -1773,6 +2031,13 @@ enum AgentError: Equatable, Sendable, SharedErrorDescribing {
                 userMessage: "Agent 请求已完成，无法继续恢复。",
                 subsystem: .agent,
                 reason: .requestAlreadyCompleted
+            )
+        case .requestNotResumable:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "这条请求已终止，不能继续恢复；请发起新请求。",
+                subsystem: .agent,
+                reason: .requestNotResumable
             )
         case .transientImageRequired:
             SharedErrorDescriptor(

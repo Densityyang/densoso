@@ -2,6 +2,7 @@ import SwiftData
 import SwiftUI
 import UIKit
 import DensosoDomain
+import UniformTypeIdentifiers
 
 struct SettingsScreen: View {
     private struct PendingHealthPolicyExpansion: Equatable {
@@ -15,6 +16,7 @@ struct SettingsScreen: View {
     }
 
     @Environment(Dependencies.self) private var dependencies
+    @Environment(AppState.self) private var appState
     @Environment(\.modelContext) private var modelContext
 
     @Query private var profiles: [UserProfile]
@@ -40,6 +42,12 @@ struct SettingsScreen: View {
     @State private var statusMessage: String?
     @State private var exportURL: URL?
     @State private var showShareSheet = false
+    @State private var isChoosingBackup = false
+    @State private var pendingBackupURL: URL?
+    @State private var isConfirmingBackupRestore = false
+    @State private var isRestoringBackup = false
+    @State private var backupRestoreMessage: String?
+    @State private var backupRestoreWarning: String?
     @State private var isExportingDiagnostics = false
     @State private var isAuthorizingHealth = false
     @State private var healthAuthorizationError: String?
@@ -162,6 +170,34 @@ struct SettingsScreen: View {
                             OrbitBackground()
                         }
                 }
+            }
+            .fileImporter(
+                isPresented: $isChoosingBackup,
+                allowedContentTypes: [.json],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    pendingBackupURL = url
+                    backupRestoreWarning = nil
+                    isConfirmingBackupRestore = true
+                case .failure(let error):
+                    backupRestoreWarning = "无法选择备份：\(safeErrorMessage(error))"
+                }
+            }
+            .alert("还原备份并替换当前数据？", isPresented: $isConfirmingBackupRestore) {
+                Button("还原备份", role: .destructive) {
+                    Task { await restoreBackup() }
+                }
+                .disabled(appState.isAgentProcessing || dependencies.agentSession.hasActiveRequest)
+                Button("取消", role: .cancel) {
+                    pendingBackupURL = nil
+                }
+            } message: {
+                Text(appState.isAgentProcessing || dependencies.agentSession.hasActiveRequest
+                    ? "当前对话任务结束后才能还原。还原前会验证文件完整性；确认后将替换本机备份范围内的数据、清除待确认操作，并撤销云端健康历史授权。"
+                    : "还原前会验证文件完整性。确认后将替换本机备份范围内的数据、清除待确认操作，并撤销云端健康历史授权；你可以取消并保留当前数据。")
             }
         }
     }
@@ -620,7 +656,35 @@ struct SettingsScreen: View {
             Button("导出 JSON 备份", systemImage: "square.and.arrow.up") {
                 Task { await exportData() }
             }
-            .disabled(dependencies.exportService.isExporting)
+            .disabled(dependencies.exportService.isExporting || isRestoringBackup)
+
+            Button("导入 JSON 备份", systemImage: "square.and.arrow.down") {
+                isChoosingBackup = true
+            }
+            .disabled(
+                dependencies.exportService.isExporting
+                    || isRestoringBackup
+                    || appState.isAgentProcessing
+                    || dependencies.agentSession.hasActiveRequest
+            )
+
+            Text("导入会替换本机备份范围内的数据；未完成请求不会恢复为可续跑状态，待确认草稿与回执会清除，云端健康历史授权需要重新确认。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if isRestoringBackup {
+                ProgressView("正在验证并还原备份")
+            }
+            if let backupRestoreMessage {
+                Label(backupRestoreMessage, systemImage: "checkmark.circle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(OrbitPalette.green)
+            }
+            if let backupRestoreWarning {
+                Label(backupRestoreWarning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(OrbitPalette.coral)
+            }
 
             Button("导出脱敏语音诊断", systemImage: "waveform.badge.magnifyingglass") {
                 Task { await exportSpeechDiagnostics() }
@@ -691,6 +755,13 @@ struct SettingsScreen: View {
                 granted: granted,
                 policyVersion: policyVersion
             )
+            if !granted {
+                await CloudHealthContextPolicy.notifyRevokedConsent(
+                    provider: provider,
+                    dataClass: dataClass,
+                    repository: dependencies.providerGovernanceRepository
+                )
+            }
         } catch {
             healthAuthorizationError = "无法保存云端同意状态：\(safeErrorMessage(error))"
         }
@@ -888,6 +959,75 @@ struct SettingsScreen: View {
             showShareSheet = true
         } catch {
             dependencies.exportService.lastError = safeErrorMessage(error)
+        }
+    }
+
+    private func restoreBackup() async {
+        guard let url = pendingBackupURL else { return }
+        guard !appState.isAgentProcessing, !dependencies.agentSession.hasActiveRequest else {
+            backupRestoreWarning = "请等待当前对话任务结束，再导入备份。"
+            return
+        }
+        isRestoringBackup = true
+        backupRestoreMessage = nil
+        backupRestoreWarning = nil
+        dependencies.exportService.lastError = nil
+        defer {
+            isRestoringBackup = false
+            pendingBackupURL = nil
+        }
+
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing { url.stopAccessingSecurityScopedResource() }
+        }
+
+        do {
+            let summary = try await dependencies.exportService.restoreJSON(url: url, context: modelContext)
+            let restoredCounts = [
+                "餐食 \(summary.meals)",
+                "训练 \(summary.workouts)",
+                "体重 \(summary.weights)",
+                "每日记录 \(summary.dailyCheckIns)",
+                "Agent 请求 \(summary.agentRequests)",
+                "Agent 成本记录 \(summary.agentRequestCostBudgets)",
+            ].joined(separator: "、")
+            backupRestoreMessage = "备份已恢复：\(restoredCounts)。"
+            var warnings: [String] = []
+
+            do {
+                try await dependencies.agentSession.restore()
+            } catch {
+                warnings.append("备份数据已恢复，但对话状态刷新失败：\(safeErrorMessage(error))")
+            }
+
+            if !summary.quarantinedAgentLedgerEntries.isEmpty {
+                let examples = summary.quarantinedAgentLedgerEntries.prefix(3).map { entry in
+                    "\(entry.recordType == .request ? "请求" : "成本预算") \(entry.requestID.uuidString)：\(quarantineReasonDescription(entry.reason))"
+                }.joined(separator: "、")
+                let additional = summary.quarantinedAgentLedgerEntries.count > 3
+                    ? "，另有 \(summary.quarantinedAgentLedgerEntries.count - 3) 条"
+                    : ""
+                warnings.append("有 \(summary.quarantinedAgentLedgerEntries.count) 条 Agent 请求记录因格式或关联校验未通过而隔离（\(examples)\(additional)）；其余备份数据已恢复。")
+            }
+            backupRestoreWarning = warnings.isEmpty ? nil : warnings.joined(separator: " ")
+        } catch {
+            dependencies.exportService.lastError = "备份未导入：\(safeErrorMessage(error))"
+        }
+    }
+
+    private func quarantineReasonDescription(
+        _ reason: ExportService.QuarantinedAgentLedgerEntry.Reason
+    ) -> String {
+        switch reason {
+        case .duplicateIdentifier: "标识重复"
+        case .invalidDateRange: "日期范围无效"
+        case .invalidCounter: "计数值无效"
+        case .unsupportedRequestState: "请求状态不支持"
+        case .missingRequest: "找不到关联请求"
+        case .conversationMismatch: "对话关联不匹配"
+        case .oversizedField: "字段长度超出限制"
+        case .unsupportedCostState: "成本状态不支持"
         }
     }
 
@@ -1252,4 +1392,5 @@ struct ShareSheet: UIViewControllerRepresentable {
     SettingsScreen()
         .modelContainer(persistence.container)
         .environment(Dependencies(modelContainer: persistence.container))
+        .environment(AppState.shared)
 }

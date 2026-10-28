@@ -287,7 +287,7 @@ final class AgentCoordinatorTests: XCTestCase {
         var context = ModelContext(harness.container)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeightRecord>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
-        _ = try await harness.session.confirmPendingAction(id: try XCTUnwrap(harness.session.pendingActions.first?.id))
+        _ = try await harness.session.confirmPendingAction(try XCTUnwrap(harness.session.pendingActions.first))
 
         context = ModelContext(harness.container)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeightRecord>()), 1)

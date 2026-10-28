@@ -33,7 +33,7 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
         XCTAssertEqual(outbox.processCount, 0)
 
-        let receipt = try await coordinator.confirm(id: pending.id)
+        let receipt = try await coordinator.confirm(action: pending)
 
         XCTAssertEqual(receipt.actionType, .dailyCheckIn)
         XCTAssertEqual(receipt.healthSyncState, .notApplicable)
@@ -76,8 +76,8 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             )),
             clientRequestID: UUID()
         )
-        let firstReceipt = try await coordinator.confirm(id: first.id)
-        let replayedFirstReceipt = try await coordinator.confirm(id: first.id)
+        let firstReceipt = try await coordinator.confirm(action: first)
+        let replayedFirstReceipt = try await coordinator.confirm(action: first)
         XCTAssertEqual(replayedFirstReceipt.localRecordID, firstReceipt.localRecordID)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyCheckInRecord>()), 1)
 
@@ -91,7 +91,7 @@ final class DailyCheckInConfirmationTests: XCTestCase {
             )),
             clientRequestID: UUID()
         )
-        let latestReceipt = try await coordinator.confirm(id: latest.id)
+        let latestReceipt = try await coordinator.confirm(action: latest)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyCheckInRecord>()), 2)
 
         let subjective = try XCTUnwrap(
@@ -573,7 +573,7 @@ final class DailyCheckInConfirmationTests: XCTestCase {
         let context = ModelContext(explicitContainer)
         XCTAssertEqual(explicitSession.pendingActions.count, 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyCheckInRecord>()), 0)
-        _ = try await explicitSession.confirmPendingAction(id: try XCTUnwrap(explicitSession.pendingActions.first?.id))
+        _ = try await explicitSession.confirmPendingAction(try XCTUnwrap(explicitSession.pendingActions.first))
         let saved = try XCTUnwrap(context.fetch(FetchDescriptor<DailyCheckInRecord>()).first)
         XCTAssertEqual(saved.sourceRaw, "userReported")
         XCTAssertEqual(saved.energyRaw, "low")

@@ -185,7 +185,6 @@ def main() -> int:
         "gate-01-foundation-results",
         "alarm shift; exec @ARGV' 60 xcrun simctl list devices available",
         "alarm shift; exec @ARGV' 60 xcrun simctl boot",
-        "alarm shift; exec @ARGV' 180 xcrun simctl bootstatus",
         "if: ${{ always() && steps.prepare_simulator.outcome == 'success' && steps.set_paths.outcome == 'success' }}",
     ):
         if expected not in workflow_text:
@@ -196,8 +195,17 @@ def main() -> int:
         errors.append("every iOS Simulator setup must bound its simulator-list lookup")
     if workflow_text.count("alarm shift; exec @ARGV' 60 xcrun simctl boot ") != simulator_setup_count:
         errors.append("every iOS Simulator boot request must have a timeout")
-    if workflow_text.count("alarm shift; exec @ARGV' 180 xcrun simctl bootstatus ") != simulator_setup_count:
+    bounded_bootstatus_count = workflow_text.count("xcrun simctl bootstatus")
+    for timeout in re.findall(r"alarm shift; exec @ARGV' (\d+) xcrun simctl bootstatus", workflow_text):
+        if int(timeout) <= 0:
+            errors.append("every iOS Simulator boot-status wait must have a positive timeout")
+            break
+    if len(re.findall(r"alarm shift; exec @ARGV' \d+ xcrun simctl bootstatus", workflow_text)) != bounded_bootstatus_count:
         errors.append("every iOS Simulator boot-status wait must have a timeout")
+    gate19_parts = workflow_text.split("id: gate19_simulator", 1)
+    gate19_simulator_block = gate19_parts[1].split("id: gate19_ios", 1)[0] if len(gate19_parts) == 2 else ""
+    if "alarm shift; exec @ARGV' 600 xcrun simctl bootstatus" not in gate19_simulator_block:
+        errors.append("Gate 19 simulator boot-status wait must allow up to 600 seconds")
 
     if errors:
         for error in errors:

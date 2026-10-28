@@ -4,17 +4,23 @@ import Foundation
 protocol ConfirmationRepository: Sendable {
     func stage(
         payload: ActionPayload,
-        payloadData: Data,
         canonicalPayloadData: Data,
+        canonicalPayloadHash: String,
         idempotencyKey: String,
         clientRequestID: UUID,
+        conversationID: UUID,
         createdAt: Date,
         expiresAt: Date
     ) async throws -> PendingAction
 
-    func activeActions(now: Date) async throws -> [PendingAction]
-    func confirm(id: UUID, now: Date) async throws -> CommitReceipt
-    func reject(id: UUID, now: Date) async throws
+    func activeActions(conversationID: UUID, now: Date) async throws -> [PendingAction]
+    func confirm(
+        id: UUID,
+        conversationID: UUID,
+        expectedPayloadHash: String,
+        now: Date
+    ) async throws -> CommitReceipt
+    func reject(id: UUID, conversationID: UUID, now: Date) async throws
     func recoverInterruptedCommits(now: Date) async throws
 }
 
@@ -24,6 +30,7 @@ enum ConfirmationError: Equatable, Sendable, SharedErrorDescribing {
     case rejected
     case alreadyCommitting
     case payloadCorrupt
+    case payloadHashMismatch
     case persistenceReadOnly(diagnosticID: String)
     case unsupportedAction
     case invariantViolation(String)
@@ -66,6 +73,13 @@ enum ConfirmationError: Equatable, Sendable, SharedErrorDescribing {
                 subsystem: .confirmation,
                 reason: .confirmationPayloadCorrupt
             )
+        case .payloadHashMismatch:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "确认内容已变化，请重新检查并生成草稿。",
+                subsystem: .confirmation,
+                reason: .confirmationPayloadCorrupt
+            )
         case .persistenceReadOnly:
             SharedErrorDescriptor(
                 code: .actionConflict,
@@ -103,7 +117,7 @@ enum ConfirmationError: Equatable, Sendable, SharedErrorDescribing {
             return true
         case .commitFailed(let retryable):
             return retryable
-        case .notFound, .expired, .rejected, .payloadCorrupt, .unsupportedAction, .invariantViolation:
+        case .notFound, .expired, .rejected, .payloadCorrupt, .payloadHashMismatch, .unsupportedAction, .invariantViolation:
             return false
         }
     }

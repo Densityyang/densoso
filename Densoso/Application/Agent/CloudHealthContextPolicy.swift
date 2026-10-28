@@ -98,6 +98,88 @@ struct CloudHealthContextPolicySnapshot: Codable, Equatable, Sendable {
     }
 }
 
+struct CloudHealthContextPolicyChange: Sendable {
+    let provider: ProviderID
+    let snapshot: CloudHealthContextPolicySnapshot
+    let revokedClasses: Set<ProviderDataClass>
+
+    func affects(requestDataClasses: Set<ProviderDataClass>) -> Bool {
+        !revokedClasses.isDisjoint(with: requestDataClasses)
+    }
+}
+
+private actor CloudHealthContextPolicyChangeHub {
+    static let shared = CloudHealthContextPolicyChangeHub()
+
+    private var observers: [UUID: (ProviderID, AsyncStream<CloudHealthContextPolicyChange>.Continuation)] = [:]
+
+    func changes(for provider: ProviderID) -> AsyncStream<CloudHealthContextPolicyChange> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<CloudHealthContextPolicyChange>.makeStream()
+        observers[id] = (provider, continuation)
+        continuation.onTermination = { @Sendable _ in
+            Task { await CloudHealthContextPolicyChangeHub.shared.removeObserver(id) }
+        }
+        return stream
+    }
+
+    func publish(_ change: CloudHealthContextPolicyChange) {
+        for (_, (provider, continuation)) in observers where provider == change.provider {
+            continuation.yield(change)
+        }
+    }
+
+    private func removeObserver(_ id: UUID) {
+        observers.removeValue(forKey: id)
+    }
+}
+
+actor CloudHealthPolicySendAttempt {
+    struct State: Sendable {
+        let serializationGateReleased: Bool
+        let networkAttemptAllowed: Bool
+        let providerStreamStarted: Bool
+        let restrictiveChangeObserved: Bool
+    }
+
+    private var serializationGateReleased = false
+    private var networkAttemptAllowed = false
+    private var providerStreamStarted = false
+    private var restrictiveChangeObserved = false
+    private var finished = false
+
+    func markSerializationGateReleased() {
+        serializationGateReleased = true
+    }
+
+    func markNetworkAttemptAllowed() {
+        networkAttemptAllowed = true
+    }
+
+    func markProviderStreamStarted() {
+        providerStreamStarted = true
+    }
+
+    func observeRestrictiveChangeWhileActive() -> Bool {
+        guard !finished else { return false }
+        restrictiveChangeObserved = true
+        return true
+    }
+
+    func markFinished() {
+        finished = true
+    }
+
+    func state() -> State {
+        State(
+            serializationGateReleased: serializationGateReleased,
+            networkAttemptAllowed: networkAttemptAllowed,
+            providerStreamStarted: providerStreamStarted,
+            restrictiveChangeObserved: restrictiveChangeObserved
+        )
+    }
+}
+
 protocol CloudHealthContextPolicySnapshotRepository: Sendable {
     func currentCloudHealthContextPolicySnapshot(provider: ProviderID) async throws -> CloudHealthContextPolicySnapshot
     func withCurrentSendAuthorization<Result: Sendable>(
@@ -228,13 +310,33 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         repository: any ProviderGovernanceRepository,
         changeSource: CloudHealthPolicyChangeSource = .agentConversation
     ) async throws -> CloudHealthContextPolicySnapshot {
-        try await persist(
+        let previous = try await load(from: repository, provider: provider)
+        let snapshot = try await persist(
             provider: provider,
             allowedClasses: allowedClasses,
             repository: repository,
             changeSource: changeSource,
             confirmedExpansion: false
         )
+        let requestedClasses = allowedClasses.intersection(Set(dataClasses))
+        let removedHealthClass = !requestedClasses.isSuperset(of: previous.allowedClasses)
+        let removedPersistedClass = !snapshot.allowedClasses.isSuperset(of: previous.snapshot.allowedClasses)
+        let revokedPolicy = previous.snapshot.state == .active && snapshot.state != .active
+        var revokedClasses = previous.allowedClasses.subtracting(requestedClasses)
+            .union(previous.snapshot.allowedClasses.subtracting(snapshot.allowedClasses))
+        if revokedPolicy && revokedClasses.isEmpty {
+            revokedClasses.formUnion(previous.allowedClasses)
+        }
+        if removedHealthClass || removedPersistedClass || revokedPolicy {
+            await CloudHealthContextPolicyChangeHub.shared.publish(
+                CloudHealthContextPolicyChange(
+                    provider: provider,
+                    snapshot: snapshot,
+                    revokedClasses: revokedClasses
+                )
+            )
+        }
+        return snapshot
     }
 
     static func confirmExpandedPolicy(
@@ -267,12 +369,22 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
             throw CloudHealthContextPolicyError.expansionRequiresConfirmation
         }
         if let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
-            return try await snapshotRepository.updateConversationHistoryConsent(
+            let snapshot = try await snapshotRepository.updateConversationHistoryConsent(
                 provider: provider,
                 allowed: allowed,
                 changeSource: changeSource,
                 confirmedAt: confirmedAt
             )
+            if !allowed && (first || second) {
+                await CloudHealthContextPolicyChangeHub.shared.publish(
+                    CloudHealthContextPolicyChange(
+                        provider: provider,
+                        snapshot: snapshot,
+                        revokedClasses: [.conversationHistory]
+                    )
+                )
+            }
+            return snapshot
         }
         try await repository.setConsent(
             provider: provider,
@@ -280,7 +392,46 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
             granted: allowed,
             policyVersion: "cloud-conversation-history-v1"
         )
-        return try await currentSnapshotForConsent(from: repository, provider: provider)
+        let snapshot = try await currentSnapshotForConsent(from: repository, provider: provider)
+        if !allowed && (first || second) {
+            await CloudHealthContextPolicyChangeHub.shared.publish(
+                CloudHealthContextPolicyChange(
+                    provider: provider,
+                    snapshot: snapshot,
+                    revokedClasses: [.conversationHistory]
+                )
+            )
+        }
+        return snapshot
+    }
+
+    static func restrictiveChanges(for provider: ProviderID) async -> AsyncStream<CloudHealthContextPolicyChange> {
+        await CloudHealthContextPolicyChangeHub.shared.changes(for: provider)
+    }
+
+    static func notifyRevokedConsent(
+        provider: ProviderID,
+        dataClass: ProviderDataClass,
+        repository: any ProviderGovernanceRepository
+    ) async {
+        let snapshot = (try? await load(from: repository, provider: provider).snapshot)
+            ?? CloudHealthContextPolicySnapshot.unconfigured(provider: provider)
+        await CloudHealthContextPolicyChangeHub.shared.publish(
+            CloudHealthContextPolicyChange(
+                provider: provider,
+                snapshot: snapshot,
+                revokedClasses: [dataClass]
+            )
+        )
+    }
+
+    func isMoreRestrictive(than previous: Self) -> Bool {
+        guard provider == previous.provider else { return false }
+        if !allowedClasses.isSuperset(of: previous.allowedClasses) { return true }
+        if previous.allowsConversationHistory && !allowsConversationHistory { return true }
+        if previous.snapshot.state == .active && snapshot.state != .active { return true }
+        return snapshot != previous.snapshot
+            && !snapshot.allowedClasses.isSuperset(of: previous.snapshot.allowedClasses)
     }
 
     private static func currentSnapshotForConsent(

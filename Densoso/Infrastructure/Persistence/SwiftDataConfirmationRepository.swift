@@ -15,6 +15,15 @@ enum ConfirmationInjectedFailure: Error, Equatable {
     case fault(ConfirmationFaultPoint)
 }
 
+private struct StoredPendingActionEnvelope: Codable {
+    static let currentVersion = 1
+
+    let version: Int
+    let conversationID: UUID
+    let canonicalPayloadHash: String
+    let payload: ActionPayload
+}
+
 @ModelActor
 actor SwiftDataConfirmationRepository: ConfirmationRepository {
     static let expiredActionBatchSize = 64
@@ -30,25 +39,54 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
 
     func stage(
         payload: ActionPayload,
-        payloadData: Data,
         canonicalPayloadData: Data,
+        canonicalPayloadHash: String,
         idempotencyKey: String,
         clientRequestID: UUID,
+        conversationID: UUID,
         createdAt: Date,
         expiresAt: Date
     ) throws -> PendingAction {
+        guard ActionPayload.supportedSchemaVersions.contains(ActionPayload.currentSchemaVersion),
+              Self.sha256(canonicalPayloadData) == canonicalPayloadHash,
+              try payload.canonicalData(schemaVersion: ActionPayload.currentSchemaVersion) == canonicalPayloadData,
+              try payload.canonicalPayloadHash(schemaVersion: ActionPayload.currentSchemaVersion) == canonicalPayloadHash else {
+            throw ConfirmationError.payloadCorrupt
+        }
         if let existing = try pendingAction(idempotencyKey: idempotencyKey) {
-            guard existing.canonicalPayloadData == canonicalPayloadData,
-                  existing.clientRequestID == clientRequestID else {
-                throw ConfirmationError.invariantViolation("idempotency key collision")
+            do {
+                let envelope = try decodeEnvelope(existing.payloadData)
+                guard existing.canonicalPayloadData == canonicalPayloadData,
+                      envelope.canonicalPayloadHash == canonicalPayloadHash,
+                      envelope.conversationID == conversationID,
+                      existing.schemaVersion == ActionPayload.currentSchemaVersion,
+                      existing.clientRequestID == clientRequestID else {
+                    throw ConfirmationError.invariantViolation("idempotency key collision")
+                }
+                return try map(existing)
+            } catch ConfirmationError.notFound {
+                guard existing.stateRaw == PendingActionState.pending.rawValue
+                    || existing.stateRaw == PendingActionState.committing.rawValue else {
+                    throw ConfirmationError.invariantViolation("legacy action cannot be restaged")
+                }
+                existing.stateRaw = PendingActionState.failed.rawValue
+                existing.failureCode = "legacy_unbound_action"
+                existing.failureDetail = nil
+                existing.idempotencyKey = "legacy-unbound-action-\(existing.id.uuidString.lowercased())"
+                existing.updatedAt = createdAt
+                try modelContext.save()
             }
-            return try map(existing)
         }
         let record = PendingActionRecord(
             idempotencyKey: idempotencyKey,
             actionTypeRaw: payload.actionType.rawValue,
             canonicalPayloadData: canonicalPayloadData,
-            payloadData: payloadData,
+            payloadData: try encodeEnvelope(
+                payload: payload,
+                conversationID: conversationID,
+                canonicalPayloadHash: canonicalPayloadHash
+            ),
+            schemaVersion: ActionPayload.currentSchemaVersion,
             clientRequestID: clientRequestID,
             createdAt: createdAt,
             expiresAt: expiresAt
@@ -62,14 +100,17 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             createdAt: createdAt,
             expiresAt: expiresAt,
             payload: payload,
-            state: .pending
+            state: .pending,
+            conversationID: conversationID,
+            canonicalPayloadHash: canonicalPayloadHash
         )
     }
 
-    func activeActions(now: Date) throws -> [PendingAction] {
+    func activeActions(conversationID: UUID, now: Date) throws -> [PendingAction] {
         let pendingState = PendingActionState.pending.rawValue
         let committingState = PendingActionState.committing.rawValue
         let expiredState = PendingActionState.expired.rawValue
+        let failedState = PendingActionState.failed.rawValue
         let expirationSort = [
             SortDescriptor(\PendingActionRecord.createdAt),
             SortDescriptor(\PendingActionRecord.idempotencyKey),
@@ -130,17 +171,53 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             activeDescriptor.fetchLimit = Self.activeActionBatchSize
             let page = try modelContext.fetch(activeDescriptor)
             guard !page.isEmpty else { break }
-            actions.append(contentsOf: try page.map { try map($0) })
-            guard let last = page.last else { break }
-            cursorCreatedAt = last.createdAt
-            cursorIdempotencyKey = last.idempotencyKey
+            let pageLastCreatedAt = page.last?.createdAt
+            let pageLastIdempotencyKey = page.last?.idempotencyKey
+            var didIsolateInvalidActions = false
+            for record in page {
+                do {
+                    let action = try map(record)
+                    if action.conversationID == conversationID {
+                        actions.append(action)
+                    }
+                } catch let error as ConfirmationError {
+                    switch error {
+                    case .notFound, .payloadCorrupt, .unsupportedAction, .invariantViolation:
+                        let wasActive = record.stateRaw == pendingState || record.stateRaw == committingState
+                        record.stateRaw = failedState
+                        record.failureCode = Self.failureCode(for: error)
+                        record.failureDetail = nil
+                        record.updatedAt = now
+                        if wasActive,
+                           try receipt(actionID: record.id) == nil {
+                            record.idempotencyKey = "invalid-action-\(record.id.uuidString.lowercased())"
+                        }
+                        didIsolateInvalidActions = true
+                    default:
+                        throw error
+                    }
+                }
+            }
+            if didIsolateInvalidActions {
+                do {
+                    try modelContext.save()
+                } catch {
+                    modelContext.rollback()
+                    throw error
+                }
+            }
+            guard let pageLastCreatedAt, let pageLastIdempotencyKey else { break }
+            cursorCreatedAt = pageLastCreatedAt
+            cursorIdempotencyKey = pageLastIdempotencyKey
             if page.count < Self.activeActionBatchSize { break }
         }
         return actions
     }
 
-    func reject(id: UUID, now: Date) throws {
+    func reject(id: UUID, conversationID: UUID, now: Date) throws {
         guard let action = try pendingAction(id: id) else { throw ConfirmationError.notFound }
+        let presentedAction = try map(action)
+        guard presentedAction.conversationID == conversationID else { throw ConfirmationError.notFound }
         guard let state = PendingActionState(rawValue: action.stateRaw) else {
             throw ConfirmationError.invariantViolation("unknown pending action state \(action.stateRaw)")
         }
@@ -162,9 +239,30 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         }
     }
 
-    func confirm(id: UUID, now: Date) throws -> CommitReceipt {
-        if let receipt = try receipt(actionID: id) { return try map(receipt) }
+    func confirm(
+        id: UUID,
+        conversationID: UUID,
+        expectedPayloadHash: String,
+        now: Date
+    ) throws -> CommitReceipt {
         guard let action = try pendingAction(id: id) else { throw ConfirmationError.notFound }
+        guard ActionPayload.supportedSchemaVersions.contains(action.schemaVersion) else {
+            throw ConfirmationError.unsupportedAction
+        }
+        let envelope = try decodeEnvelope(action.payloadData)
+        guard envelope.conversationID == conversationID else { throw ConfirmationError.notFound }
+        let storedPayloadHash = envelope.canonicalPayloadHash
+        guard storedPayloadHash == expectedPayloadHash,
+              Self.sha256(action.canonicalPayloadData) == storedPayloadHash else {
+            throw ConfirmationError.payloadHashMismatch
+        }
+        let payload = envelope.payload
+        try validateActionType(action, matches: payload)
+        guard try payload.canonicalData(schemaVersion: action.schemaVersion) == action.canonicalPayloadData,
+              try payload.canonicalPayloadHash(schemaVersion: action.schemaVersion) == storedPayloadHash else {
+            throw ConfirmationError.payloadCorrupt
+        }
+        if let receipt = try receipt(actionID: id) { return try map(receipt) }
         guard let state = PendingActionState(rawValue: action.stateRaw) else {
             throw ConfirmationError.invariantViolation("unknown pending action state \(action.stateRaw)")
         }
@@ -184,10 +282,6 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             throw ConfirmationError.expired
         }
 
-        let payload = try decodePayload(action.payloadData)
-        guard try payload.canonicalData(schemaVersion: action.schemaVersion) == action.canonicalPayloadData else {
-            throw ConfirmationError.payloadCorrupt
-        }
         action.stateRaw = PendingActionState.committing.rawValue
         action.updatedAt = now
         try modelContext.save()
@@ -410,9 +504,24 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             let actions = try modelContext.fetch(actionDescriptor)
             guard let lastAction = actions.last else { break }
             for action in actions {
+                let pendingAction: PendingAction
+                do {
+                    pendingAction = try map(action)
+                } catch let error as ConfirmationError {
+                    action.stateRaw = PendingActionState.failed.rawValue
+                    action.failureCode = Self.failureCode(for: error)
+                    action.failureDetail = nil
+                    action.updatedAt = now
+                    changed = true
+                    continue
+                }
+
                 if try receipt(actionID: action.id) != nil {
                     action.stateRaw = PendingActionState.committed.rawValue
-                } else if try sourceRecordExists(idempotencyKey: action.idempotencyKey, actionTypeRaw: action.actionTypeRaw) {
+                } else if try sourceRecordExists(
+                    idempotencyKey: action.idempotencyKey,
+                    actionType: pendingAction.payload.actionType
+                ) {
                     action.stateRaw = PendingActionState.failed.rawValue
                     action.failureCode = "record_without_receipt"
                     action.failureDetail = "A source record exists without its committed receipt."
@@ -926,8 +1035,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         return try modelContext.fetch(descriptor).first
     }
 
-    private func sourceRecordExists(idempotencyKey: String, actionTypeRaw: String) throws -> Bool {
-        switch ActionType(rawValue: actionTypeRaw) {
+    private func sourceRecordExists(idempotencyKey: String, actionType: ActionType) throws -> Bool {
+        switch actionType {
         case .meal:
             let predicate = #Predicate<MealRecord> { $0.sourceActionKey == idempotencyKey }
             var descriptor = FetchDescriptor<MealRecord>(predicate: predicate)
@@ -960,8 +1069,6 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             var descriptor = FetchDescriptor<UserPreferenceRecord>(predicate: predicate)
             descriptor.fetchLimit = 1
             return try !modelContext.fetch(descriptor).isEmpty
-        case nil:
-            throw ConfirmationError.invariantViolation("unknown action type \(actionTypeRaw)")
         }
     }
 
@@ -993,18 +1100,57 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         }
     }
 
-    private func decodePayload(_ data: Data) throws -> ActionPayload {
+    private func encodeEnvelope(
+        payload: ActionPayload,
+        conversationID: UUID,
+        canonicalPayloadHash: String
+    ) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(StoredPendingActionEnvelope(
+            version: StoredPendingActionEnvelope.currentVersion,
+            conversationID: conversationID,
+            canonicalPayloadHash: canonicalPayloadHash,
+            payload: payload
+        ))
+    }
+
+    private func decodeEnvelope(_ data: Data) throws -> StoredPendingActionEnvelope {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
-        guard let payload = try? decoder.decode(ActionPayload.self, from: data) else {
-            throw ConfirmationError.payloadCorrupt
+        if let envelope = try? decoder.decode(StoredPendingActionEnvelope.self, from: data) {
+            guard envelope.version == StoredPendingActionEnvelope.currentVersion else {
+                throw ConfirmationError.unsupportedAction
+            }
+            return envelope
         }
-        return payload
+        if (try? decoder.decode(ActionPayload.self, from: data)) != nil {
+            // Pre-envelope pending rows contain no trustworthy owner/hash.
+            throw ConfirmationError.notFound
+        }
+        throw ConfirmationError.payloadCorrupt
     }
 
     private func map(_ record: PendingActionRecord) throws -> PendingAction {
         guard let state = PendingActionState(rawValue: record.stateRaw) else {
             throw ConfirmationError.invariantViolation("unknown pending action state \(record.stateRaw)")
+        }
+        guard ActionPayload.supportedSchemaVersions.contains(record.schemaVersion) else {
+            throw ConfirmationError.unsupportedAction
+        }
+        let envelope = try decodeEnvelope(record.payloadData)
+        try validateActionType(record, matches: envelope.payload)
+        do {
+            guard Self.sha256(record.canonicalPayloadData) == envelope.canonicalPayloadHash,
+                  try envelope.payload.canonicalData(schemaVersion: record.schemaVersion) == record.canonicalPayloadData,
+                  try envelope.payload.canonicalPayloadHash(schemaVersion: record.schemaVersion) == envelope.canonicalPayloadHash else {
+                throw ConfirmationError.payloadCorrupt
+            }
+        } catch let error as ConfirmationError {
+            throw error
+        } catch {
+            throw ConfirmationError.payloadCorrupt
         }
         return PendingAction(
             id: record.id,
@@ -1012,10 +1158,32 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             clientRequestID: record.clientRequestID,
             createdAt: record.createdAt,
             expiresAt: record.expiresAt,
-            payload: try decodePayload(record.payloadData),
+            payload: envelope.payload,
             state: state,
-            failureCode: record.failureCode
+            failureCode: record.failureCode,
+            conversationID: envelope.conversationID,
+            canonicalPayloadHash: envelope.canonicalPayloadHash
         )
+    }
+
+    private func validateActionType(_ record: PendingActionRecord, matches payload: ActionPayload) throws {
+        guard record.actionTypeRaw == payload.actionType.rawValue else {
+            throw ConfirmationError.payloadCorrupt
+        }
+    }
+
+    private static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func failureCode(for error: ConfirmationError) -> String {
+        switch error {
+        case .notFound: "legacy_unbound_action"
+        case .payloadCorrupt, .payloadHashMismatch: "corrupt_action_payload"
+        case .unsupportedAction: "unsupported_action_schema"
+        case .invariantViolation: "invalid_action_state"
+        default: "invalid_action"
+        }
     }
 
     private func map(_ record: CommittedActionReceiptRecord) throws -> CommitReceipt {

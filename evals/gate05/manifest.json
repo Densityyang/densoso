@@ -4,8 +4,8 @@
   "protectedOCRSourceUsed": false,
   "fieldMeasurementClaimed": false,
   "fieldBenchmark": {
-    "status": "BLOCKED",
-    "reason": "MISSING_EVIDENCE"
+    "status": "NOT_MEASURED",
+    "reason": "NO_LABELED_FIELD_DATA"
   },
   "resolutionCaseCount": 100,
   "portionReferenceCount": 50,
@@ -22,6 +22,6 @@
     "minimumPortionCoverage": 0.8,
     "maximumOutsideRate": 0.2
   },
-  "openPhotoFeatureGate": "enabled only when runtime consent, configuration, and all synthetic gates pass",
+  "openPhotoFeatureGate": "optional Qwen review remains disabled without measured field calibration; default DeepSeek Agent photo flow uses separate consent and explicit user send",
   "boundary": "These are deterministic public synthetic algorithm checks, not claims of field photo accuracy or real kitchen-scale collection."
 }

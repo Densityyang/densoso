@@ -338,7 +338,7 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
         XCTAssertNotNil(draft.totalNutrients?.proteinGrams)
         XCTAssertNil(draft.totalNutrients?.fatGrams)
         XCTAssertNil(draft.totalNutrients?.carbohydrateGrams)
-        _ = try await harness.confirmation.confirm(id: action.id)
+        _ = try await harness.confirmation.confirm(action: action)
         let context = ModelContext(harness.container)
         let meal = try XCTUnwrap(context.fetch(FetchDescriptor<MealRecord>()).first)
         XCTAssertNotNil(meal.proteinLikelyG)

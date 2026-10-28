@@ -7,6 +7,47 @@ Branch: `codex/ai-native-health-loop`
 Original review baseline (historical): `33e5ea7908223a3316ea34f4a857d0f5537e2863`
 Associated pull request: none
 
+## Current continuation — 2026-10-28 (backup, recovery, and consent-boundary review)
+
+**GitHub branch baseline:** `707c5fb62bb18bdbb0075cea03258abcef5f3099` on
+`codex/ai-native-health-loop`. The complete coding batch below is committed
+locally on that branch and is awaiting push and exact-SHA Build evidence. The
+unrelated dirty audit note `docs/audits/cn-food-mcp-candidate-disposition.md`
+is excluded from the commit.
+
+**Latest full Build:** [#40679830624](https://github.com/Densityyang/densoso/actions/runs/40679830624)
+targets the exact committed SHA above through `codex/ci-verify-health-loop-707c5fb`.
+At this report revision, Gates 16, 17, and 18 passed. Gate 1 failed one unit
+assertion: `testMetadataInspectorIdentifiesV1AndV2WithoutChangingStoreFamily`
+compared SQLite sidecar file sizes, and the inspector's read-only access allowed
+the WAL to be checkpointed from 111,272 bytes to zero while the main store and
+SHM sizes were unchanged. The remaining 632 unit tests and all six UI tests
+passed; the iOS 18 and Watch builds, launch-screen check, and static contracts
+also passed. Gate 19's seven selected Swift package tests passed, but simulator
+boot status hit the workflow's 180-second alarm before app XCTest ran, so its
+runtime app evidence is blocked. Gate 2's migration/confirmation XCTest was
+still running; no result is claimed here. This run is diagnostic for `707c5fb`
+and does not include the subsequent local coding commit.
+
+**Coding in the worktree:** replace the SQLite file-family assertion with
+before/after semantic snapshots of V1 and V2 source records; raise Gate 19's
+simulator boot-status allowance to 600 seconds and make the static validator
+accept positive timeouts while requiring that Gate 19 allowance; carry revoked
+provider data classes in consent events and cancel active Agent requests only
+when their outbound messages, health context, tool results, image, or history
+depend on that class; validate `PendingActionRecord.actionTypeRaw` against the
+envelope payload before confirmation, mapping, and recovery lookups; and reject
+backup Agent ledgers whose provider/tool use exceeds their caps, whose cached
+tokens exceed input tokens, or whose cost reservation exceeds the request
+budget. Focused regression cases accompany those changes. The owner has chosen
+the Beta `earliestAuthorizedSampleDate(for:)` API on Xcode 27; the production
+adapter and Build/IPA runners already use that choice.
+
+No local tests, builds, or validators were run. This coding batch still needs a
+push and same-SHA GitHub Actions Build. The signed-device HealthKit authorization
+boundary, signing, and release remain owner-run; live meal field calibration
+remains `NOT_MEASURED`.
+
 ## Current continuation — 2026-10-28 (Gate 6 shared window contract)
 
 **Latest full Build:** [#40658568337](https://github.com/Densityyang/densoso/actions/runs/40658568337)

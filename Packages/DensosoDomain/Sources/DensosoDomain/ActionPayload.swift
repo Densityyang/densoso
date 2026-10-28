@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum ToolEffect: String, Codable, Sendable {
@@ -17,9 +18,13 @@ public enum ActionType: String, Codable, Sendable {
 public enum CanonicalizationError: Error, Equatable, Sendable {
     case nonFinite(field: String)
     case outOfRange(field: String)
+    case unsupportedSchemaVersion(Int)
 }
 
 public enum ActionPayload: Codable, Equatable, Sendable {
+    public static let currentSchemaVersion = 1
+    public static let supportedSchemaVersions: Set<Int> = [currentSchemaVersion]
+
     case meal(MealDraft)
     case weight(WeightDraft)
     case workoutPlan(WorkoutPlanDraft)
@@ -108,12 +113,20 @@ public enum ActionPayload: Codable, Equatable, Sendable {
         }
     }
 
-    public func canonicalData(schemaVersion: Int = 1) throws -> Data {
+    public func canonicalData(schemaVersion: Int = currentSchemaVersion) throws -> Data {
+        guard Self.supportedSchemaVersions.contains(schemaVersion) else {
+            throw CanonicalizationError.unsupportedSchemaVersion(schemaVersion)
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(
             try CanonicalActionEnvelope(schemaVersion: schemaVersion, payload: self)
         )
+    }
+
+    public func canonicalPayloadHash(schemaVersion: Int = currentSchemaVersion) throws -> String {
+        let data = try canonicalData(schemaVersion: schemaVersion)
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -126,6 +139,10 @@ public struct PendingAction: Codable, Equatable, Identifiable, Sendable {
     public let payload: ActionPayload
     public let state: PendingActionState
     public let failureCode: String?
+    /// Nil only for legacy persisted actions that must fail closed.
+    public let conversationID: UUID?
+    /// SHA-256 of the canonical bytes associated with the payload shown to the user.
+    public let canonicalPayloadHash: String?
 
     public init(
         id: UUID,
@@ -135,7 +152,9 @@ public struct PendingAction: Codable, Equatable, Identifiable, Sendable {
         expiresAt: Date,
         payload: ActionPayload,
         state: PendingActionState,
-        failureCode: String? = nil
+        failureCode: String? = nil,
+        conversationID: UUID? = nil,
+        canonicalPayloadHash: String? = nil
     ) {
         self.id = id
         self.idempotencyKey = idempotencyKey
@@ -145,6 +164,8 @@ public struct PendingAction: Codable, Equatable, Identifiable, Sendable {
         self.payload = payload
         self.state = state
         self.failureCode = failureCode
+        self.conversationID = conversationID
+        self.canonicalPayloadHash = canonicalPayloadHash
     }
 }
 

@@ -335,7 +335,8 @@ final class Dependencies {
             governanceRepository: providerGovernanceRepository,
             providerConfiguration: providerConfiguration,
             usageLedger: providerUsageLedger,
-            confirmationCoordinator: confirmationCoordinator
+            confirmationCoordinator: confirmationCoordinator,
+            conversationID: agentSession.confirmationConversationID
         )
     }
 }

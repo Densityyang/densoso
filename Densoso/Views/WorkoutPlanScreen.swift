@@ -234,9 +234,13 @@ struct WorkoutPlanScreen: View {
             try WorkoutPlanCompiler().validate(draft)
             let action = try await dependencies.confirmationCoordinator.stage(
                 payload: .workoutPlan(draft),
-                clientRequestID: UUID()
+                clientRequestID: UUID(),
+                conversationID: dependencies.agentSession.confirmationConversationID
             )
-            _ = try await dependencies.confirmationCoordinator.confirm(id: action.id)
+            _ = try await dependencies.confirmationCoordinator.confirm(
+                action: action,
+                conversationID: dependencies.agentSession.confirmationConversationID
+            )
             try? await dependencies.agentSession.reloadPendingActions()
             refreshConfirmedPlans()
             do {

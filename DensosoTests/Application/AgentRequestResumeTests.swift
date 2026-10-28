@@ -6,7 +6,7 @@ import XCTest
 
 @MainActor
 final class AgentRequestResumeTests: XCTestCase {
-    func testConsentRevokedDuringFinalProviderGatePreventsStartingStream() async throws {
+    func testConsentRevokedDuringFinalProviderGateFallsBackWithoutStartingStream() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
             for: schema,
@@ -54,17 +54,226 @@ final class AgentRequestResumeTests: XCTestCase {
             healthNarrativeContextProvider: { narrativeContext }
         )
 
-        do {
-            _ = try await session.send(userText: "分析我的睡眠趋势怎么样", requestID: UUID())
-            XCTFail("Revoked health context must be blocked before provider.stream is called")
-        } catch {
-            XCTAssertEqual(
-                error as? ProviderError,
-                .consentRequired(provider: .deepSeek, dataClass: .healthSleep)
-            )
-        }
+        let response = try await session.send(userText: "分析我的睡眠趋势怎么样", requestID: UUID())
 
         XCTAssertTrue(provider.recordedRequests().isEmpty)
+        XCTAssertFalse(response.text.contains("sleep.pre-send-sentinel"))
+        XCTAssertFalse(response.text.contains("420"))
+    }
+
+    func testRestrictivePolicyWhileQueuedRebuildsSameProviderRoundWithoutDuplicateReservation() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000947")!
+        let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000948")!
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let governance = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await governance.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep, .healthActivity],
+            repository: governance
+        )
+        let provider = GatePausedTextProvider(pausePoint: .beforeSerialization)
+        let session = makeSession(
+            container: container,
+            repository: repository,
+            provider: provider,
+            conversationID: conversationID,
+            budget: AgentBudget(maximumProviderRounds: 3, deadline: .distantFuture),
+            governance: governance,
+            healthNarrativeContextProvider: { await Self.sleepAndActivityNarrativeContext() }
+        )
+
+        let sendTask = Task {
+            try await session.send(userText: "分析睡眠和活动趋势", requestID: requestID)
+        }
+        try await provider.waitForStreamCount(1)
+        _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity],
+            repository: governance,
+            changeSource: .settings
+        )
+
+        let response = try await sendTask.value
+        let requests = provider.recordedRequests()
+        let serializedBodies = provider.recordedSerializedBodies()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.map(\.requestID), [requestID, requestID])
+        XCTAssertEqual(serializedBodies.count, 1)
+        let rebuiltBody = try XCTUnwrap(serializedBodies.first)
+        XCTAssertFalse(rebuiltBody.contains("sleep.pre-serialization-secret"))
+        XCTAssertFalse(rebuiltBody.contains("919191"))
+        XCTAssertTrue(rebuiltBody.contains("activity.allowed-control"))
+        XCTAssertTrue(rebuiltBody.contains("606060"))
+
+        let savedRequestSnapshot = try await repository.agentRequest(
+            requestID: requestID,
+            conversationID: conversationID
+        )
+        let savedRequest = try XCTUnwrap(savedRequestSnapshot)
+        XCTAssertEqual(response.providerRoundsCount, 1)
+        XCTAssertEqual(savedRequest.consumption.providerRoundsUsed, 1)
+        XCTAssertEqual(savedRequest.costBudget.lastReservedProviderRound, 1)
+        XCTAssertEqual(savedRequest.costBudget.reservedCostMicros, savedRequest.costBudget.lastReservedCostMicros)
+        XCTAssertEqual(savedRequest.resumeCount, 0)
+        XCTAssertEqual(savedRequest.state, .completed)
+        XCTAssertTrue(session.pendingActions.isEmpty)
+    }
+
+    func testRestrictivePolicyAfterSerializationBeforeNetworkGateRebuildsUnsentBody() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000951")!
+        let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000952")!
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let governance = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await governance.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep, .healthActivity],
+            repository: governance
+        )
+        let provider = GatePausedTextProvider(pausePoint: .afterSerialization)
+        let session = makeSession(
+            container: container,
+            repository: repository,
+            provider: provider,
+            conversationID: conversationID,
+            budget: AgentBudget(maximumProviderRounds: 3, deadline: .distantFuture),
+            governance: governance,
+            healthNarrativeContextProvider: { await Self.sleepAndActivityNarrativeContext() }
+        )
+
+        let sendTask = Task {
+            try await session.send(userText: "分析睡眠和活动趋势", requestID: requestID)
+        }
+        try await provider.waitForStreamCount(1)
+        try await provider.waitForNetworkGatePause()
+        _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity],
+            repository: governance,
+            changeSource: .settings
+        )
+
+        let response = try await sendTask.value
+        let requests = provider.recordedRequests()
+        let serializedBodies = provider.recordedSerializedBodies()
+        let transportBodies = provider.recordedTransportBodies()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.map(\.requestID), [requestID, requestID])
+        XCTAssertEqual(serializedBodies.count, 2)
+        XCTAssertTrue(serializedBodies[0].contains("sleep.pre-serialization-secret"))
+        XCTAssertFalse(serializedBodies[1].contains("sleep.pre-serialization-secret"))
+        XCTAssertFalse(serializedBodies[1].contains("919191"))
+        XCTAssertTrue(serializedBodies[1].contains("activity.allowed-control"))
+        XCTAssertEqual(transportBodies.count, 1)
+        XCTAssertEqual(transportBodies[0], serializedBodies[1])
+        XCTAssertFalse(transportBodies[0].contains("sleep.pre-serialization-secret"))
+
+        let savedRequestSnapshot = try await repository.agentRequest(
+            requestID: requestID,
+            conversationID: conversationID
+        )
+        let savedRequest = try XCTUnwrap(savedRequestSnapshot)
+        XCTAssertEqual(response.providerRoundsCount, 1)
+        XCTAssertEqual(savedRequest.consumption.providerRoundsUsed, 1)
+        XCTAssertEqual(savedRequest.costBudget.lastReservedProviderRound, 1)
+        XCTAssertEqual(savedRequest.costBudget.reservedCostMicros, savedRequest.costBudget.lastReservedCostMicros)
+        XCTAssertEqual(savedRequest.resumeCount, 0)
+        XCTAssertEqual(savedRequest.state, .completed)
+        XCTAssertTrue(session.pendingActions.isEmpty)
+    }
+
+    func testRestrictivePolicyCancelsInFlightProviderStreamWithoutAutomaticReplay() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000949")!
+        let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000950")!
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let governance = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await governance.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: governance
+        )
+        let transport = ScriptedProviderHTTPTransport(steps: [.delay])
+        let provider = DeepSeekProvider(
+            model: "fixture-model",
+            credentialSource: TestCredentialSource(values: [.deepSeek: "fixture-key"]),
+            transport: transport,
+            jitter: { _ in 0 }
+        )
+        let session = makeSession(
+            container: container,
+            repository: repository,
+            provider: provider,
+            conversationID: conversationID,
+            budget: AgentBudget(maximumProviderRounds: 3, deadline: .distantFuture),
+            governance: governance,
+            healthNarrativeContextProvider: { await Self.sleepAndActivityNarrativeContext() }
+        )
+
+        let sendTask = Task {
+            try await session.send(userText: "分析睡眠趋势", requestID: requestID)
+        }
+        try await waitForTransportRequest(transport)
+        _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+            provider: .deepSeek,
+            allowedClasses: [],
+            repository: governance,
+            changeSource: .settings
+        )
+
+        do {
+            _ = try await sendTask.value
+            XCTFail("A sent request must be interrupted without automatic replay after revocation")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .cancelled)
+        }
+        try await waitForTransportCancellation(transport)
+        let requests = await transport.recordedRequests()
+        let cancellations = await transport.recordedCancellationCount()
+        let savedRequestSnapshot = try await repository.agentRequest(
+            requestID: requestID,
+            conversationID: conversationID
+        )
+        let savedRequest = try XCTUnwrap(savedRequestSnapshot)
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(savedRequest.consumption.providerRoundsUsed, 1)
+        XCTAssertEqual(savedRequest.costBudget.lastReservedProviderRound, 1)
+        XCTAssertEqual(savedRequest.costBudget.reservedCostMicros, savedRequest.costBudget.lastReservedCostMicros)
+        XCTAssertEqual(savedRequest.resumeCount, 0)
+        XCTAssertEqual(savedRequest.state, .interrupted)
+        XCTAssertTrue(session.pendingActions.isEmpty)
     }
 
     func testAgentHealthPolicyAlignmentStagesDraftAndRequiresConversationConfirmation() async throws {
@@ -231,7 +440,6 @@ final class AgentRequestResumeTests: XCTestCase {
             (.deepSeek, .healthSleep),
             (.deepSeek, .healthActivity),
         ])
-        let now = Date()
         let provider = ScriptedTextProvider(scripts: [
             [
                 .textDelta("sleep.current-turn-prose-secret"),
@@ -466,6 +674,91 @@ final class AgentRequestResumeTests: XCTestCase {
         let request = try XCTUnwrap(requestValue)
         XCTAssertEqual(request.state, .failed)
         XCTAssertEqual(request.costBudget.state, .unavailable)
+    }
+
+    func testBackupImportedFailedRequestIsNonResumableWithoutProviderCall() async throws {
+        let sourceContainer = PersistenceBootstrap.make(inMemory: true).container
+        let sourceContext = sourceContainer.mainContext
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000934")!
+        let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000935")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        sourceContext.insert(ConversationRecord(id: conversationID))
+        sourceContext.insert(AgentRequestRecord(
+            requestID: requestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(120),
+            maximumProviderRounds: 3,
+            maximumToolCalls: 4,
+            stateRaw: AgentRequestState.interrupted.rawValue
+        ))
+        try sourceContext.save()
+
+        let backupURL = try await ExportService().exportJSON(context: sourceContext)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let targetContainer = PersistenceBootstrap.make(inMemory: true).container
+        let targetContext = targetContainer.mainContext
+        targetContext.insert(ConversationRecord(id: conversationID))
+        targetContext.insert(AgentRequestRecord(
+            requestID: requestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(120),
+            maximumProviderRounds: 3,
+            maximumToolCalls: 4,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        targetContext.insert(MessageRecord(
+            conversationID: conversationID,
+            roleRaw: ModelRole.assistant.rawValue,
+            contentData: try JSONEncoder().encode(ModelMessage(role: .assistant, text: "旧数据库里的完成回复")),
+            ordinal: 0,
+            requestID: requestID
+        ))
+        try targetContext.save()
+        let targetRepository = SwiftDataAgentRepository(modelContainer: targetContainer)
+        let hasStaleCompletedResponseBeforeRestore = try await targetRepository.containsCompletedResponse(
+            requestID: requestID,
+            conversationID: conversationID
+        )
+        XCTAssertTrue(hasStaleCompletedResponseBeforeRestore)
+
+        let restoreSummary = try await ExportService().restoreJSON(
+            url: backupURL,
+            context: targetContext
+        )
+        XCTAssertEqual(restoreSummary.agentRequests, 1)
+        let importedRequest = try XCTUnwrap(
+            targetContext.fetch(FetchDescriptor<AgentRequestRecord>()).first
+        )
+        XCTAssertEqual(importedRequest.stateRaw, AgentRequestState.failed.rawValue)
+        let hasStaleCompletedResponseAfterRestore = try await targetRepository.containsCompletedResponse(
+            requestID: requestID,
+            conversationID: conversationID
+        )
+        XCTAssertTrue(hasStaleCompletedResponseAfterRestore)
+
+        let provider = ScriptedTextProvider(scripts: [[
+            .textDelta("导入的无 transcript 请求不得恢复"),
+            .completed(.completed),
+        ]])
+        let session = makeSession(
+            container: targetContainer,
+            repository: targetRepository,
+            provider: provider,
+            conversationID: conversationID,
+            budget: AgentBudget(maximumProviderRounds: 20, maximumToolCalls: 20, deadline: .distantFuture)
+        )
+        try await session.restore()
+
+        do {
+            _ = try await session.send(userText: "继续", requestID: requestID)
+            XCTFail("An imported failed request must not replay a stale transcript or resume")
+        } catch {
+            XCTAssertEqual(error as? AgentError, .requestNotResumable)
+            XCTAssertFalse(error.localizedDescription.contains("预算超限"))
+        }
+        XCTAssertTrue(provider.recordedRequests().isEmpty)
     }
 
     func testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage() async throws {
@@ -759,6 +1052,53 @@ final class AgentRequestResumeTests: XCTestCase {
         )
     }
 
+    private static func sleepAndActivityNarrativeContext() -> HealthNarrativeContext {
+        let window = HealthContextWindowSummary(
+            windowDays: 7,
+            coverageDays: ["sleep": 7, "steps": 7],
+            averageSleepMinutes: 919_191,
+            averageStepCount: 606_060,
+            averageActiveEnergyKcal: nil,
+            averageEnergyIntakeKcal: nil,
+            averageDailyDeficitKcal: nil,
+            averageProteinGrams: nil,
+            medianWeightKilograms: nil
+        )
+        let summary = HealthContextSummary(
+            sevenDay: window,
+            twentyEightDay: window,
+            targetWeightKilograms: nil,
+            dailyDeficitGoalKcal: nil,
+            dailyProteinGoalGrams: nil,
+            recommendationReferences: []
+        )
+        return HealthNarrativeContext(
+            healthState: nil,
+            evidence: [
+                EvidenceReference(key: "sleep.pre-serialization-secret", source: "sleep"),
+                EvidenceReference(key: "activity.allowed-control", source: "activity"),
+            ],
+            recommendationCandidates: [],
+            aggregateSummary: summary
+        )
+    }
+
+    private func waitForTransportRequest(_ transport: ScriptedProviderHTTPTransport) async throws {
+        for _ in 0..<500 {
+            if !(await transport.recordedRequests()).isEmpty { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for the local Provider transport to receive the request")
+    }
+
+    private func waitForTransportCancellation(_ transport: ScriptedProviderHTTPTransport) async throws {
+        for _ in 0..<500 {
+            if await transport.recordedCancellationCount() > 0 { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for the local Provider transport cancellation")
+    }
+
     private func createV4Store(at storeURL: URL) throws {
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let configuration = ModelConfiguration("Densoso", schema: schema, url: storeURL)
@@ -773,6 +1113,115 @@ final class AgentRequestResumeTests: XCTestCase {
             ordinal: 0
         ))
         try context.save()
+    }
+}
+
+private enum ProviderPausePoint: Equatable, Sendable {
+    case beforeSerialization
+    case afterSerialization
+}
+
+private final class GatePausedTextProvider: TextModelProvider, @unchecked Sendable {
+    let descriptor = ProviderDescriptor(
+        id: .deepSeek,
+        model: "fixture-model",
+        capabilities: [.text, .toolCalling, .structuredOutput]
+    )
+
+    private let lock = NSLock()
+    private let pausePoint: ProviderPausePoint
+    private var requests: [ModelRequest] = []
+    private var serializedBodies: [String] = []
+    private var transportBodies: [String] = []
+    private var isPausedBeforeNetworkGate = false
+
+    init(pausePoint: ProviderPausePoint) {
+        self.pausePoint = pausePoint
+    }
+
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ProviderEvent, Error> {
+        let requestIndex = lock.withLock { () -> Int in
+            requests.append(request)
+            return requests.count
+        }
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    if requestIndex == 1, self.pausePoint == .beforeSerialization {
+                        // Hold the queued request before it is authorized for serialization.
+                        try await Task.sleep(for: .seconds(60))
+                    }
+                    let messageText = request.messages.flatMap { message in
+                        message.content.compactMap { content -> String? in
+                            switch content {
+                            case .text(let text), .toolResult(_, let text): text
+                            case .toolCall, .image, .reasoning: nil
+                            }
+                        }
+                    }.joined(separator: "\n")
+                    let responseSchema = request.responseFormat.flatMap {
+                        try? String(data: $0.encodedData(), encoding: .utf8)
+                    } ?? ""
+                    let payload = [request.systemPrompt ?? "", messageText, responseSchema]
+                        .joined(separator: "\n")
+                    let body: Data
+                    if let gate = request.preSerializationGate {
+                        body = try await gate { Data(payload.utf8) }
+                    } else {
+                        body = Data(payload.utf8)
+                    }
+                    self.lock.withLock {
+                        self.serializedBodies.append(String(decoding: body, as: UTF8.self))
+                    }
+                    if requestIndex == 1, self.pausePoint == .afterSerialization {
+                        // The body exists locally, but it has not reached the network gate.
+                        self.lock.withLock { self.isPausedBeforeNetworkGate = true }
+                        try await Task.sleep(for: .seconds(60))
+                    }
+                    try await request.networkAttemptGate?()
+                    try Task.checkCancellation()
+                    self.lock.withLock {
+                        self.transportBodies.append(String(decoding: body, as: UTF8.self))
+                    }
+                    continuation.yield(.textDelta(
+                        "{\"headline\":\"趋势\",\"summary\":\"已按授权数据分析\",\"recommendations\":[],\"tomorrowGuidance\":null,\"evidenceKeys\":[\"activity.allowed-control\"]}"
+                    ))
+                    continuation.yield(.completed(.completed))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
+    }
+
+    func waitForStreamCount(_ count: Int) async throws {
+        for _ in 0..<500 {
+            if lock.withLock({ requests.count >= count }) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw ProviderError.timeout
+    }
+
+    func waitForNetworkGatePause() async throws {
+        for _ in 0..<500 {
+            if lock.withLock({ isPausedBeforeNetworkGate }) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw ProviderError.timeout
+    }
+
+    func recordedRequests() -> [ModelRequest] {
+        lock.withLock { requests }
+    }
+
+    func recordedSerializedBodies() -> [String] {
+        lock.withLock { serializedBodies }
+    }
+
+    func recordedTransportBodies() -> [String] {
+        lock.withLock { transportBodies }
     }
 }
 
