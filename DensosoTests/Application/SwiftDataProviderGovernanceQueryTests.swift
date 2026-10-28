@@ -195,6 +195,68 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
         XCTAssertNil(summary.currency)
     }
 
+    func testMonthlyUsageSaturatesCorruptTokenTotalsAndMarksCostOverflowUnpriced() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let monthStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let monthEnd = monthStart.addingTimeInterval(30 * 86_400)
+
+        [
+            usageRecord(
+                key: "overflow-a", provider: .deepSeek, createdAt: monthStart,
+                input: Int.max - 1, output: Int.max - 1,
+                cost: Int64.max - 1, cachedInput: Int.max - 2, reasoning: Int.max - 3
+            ),
+            usageRecord(
+                key: "overflow-b", provider: .deepSeek, createdAt: monthStart,
+                input: 2, output: 2,
+                cost: 2, cachedInput: 3, reasoning: 4
+            ),
+            usageRecord(
+                key: "corrupt-negative-tokens", provider: .deepSeek, createdAt: monthStart,
+                input: Int.min, output: Int.min,
+                cost: 0, cachedInput: Int.min, reasoning: Int.min
+            ),
+            usageRecord(
+                key: "near-limit-exact-a", provider: .qwen, createdAt: monthStart,
+                input: Int.max - 10, output: Int.max - 20,
+                cost: Int64.max - 50, cachedInput: Int.max - 30, reasoning: Int.max - 40
+            ),
+            usageRecord(
+                key: "near-limit-exact-b", provider: .qwen, createdAt: monthStart,
+                input: 5, output: 7,
+                cost: 25, cachedInput: 11, reasoning: 13
+            ),
+        ].forEach(context.insert)
+        try context.save()
+
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        let summary = try await repository.monthlyUsage(
+            provider: .deepSeek,
+            monthStart: monthStart,
+            monthEnd: monthEnd
+        )
+
+        XCTAssertEqual(summary.inputTokens, Int.max)
+        XCTAssertEqual(summary.cachedInputTokens, Int.max)
+        XCTAssertEqual(summary.outputTokens, Int.max)
+        XCTAssertEqual(summary.reasoningTokens, Int.max)
+        XCTAssertNil(summary.estimatedCostMicros)
+        XCTAssertNil(summary.currency)
+
+        let nearLimitSummary = try await repository.monthlyUsage(
+            provider: .qwen,
+            monthStart: monthStart,
+            monthEnd: monthEnd
+        )
+        XCTAssertEqual(nearLimitSummary.inputTokens, Int.max - 5)
+        XCTAssertEqual(nearLimitSummary.cachedInputTokens, Int.max - 19)
+        XCTAssertEqual(nearLimitSummary.outputTokens, Int.max - 13)
+        XCTAssertEqual(nearLimitSummary.reasoningTokens, Int.max - 27)
+        XCTAssertEqual(nearLimitSummary.estimatedCostMicros, Int64.max - 25)
+        XCTAssertEqual(nearLimitSummary.currency, "USD")
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         return try ModelContainer(

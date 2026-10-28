@@ -1,5 +1,37 @@
 # AI-Native Health Loop Repair Report
 
+## Coding continuation — 2026-10-28 (budget and usage boundaries)
+
+**Branch base:** `1cc3748c9131c4afb5b9fabc29c30dd98f7c95d4` on
+`codex/ai-native-health-loop`, synced with `origin`; there is no associated PR.
+The unrelated pre-existing audit-note change
+`docs/audits/cn-food-mcp-candidate-disposition.md` is excluded.
+
+**Latest full Build before this continuation:** [#40707295244](https://github.com/Densityyang/densoso/actions/runs/40707295244)
+targets the exact base SHA. As of 2026-10-28 14:45 UTC, Gates 16 and 17 had
+passed; Gates 1, 18, and 19 remained queued, with no active step on this run.
+Earlier full Build runs for older SHAs were still using runners, so no current
+SHA test failure had been observed when this batch began. A new full Build is
+required for the resulting SHA.
+
+**Coding in this continuation:** persistently unavailable pricing can no
+longer bypass `maximumProviderRounds`; both request-ledger usage entry points
+reject cached input tokens greater than total input before mutation. The
+provider usage ledger rejects impossible cached-token relationships and
+non-finite audio duration before persistence. Speech cost conversion uses an
+exact `Int64` conversion and reports unrepresentable cost as unknown instead
+of trapping. Monthly usage token totals clamp corrupt negative records and
+saturate safely; cost overflow returns an unpriced summary with nil amount and
+currency rather than a false exact price.
+
+Regression cases cover the unavailable-cost round limit, request-ledger
+non-mutation, invalid provider usage, the speech `2^63` conversion boundary,
+and monthly token/cost overflow plus exact near-limit totals. `git diff --check`
+passed on the changed source and test files. No local tests, builds, or
+validators were run. Gate 15 signed-device evidence, live meal field
+calibration, live Provider behavior, signing, and release remain separate
+owner/evidence items; meal field calibration is `NOT_MEASURED`.
+
 ## Coding continuation — 2026-10-28 (provider-policy fail-closed)
 
 **Branch base:** `6495bdc6270befbfe7e3c35fa667616f31aeec92` on

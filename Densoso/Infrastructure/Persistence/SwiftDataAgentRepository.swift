@@ -88,6 +88,9 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         conversationID: UUID,
         consumption: AgentBudgetConsumption
     ) throws {
+        guard consumption.cachedInputTokens <= consumption.inputTokens else {
+            throw AgentRequestPersistenceError.invalidState("cached input tokens exceed input tokens")
+        }
         let record = try fetchAgentRequest(requestID: requestID, conversationID: conversationID)
         record.providerRoundsUsed = consumption.providerRoundsUsed
         record.toolCallsUsed = consumption.toolCallsUsed
@@ -112,7 +115,10 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         guard providerRound > 0, estimatedCostMicros.map({ $0 >= 0 }) ?? true else {
             throw AgentRequestPersistenceError.costBudgetMismatch
         }
-        _ = try fetchAgentRequest(requestID: requestID, conversationID: conversationID)
+        let request = try fetchAgentRequest(requestID: requestID, conversationID: conversationID)
+        guard providerRound <= request.maximumProviderRounds else {
+            throw AgentRequestPersistenceError.costBudgetExceeded
+        }
         let record = try fetchCostBudgetRecord(requestID: requestID, conversationID: conversationID)
         let budgetState = AgentCostBudgetState(rawValue: record.costStateRaw) ?? .unavailable
         if record.providerRaw != "unresolved",
@@ -191,6 +197,9 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         conversationID: UUID,
         usage: AgentTokenUsage
     ) throws {
+        guard usage.cachedInputTokens <= usage.inputTokens else {
+            throw AgentRequestPersistenceError.invalidState("cached input tokens exceed input tokens")
+        }
         let record = try fetchAgentRequest(requestID: requestID, conversationID: conversationID)
         record.inputTokens = Self.add(record.inputTokens, usage.inputTokens)
         record.cachedInputTokens = Self.add(record.cachedInputTokens, usage.cachedInputTokens)

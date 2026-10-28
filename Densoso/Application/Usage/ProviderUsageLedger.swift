@@ -27,8 +27,9 @@ struct PricingDescriptor: Equatable, Sendable {
                   usage.audioSeconds.isFinite,
                   usage.audioSeconds >= 0 else { return nil }
             let rawCost = usage.audioSeconds * Double(audioMicrosPerSecond)
-            guard rawCost.isFinite, rawCost <= Double(Int64.max) else { return nil }
-            return (Int64(rawCost.rounded(.up)), currency)
+            guard rawCost.isFinite,
+                  let cost = Int64(exactly: rawCost.rounded(.up)) else { return nil }
+            return (cost, currency)
         }
 
         guard usage.inputTokens >= 0,
@@ -124,6 +125,7 @@ struct ProviderUsageSummary: Equatable, Sendable {
 
 enum ProviderUsageLedgerError: Error, Equatable {
     case requestIdentityMismatch
+    case invalidUsage
 }
 
 protocol ProviderGovernanceRepository: Sendable {
@@ -198,6 +200,10 @@ actor ProviderUsageLedger {
         requestID: UUID,
         providerRound: Int = 1
     ) async throws -> Bool {
+        guard usage.cachedInputTokens <= usage.inputTokens,
+              usage.audioSeconds.isFinite else {
+            throw ProviderUsageLedgerError.invalidUsage
+        }
         guard usage.requestID == nil || usage.requestID == requestID else {
             throw ProviderUsageLedgerError.requestIdentityMismatch
         }

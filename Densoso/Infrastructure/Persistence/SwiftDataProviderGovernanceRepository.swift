@@ -329,6 +329,7 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
         var latencyMillisecondsTotal = 0
         var latencySampleCount = 0
         var pricedCost: Int64 = 0
+        var pricedCostOverflowed = false
         var currencies = Set<String>()
         while true {
             let predicate: Predicate<ProviderUsageRecord>
@@ -357,10 +358,10 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
             for record in batch {
                 cursor = UsageCursor(createdAt: record.createdAt, usageKey: record.usageKey)
                 recordCount += 1
-                inputTokens += record.inputTokens
-                cachedInputTokens += record.cachedInputTokens
-                outputTokens += record.outputTokens
-                reasoningTokens += record.reasoningTokens
+                inputTokens = Self.saturatingAdd(inputTokens, max(record.inputTokens, 0))
+                cachedInputTokens = Self.saturatingAdd(cachedInputTokens, max(record.cachedInputTokens, 0))
+                outputTokens = Self.saturatingAdd(outputTokens, max(record.outputTokens, 0))
+                reasoningTokens = Self.saturatingAdd(reasoningTokens, max(record.reasoningTokens, 0))
                 imageCount = Self.saturatingAdd(imageCount, record.imageCount)
                 audioSeconds += record.audioSeconds
                 if let latency = record.latencyMilliseconds, latency >= 0 {
@@ -372,11 +373,17 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
                    record.currency != "unavailable" {
                     pricedCount += 1
                     currencies.insert(record.currency)
-                    pricedCost += record.estimatedCostMicros
+                    if !pricedCostOverflowed {
+                        let (total, overflowed) = pricedCost.addingReportingOverflow(record.estimatedCostMicros)
+                        pricedCostOverflowed = overflowed
+                        if !overflowed { pricedCost = total }
+                    }
                 }
             }
         }
-        let cost: Int64? = pricedCount == recordCount && currencies.count <= 1 ? pricedCost : nil
+        let cost: Int64? = !pricedCostOverflowed && pricedCount == recordCount && currencies.count <= 1
+            ? pricedCost
+            : nil
         return ProviderUsageSummary(
             provider: provider,
             inputTokens: inputTokens,

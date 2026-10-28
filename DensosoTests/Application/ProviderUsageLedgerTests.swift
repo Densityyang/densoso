@@ -150,6 +150,44 @@ final class ProviderUsageLedgerTests: XCTestCase {
         XCTAssertEqual(usageCount, 0)
     }
 
+    func testInvalidProviderUsageIsRejectedBeforePersistence() async throws {
+        let repository = InMemoryProviderGovernanceRepository()
+        let ledger = ProviderUsageLedger(repository: repository)
+        let invalidUsages = [
+            ProviderUsage(
+                provider: .deepSeek,
+                model: "fixture",
+                capability: .text,
+                inputTokens: 10,
+                outputTokens: 2,
+                audioSeconds: 0,
+                attempt: 1,
+                cachedInputTokens: 11
+            ),
+            ProviderUsage(
+                provider: .qwen,
+                model: "fixture",
+                capability: .speech,
+                inputTokens: 0,
+                outputTokens: 0,
+                audioSeconds: .infinity,
+                attempt: 1
+            ),
+        ]
+
+        for usage in invalidUsages {
+            do {
+                try await ledger.record(usage, requestID: UUID())
+                XCTFail("Malformed provider usage must not be persisted")
+            } catch {
+                XCTAssertEqual(error as? ProviderUsageLedgerError, .invalidUsage)
+            }
+        }
+
+        let usageCount = await repository.usageCount()
+        XCTAssertEqual(usageCount, 0)
+    }
+
     func testLegacyUsagePayloadDecodesWithUnknownImageAndLatencyMetadata() throws {
         let data = Data(
             #"{"provider":"deepSeek","model":"fixture","capability":"text","inputTokens":10,"cachedInputTokens":2,"outputTokens":3,"reasoningTokens":1,"audioSeconds":0,"attempt":1}"#.utf8
@@ -256,6 +294,43 @@ final class ProviderUsageLedgerTests: XCTestCase {
         )
 
         XCTAssertEqual(descriptor.estimate(usage)?.micros, 1)
+    }
+
+    func testSpeechCostRejectsUnrepresentableInt64BoundaryWithoutTrap() {
+        let descriptor = PricingDescriptor(
+            provider: .qwen,
+            model: "fixture",
+            capability: .speech,
+            version: "fixture-v1",
+            origin: .localConfiguration(identifier: "fixture-v1"),
+            currency: "CNY",
+            inputMicrosPerMillionTokens: nil,
+            cachedInputMicrosPerMillionTokens: nil,
+            outputMicrosPerMillionTokens: nil,
+            audioMicrosPerSecond: 1
+        )
+        let representableUsage = ProviderUsage(
+            provider: .qwen,
+            model: "fixture",
+            capability: .speech,
+            inputTokens: 0,
+            outputTokens: 0,
+            audioSeconds: 12.5,
+            attempt: 1
+        )
+        XCTAssertEqual(descriptor.estimate(representableUsage)?.micros, 13)
+
+        // Double(Int64.max) rounds to 2^63, which cannot be converted to Int64.
+        let boundaryUsage = ProviderUsage(
+            provider: .qwen,
+            model: "fixture",
+            capability: .speech,
+            inputTokens: 0,
+            outputTokens: 0,
+            audioSeconds: Double(Int64.max),
+            attempt: 1
+        )
+        XCTAssertNil(descriptor.estimate(boundaryUsage))
     }
 
     func testQwenSpeechUsageWithoutPricingDescriptorKeepsCostUnknown() async throws {
