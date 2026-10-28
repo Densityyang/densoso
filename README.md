@@ -109,7 +109,7 @@ python -m py_compile scripts/evaluate_voice_transcripts.py scripts/generate_voic
 GitHub Actions 工作流位于 `.github/workflows/`：
 
 - `build.yml`：`gate-01-foundation` 执行纯 `DensosoDomain` 测试、确定性 XcodeGen、
-  iOS 18 deployment 构建、iOS 26 Simulator 单测/UI 截图与 Watch 编译，
+  iOS 18 deployment 构建、iOS 27.0 Simulator 单测/UI 截图与单目标 Watch app 编译，
   并上传 `.xcresult` 和日志证据；后续依次运行 `gate-02-domain-persistence`
   `gate-03-agent-provider`、`gate-04-speech` 和 `gate-05-meal-capture`；
   Provider/ASR/VL 测试只使用本地 fixture/fake transport。Gate 5 的 100/50

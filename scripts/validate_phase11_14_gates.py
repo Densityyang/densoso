@@ -1896,7 +1896,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         errors,
     )
     require(
-        "DensosoWatchExtension/WatchCompanionView.swift",
+        "DensosoWatchApp/WatchCompanionView.swift",
         (
             "currentSnapshot(asOf: date)?.tomorrowGuidance",
             "Text(guidance.conditionalNote)",
@@ -1917,7 +1917,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         ),
         errors,
     )
-    watch_view = read_text("DensosoWatchExtension/WatchCompanionView.swift", errors)
+    watch_view = read_text("DensosoWatchApp/WatchCompanionView.swift", errors)
     if 'Button("确认")' in watch_view or 'Button("拒绝"' in watch_view:
         errors.append("Watch pending-action UI must direct users to iPhone review")
     require(
@@ -2080,7 +2080,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         errors,
     )
     require(
-        "DensosoWatchExtension/WatchConnectivityClient.swift",
+        "DensosoWatchApp/WatchConnectivityClient.swift",
         (
             "let predecessorSequence = outbox.latestPendingCausalSequence",
             "dependsOn: predecessorSequence",

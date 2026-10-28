@@ -64,8 +64,8 @@ The `foundation` job must run and retain evidence for:
 2. pure `DensosoDomain` package tests;
 3. two identical XcodeGen generations;
 4. an iOS 18 deployment build;
-5. iOS 26 Simulator unit tests;
-6. Watch app and extension compilation with watchOS 11 deployment;
+5. iOS 27.0 Simulator unit tests;
+6. Single-target Watch app compilation with watchOS 11 deployment;
 7. in-memory UI smoke tests and screenshot attachments;
 8. launch-screen bundle validation; and
 9. `.xcresult` bundles and build/test logs in `gate-01-foundation-results`.

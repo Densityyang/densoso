@@ -55,6 +55,7 @@ GATE15_REQUIRED_SCENARIOS = {
         "watch-quick-record",
         "watch-offline-queue-replay",
         "watch-reconnect",
+        "watch-single-target-upgrade-outbox",
         "watch-workoutkit",
     },
 }

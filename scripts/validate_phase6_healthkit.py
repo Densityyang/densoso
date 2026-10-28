@@ -566,8 +566,8 @@ def main() -> int:
         "Densoso/Services/WorkoutRouteImporter.swift",
         "Densoso/Services/HealthKitWorkoutImporter.swift",
         "Densoso/Services/WorkoutSessionMirroringService.swift",
-        "DensosoWatchExtension/WatchHealthKitWorkoutManager.swift",
-        "DensosoWatchExtension/DensosoWatchExtension.entitlements",
+        "DensosoWatchApp/WatchHealthKitWorkoutManager.swift",
+        "DensosoWatchApp/DensosoWatchExtension.entitlements",
     ):
         if (ROOT / removed).exists():
             errors.append(f"obsolete importer remains: {removed}")
@@ -675,12 +675,12 @@ def main() -> int:
         errors,
     )
     watch_app = require_text(
-        "DensosoWatchExtension/DensosoWatchCompanionApp.swift",
+        "DensosoWatchApp/DensosoWatchCompanionApp.swift",
         ("DensosoWatchCompanionApp", "WatchCompanionView"),
         errors,
     )
     watch_view = require_text(
-        "DensosoWatchExtension/WatchCompanionView.swift",
+        "DensosoWatchApp/WatchCompanionView.swift",
         ("WatchCompanionView", "connectivity.sendTranscript", "pendingActionsSection(asOf"),
         errors,
     )

@@ -207,7 +207,7 @@ jobs:
           test "$SCREENSHOT_COUNT" -ge 5
           echo "Exported $SCREENSHOT_COUNT Gate 1 screenshots."
 
-      - name: Build Watch app and extension
+      - name: Build single-target Watch app
         id: watch_build
         if: ${{ always() && steps.generate_project.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |

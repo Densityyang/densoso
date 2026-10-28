@@ -48,7 +48,14 @@ binding but does not download private evidence artifacts.
 | Apple Watch | @pending | pending | pending | pending | pending | watch-quick-record | pending | pending | pending | pending |
 | Apple Watch | @pending | pending | pending | pending | pending | watch-offline-queue-replay | pending | pending | pending | pending |
 | Apple Watch | @pending | pending | pending | pending | pending | watch-reconnect | pending | pending | pending | pending |
+| Apple Watch | @pending | pending | pending | pending | pending | watch-single-target-upgrade-outbox | pending | pending | pending | pending |
 | Apple Watch | @pending | pending | pending | pending | pending | watch-workoutkit | pending | pending | pending | pending |
 
 The tester must attach the device matrix and original test evidence. Do not
 replace missing device evidence with simulator output.
+
+For `watch-single-target-upgrade-outbox`, install the tested build over the
+previous dual-target Watch build without deleting the app. Queue a durable Watch
+transcript while the iPhone is unreachable before upgrading, then verify after
+upgrade and reconnection that the transcript remains pending and is accepted by
+the iPhone exactly once. A clean install does not satisfy this migration row.

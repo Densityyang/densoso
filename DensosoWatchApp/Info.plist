@@ -20,7 +20,7 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>WKCompanionAppBundleIdentifier</key>
     <string>com.densoso.densoso</string>
-    <key>WKWatchKitApp</key>
+    <key>WKApplication</key>
     <true/>
 </dict>
 </plist>

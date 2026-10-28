@@ -75,7 +75,7 @@ def main() -> int:
         errors,
     )
     watch = require_text(
-        "DensosoWatchExtension/WatchConnectivityClient.swift",
+        "DensosoWatchApp/WatchConnectivityClient.swift",
         (
             "session.sendMessage", "session.transferUserInfo", "didReceiveApplicationContext",
             "didFinish userInfoTransfer: WCSessionUserInfoTransfer", "dispatchedIDs.removeAll()", "sendTranscript",
@@ -108,7 +108,7 @@ def main() -> int:
     if "confirmationCoordinator.confirm(id: actionID)" in phone or "confirmationCoordinator.reject(id: actionID)" in phone:
         errors.append("Phone Watch ingress must not confirm or reject a pending action on the Watch's behalf")
     view = require_text(
-        "DensosoWatchExtension/WatchCompanionView.swift",
+        "DensosoWatchApp/WatchCompanionView.swift",
         ("请在 iPhone 查看并确认或拒绝",),
         errors,
     )
@@ -242,7 +242,7 @@ def main() -> int:
         errors,
     )
 
-    watch_files = sorted((ROOT / "DensosoWatchExtension").glob("*.swift"))
+    watch_files = sorted((ROOT / "DensosoWatchApp").glob("*.swift"))
     if not watch_files:
         errors.append("missing Watch Swift target sources")
     for path in watch_files:
@@ -254,8 +254,8 @@ def main() -> int:
         if "AVAudioSession" in source or "AVAudioRecorder" in source or "AVCaptureAudio" in source:
             errors.append(f"Watch target contains a custom microphone capture path: {path.name}")
     for removed in (
-        "DensosoWatchExtension/WatchHealthKitWorkoutManager.swift",
-        "DensosoWatchExtension/DensosoWatchExtension.entitlements",
+        "DensosoWatchApp/WatchHealthKitWorkoutManager.swift",
+        "DensosoWatchApp/DensosoWatchExtension.entitlements",
     ):
         if (ROOT / removed).exists():
             errors.append(f"obsolete Watch workout component remains: {removed}")

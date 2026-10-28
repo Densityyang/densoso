@@ -62,8 +62,35 @@ def main() -> int:
         errors.append("project.yml must set the global iOS deployment target to 18.0")
     if 'IPHONEOS_DEPLOYMENT_TARGET: "26.0"' in project_text:
         errors.append("project.yml still contains an iOS 26 deployment target")
-    if project_text.count('WATCHOS_DEPLOYMENT_TARGET: "11.0"') != 2:
-        errors.append("Watch app and extension must both keep watchOS deployment at 11.0")
+    if project_text.count('WATCHOS_DEPLOYMENT_TARGET: "11.0"') != 1:
+        errors.append("The single Watch app target must keep watchOS deployment at 11.0")
+    watch_target = project_text.partition("  DensosoWatchApp:")[2].partition("  DensosoTests:")[0]
+    if not watch_target or "type: application" not in watch_target:
+        errors.append("DensosoWatchApp must be a single-target watchOS application")
+    if "watchkit2-extension" in project_text:
+        errors.append("project.yml must not retain a deprecated WatchKit extension target")
+    if "DensosoWatchExtension" in project_text:
+        errors.append("project.yml must not retain the removed WatchKit extension target")
+    ios_app_target = project_text.partition("  Densoso:")[2].partition("  DensosoWatchApp:")[0]
+    if "- target: DensosoWatchApp\n        embed: true" not in ios_app_target:
+        errors.append("iOS app target must embed the single-target Watch app")
+    if "Densoso/Infrastructure/WatchConnectivity/WatchMessageOutboxStore.swift" not in watch_target:
+        errors.append("Watch app target must include the durable Watch message outbox store")
+    if "postGenCommand: python3 scripts/patch_xcodegen_watch_embed.py" not in project_text:
+        errors.append("project.yml must correct XcodeGen's single-target Watch app embedding destination")
+    watch_embed_patch = ROOT / "scripts" / "patch_xcodegen_watch_embed.py"
+    if not watch_embed_patch.is_file():
+        errors.append("single-target Watch app embedding patch script is missing")
+    watch_info = ROOT / "DensosoWatchApp" / "Info.plist"
+    if watch_info.is_file():
+        watch_info_text = watch_info.read_text(encoding="utf-8")
+        if "<key>WKApplication</key>" not in watch_info_text:
+            errors.append("single-target Watch app Info.plist must declare WKApplication")
+        if "<key>WKWatchKitApp</key>" in watch_info_text:
+            errors.append("single-target Watch app Info.plist must not retain WKWatchKitApp")
+    watch_scheme = project_text.partition("  DensosoWatch:")[2].partition("packages:")[0]
+    if "DensosoWatchApp: all" not in watch_scheme or "DensosoWatchExtension" in watch_scheme:
+        errors.append("DensosoWatch scheme must build only the single-target Watch app")
     for expected in (
         "DensosoUITests:",
         'deploymentTarget: "18.0"',
@@ -85,7 +112,7 @@ def main() -> int:
         ROOT / "Densoso" / "Views",
         ROOT / "DensosoTests",
         ROOT / "DensosoUITests",
-        ROOT / "DensosoWatchExtension",
+        ROOT / "DensosoWatchApp",
         ROOT / "README.md",
         PROJECT_YML,
         WORKFLOW,
@@ -135,6 +162,7 @@ def main() -> int:
         "Packages/DensosoDomain",
         "validate_phase1_foundation.py",
         "Generate Xcode project",
+        "Build single-target Watch app",
         "Build with iOS 18 deployment target",
         "IPHONEOS_DEPLOYMENT_TARGET=18.0",
         "Record Gate 1 execution status",
