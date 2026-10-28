@@ -318,7 +318,7 @@ final class HealthKitSyncCoordinator {
                 guard let start = windowPlans.values.map(\.targetStart).min() else {
                     throw HealthStoreClientError.invalidAnchor
                 }
-                let generations = try prepareHealthKitSnapshotRebuild(
+                let generations = try await prepareHealthKitSnapshotRebuild(
                     for: snapshotRebuildMetrics,
                     from: start,
                     through: now,
@@ -521,7 +521,7 @@ final class HealthKitSyncCoordinator {
                 authorizationStart: plan.authorizationStart
             )
             if plan.authorizationBoundaryUnavailable || needsRebaseline {
-                let generations = try prepareHealthKitSnapshotRebuild(
+                let generations = try await prepareHealthKitSnapshotRebuild(
                     for: [metric],
                     from: plan.targetStart,
                     through: now,
@@ -561,7 +561,7 @@ final class HealthKitSyncCoordinator {
                     scanGeneration = generation
                 }
             }
-            let generations = try prepareHealthKitSnapshotRebuild(
+            let generations = try await prepareHealthKitSnapshotRebuild(
                 for: [metric],
                 from: plan.targetStart,
                 through: now,
@@ -609,7 +609,7 @@ final class HealthKitSyncCoordinator {
                 authorizationStart: plan.authorizationStart
             )
             if plan.authorizationBoundaryUnavailable || needsRebaseline {
-                let generations = try prepareHealthKitSnapshotRebuild(
+                let generations = try await prepareHealthKitSnapshotRebuild(
                     for: [metric],
                     from: plan.targetStart,
                     through: now,

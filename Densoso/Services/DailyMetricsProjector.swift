@@ -332,7 +332,7 @@ enum DailyMetricsProjector {
     ) async throws -> Bool {
         try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
             try Task.checkCancellation()
-            try await withProjectionErrorMapping {
+            return try await withProjectionErrorMapping {
                 let calendar = Calendar.current
                 let day = calendar.startOfDay(for: date)
                 guard let existingSnapshot = try existingMetric(on: day, in: modelContext).map({ metric in
