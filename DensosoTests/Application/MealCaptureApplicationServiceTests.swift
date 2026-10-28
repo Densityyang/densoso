@@ -802,8 +802,8 @@ private struct MealCaptureHarness {
 
     private static let seedJSON = """
     [
-      {"id":2,"name":"米饭(熟)","alias":"熟米饭|白米饭","preparation":"cooked","category":"谷类及制品","edible":100,"energyKcal":116,"proteinG":2.6,"fatG":0.3,"carbohydrateG":25.9,"fiberG":0.3,"sourceID":"fixture-food-composition","sourceRecordID":"rice-cooked","sourceVersion":"fixture-v1","licenseStatus":"verified","sourceRecordJSON":"{\"massBasis\":\"cooked\"}"},
-      {"id":31,"name":"大米(生)","alias":"生大米|大米","preparation":"raw","category":"谷类及制品","edible":100,"energyKcal":346,"proteinG":7.4,"fatG":0.8,"carbohydrateG":77.9,"fiberG":0.7,"sourceID":"fixture-food-composition","sourceRecordID":"rice-raw","sourceVersion":"fixture-v1","licenseStatus":"verified","sourceRecordJSON":"{\"massBasis\":\"edibleRaw\"}"}
+      {"id":2,"name":"米饭(熟)","alias":"熟米饭|白米饭","preparation":"cooked","category":"谷类及制品","edible":100,"energyKcal":116,"proteinG":2.6,"fatG":0.3,"carbohydrateG":25.9,"fiberG":0.3,"sourceID":"fixture-food-composition","sourceRecordID":"rice-cooked","sourceVersion":"fixture-v1","licenseStatus":"verified","sourceRecordJSON":"{\\\"massBasis\\\":\\\"cooked\\\"}"},
+      {"id":31,"name":"大米(生)","alias":"生大米|大米","preparation":"raw","category":"谷类及制品","edible":100,"energyKcal":346,"proteinG":7.4,"fatG":0.8,"carbohydrateG":77.9,"fiberG":0.7,"sourceID":"fixture-food-composition","sourceRecordID":"rice-raw","sourceVersion":"fixture-v1","licenseStatus":"verified","sourceRecordJSON":"{\\\"massBasis\\\":\\\"edibleRaw\\\"}"}
     ]
     """
 

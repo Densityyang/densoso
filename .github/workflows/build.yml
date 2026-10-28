@@ -2272,6 +2272,8 @@ jobs:
             -only-testing:DensosoTests/AgentRequestResumeTests/testConversationHistoryConsentDefaultsToCurrentTurnOnlyInProviderPayload \
             -only-testing:DensosoTests/AgentRequestResumeTests/testConfirmedConversationHistoryConsentIncludesCurrentRevisionHistoryInProviderPayload \
             -only-testing:DensosoTests/HealthIntelligenceServiceTests/testReadModelReportsPerMetricCoverageAcrossTheFortyTwoDayHealthWindow \
+            -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHealthBriefCacheGenerationFenceRejectsPrePurgeWrites \
+            -only-testing:DensosoTests/HealthIntelligenceServiceTests/testInvalidatedBriefCacheDoesNotReloadPrePurgeBriefs \
             -only-testing:DensosoTests/ExportServiceTests/testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied \
             -only-testing:DensosoTests/ExportServiceTests/testRestoreInvalidatesCloudHealthAuthorizationAlreadyPresentInTargetStore \
             -only-testing:DensosoTests/GetHealthHistoryToolTests/testHistoryResponsePreservesUnknownAndPartialCoverageWithoutAbsenceOrZero \

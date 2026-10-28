@@ -20,8 +20,9 @@ final class ConfirmedMealCalorieCorrectionTests: XCTestCase {
         XCTAssertEqual(correction.evidence.sourceID, ConfirmedMealCalorieCorrection.evidenceSourceID)
         XCTAssertEqual(correction.evidence.sourceVersion, ConfirmedMealCalorieCorrection.evidenceSourceVersion)
         XCTAssertTrue(correction.evidence.summary.contains("1970-01-01T00:00:00Z"))
-        XCTAssertTrue(correction.evidence.summary.contains("热量范围 300–600（likely 400） kcal"))
-        XCTAssertTrue(correction.evidence.summary.contains("热量范围 375–750（likely 500） kcal"))
+        XCTAssertTrue(correction.evidence.summary.contains(
+            "热量范围 300–600（likely 400） kcal → 375–750（likely 500） kcal"
+        ))
         XCTAssertTrue(correction.evidence.summary.contains("蛋白质、脂肪和碳水估算未调整"))
         XCTAssertTrue(correction.evidence.summary.contains("菜品和食材份量保持原记录"))
     }

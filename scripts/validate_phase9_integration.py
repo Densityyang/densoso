@@ -49,8 +49,8 @@ def main() -> int:
     export = require_text(
         "Densoso/Services/ExportService.swift",
         (
-            "private static let formatVersion = 6",
-            "private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5, 6]",
+            "private static let formatVersion = 7",
+            "private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5, 6, 7]",
             "weightRecords: [WeightRecordExport]?",
             "goalProfiles: [GoalProfileExport]?",
             "dailyHealthSnapshots: [DailyHealthSnapshotExport]?",
