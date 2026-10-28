@@ -1,13 +1,49 @@
 # AI-Native Health Loop Repair Report
 
-Date: 2026-10-27
+Date: 2026-10-28
 Repository: `Densityyang/densoso`  
 Worktree: `E:\howtodo\densoso-ai-native-loop`  
 Branch: `codex/ai-native-health-loop`  
 Original review baseline (historical): `33e5ea7908223a3316ea34f4a857d0f5537e2863`
 Associated pull request: none
 
-## Current continuation — 2026-10-27
+## Current continuation — 2026-10-28
+
+**Implementation code SHA:** `c890c3f2978a319634f9572f217d504ee3f2ed79` on
+`codex/ai-native-health-loop`. This implementation batch is pushed to `origin`.
+There is still no PR associated with this branch, and PR #14 remains unrelated.
+
+**GitHub verification:** full Build run
+[#40616857687](https://github.com/Densityyang/densoso/actions/runs/40616857687)
+targets that exact code SHA through the isolated ref `codex/ci-verify-c890c3f`.
+At this report update, Gate 16 contract validation has passed and Gates 1, 18,
+and 19 are running. The full run is not yet complete, so no overall PASS is
+claimed. No local tests or builds were run.
+
+**Fixes prompted by the previous full run:** run
+[#40484158096](https://github.com/Densityyang/densoso/actions/runs/40484158096)
+reported eight failed assertions in one HealthKit observer test because its
+fixture used an October 2023 clock while the observer used the runner's current
+date. The fixture now derives its date from `Date()`. Gates 3, 5, 6, 7, 9, and
+11–14 also had static validators that no longer matched the current tool count,
+UI copy, HealthKit observer/authorization-boundary flow, cache-generation
+fence, backup privacy boundary, prompt/schema versions, and Watch inbox paging
+contract. Those validators now check the current implementation and tests.
+Gate 6 continues to cover historical anchored re-queries as documented. Gate
+11–14 focused test commands had succeeded in the previous run; those jobs failed
+in validator/evidence export. Gate 16's fail-closed aggregate behavior remains
+unchanged.
+
+**Remaining acceptance boundary:** the current batch does not change app
+runtime code. The signed iPhone/Watch Gate 15 acceptance and owner Gate 16
+release acceptance remain for the owner; signing and launch are reserved for
+the owner. The real-meal field benchmark and live DeepSeek endpoint behavior
+remain unmeasured without labeled meal data and live credentials. The pinned
+recipe catalog still contains 3,073 unmapped ingredient rows out of 3,262,
+3,259 unknown raw/cooked mass bases, and 215 unknown cooking methods; these
+remain unknown rather than being fabricated.
+
+## Historical continuation — 2026-10-27 (superseded)
 
 **Current code SHA:** `c04116d54cf89c8128f8f701715cc435b31b20aa` on
 `codex/ai-native-health-loop`. The batch is pushed to the main coding branch.
