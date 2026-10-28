@@ -152,7 +152,7 @@ jobs:
         if: ${{ always() && steps.generate_project.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |
           set -o pipefail
-          perl -e 'alarm shift; exec @ARGV' 720 xcodebuild -project Densoso.xcodeproj \
+          perl -e 'alarm shift; exec @ARGV' 1800 xcodebuild -project Densoso.xcodeproj \
             -scheme Densoso \
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath "$DERIVED_DATA_PATH" \
