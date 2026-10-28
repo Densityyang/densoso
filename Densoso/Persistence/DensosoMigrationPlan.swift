@@ -59,15 +59,18 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                         meal.energyLowKcal = energy
                         meal.energyLikelyKcal = energy
                         meal.energyHighKcal = energy
-                        meal.proteinLowG = meal.proteinG
-                        meal.proteinLikelyG = meal.proteinG
-                        meal.proteinHighG = meal.proteinG
-                        meal.fatLowG = meal.fatG
-                        meal.fatLikelyG = meal.fatG
-                        meal.fatHighG = meal.fatG
-                        meal.carbsLowG = meal.carbsG
-                        meal.carbsLikelyG = meal.carbsG
-                        meal.carbsHighG = meal.carbsG
+                        let protein = Self.legacyMacroPoint(meal.proteinG)
+                        meal.proteinLowG = protein
+                        meal.proteinLikelyG = protein
+                        meal.proteinHighG = protein
+                        let fat = Self.legacyMacroPoint(meal.fatG)
+                        meal.fatLowG = fat
+                        meal.fatLikelyG = fat
+                        meal.fatHighG = fat
+                        let carbs = Self.legacyMacroPoint(meal.carbsG)
+                        meal.carbsLowG = carbs
+                        meal.carbsLikelyG = carbs
+                        meal.carbsHighG = carbs
                         meal.sourceActionKey = "legacy-meal-\(meal.id.uuidString.lowercased())"
                         meal.evidenceData = try encoder.encode([
                             EvidenceSnapshot(
@@ -85,15 +88,18 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                             dish.energyLowKcal = dishEnergy
                             dish.energyLikelyKcal = dishEnergy
                             dish.energyHighKcal = dishEnergy
-                            dish.proteinLowG = dish.estimatedProteinG
-                            dish.proteinLikelyG = dish.estimatedProteinG
-                            dish.proteinHighG = dish.estimatedProteinG
-                            dish.fatLowG = dish.estimatedFatG
-                            dish.fatLikelyG = dish.estimatedFatG
-                            dish.fatHighG = dish.estimatedFatG
-                            dish.carbsLowG = dish.estimatedCarbsG
-                            dish.carbsLikelyG = dish.estimatedCarbsG
-                            dish.carbsHighG = dish.estimatedCarbsG
+                            let protein = Self.legacyMacroPoint(dish.estimatedProteinG)
+                            dish.proteinLowG = protein
+                            dish.proteinLikelyG = protein
+                            dish.proteinHighG = protein
+                            let fat = Self.legacyMacroPoint(dish.estimatedFatG)
+                            dish.fatLowG = fat
+                            dish.fatLikelyG = fat
+                            dish.fatHighG = fat
+                            let carbs = Self.legacyMacroPoint(dish.estimatedCarbsG)
+                            dish.carbsLowG = carbs
+                            dish.carbsLikelyG = carbs
+                            dish.carbsHighG = carbs
                             dish.evidenceData = meal.evidenceData
                             dish.algorithmVersion = meal.algorithmVersion
                         }
@@ -406,6 +412,13 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
             if endDate > windowStart && startDate < windowEnd { affected.insert(wakeDay) }
         }
         return affected
+    }
+
+    /// V2 used zero as the default for missing macros, so only positive finite legacy
+    /// values can safely become point estimates. Keep zero and invalid values unavailable.
+    private static func legacyMacroPoint(_ value: Double) -> Double? {
+        guard value.isFinite, value > 0 else { return nil }
+        return value
     }
 }
 

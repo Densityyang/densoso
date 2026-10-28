@@ -102,6 +102,13 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(meal.dishes.count, 1)
         XCTAssertEqual(dish.mealRecord?.id, meal.id)
         XCTAssertEqual(dish.estimatedCaloriesKcal, seed.mealCalories)
+        // V2's default zero values cannot distinguish missing macros from measured zero.
+        XCTAssertEqual([meal.proteinLowG, meal.proteinLikelyG, meal.proteinHighG], [nil, nil, nil])
+        XCTAssertEqual([meal.fatLowG, meal.fatLikelyG, meal.fatHighG], [nil, nil, nil])
+        XCTAssertEqual([meal.carbsLowG, meal.carbsLikelyG, meal.carbsHighG], [nil, nil, nil])
+        XCTAssertEqual([dish.proteinLowG, dish.proteinLikelyG, dish.proteinHighG], [nil, nil, nil])
+        XCTAssertEqual([dish.fatLowG, dish.fatLikelyG, dish.fatHighG], [nil, nil, nil])
+        XCTAssertEqual([dish.carbsLowG, dish.carbsLikelyG, dish.carbsHighG], [nil, nil, nil])
         XCTAssertEqual(workout.id, seed.workoutID)
         XCTAssertEqual(workout.estimatedCaloriesBurned, seed.workoutCalories)
         XCTAssertEqual(workout.workoutOrigin, "externalHealthKit")
@@ -129,6 +136,30 @@ final class DensosoMigrationTests: XCTestCase {
                 "cursorBytes": String(seed.cursorBytes?.count ?? 0),
             ]
         )
+    }
+
+    func testV2MigrationPreservesPositiveLegacyMacroPointEstimates() throws {
+        let seed = try Gate02FixtureLoader.load("v2-seed", as: Gate02Seed.self)
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        try createV2Store(
+            seed: seed,
+            at: location.storeURL,
+            mealNutrients: (proteinG: 24.5, fatG: 11.25, carbsG: 33.75),
+            dishNutrients: (proteinG: 8.5, fatG: 2.75, carbsG: 11.25)
+        )
+
+        let container = try openCurrentStore(at: location.storeURL)
+        let context = ModelContext(container)
+        let meal = try XCTUnwrap(context.fetch(FetchDescriptor<MealRecord>()).first)
+        let dish = try XCTUnwrap(context.fetch(FetchDescriptor<DishEntry>()).first)
+
+        XCTAssertEqual([meal.proteinLowG, meal.proteinLikelyG, meal.proteinHighG], [24.5, 24.5, 24.5])
+        XCTAssertEqual([meal.fatLowG, meal.fatLikelyG, meal.fatHighG], [11.25, 11.25, 11.25])
+        XCTAssertEqual([meal.carbsLowG, meal.carbsLikelyG, meal.carbsHighG], [33.75, 33.75, 33.75])
+        XCTAssertEqual([dish.proteinLowG, dish.proteinLikelyG, dish.proteinHighG], [8.5, 8.5, 8.5])
+        XCTAssertEqual([dish.fatLowG, dish.fatLikelyG, dish.fatHighG], [2.75, 2.75, 2.75])
+        XCTAssertEqual([dish.carbsLowG, dish.carbsLikelyG, dish.carbsHighG], [11.25, 11.25, 11.25])
     }
 
     func testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords() throws {
@@ -777,17 +808,33 @@ final class DensosoMigrationTests: XCTestCase {
         container = nil
     }
 
-    private func createV2Store(seed: Gate02Seed, at url: URL) throws {
+    private func createV2Store(
+        seed: Gate02Seed,
+        at url: URL,
+        mealNutrients: (proteinG: Double, fatG: Double, carbsG: Double) = (0, 0, 0),
+        dishNutrients: (proteinG: Double, fatG: Double, carbsG: Double) = (0, 0, 0)
+    ) throws {
         var container: ModelContainer? = try makeContainer(version: DensosoSchemaV2.self, url: url)
         var context: ModelContext? = ModelContext(container!)
         let date = Date(timeIntervalSince1970: seed.recordedAt)
         let meal = DensosoSchemaV2.MealRecord(
             date: date,
             totalCaloriesKcal: seed.mealCalories,
+            proteinG: mealNutrients.proteinG,
+            fatG: mealNutrients.fatG,
+            carbsG: mealNutrients.carbsG,
             algorithmVersion: seed.mealAlgorithmVersion
         )
         meal.id = seed.mealID
-        meal.dishes = [DensosoSchemaV2.DishEntry(dishName: "fixture dish", estimatedCaloriesKcal: seed.mealCalories)]
+        meal.dishes = [
+            DensosoSchemaV2.DishEntry(
+                dishName: "fixture dish",
+                estimatedCaloriesKcal: seed.mealCalories,
+                estimatedProteinG: dishNutrients.proteinG,
+                estimatedFatG: dishNutrients.fatG,
+                estimatedCarbsG: dishNutrients.carbsG
+            ),
+        ]
         let workout = DensosoSchemaV2.WorkoutRecord(
             date: date,
             type: "running",
