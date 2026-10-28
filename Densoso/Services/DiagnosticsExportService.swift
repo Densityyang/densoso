@@ -402,9 +402,10 @@ final class DiagnosticsExportService {
             goals: nil,
             recommendations: []
         )
-        let metrics = Self.diagnosticsCoverageMetricKeys.compactMap { metric in
-            guard let coverage = summary.analysisWindowCoverage[metric] else { return nil }
-            return DiagnosticsMetricCoverage(
+        var metrics: [DiagnosticsMetricCoverage] = []
+        for metric in Self.diagnosticsCoverageMetricKeys {
+            guard let coverage = summary.analysisWindowCoverage[metric] else { continue }
+            metrics.append(DiagnosticsMetricCoverage(
                 metric: metric,
                 expectedCalendarDays: coverage.expectedCalendarDays,
                 coverageStatus: coverage.validCalendarDays != nil && coverage.missingCalendarDays != nil
@@ -414,7 +415,7 @@ final class DiagnosticsExportService {
                 missingCalendarDays: coverage.missingCalendarDays,
                 authorizationLimited: coverage.authorizationLimited,
                 dataAvailabilityLimited: coverage.dataAvailabilityLimited
-            )
+            ))
         }
         return DiagnosticsHealthCoverage(
             analysisWindowDays: HealthDataWindowContract.analysisLookbackDays,
