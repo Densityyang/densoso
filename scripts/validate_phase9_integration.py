@@ -102,7 +102,7 @@ def main() -> int:
             "summary.userPreferences",
             "未确认的偏好",
             "not-part-of-backup",
-            "XCTAssertEqual(exported.formatVersion, 6)",
+            "XCTAssertEqual(exported.formatVersion, 7)",
             "energyIntakeKcal: try EstimateRange(low: 450, likely: 500, high: 600)",
             "testBackupExportPagesMealHistoryAcross64RowBoundary",
             "testRestorePagesInterruptedRequestHistoryAcross64RowBoundary",
@@ -616,7 +616,7 @@ def main() -> int:
         "docs/gates/gate-09-integration.md",
         (
             "Status:",
-            "format version 5",
+            "format version 7",
             "Gates 1–8",
             "physical iPhone render",
             "blocked-by-signing",
@@ -660,8 +660,8 @@ def main() -> int:
 
     report = {
         "status": "pass",
-        "scope": "four-tab-integration-v5-backup-and-privacy-focused-diagnostics-export",
-        "backupCompatibility": [2, 3, 4, 5],
+        "scope": "four-tab-integration-v7-backup-and-privacy-focused-diagnostics-export",
+        "backupCompatibility": [2, 3, 4, 5, 6, 7],
         "userReportedCheckInsExported": True,
         "userReportedPreferencesExported": True,
         "dailyLoopTodaySurfaceIntegrated": True,

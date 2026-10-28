@@ -40,9 +40,10 @@ acceptance.
   filter changes clear the action; deletes do not show a misleading newer-row
   action. Outbox/cursor saves refresh sync status only. Counts use database
   counts instead of materializing the full HealthKit outbox.
-- Backups use format version 5 for profile history, weights, goals, health
-  snapshots, schedules, cached briefs and weekly reports while preserving
-  V2/V3/V4 import.
+- Backups use format version 7 for profile history, weights, goals, health
+  snapshots, schedules, cached briefs, weekly reports, check-ins, preferences
+  and meal priors. Restore accepts formats V2 through V7; legacy V2, V3 and V5
+  fixtures and the current V7 round-trip are covered by the export tests.
   Export reads every collection in ordered 64-row SwiftData pages, retaining
   the complete backup contents and existing serialization order.
   Restore likewise pages request/message history in batches while retaining
@@ -75,8 +76,9 @@ acceptance.
    in-app confirmation; an open workout editor defers consuming another plan.
 3. HealthKit changes flow into local daily summaries and Trends; Watch messages
    route to the same phone-side confirmation draft.
-4. Backup V2/V3/V4 compatibility and V5 round-trip are tested, including that
-   secrets, consent, cursors and active outbox state are excluded/reset; a
+4. Legacy V2/V3/V5 backup fixtures and the current V7 round-trip are tested,
+   including exclusion/reset of secrets, consent, cursors and active outbox
+   state; a
    65-meal export fixture and 65-request restore fixture cross their page
    boundaries without losing eligible records.
    Records history also retains 65 selected-day records of each kind across its
