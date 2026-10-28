@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 public enum ToolEffect: String, Codable, Sendable {
@@ -122,11 +121,6 @@ public enum ActionPayload: Codable, Equatable, Sendable {
         return try encoder.encode(
             try CanonicalActionEnvelope(schemaVersion: schemaVersion, payload: self)
         )
-    }
-
-    public func canonicalPayloadHash(schemaVersion: Int = currentSchemaVersion) throws -> String {
-        let data = try canonicalData(schemaVersion: schemaVersion)
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
 
