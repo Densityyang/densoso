@@ -64,12 +64,24 @@ def method_leaf(value: str) -> str:
 
 def required_matches(required: str, case: TestCase) -> bool:
     wanted = clean_identifier(required)
+    wanted_candidates = [wanted]
+    for test_target in ("DensosoTests", "DensosoUITests"):
+        target_prefix = f"{test_target}/"
+        if wanted.startswith(target_prefix):
+            # xcresult's Test Case node identifiers omit the Xcode test target,
+            # while xcodebuild selectors commonly include it.
+            wanted_candidates.append(wanted.removeprefix(target_prefix))
+
     candidates = [clean_identifier(case.name)]
     if case.identifier:
         candidates.append(clean_identifier(case.identifier))
 
-    if "/" in wanted:
-        return any(candidate == wanted or candidate.endswith("/" + wanted) for candidate in candidates)
+    if any("/" in candidate for candidate in wanted_candidates):
+        return any(
+            candidate == expected or candidate.endswith("/" + expected)
+            for expected in wanted_candidates
+            for candidate in candidates
+        )
 
     return any(
         candidate == wanted or method_leaf(candidate) == wanted

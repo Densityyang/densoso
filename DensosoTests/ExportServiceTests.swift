@@ -133,7 +133,7 @@ final class ExportServiceTests: XCTestCase {
     }
 
     func testRestorePagesInterruptedRequestHistoryAcross64RowBoundary() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV10.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV12.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

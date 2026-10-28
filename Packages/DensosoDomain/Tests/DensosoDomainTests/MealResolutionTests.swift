@@ -49,6 +49,38 @@ final class MealResolutionTests: XCTestCase {
         XCTAssertEqual(resolution.candidates.count, 2)
     }
 
+    func testMealEstimatorCarriesCookingMethodEvidenceToDish() throws {
+        let resolution = selected(fixtureCatalog()[0])
+        let portion = try PortionEstimator().estimate(
+            evidence: [.exactGrams(grams: 100)],
+            food: resolution.autoPreselect
+        )
+        let cookingEvidence = EvidenceSnapshot(
+            grade: .estimated,
+            sourceID: "meal-model-cooking-method",
+            sourceVersion: "log-meal-tool-v1",
+            summary: "模型识别的烹饪方法：炒；未由用户或菜谱来源验证"
+        )
+
+        let dish = try MealEstimator().estimateDish(
+            MealDishEstimationInput(
+                name: "炒饭",
+                cookingMethod: "stirFry",
+                ingredients: [
+                    MealIngredientEstimationInput(
+                        label: "米饭",
+                        resolution: resolution,
+                        portion: portion,
+                        massBasis: .cooked
+                    )
+                ],
+                cookingMethodEvidence: cookingEvidence
+            )
+        )
+
+        XCTAssertTrue(dish.evidence.contains(cookingEvidence))
+    }
+
     func testPortionRulesAndSinglePhotoNeverMeasured() throws {
         let estimator = PortionEstimator()
         let approximate = try estimator.estimate(evidence: [.approximateGrams(grams: 200)], food: nil)

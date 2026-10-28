@@ -7,7 +7,17 @@ Branch: `codex/ai-native-health-loop`
 Original review baseline (historical): `33e5ea7908223a3316ea34f4a857d0f5537e2863`
 Associated pull request: none
 
-## Current continuation — 2026-10-28
+## Current continuation — 2026-10-28 (follow-up coding batch)
+
+**Base branch state:** `codex/ai-native-health-loop` is at `8301fcc0d76dba1bdb6350506a993b878eb878ce`, matching `origin`; there is no associated PR. The follow-up implementation batch is in the main worktree and is awaiting its coherent commit and same-SHA GitHub verification.
+
+**Latest full Build:** [#40639355581](https://github.com/Densityyang/densoso/actions/runs/40639355581) is still running on the base SHA `8301fcc` through `codex/ci-verify-8301fcc`; it does not include the current worktree changes. Gate 1 failed `ExportServiceTests.testRestorePagesInterruptedRequestHistoryAcross64RowBoundary` because the pagination test used V10 schema while its export path fetches the V12 `PersonalMealDishPriorRecord`. Gate 2 passed. Gate 3's static contract and cumulative domain steps passed, and its Agent Provider XCTest was still running at this report revision. The Gate 16 static aggregate-contract job and Gates 17–19 passed. Gates 4–15 have not reported results, and the final release aggregate has not run. No full-CI PASS is claimed.
+
+**Coding in this batch:** the pagination fixture now uses V12. The xcresult manifest matcher handles xcodebuild selectors whose target prefix is absent from xcresult case identifiers. Gate 19's sanitized JSON exporter validates the `.json` file and parses an object instead of requiring Xcode's optional UTI metadata; its source anchors now match current APIs and the health-window contract. A shared domain `HealthDataWindowContract` supplies the 42-day analysis/backfill and 7-day subjective windows to both HealthKit policy and domain analysis. Food import now materializes manifest license/redistribution evidence in the database, sorts output deterministically, verifies SQLite integrity, and atomically replaces output only after a complete successful build; importer regressions cover stale-table replacement and failure preservation. Meal cooking-method evidence now distinguishes recipe-prior evidence from model estimates and records provider/model provenance; the local Agent request correlation is explicitly not represented as a remote provider request ID.
+
+**Verification boundary:** `git diff --check` passed. No local tests, validators, or builds were run. The above coding changes still require the full GitHub Actions workflow on their resulting commit. Gate 15 paired-device acceptance and live meal field calibration remain unmeasured; signing and launch remain with the owner.
+
+## Historical continuation — 2026-10-28 (superseded)
 
 **Implementation code SHA:** `6faaf36b567a4a8f6bb195db11281d8845d24a6b` on
 `codex/ai-native-health-loop`, pushed to `origin`. There is no PR associated

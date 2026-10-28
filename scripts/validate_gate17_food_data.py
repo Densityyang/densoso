@@ -364,7 +364,9 @@ def validate_imported_database(
             )
         actual_rows = connection.execute(
             "SELECT id, name, alias, sourceID, sourceRecordID, sourceVersion, "
-            "licenseStatus, sourceRecordJSON, energyKcal, energyRaw, energyUnit "
+            "licenseStatus, sourceRecordJSON, energyKcal, energyRaw, energyUnit, "
+            "sourceURL, licenseSPDX, licenseURL, redistributionAllowed, "
+            "sourceVerificationStatus "
             "FROM food_items ORDER BY id"
         ).fetchall()
 
@@ -384,9 +386,31 @@ def validate_imported_database(
         energy_kcal,
         energy_raw,
         energy_unit,
+        source_url,
+        license_spdx,
+        license_url,
+        redistribution_allowed,
+        source_verification_status,
     ) in actual_rows:
         source_record = json.loads(source_json)
         expected = expected_by_id[row_id]
+        source = registry[source_id]
+        expected_manifest_evidence = {
+            field: source.get(field)
+            for field in (
+                "sourceURL",
+                "sourceVersion",
+                "retrievedAt",
+                "licenseSPDX",
+                "licenseURL",
+                "dataRole",
+                "dataType",
+                "redistributionAllowed",
+                "verificationStatus",
+            )
+        }
+        expected_source_record = dict(expected)
+        expected_source_record["sourceManifestEvidence"] = expected_manifest_evidence
         raw_energy = expected.get("energyKcal", expected.get("energy"))
         expected_unit = expected.get("energyUnit", "kcal/100g")
         normalized_energy = float(raw_energy)
@@ -399,7 +423,12 @@ def validate_imported_database(
             or record_id != expected.get("sourceRecordID")
             or version != expected["sourceVersion"]
             or license_status != expected.get("licenseStatus", "unverified")
-            or source_record != expected
+            or source_record != expected_source_record
+            or source_url != source.get("sourceURL")
+            or license_spdx != source.get("licenseSPDX")
+            or license_url != source.get("licenseURL")
+            or redistribution_allowed != int(source.get("redistributionAllowed") is True)
+            or source_verification_status != source.get("verificationStatus")
             or energy_kcal != round(normalized_energy)
             or energy_raw != str(raw_energy)
             or energy_unit != expected_unit
@@ -407,7 +436,6 @@ def validate_imported_database(
             raise GateFailure(
                 f"imported food row {row_id} lost or changed its source record or energy value"
             )
-        source = registry[source_id]
         if production and (
             license_status != "verified"
             or source.get("verificationStatus") != "verified"

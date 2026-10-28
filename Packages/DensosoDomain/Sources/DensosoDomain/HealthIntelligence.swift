@@ -1290,8 +1290,12 @@ public struct HealthIntelligenceEngine: Sendable {
             let day = calendar.startOfDay(for: $0.dayStart)
             return day >= sevenDayStart
         }
-        let analysisWindowDays = 42
-        let analysisStart = calendar.date(byAdding: .day, value: -(analysisWindowDays - 1), to: end) ?? end
+        let analysisWindowDays = HealthDataWindowContract.analysisLookbackDays
+        let analysisStart = HealthDataWindowContract.startOfWindow(
+            through: end,
+            days: analysisWindowDays,
+            calendar: calendar
+        ) ?? end
         let analysisDays = days.filter {
             let day = calendar.startOfDay(for: $0.dayStart)
             return day >= analysisStart && day <= end

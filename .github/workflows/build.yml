@@ -2343,10 +2343,9 @@ jobs:
                       raise SystemExit("target XCTest attachment entry has an unexpected schema")
                   suggested_name = attachment.get("suggestedHumanReadableName", "")
                   exported_name = attachment.get("exportedFileName", "")
-                  uniform_type = attachment.get("uniformTypeIdentifier", "")
                   if not all(
                       isinstance(value, str)
-                      for value in (suggested_name, exported_name, uniform_type)
+                      for value in (suggested_name, exported_name)
                   ):
                       raise SystemExit("target XCTest attachment metadata has an unexpected schema")
                   if Path(suggested_name).name == suggested_name and suggested_name.endswith(".json"):
@@ -2355,25 +2354,31 @@ jobs:
                   else:
                       suggested_stem = ""
                   if suggested_stem == expected_attachment_stem:
-                      candidates.append((suggested_name, exported_name, uniform_type))
+                      candidates.append((suggested_name, exported_name))
           if len(candidates) != 1:
               raise SystemExit(
                   f"expected one Gate 19 sanitized request attachment, found {len(candidates)}"
               )
-          _, exported_name, uniform_type = candidates[0]
+          _, exported_name = candidates[0]
           if (
               not isinstance(exported_name, str)
               or not exported_name
               or "/" in exported_name
               or "\\" in exported_name
               or Path(exported_name).suffix.lower() != ".json"
-              or uniform_type != "public.json"
           ):
-              raise SystemExit("the Gate 19 sanitized request attachment is not a JSON file")
+              raise SystemExit("the Gate 19 sanitized request attachment is not named as a JSON file")
           attachment_path = export_root / exported_name
           if not attachment_path.is_file():
               raise SystemExit("the Gate 19 sanitized request attachment file is missing")
-          destination.write_bytes(attachment_path.read_bytes())
+          encoded = attachment_path.read_bytes()
+          try:
+              document = json.loads(encoded)
+          except (UnicodeDecodeError, json.JSONDecodeError) as error:
+              raise SystemExit("the Gate 19 sanitized request attachment is not valid JSON") from error
+          if not isinstance(document, dict):
+              raise SystemExit("the Gate 19 sanitized request attachment must contain a JSON object")
+          destination.write_bytes(encoded)
           print(f"Exported sanitized Gate 19 request evidence to {destination}.")
           PY
 

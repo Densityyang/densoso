@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sqlite3
 import subprocess
@@ -123,6 +124,87 @@ def _verify_incomplete_verified_manifest_is_rejected(temp: Path) -> None:
         raise SystemExit("importer accepted a verified source with incomplete license evidence")
 
 
+def _verify_atomic_rebuild_replaces_stale_database(temp: Path, seed_item: dict[str, Any]) -> None:
+    item = dict(seed_item)
+    item["id"] = 9010
+    input_path = temp / "atomic-rebuild-input.json"
+    output_path = temp / "atomic-rebuild.db"
+    input_path.write_text(json.dumps([item], ensure_ascii=False), encoding="utf-8")
+    with sqlite3.connect(output_path) as connection:
+        connection.execute("CREATE TABLE stale_unrelated_artifact (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO stale_unrelated_artifact VALUES ('old schema')")
+
+    result = _import(input_path, output_path)
+    if result.returncode != 0:
+        raise SystemExit(
+            f"atomic rebuild failed to replace an existing database: {result.stderr.strip()}"
+        )
+    with sqlite3.connect(output_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        imported = connection.execute(
+            "SELECT COUNT(*) FROM food_items WHERE id = 9010"
+        ).fetchone()[0]
+    if "stale_unrelated_artifact" in tables or imported != 1:
+        raise SystemExit("atomic rebuild retained stale SQLite objects or omitted the new row")
+
+
+def _verify_failed_atomic_rebuild_preserves_previous_bytes(
+    temp: Path, seed_item: dict[str, Any]
+) -> None:
+    item = dict(seed_item)
+    item["id"] = 9011
+    input_path = temp / "atomic-failure-input.json"
+    output_path = temp / "atomic-failure.db"
+    input_path.write_text(json.dumps([item], ensure_ascii=False), encoding="utf-8")
+    with sqlite3.connect(output_path) as connection:
+        connection.execute("CREATE TABLE previous_valid_artifact (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO previous_valid_artifact VALUES ('keep me')")
+    original_bytes = output_path.read_bytes()
+
+    spec = importlib.util.spec_from_file_location(
+        "densoso_food_import_atomic_fixture", IMPORTER
+    )
+    if spec is None or spec.loader is None:
+        raise SystemExit("unable to load the food importer for atomic failure injection")
+    importer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(importer)
+
+    def fail_after_temporary_schema(
+        _connection: sqlite3.Connection, _items: list[dict[str, Any]]
+    ) -> None:
+        raise RuntimeError("injected failure after temporary database creation")
+
+    importer.import_data = fail_after_temporary_schema
+    original_argv = sys.argv
+    saw_injected_failure = False
+    try:
+        sys.argv = [
+            str(IMPORTER),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ]
+        try:
+            importer.main()
+        except RuntimeError as error:
+            if str(error) != "injected failure after temporary database creation":
+                raise
+            saw_injected_failure = True
+    finally:
+        sys.argv = original_argv
+
+    if not saw_injected_failure:
+        raise SystemExit("failure-injection fixture did not fail during temporary database import")
+    if output_path.read_bytes() != original_bytes:
+        raise SystemExit("failed atomic rebuild changed the previous output bytes")
+
+
 def main() -> None:
     items = json.loads(SEED_FILE.read_text(encoding="utf-8"))
     if not isinstance(items, list) or not items:
@@ -200,20 +282,53 @@ def main() -> None:
             )
         with sqlite3.connect(production_database) as connection:
             production_rows = connection.execute(
-                "SELECT sourceID, sourceRecordID, sourceVersion, licenseStatus, sourceRecordJSON "
+                "SELECT sourceID, sourceRecordID, sourceVersion, licenseStatus, sourceRecordJSON, "
+                "sourceURL, licenseSPDX, licenseURL, redistributionAllowed, "
+                "sourceVerificationStatus "
                 "FROM food_items ORDER BY id"
             ).fetchall()
         if any(row[3] != "verified" for row in production_rows):
             raise SystemExit("production database contains a row without verified record-level licensing")
         if len({(row[0], row[1]) for row in production_rows}) != len(production_rows):
             raise SystemExit("production database contains duplicate source record IDs")
-        for source_id, source_record_id, source_version, _, source_record_json in production_rows:
+        for (
+            source_id,
+            source_record_id,
+            source_version,
+            _,
+            source_record_json,
+            source_url,
+            license_spdx,
+            license_url,
+            redistribution_allowed,
+            source_verification_status,
+        ) in production_rows:
             source_record = json.loads(source_record_json)
             source = registry[source_id]
+            expected_manifest_evidence = {
+                field: source.get(field)
+                for field in (
+                    "sourceURL",
+                    "sourceVersion",
+                    "retrievedAt",
+                    "licenseSPDX",
+                    "licenseURL",
+                    "dataRole",
+                    "dataType",
+                    "redistributionAllowed",
+                    "verificationStatus",
+                )
+            }
             if (
                 not source_record.get("sourceName")
                 or source_record.get("sourceRecordID") != source_record_id
                 or source_version != source.get("sourceVersion")
+                or source_record.get("sourceManifestEvidence") != expected_manifest_evidence
+                or source_url != source.get("sourceURL")
+                or license_spdx != source.get("licenseSPDX")
+                or license_url != source.get("licenseURL")
+                or redistribution_allowed != 1
+                or source_verification_status != "verified"
                 or source_record.get("massBasis") not in {"edibleRaw", "cooked", "asPurchased"}
                 or source_record.get("nutrientBasis") != "per100g"
             ):
@@ -239,6 +354,8 @@ def main() -> None:
 
         _verify_unicode_alias_collision_is_reported(temporary, items[0])
         _verify_incomplete_verified_manifest_is_rejected(temporary)
+        _verify_atomic_rebuild_replaces_stale_database(temporary, items[0])
+        _verify_failed_atomic_rebuild_preserves_previous_bytes(temporary, items[0])
 
         zero_item = dict(items[0])
         zero_item["id"] = 9001

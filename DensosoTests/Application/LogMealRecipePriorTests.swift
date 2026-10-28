@@ -96,6 +96,82 @@ final class LogMealRecipePriorTests: XCTestCase {
         XCTAssertTrue(harness.session.foodDatabase === harness.foodDatabase)
     }
 
+    func testModelCookingMethodEvidenceRecordsReportedProviderModelAndAgentCorrelation() async throws {
+        let agentRequestID = UUID()
+        let provider = ScriptedTextProvider(
+            model: "fixture-meal-model",
+            scripts: [
+                [
+                    .toolCall(modelMealCall()),
+                    .usage(ProviderUsage(
+                        provider: .deepSeek,
+                        model: "fixture-meal-model",
+                        capability: .text,
+                        inputTokens: 10,
+                        outputTokens: 10,
+                        audioSeconds: 0,
+                        attempt: 1,
+                        requestID: agentRequestID
+                    )),
+                    .completed(.toolUse),
+                ],
+                [.textDelta("已准备待确认餐食草稿。"), .completed(.completed)],
+            ]
+        )
+        let harness = try makeHarness(provider: provider)
+
+        _ = try await harness.session.send(
+            userText: "午餐吃了100克鳝丝。",
+            requestID: agentRequestID
+        )
+
+        let action = try XCTUnwrap(harness.session.pendingActions.first)
+        guard case .meal(let draft) = action.payload else {
+            return XCTFail("Expected a confirmation-required meal draft")
+        }
+        let dish = try XCTUnwrap(draft.dishes.first)
+        let methodEvidence = try XCTUnwrap(dish.evidence.first {
+            $0.sourceID == "meal-model-cooking-method:deepSeek"
+        })
+        XCTAssertEqual(methodEvidence.sourceVersion, "reported:fixture-meal-model")
+        XCTAssertTrue(methodEvidence.summary.contains("provider=DeepSeek"))
+        XCTAssertTrue(methodEvidence.summary.contains("Provider 返回"))
+        XCTAssertTrue(methodEvidence.summary.contains("providerRequestID=unavailable"))
+        XCTAssertTrue(methodEvidence.summary.contains("Agent request correlation=\(agentRequestID.uuidString)"))
+        XCTAssertTrue(methodEvidence.summary.contains("toolVersion=log-meal-tool-v1"))
+        XCTAssertTrue(methodEvidence.summary.contains("estimatorVersion=\(MealEstimator.algorithmVersion)"))
+    }
+
+    func testModelCookingMethodEvidenceUsesConfiguredModelAndAgentCorrelationWhenUsageIsAbsent() async throws {
+        let agentRequestID = UUID()
+        let provider = ScriptedTextProvider(
+            model: "configured-meal-model",
+            scripts: [
+                [.toolCall(modelMealCall()), .completed(.toolUse)],
+                [.textDelta("已准备待确认餐食草稿。"), .completed(.completed)],
+            ]
+        )
+        let harness = try makeHarness(provider: provider)
+
+        _ = try await harness.session.send(
+            userText: "午餐吃了100克鳝丝。",
+            requestID: agentRequestID
+        )
+
+        let action = try XCTUnwrap(harness.session.pendingActions.first)
+        guard case .meal(let draft) = action.payload else {
+            return XCTFail("Expected a confirmation-required meal draft")
+        }
+        let dish = try XCTUnwrap(draft.dishes.first)
+        let methodEvidence = try XCTUnwrap(dish.evidence.first {
+            $0.sourceID == "meal-model-cooking-method:deepSeek"
+        })
+        XCTAssertEqual(methodEvidence.sourceVersion, "configured:configured-meal-model")
+        XCTAssertTrue(methodEvidence.summary.contains("配置模型；本轮未返回 usage"))
+        XCTAssertTrue(methodEvidence.summary.contains("providerRequestID=unavailable"))
+        XCTAssertTrue(methodEvidence.summary.contains("Agent request correlation=\(agentRequestID.uuidString)"))
+    }
+
     func testRecipeBatchQuantityWithoutServingCountRequiresMealPortion() async throws {
         let provider = ScriptedTextProvider(scripts: [])
         let harness = try makeHarness(provider: provider)
@@ -149,6 +225,39 @@ final class LogMealRecipePriorTests: XCTestCase {
                         "ingredients": .array(ingredientNames.map(ingredient)),
                         "lowConfidence": .boolean(false),
                         "recipePriorID": .string(recipeID),
+                    ]),
+                ]),
+                "note": .null,
+            ])
+        )
+    }
+
+    private func modelMealCall() -> ToolCall {
+        ToolCall(
+            id: UUID().uuidString,
+            name: "log_meal",
+            arguments: .object([
+                "mealType": .string("lunch"),
+                "occurredAt": .null,
+                "dishes": .array([
+                    .object([
+                        "dishName": .string("炒鳝丝"),
+                        "cookingMethod": .string("stirFry"),
+                        "ingredients": .array([
+                            .object([
+                                "name": .string("鳝丝"),
+                                "quantityEvidence": .object([
+                                    "kind": .string("exactGrams"),
+                                    "value": .integer(100),
+                                    "unit": .string("g"),
+                                    "gramsPerServing": .null,
+                                ]),
+                                "preparation": .string("raw"),
+                                "massBasis": .string("edibleRaw"),
+                            ]),
+                        ]),
+                        "lowConfidence": .boolean(false),
+                        "recipePriorID": .null,
                     ]),
                 ]),
                 "note": .null,

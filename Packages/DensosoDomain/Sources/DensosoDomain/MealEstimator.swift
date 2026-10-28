@@ -31,6 +31,7 @@ public struct MealDishEstimationInput: Codable, Equatable, Sendable {
     public let recipeOilRetentionGrams: EstimateRange?
     public let recipeOilRetentionEvidence: EvidenceSnapshot?
     public let recipePriorEvidence: [EvidenceSnapshot]
+    public let cookingMethodEvidence: EvidenceSnapshot?
     public let suppressInferredOil: Bool
 
     public init(
@@ -42,6 +43,7 @@ public struct MealDishEstimationInput: Codable, Equatable, Sendable {
         recipeOilRetentionGrams: EstimateRange? = nil,
         recipeOilRetentionEvidence: EvidenceSnapshot? = nil,
         recipePriorEvidence: [EvidenceSnapshot] = [],
+        cookingMethodEvidence: EvidenceSnapshot? = nil,
         suppressInferredOil: Bool = false
     ) {
         self.name = name
@@ -52,6 +54,7 @@ public struct MealDishEstimationInput: Codable, Equatable, Sendable {
         self.recipeOilRetentionGrams = recipeOilRetentionGrams
         self.recipeOilRetentionEvidence = recipeOilRetentionEvidence
         self.recipePriorEvidence = recipePriorEvidence
+        self.cookingMethodEvidence = cookingMethodEvidence
         self.suppressInferredOil = suppressInferredOil
     }
 
@@ -64,6 +67,7 @@ public struct MealDishEstimationInput: Codable, Equatable, Sendable {
         case recipeOilRetentionGrams
         case recipeOilRetentionEvidence
         case recipePriorEvidence
+        case cookingMethodEvidence
         case suppressInferredOil
     }
 
@@ -77,6 +81,7 @@ public struct MealDishEstimationInput: Codable, Equatable, Sendable {
         recipeOilRetentionGrams = try container.decodeIfPresent(EstimateRange.self, forKey: .recipeOilRetentionGrams)
         recipeOilRetentionEvidence = try container.decodeIfPresent(EvidenceSnapshot.self, forKey: .recipeOilRetentionEvidence)
         recipePriorEvidence = try container.decodeIfPresent([EvidenceSnapshot].self, forKey: .recipePriorEvidence) ?? []
+        cookingMethodEvidence = try container.decodeIfPresent(EvidenceSnapshot.self, forKey: .cookingMethodEvidence)
         suppressInferredOil = try container.decodeIfPresent(Bool.self, forKey: .suppressInferredOil) ?? false
     }
 }
@@ -162,7 +167,10 @@ public struct MealEstimator: Sendable {
             summary: "约 \(caloriePresentation.likelyKcal) kcal，可信度\(caloriePresentation.confidence.displayName)",
             confidence: nil
         )
-        let evidence = input.recipePriorEvidence + ingredients.flatMap(\.evidence) + [calorieEvidence]
+        let evidence = input.recipePriorEvidence
+            + (input.cookingMethodEvidence.map { [$0] } ?? [])
+            + ingredients.flatMap(\.evidence)
+            + [calorieEvidence]
         return MealDishDraft(
             name: input.name,
             cookingMethod: input.cookingMethod,

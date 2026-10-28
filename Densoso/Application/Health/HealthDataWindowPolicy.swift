@@ -1,18 +1,26 @@
 import Foundation
 import DensosoDomain
 
-/// Owns the bounded health-history windows shared by HealthKit sync and analysis.
+/// Adapts the shared bounded-history contract to HealthKit sync and coverage.
 struct HealthDataWindowPolicy: Sendable {
-    static let analysisLookbackDays = 42
-    static let initialBackfillDays = 42
-    static let subjectiveCheckInLookbackDays = 7
+    static let analysisLookbackDays = HealthDataWindowContract.analysisLookbackDays
+    static let initialBackfillDays = HealthDataWindowContract.initialBackfillDays
+    static let subjectiveCheckInLookbackDays = HealthDataWindowContract.subjectiveCheckInLookbackDays
 
     static func analysisStart(through date: Date, calendar: Calendar) -> Date? {
-        startOfWindow(through: date, days: analysisLookbackDays, calendar: calendar)
+        HealthDataWindowContract.startOfWindow(
+            through: date,
+            days: analysisLookbackDays,
+            calendar: calendar
+        )
     }
 
     static func initialBackfillStart(through date: Date, calendar: Calendar) -> Date? {
-        startOfWindow(through: date, days: initialBackfillDays, calendar: calendar)
+        HealthDataWindowContract.startOfWindow(
+            through: date,
+            days: initialBackfillDays,
+            calendar: calendar
+        )
     }
 
     static func effectiveStart(
@@ -71,14 +79,6 @@ struct HealthDataWindowPolicy: Sendable {
         return (0...count).compactMap { calendar.date(byAdding: .day, value: $0, to: first) }
     }
 
-    private static func startOfWindow(through date: Date, days: Int, calendar: Calendar) -> Date? {
-        guard days > 0 else { return nil }
-        return calendar.date(
-            byAdding: .day,
-            value: -(days - 1),
-            to: calendar.startOfDay(for: date)
-        )
-    }
 }
 
 /// Optional app-layer capability: older and fake clients can omit a limited

@@ -172,6 +172,13 @@ struct LogMealTool: ConfirmationRequiredTool {
                 modelMethod: rawDish.cookingMethod,
                 recipePrior: recipePrior
             )
+            let cookingMethodEvidence = makeCookingMethodEvidence(
+                modelMethod: rawDish.cookingMethod,
+                resolvedMethod: resolvedCookingMethod,
+                recipePrior: recipePrior,
+                lowConfidence: rawDish.lowConfidence,
+                modelProvenance: context.currentMealModelProvenance()
+            )
             let personalDishPrior = try await mealPortionPriorRepository?.dishPrior(
                 named: name,
                 cookingMethod: resolvedCookingMethod == "unknown" ? nil : resolvedCookingMethod
@@ -497,6 +504,7 @@ struct LogMealTool: ConfirmationRequiredTool {
                             recipeOilRetentionGrams: recipeOilRetention,
                             recipeOilRetentionEvidence: recipeOilRetentionEvidence,
                             recipePriorEvidence: recipeEvidence,
+                            cookingMethodEvidence: cookingMethodEvidence,
                             suppressInferredOil: recipeOilRetention != nil
                         )
                     )
@@ -607,6 +615,105 @@ struct LogMealTool: ConfirmationRequiredTool {
             return modelMethod
         }
         return recipeMethod
+    }
+
+    private func makeCookingMethodEvidence(
+        modelMethod: String,
+        resolvedMethod: String,
+        recipePrior: RecipePriorRecord?,
+        lowConfidence: Bool,
+        modelProvenance: AgentMealModelProvenance?
+    ) -> EvidenceSnapshot? {
+        if modelMethod != "unknown" {
+            let confidenceNote = lowConfidence ? "（识别标记为低置信度）" : ""
+            let providerLabel: String
+            let modelLabel: String
+            let sourceVersion: String
+            let requestIdentity: String
+            let sourceID: String
+            if let modelProvenance {
+                providerLabel = providerName(modelProvenance.selectedProvider)
+                let reportedModel = sanitizedModelIdentifier(modelProvenance.reportedModel)
+                let configuredModel = sanitizedModelIdentifier(modelProvenance.configuredModel)
+                if let reportedModel {
+                    modelLabel = "\(reportedModel)（Provider 返回）"
+                    sourceVersion = "reported:\(reportedModel)"
+                } else if let configuredModel {
+                    modelLabel = "\(configuredModel)（配置模型；本轮未返回 usage）"
+                    sourceVersion = "configured:\(configuredModel)"
+                } else {
+                    modelLabel = "模型标识不可用"
+                    sourceVersion = "unreported"
+                }
+                requestIdentity = "providerRequestID=unavailable; Agent request correlation=\(modelProvenance.agentRequestID.uuidString)"
+                sourceID = "meal-model-cooking-method:\(modelProvenance.selectedProvider.rawValue)"
+            } else {
+                providerLabel = "unavailable"
+                modelLabel = "模型标识不可用"
+                sourceVersion = "unreported"
+                requestIdentity = "provider request ID unavailable; Agent request correlation unavailable"
+                sourceID = "meal-model-cooking-method:unattributed"
+            }
+            return EvidenceSnapshot(
+                grade: .estimated,
+                sourceID: sourceID,
+                sourceVersion: sourceVersion,
+                summary: "模型识别的烹饪方法：\(cookingMethodLabel(resolvedMethod))\(confidenceNote)；未由用户或菜谱来源验证；provider=\(providerLabel)；model=\(modelLabel)；\(requestIdentity)；toolVersion=log-meal-tool-v1；estimatorVersion=\(MealEstimator.algorithmVersion)",
+                confidence: nil
+            )
+        }
+
+        guard let recipePrior,
+              resolvedMethod != "unknown",
+              recipePrior.cookingMethod == resolvedMethod else {
+            return nil
+        }
+        let grade: EvidenceGrade
+        switch recipePrior.confidenceGrade.lowercased() {
+        case "strong": grade = .strong
+        case "moderate": grade = .moderate
+        case "weak": grade = .weak
+        default: grade = .estimated
+        }
+        return EvidenceSnapshot(
+            grade: grade,
+            sourceID: "recipe-prior:\(recipePrior.sourceID):\(recipePrior.sourceRecordID):cooking-method",
+            sourceVersion: recipePrior.sourceVersion,
+            summary: "来源菜谱提供烹饪方法：\(cookingMethodLabel(resolvedMethod))；作为估算先验，非本餐实测",
+            confidence: nil
+        )
+    }
+
+    private func providerName(_ provider: ProviderID) -> String {
+        switch provider {
+        case .deepSeek: "DeepSeek"
+        case .qwen: "Qwen"
+        }
+    }
+
+    private func sanitizedModelIdentifier(_ model: String?) -> String? {
+        guard let model else { return nil }
+        let normalized = model
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        return String(normalized.prefix(96))
+    }
+
+    private func cookingMethodLabel(_ method: String) -> String {
+        switch method {
+        case "steam": "蒸"
+        case "boil": "煮"
+        case "coldDress": "凉拌"
+        case "stirFry": "炒"
+        case "braise": "焖烧"
+        case "dryFry": "干煸"
+        case "deepFry": "油炸"
+        case "roast": "烤"
+        case "stew": "炖"
+        default: "未识别"
+        }
     }
 
     private func matchingRecipeIngredient(

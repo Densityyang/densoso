@@ -12,8 +12,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sqlite3
 import sys
+import tempfile
 import unicodedata
 from collections import defaultdict
 from pathlib import Path
@@ -253,6 +255,21 @@ def _prepare_items(
                 f"{record}: sourceVersion {source_version!r} does not match "
                 f"manifest version {source.get('sourceVersion')!r}"
             )
+        # The manifest is the authority for redistribution metadata. Keep row
+        # declarations honest when supplied, and materialize the manifest values
+        # into the generated database below so provenance is self-contained.
+        for field in (
+            "sourceURL",
+            "licenseSPDX",
+            "licenseURL",
+            "redistributionAllowed",
+            "verificationStatus",
+        ):
+            if field in item and item[field] != source.get(field):
+                raise ValueError(
+                    f"{record}: {field} {item[field]!r} does not match source manifest "
+                    f"value {source.get(field)!r}"
+                )
         if isinstance(source_record_id, str):
             record_key = (source_id, source_record_id)
             previous_owner = source_record_owners.get(record_key)
@@ -324,6 +341,22 @@ def _prepare_items(
             if normalized_alias:
                 alias_owners[normalized_alias].add(identifier)
 
+        source_record = dict(item)
+        source_record["sourceManifestEvidence"] = {
+            field: source.get(field)
+            for field in (
+                "sourceURL",
+                "sourceVersion",
+                "retrievedAt",
+                "licenseSPDX",
+                "licenseURL",
+                "dataRole",
+                "dataType",
+                "redistributionAllowed",
+                "verificationStatus",
+            )
+        }
+
         normalized.append({
             "id": identifier,
             "name": name.strip(),
@@ -340,11 +373,17 @@ def _prepare_items(
             "sourceRecordID": source_record_id,
             "sourceVersion": source_version,
             "licenseStatus": license_status,
-            "sourceRecordJSON": json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            "sourceURL": source.get("sourceURL"),
+            "licenseSPDX": source.get("licenseSPDX"),
+            "licenseURL": source.get("licenseURL"),
+            "redistributionAllowed": int(source["redistributionAllowed"]),
+            "sourceVerificationStatus": source["verificationStatus"],
+            "sourceRecordJSON": json.dumps(source_record, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
             "_importWarnings": record_warnings,
         })
 
-    for alias, owners in alias_owners.items():
+    for alias in sorted(alias_owners):
+        owners = alias_owners[alias]
         if len(owners) > 1:
             warning = f"alias collision {alias!r} maps to food IDs {sorted(owners)}"
             warnings.append(warning)
@@ -354,6 +393,8 @@ def _prepare_items(
 
     for row in normalized:
         row["importWarningsJSON"] = json.dumps(row.pop("_importWarnings"), ensure_ascii=False)
+    normalized.sort(key=lambda row: row["id"])
+    warnings.sort()
     return normalized, skipped_unverified, warnings
 
 
@@ -381,6 +422,11 @@ def create_schema(conn: sqlite3.Connection) -> None:
             sourceRecordID TEXT,
             sourceVersion TEXT NOT NULL,
             licenseStatus TEXT NOT NULL,
+            sourceURL TEXT,
+            licenseSPDX TEXT,
+            licenseURL TEXT,
+            redistributionAllowed INTEGER NOT NULL,
+            sourceVerificationStatus TEXT NOT NULL,
             sourceRecordJSON TEXT NOT NULL,
             importWarningsJSON TEXT NOT NULL
         )
@@ -402,12 +448,16 @@ def import_data(conn: sqlite3.Connection, items: list[dict[str, Any]]) -> None:
             id, name, alias, preparation, isCookedComposite, category, edible,
             energyKcal, energyRaw, energyUnit, proteinG, fatG, carbohydrateG,
             fiberG, sourceID, sourceRecordID, sourceVersion, licenseStatus,
+            sourceURL, licenseSPDX, licenseURL, redistributionAllowed,
+            sourceVerificationStatus,
             sourceRecordJSON, importWarningsJSON
         ) VALUES (
             :id, :name, :alias, :preparation, :isCookedComposite, :category,
             :edible, :energyKcal, :energyRaw, :energyUnit, :proteinG, :fatG,
             :carbohydrateG, :fiberG, :sourceID, :sourceRecordID,
-            :sourceVersion, :licenseStatus, :sourceRecordJSON, :importWarningsJSON
+            :sourceVersion, :licenseStatus, :sourceURL, :licenseSPDX,
+            :licenseURL, :redistributionAllowed, :sourceVerificationStatus,
+            :sourceRecordJSON, :importWarningsJSON
         )
     """, items)
 
@@ -444,15 +494,26 @@ def main() -> int:
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(output_path)
-    try:
-        create_schema(conn)
-        import_data(conn, normalized)
-        rebuild_fts(conn)
-        conn.commit()
-        count = conn.execute("SELECT COUNT(*) FROM food_items").fetchone()[0]
-    finally:
-        conn.close()
+    # Build a fresh database beside the destination, then replace it only after
+    # the complete import succeeds. This prevents stale tables from surviving
+    # rebuilds and leaves a previous valid artifact intact on failure.
+    with tempfile.TemporaryDirectory(
+        prefix=f".{output_path.name}.", dir=output_path.parent
+    ) as temporary_directory:
+        temporary_output = Path(temporary_directory) / output_path.name
+        conn = sqlite3.connect(temporary_output)
+        try:
+            create_schema(conn)
+            import_data(conn, normalized)
+            rebuild_fts(conn)
+            conn.commit()
+            count = conn.execute("SELECT COUNT(*) FROM food_items").fetchone()[0]
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            if integrity != "ok":
+                raise ValueError(f"generated food database failed SQLite integrity check: {integrity}")
+        finally:
+            conn.close()
+        os.replace(temporary_output, output_path)
 
     mode = "production" if args.production else "development/review"
     print(f"Food import ({mode}): {count} rows → {output_path}")

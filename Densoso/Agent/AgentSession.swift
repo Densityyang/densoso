@@ -108,6 +108,7 @@ final class AgentSession {
     private var transientMealImageEvidence: [MealEvidence] = []
     private var transientMealHasImage = false
     private var transientMealUserText: String?
+    private var transientMealModelProvenance: AgentMealModelProvenance?
     private var didIssueMealClarification = false
     private var transientMealClarificationWasAnswered = false
     private var transientMealPriorClarificationField: String?
@@ -344,6 +345,7 @@ final class AgentSession {
             transientMealImageEvidence = []
             transientMealHasImage = false
             transientMealUserText = nil
+            transientMealModelProvenance = nil
             didIssueMealClarification = false
             transientMealClarificationWasAnswered = false
             transientMealPriorClarificationField = nil
@@ -760,6 +762,15 @@ final class AgentSession {
                     }
                     assistantContent.append(contentsOf: result.reasoning.map(ModelContent.reasoning))
                     assistantContent.append(contentsOf: result.toolCalls.map(ModelContent.toolCall))
+                    let reportedTextUsage = result.usages.last {
+                        $0.provider == provider.descriptor.id && $0.capability == .text
+                    }
+                    let mealModelProvenance = AgentMealModelProvenance(
+                        selectedProvider: provider.descriptor.id,
+                        configuredModel: provider.descriptor.model,
+                        reportedModel: reportedTextUsage?.model,
+                        agentRequestID: requestID
+                    )
                     let hasHealthToolCall = result.toolCalls.contains {
                         CloudRequestPolicyGuard.isHealthTool(name: $0.name)
                     }
@@ -782,7 +793,11 @@ final class AgentSession {
                         if registry.effect(for: call.name) == .stagesAction {
                             useStructuredHealthNarrative = false
                         }
-                        let output = await executeTool(call, clientRequestID: requestID)
+                        let output = await executeTool(
+                            call,
+                            clientRequestID: requestID,
+                            mealModelProvenance: mealModelProvenance
+                        )
                         let toolProvenance = CloudRequestPolicyGuard.isHealthTool(name: call.name)
                             ? healthContextPolicyProvenance(for: roundPolicy, includeIf: true)
                             : nil
@@ -908,10 +923,14 @@ final class AgentSession {
 
     private func executeTool(
         _ call: ToolCall,
-        clientRequestID: UUID
+        clientRequestID: UUID,
+        mealModelProvenance: AgentMealModelProvenance
     ) async -> String {
         do {
             if call.name == "log_meal" {
+                let previousMealModelProvenance = transientMealModelProvenance
+                transientMealModelProvenance = mealModelProvenance
+                defer { transientMealModelProvenance = previousMealModelProvenance }
                 return try await PerformanceSignposts.measureAsync("Meal.DeterministicToolDraft") {
                     try await registry.execute(
                         name: call.name,
@@ -1150,6 +1169,10 @@ final class AgentSession {
 
     func currentMealImageEvidence() -> [MealEvidence] {
         transientMealImageEvidence
+    }
+
+    func currentMealModelProvenance() -> AgentMealModelProvenance? {
+        transientMealModelProvenance
     }
 
     func currentMealHasImage() -> Bool {
@@ -1697,6 +1720,13 @@ private struct LegacyProviderMessage: Decodable {
             case toolUseID = "tool_use_id"
         }
     }
+}
+
+struct AgentMealModelProvenance: Equatable, Sendable {
+    let selectedProvider: ProviderID
+    let configuredModel: String
+    let reportedModel: String?
+    let agentRequestID: UUID
 }
 
 private struct ProviderRoundResult: Sendable {
