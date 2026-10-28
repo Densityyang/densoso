@@ -172,6 +172,10 @@ struct LogMealTool: ConfirmationRequiredTool {
                 modelMethod: rawDish.cookingMethod,
                 recipePrior: recipePrior
             )
+            let personalDishPrior = try await mealPortionPriorRepository?.dishPrior(
+                named: name,
+                cookingMethod: resolvedCookingMethod == "unknown" ? nil : resolvedCookingMethod
+            )
             let recipeEvidence = recipePrior.map { [recipePriorEvidence($0)] } ?? []
 
             var ingredients: [MealIngredientEstimationInput] = []
@@ -313,6 +317,22 @@ struct LogMealTool: ConfirmationRequiredTool {
                 } else {
                     quantityEvidence = ingredient.quantityEvidence
                 }
+                let dishPriorIngredient: PersonalMealDishIngredientPrior?
+                if ingredient.quantityEvidence.kind == .unknown,
+                   ingredient.quantityEvidence.value == nil,
+                   userReportedGrams == nil,
+                   validatedPackageServingGrams == nil,
+                   let personalDishPrior,
+                   let priorIngredient = personalDishPrior.ingredient(
+                    foodID: selectedFood.entry.localFoodID,
+                    name: selectedFood.entry.name
+                   ),
+                   priorIngredient.massBasis == nil
+                    || priorIngredient.massBasis == Self.sourceBackedMassBasis(for: selectedFood.entry) {
+                    dishPriorIngredient = priorIngredient
+                } else {
+                    dishPriorIngredient = nil
+                }
                 let personalPrior: HouseholdPortionPrior?
                 if (quantityEvidence.kind == .household || quantityEvidence.kind == .count),
                    let quantityUnit = quantityEvidence.unit,
@@ -326,25 +346,33 @@ struct LogMealTool: ConfirmationRequiredTool {
                     personalPrior = nil
                 }
                 let portionEvidence: PortionEvidence
-                do {
-                    portionEvidence = try quantityResolver.resolve(
-                        quantityEvidence,
-                        validatedUserReportedGrams: userReportedGrams,
-                        validatedPackageGramsPerServing: validatedPackageServingGrams,
-                        personalPrior: personalPrior,
-                        allowLowConfidenceModelEstimate: context.currentMealClarificationWasAnswered()
+                if let dishPriorIngredient {
+                    portionEvidence = .personalDishPrior(
+                        lowGrams: dishPriorIngredient.lowGrams,
+                        likelyGrams: dishPriorIngredient.likelyGrams,
+                        highGrams: dishPriorIngredient.highGrams
                     )
-                } catch MealQuantityEvidenceResolutionError.missingPortionEvidence {
-                    if context.currentMealClarificationWasAnswered() {
-                        throw DraftError.clarificationLimitReached
+                } else {
+                    do {
+                        portionEvidence = try quantityResolver.resolve(
+                            quantityEvidence,
+                            validatedUserReportedGrams: userReportedGrams,
+                            validatedPackageGramsPerServing: validatedPackageServingGrams,
+                            personalPrior: personalPrior,
+                            allowLowConfidenceModelEstimate: context.currentMealClarificationWasAnswered()
+                        )
+                    } catch MealQuantityEvidenceResolutionError.missingPortionEvidence {
+                        if context.currentMealClarificationWasAnswered() {
+                            throw DraftError.clarificationLimitReached
+                        }
+                        throw DraftError.clarificationRequired(
+                            field: "quantityEvidence",
+                            question: "“\(ingredient.name)”大约有多少份量（例如一碗、几个或包装份数）？",
+                            subject: ingredient.name
+                        )
+                    } catch {
+                        throw DraftError.invalidMeal
                     }
-                    throw DraftError.clarificationRequired(
-                        field: "quantityEvidence",
-                        question: "“\(ingredient.name)”大约有多少份量（例如一碗、几个或包装份数）？",
-                        subject: ingredient.name
-                    )
-                } catch {
-                    throw DraftError.invalidMeal
                 }
                 let personalPriorUsageEvidence: EvidenceSnapshot?
                 if let personalPrior,
@@ -354,6 +382,11 @@ struct LogMealTool: ConfirmationRequiredTool {
                     personalPriorUsageEvidence = usage.evidenceSnapshot
                 } else {
                     personalPriorUsageEvidence = nil
+                }
+                let personalDishPriorUsageEvidence = personalDishPrior.flatMap { prior in
+                    dishPriorIngredient.flatMap { ingredient in
+                        PersonalMealDishPriorUsage(prior: prior, ingredient: ingredient)?.evidenceSnapshot
+                    }
                 }
                 let portion = try portionEstimator.estimate(
                     evidence: [portionEvidence],
@@ -375,8 +408,17 @@ struct LogMealTool: ConfirmationRequiredTool {
                 if let correctionPriorEvidence {
                     imageEvidence.append(correctionPriorEvidence.evidenceSnapshot)
                 }
+                if let userReportedGrams,
+                   let userPortionEvidence = PersonalMealDishPriorUserPortionEvidence.evidenceSnapshot(
+                    grams: userReportedGrams
+                   ) {
+                    imageEvidence.append(userPortionEvidence)
+                }
                 if let personalPriorUsageEvidence {
                     imageEvidence.append(personalPriorUsageEvidence)
+                }
+                if let personalDishPriorUsageEvidence {
+                    imageEvidence.append(personalDishPriorUsageEvidence)
                 }
                 if let recipeIngredient, let recipePrior {
                     imageEvidence.append(recipeIngredientEvidence(

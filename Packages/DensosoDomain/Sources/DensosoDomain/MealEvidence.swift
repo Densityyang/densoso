@@ -46,6 +46,7 @@ public struct PortionEstimate: Codable, Equatable, Sendable {
         case approximateGrams
         case packageServing
         case householdPrior
+        case personalDishPrior
         case modelEstimate
         case photoWithScale
         case photoWithoutScale

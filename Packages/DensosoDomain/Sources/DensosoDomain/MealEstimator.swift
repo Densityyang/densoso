@@ -362,6 +362,7 @@ public struct MealEstimator: Sendable {
         resolution: FoodResolution,
         portion: PortionEstimate
     ) -> EvidenceGrade {
+        if portion.source == .personalDishPrior { return .weak }
         if resolution.autoPreselect != nil, portion.isMeasured { return .measured }
         if resolution.autoPreselect != nil,
            [.measured, .userReportedExact, .packageServing].contains(portion.source) { return .strong }

@@ -9,39 +9,93 @@ Associated pull request: none
 
 ## Current continuation — 2026-10-28
 
-**Implementation code SHA:** `c890c3f2978a319634f9572f217d504ee3f2ed79` on
-`codex/ai-native-health-loop`. This implementation batch is pushed to `origin`.
-There is still no PR associated with this branch, and PR #14 remains unrelated.
+**Implementation code SHA:** `6faaf36b567a4a8f6bb195db11281d8845d24a6b` on
+`codex/ai-native-health-loop`, pushed to `origin`. There is no PR associated
+with this branch, and PR #14 remains unrelated. The prior `2cb77c4` commit
+raised Gate 1's job timeout from 35 to 60 minutes; `6faaf36` contains the
+meal/provider implementation and regression tests described below.
 
 **GitHub verification:** full Build run
+[#40622546956](https://github.com/Densityyang/densoso/actions/runs/40622546956)
+targets this exact SHA through `codex/ci-verify-6faaf36`. At this update, Gates
+16 and 17 have passed; Gate 19 failed to compile at
+`MealCaptureApplicationService.swift:411` because it still called the removed
+`Self.massBasis(for:)` helper. Gate 18's focused XCTest step and Gate 19's
+HealthKit XCTest step failed while compiling that source. Gates 1 and 2 also
+failed on the same compile error. Gates 16 and 17 passed; Gate 3 was still
+running at this report revision. These failures predate the uncommitted repair.
+No local tests or builds were run.
+
+**Coding follow-up completed in the working tree; commit and current-SHA CI
+were still pending at this report revision.** The optional Qwen photo review no
+longer infers raw/cooked mass basis from a preparation hint. Only candidates
+with verified source-backed mass basis remain selectable. Ambiguous identity
+requires explicit candidate selection and actual consumed grams; photo portion,
+oil, and calorie estimates are skipped.
+
+Today now lists confirmed meals with likely kcal, confidence, source category,
+algorithm/evidence versions, and a direct correction entry. Saving a correction
+scales only the energy range, appends timestamped user evidence, and uses the
+existing HealthRepository update path to refresh projection and HealthKit
+outbox state; macros and ingredient weights remain as recorded.
+
+Personal dish-level ingredient priors are separate from food/unit gram priors.
+They learn only from user-text-validated grams, explicitly corrected photo
+grams, or a package serving backed by local label evidence. Model/photo/recipe
+estimates alone and unlabeled package claims do not teach them. Learned priors
+require two explicit confirmations before automatic use; Settings templates are
+user-managed and available immediately. A prior only fills missing ingredient
+quantity and remains weak evidence. Current-turn portions win over it, it wins
+over generic recipe batch quantities, and ordinary confirmations do not edit a
+user-managed template. Malformed persisted or displayed priors fail closed.
+
+The feature adds SwiftData V12 with V11-to-V12 migration and backup format 7,
+including dish-prior export/restore. Gate 2 and Gate 16 static contracts now
+expect V12 as the current schema while retaining historical V10 checks. Focused
+regressions cover these flows; no local tests, builds, or validators were run.
+The three old full runs remain diagnostic only and do not include this working
+tree. A full Build run must target the resulting coding commit.
+
+The preceding verification run
+[#40620727317](https://github.com/Densityyang/densoso/actions/runs/40620727317)
+targets `2cb77c4`, before the meal/provider repairs. Gates 1 and 16–19 passed;
+Gates 1–4 and 16–19 have passed; Gate 5 was running at this report revision.
+It verifies the raised timeout and provides baseline evidence only, not final
+acceptance for `6faaf36`.
+
+The preceding full run
 [#40616857687](https://github.com/Densityyang/densoso/actions/runs/40616857687)
-targets that exact code SHA through the isolated ref `codex/ci-verify-c890c3f`.
-At this report update, Gate 16 contract validation has passed and Gates 1, 18,
-and 19 are running. The full run is not yet complete, so no overall PASS is
-claimed. No local tests or builds were run.
+targets implementation SHA `c890c3f`. All Gate 1 execution steps and its
+uploaded report passed, including the iOS build, unit/UI tests, Watch build,
+and evidence export, but GitHub marked the job cancelled after 36m27s because
+its workflow limit was 35 minutes. Gates 2–6 and 16–19 have passed; Gate 7 was
+running at this report revision. This run remains diagnostic and has not been
+cancelled. The newer runs use the 60-minute limit.
 
-**Fixes prompted by the previous full run:** run
-[#40484158096](https://github.com/Densityyang/densoso/actions/runs/40484158096)
-reported eight failed assertions in one HealthKit observer test because its
-fixture used an October 2023 clock while the observer used the runner's current
-date. The fixture now derives its date from `Date()`. Gates 3, 5, 6, 7, 9, and
-11–14 also had static validators that no longer matched the current tool count,
-UI copy, HealthKit observer/authorization-boundary flow, cache-generation
-fence, backup privacy boundary, prompt/schema versions, and Watch inbox paging
-contract. Those validators now check the current implementation and tests.
-Gate 6 continues to cover historical anchored re-queries as documented. Gate
-11–14 focused test commands had succeeded in the previous run; those jobs failed
-in validator/evidence export. Gate 16's fail-closed aggregate behavior remains
-unchanged.
+The `c890c3f` coding batch fixed the moving-date HealthKit observer test fixture
+and brought Gates 3, 5, 6, 7, 9, and 11–14 validators in line with current
+contracts. Current food-data and cloud-policy/HealthKit audits found no further
+confirmed code defects in their assigned scopes. The meal/DeepSeek review found
+that recipe batch quantities could be used without dividing by source servings,
+unknown mass basis could default to edible raw, and reasoning continuation could
+forward fields unsupported by DeepSeek. Commit `6faaf36` now divides source
+quantities only when serving counts are explicit, records the meal result as an
+uncertain model estimate, requires source-backed mass basis or clarification,
+and normalizes DeepSeek reasoning to documented `reasoning_text` parts. Focused
+regressions cover these cases; GitHub Actions is verifying them on this SHA.
 
-**Remaining acceptance boundary:** the current batch does not change app
-runtime code. The signed iPhone/Watch Gate 15 acceptance and owner Gate 16
-release acceptance remain for the owner; signing and launch are reserved for
-the owner. The real-meal field benchmark and live DeepSeek endpoint behavior
-remain unmeasured without labeled meal data and live credentials. The pinned
-recipe catalog still contains 3,073 unmapped ingredient rows out of 3,262,
-3,259 unknown raw/cooked mass bases, and 215 unknown cooking methods; these
-remain unknown rather than being fabricated.
+**Remaining acceptance boundary:** the pinned recipe catalog has 366
+source-pinned, verified recipe priors. Its import report still marks 3,073 of
+3,262 ingredient rows unmapped, 3,259 mass bases unknown, and 215 cooking
+methods unknown; the app preserves these as unknown rather than inventing
+nutrition facts. The real-meal field benchmark and live DeepSeek endpoint
+behavior remain unmeasured without labeled meal data and live credentials.
+Apple currently marks [`getEarliestAuthorizedSampleDate`](https://developer.apple.com/documentation/healthkit/hkhealthstore/getearliestauthorizedsampledate%28for%3Acompletion%3A%29)
+as Beta. The stable HealthKit adapter cannot report the per-category earliest
+authorized sample date; it uses a bounded 42-day rebaseline and keeps
+empty/uncertain coverage unknown instead of treating it as absence. Signed
+iPhone/Watch Gate 15 evidence and owner Gate 16 release acceptance remain for
+the owner; signing and launch are reserved for the owner.
 
 ## Historical continuation — 2026-10-27 (superseded)
 

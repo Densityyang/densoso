@@ -1,9 +1,12 @@
 import DensosoDomain
+import Foundation
+import SwiftData
 import SwiftUI
 
 struct ChatScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(AppState.self) private var appState
+    @Environment(\.modelContext) private var modelContext
     @FocusState private var composerFocused: Bool
 
     @State private var messages: [ChatMessage] = []
@@ -29,6 +32,10 @@ struct ChatScreen: View {
     @State private var isLoadingDailyLoopSnapshot = true
     @State private var dailyLoopSnapshotRefreshQueue = DailyLoopSnapshotRefreshQueue()
     @State private var didRecordInitialTodayContent = false
+    @State private var todayMeals: [MealRecord] = []
+    @State private var todayMealsReadError: String?
+    @State private var correctingMealID: UUID?
+    @State private var mealCorrectionError: String?
 
     var body: some View {
         NavigationStack {
@@ -113,6 +120,8 @@ struct ChatScreen: View {
                         Task { await refreshDailyLoopSnapshot(refreshHealth: true) }
                     }
                     .id("daily-loop-snapshot-anchor")
+
+                    confirmedMealsSection
 
                     DailyHealthBriefCard(brief: dependencies.healthIntelligenceService.dailyBrief)
 
@@ -270,6 +279,32 @@ struct ChatScreen: View {
         .contentMargins(.horizontal, 1, for: .scrollContent)
     }
 
+    @ViewBuilder
+    private var confirmedMealsSection: some View {
+        if let todayMealsReadError {
+            Label(todayMealsReadError, systemImage: "exclamationmark.triangle.fill")
+                .font(.footnote)
+                .foregroundStyle(OrbitPalette.coral)
+                .orbitCard()
+        } else if !todayMeals.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("今天已确认的餐食")
+                    .font(.headline)
+                ForEach(todayMeals) { meal in
+                    TodayConfirmedMealCard(
+                        meal: meal,
+                        isSaving: correctingMealID == meal.id,
+                        errorMessage: mealCorrectionError,
+                        onSaveCorrection: { correctedLikelyKcal in
+                            saveMealCorrection(meal, correctedLikelyKcal: correctedLikelyKcal)
+                        }
+                    )
+                }
+            }
+            .accessibilityIdentifier("today-confirmed-meals")
+        }
+    }
+
     private func promptButton(for action: DailyLoopQuickAction) -> some View {
         let details = quickActionDetails(for: action)
         return Button(details.title, systemImage: details.systemImage) {
@@ -420,6 +455,7 @@ struct ChatScreen: View {
     }
 
     private func prepareInitialState() async {
+        refreshTodayMeals()
         _ = try? await dependencies.healthIntelligenceService.refresh()
         await refreshDailyLoopSnapshot()
         if appState.shouldFocusComposer { focusComposer() }
@@ -453,6 +489,7 @@ struct ChatScreen: View {
     }
 
     private func refreshDailyLoopSnapshot(refreshHealth: Bool = false) async {
+        refreshTodayMeals()
         guard case .start(var passRefreshesHealth) = dailyLoopSnapshotRefreshQueue.request(
             refreshHealth: refreshHealth
         ) else { return }
@@ -489,6 +526,130 @@ struct ChatScreen: View {
             guard let nextPassRefreshesHealth = dailyLoopSnapshotRefreshQueue.finishPass() else { break }
             passRefreshesHealth = nextPassRefreshesHealth
         }
+    }
+
+    private func refreshTodayMeals() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) else {
+            todayMeals = []
+            todayMealsReadError = "无法读取今日餐食日期范围。"
+            return
+        }
+        let predicate = #Predicate<MealRecord> { meal in
+            meal.date >= today && meal.date < tomorrow
+        }
+        var descriptor = FetchDescriptor<MealRecord>(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        descriptor.fetchLimit = 50
+        do {
+            todayMeals = try modelContext.fetch(descriptor)
+            todayMealsReadError = nil
+        } catch {
+            todayMeals = []
+            todayMealsReadError = "读取今日已确认餐食失败：\(SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage)"
+        }
+    }
+
+    private func saveMealCorrection(_ meal: MealRecord, correctedLikelyKcal: Double) {
+        guard correctingMealID == nil else { return }
+        correctingMealID = meal.id
+        defer { correctingMealID = nil }
+        mealCorrectionError = nil
+
+        do {
+            let originalEnergy = try EstimateRange(
+                low: meal.energyLowKcal,
+                likely: meal.energyLikelyKcal,
+                high: meal.energyHighKcal
+            )
+            let correction = try ConfirmedMealCalorieCorrection(
+                originalEnergy: originalEnergy,
+                correctedLikelyKcal: correctedLikelyKcal,
+                occurredAt: Date()
+            )
+            let correctedEnergy = correction.correctedEnergy
+            let existingMealEvidence = try Self.decodeEvidence(meal.evidenceData)
+            let encodedMealEvidence = try JSONEncoder().encode(existingMealEvidence + [correction.evidence])
+
+            let dishUpdates = try meal.dishes.map { dish in
+                let originalDishEnergy = try EstimateRange(
+                    low: dish.energyLowKcal,
+                    likely: dish.energyLikelyKcal,
+                    high: dish.energyHighKcal
+                )
+                let correctedDishEnergy = try originalDishEnergy.scaled(by: correction.factor)
+                let dishCorrectionEvidence = EvidenceSnapshot(
+                    grade: .userReported,
+                    sourceID: ConfirmedMealCalorieCorrection.evidenceSourceID,
+                    sourceVersion: ConfirmedMealCalorieCorrection.evidenceSourceVersion,
+                    summary: "用户于 \(correction.timestamp) 将整餐热量范围 \(Self.rangeSummary(originalDishEnergy, unit: "kcal")) 更正为 \(Self.rangeSummary(correctedDishEnergy, unit: "kcal"))；菜品“\(dish.dishName)”只调整热量。蛋白质、脂肪和碳水估算未调整，因为用户未更正这些字段；食材份量保持原值。更正前估算与证据保留。",
+                    confidence: 1
+                )
+                let evidence = try Self.decodeEvidence(dish.evidenceData) + [dishCorrectionEvidence]
+                return (
+                    dish: dish,
+                    energy: correctedDishEnergy,
+                    evidenceData: try JSONEncoder().encode(evidence)
+                )
+            }
+
+            meal.totalCaloriesKcal = Int(correctedEnergy.likely.rounded())
+            meal.energyLowKcal = correctedEnergy.low
+            meal.energyLikelyKcal = correctedEnergy.likely
+            meal.energyHighKcal = correctedEnergy.high
+            meal.evidenceData = encodedMealEvidence
+            for update in dishUpdates {
+                update.dish.energyLowKcal = update.energy.low
+                update.dish.energyLikelyKcal = update.energy.likely
+                update.dish.energyHighKcal = update.energy.high
+                update.dish.estimatedCaloriesKcal = Int(update.energy.likely.rounded())
+                update.dish.evidenceData = update.evidenceData
+            }
+
+            try HealthRepository(modelContext: modelContext).update(meal)
+            refreshTodayMeals()
+            dependencies.watchConnectivityCoordinator.refreshApplicationContext()
+            addMessage(
+                text: "已保存餐食热量修正，今日汇总会按更新后的估算重算；修正前后的数值与证据均已保留。",
+                isUser: false
+            )
+            Task {
+                _ = try? await dependencies.healthIntelligenceService.refresh()
+                await refreshDailyLoopSnapshot(refreshHealth: true)
+            }
+        } catch {
+            mealCorrectionError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
+        }
+    }
+
+    private enum MealCorrectionError: Error {
+        case invalidExistingEvidence
+    }
+
+    private static func decodeEvidence(_ data: Data?) throws -> [EvidenceSnapshot] {
+        guard let data else { return [] }
+        do {
+            return try JSONDecoder().decode([EvidenceSnapshot].self, from: data)
+        } catch {
+            throw MealCorrectionError.invalidExistingEvidence
+        }
+    }
+
+    private static func rangeSummary(_ range: EstimateRange, unit: String) -> String {
+        "\(kcal(range.low))–\(kcal(range.high))（likely \(kcal(range.likely))）\(unit)"
+    }
+
+    private static func kcal(_ value: Double) -> String {
+        String(format: "%.0f", value)
     }
 
     private func focusComposer() {

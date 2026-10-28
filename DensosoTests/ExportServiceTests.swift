@@ -256,7 +256,7 @@ final class ExportServiceTests: XCTestCase {
             ExportService.BackupDocument.self,
             from: Data(contentsOf: url)
         )
-        XCTAssertEqual(exportedDocument.formatVersion, 6)
+        XCTAssertEqual(exportedDocument.formatVersion, 7)
 
         let (targetContainer, target) = try makeContext()
         _ = targetContainer
@@ -590,6 +590,39 @@ final class ExportServiceTests: XCTestCase {
             createdAt: date,
             updatedAt: date
         ))
+        let dishIngredient = try XCTUnwrap(PersonalMealDishIngredientPrior(
+            foodID: "rice-id",
+            name: "米饭",
+            lowGrams: 150,
+            likelyGrams: 180,
+            highGrams: 210,
+            preparation: .cooked,
+            massBasis: .cooked,
+            sourceID: "cn-food-table",
+            sourceRecordID: "rice-cooked-001",
+            sourceVersion: "food-table-2026-01",
+            licenseStatus: "verified"
+        ))
+        let dishKey = try XCTUnwrap(MealDishPriorStorageKey.make(
+            dishName: "盖饭",
+            cookingMethod: "stirFry",
+            ingredients: [dishIngredient]
+        ))
+        let dishIngredientEncoder = JSONEncoder()
+        dishIngredientEncoder.outputFormatting = [.sortedKeys]
+        source.insert(PersonalMealDishPriorRecord(
+            priorKey: dishKey.priorKey,
+            dishKey: dishKey.dishKey,
+            dishName: "盖饭",
+            cookingMethodKey: dishKey.cookingMethodKey,
+            cookingMethod: "stirFry",
+            ingredientsJSON: String(data: try dishIngredientEncoder.encode([dishIngredient]), encoding: .utf8)!,
+            observationCount: 0,
+            isUserManaged: true,
+            sourceActionKey: nil,
+            createdAt: date,
+            updatedAt: date
+        ))
         let unconfirmedPreference = ActionPayload.userPreference(UserPreference(
             category: .communication,
             statement: "未确认的偏好",
@@ -661,7 +694,7 @@ final class ExportServiceTests: XCTestCase {
             ExportService.BackupDocument.self,
             from: Data(contentsOf: url)
         )
-        XCTAssertEqual(exported.formatVersion, 6)
+        XCTAssertEqual(exported.formatVersion, 7)
         XCTAssertEqual(exported.payload.weightRecords?.count, 1)
         XCTAssertEqual(exported.payload.profileRevisions?.count, 1)
         XCTAssertEqual(exported.payload.dailyMetricsProjection?.first?.sourceFingerprint, "fixture-fingerprint")
@@ -670,6 +703,7 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(exported.payload.dailyCheckIns?.count, 1)
         XCTAssertEqual(exported.payload.userPreferences?.count, 1)
         XCTAssertEqual(exported.payload.mealPortionPriors?.count, 1)
+        XCTAssertEqual(exported.payload.mealDishPriors?.count, 1)
         XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("未确认的偏好"))
         XCTAssertEqual(exported.payload.dailyBriefs?.count, 1)
         XCTAssertEqual(exported.payload.weeklyBriefs?.count, 1)
@@ -706,9 +740,19 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(summary.healthDays, 1)
         XCTAssertEqual(summary.dailyCheckIns, 1)
         XCTAssertEqual(summary.mealPortionPriors, 1)
+        XCTAssertEqual(summary.mealDishPriors, 1)
         let restoredPrior = try XCTUnwrap(target.fetch(FetchDescriptor<PersonalMealPortionPriorRecord>()).first)
         XCTAssertEqual(restoredPrior.foodName, "米饭")
         XCTAssertEqual(restoredPrior.p50Grams, 180, accuracy: 0.001)
+        let restoredDishPrior = try XCTUnwrap(target.fetch(FetchDescriptor<PersonalMealDishPriorRecord>()).first)
+        XCTAssertEqual(restoredDishPrior.dishName, "盖饭")
+        XCTAssertTrue(restoredDishPrior.isUserManaged)
+        let restoredDishIngredients = try JSONDecoder().decode(
+            [PersonalMealDishIngredientPrior].self,
+            from: Data(restoredDishPrior.ingredientsJSON.utf8)
+        )
+        XCTAssertEqual(restoredDishIngredients.first?.massBasis, .cooked)
+        XCTAssertEqual(restoredDishIngredients.first?.sourceRecordID, "rice-cooked-001")
         XCTAssertEqual(summary.userPreferences, 1)
         XCTAssertEqual(summary.scheduledPlans, 0)
         XCTAssertEqual(try target.fetch(FetchDescriptor<WeightRecord>()).first?.kilograms, 70.5)
@@ -845,6 +889,7 @@ final class ExportServiceTests: XCTestCase {
             DailyBriefRecord.self, WeeklyBriefRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
             AgentRequestRecord.self, DailyCheckInRecord.self, UserPreferenceRecord.self,
             PersonalMealPortionPriorRecord.self,
+            PersonalMealDishPriorRecord.self,
             ConsentRecord.self,
             CloudHealthContextPolicyRecord.self,
             PendingActionRecord.self, CommittedActionReceiptRecord.self,

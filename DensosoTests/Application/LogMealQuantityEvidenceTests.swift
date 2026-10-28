@@ -28,10 +28,90 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         })
         XCTAssertEqual(portionEvidence.grade, .strong)
         XCTAssertEqual(portionEvidence.sourceVersion, "portion-estimator-v2")
+        XCTAssertTrue(PersonalMealDishPriorUserPortionEvidence.isExplicit(in: ingredient.evidence))
         XCTAssertTrue(draft.dishes.first?.evidence.contains {
             $0.sourceID == "calorie-accounting" && $0.sourceVersion == "calorie-accounting-v3"
         } == true)
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 0)
+    }
+
+    func testPersonalDishPriorFillsMissingQuantityAsWeakEstimateWithUsageEvidence() async throws {
+        let provider = provider(calls: [mealCall(
+            ingredientName: "米饭",
+            quantity: quantity("unknown")
+        )])
+        let harness = try makeHarness(provider: provider)
+        let ingredientPrior = try XCTUnwrap(PersonalMealDishIngredientPrior(
+            foodID: "2",
+            name: "米饭(熟)",
+            lowGrams: 120,
+            likelyGrams: 160,
+            highGrams: 210,
+            preparation: .cooked
+        ))
+        try await harness.mealPortionPriorRepository.saveDishPrior(PersonalMealDishPriorEdit(
+            id: nil,
+            dishName: "米饭",
+            ingredients: [ingredientPrior]
+        ))
+
+        _ = try await harness.session.send(userText: "我吃了一些米饭")
+
+        let action = try XCTUnwrap(harness.session.pendingActions.first)
+        guard case .meal(let draft) = action.payload else {
+            return XCTFail("Expected a pending meal draft")
+        }
+        let ingredient = try XCTUnwrap(draft.dishes.first?.ingredients.first)
+        XCTAssertEqual(ingredient.amountGrams.low, 120, accuracy: 0.001)
+        XCTAssertEqual(ingredient.amountGrams.likely, 160, accuracy: 0.001)
+        XCTAssertEqual(ingredient.amountGrams.high, 210, accuracy: 0.001)
+        XCTAssertEqual(
+            ingredient.evidence.first { $0.sourceID == "portion:personalDishPrior" }?.grade,
+            .weak
+        )
+        let usageSnapshot = try XCTUnwrap(ingredient.evidence.first {
+            $0.sourceID == PersonalMealDishPriorUsage.evidenceSourceID
+        })
+        let usage = try XCTUnwrap(PersonalMealDishPriorUsage.usage(from: usageSnapshot))
+        XCTAssertEqual(usage.dishName, "米饭")
+        XCTAssertEqual(usage.likelyGrams, 160, accuracy: 0.001)
+        XCTAssertTrue(usage.isUserManaged)
+        XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 0)
+    }
+
+    func testCurrentUserReportedGramsTakePrecedenceOverPersonalDishPrior() async throws {
+        let provider = provider(calls: [mealCall(
+            ingredientName: "米饭",
+            quantity: quantity("exactGrams", value: 120, unit: "g")
+        )])
+        let harness = try makeHarness(provider: provider)
+        let ingredientPrior = try XCTUnwrap(PersonalMealDishIngredientPrior(
+            foodID: "2",
+            name: "米饭(熟)",
+            lowGrams: 90,
+            likelyGrams: 100,
+            highGrams: 110,
+            preparation: .cooked
+        ))
+        try await harness.mealPortionPriorRepository.saveDishPrior(PersonalMealDishPriorEdit(
+            id: nil,
+            dishName: "米饭",
+            ingredients: [ingredientPrior]
+        ))
+
+        _ = try await harness.session.send(userText: "米饭186克")
+
+        let action = try XCTUnwrap(harness.session.pendingActions.first)
+        guard case .meal(let draft) = action.payload else {
+            return XCTFail("Expected a pending meal draft")
+        }
+        let ingredient = try XCTUnwrap(draft.dishes.first?.ingredients.first)
+        XCTAssertEqual(ingredient.amountGrams.low, 186, accuracy: 0.001)
+        XCTAssertEqual(ingredient.amountGrams.likely, 186, accuracy: 0.001)
+        XCTAssertEqual(ingredient.amountGrams.high, 186, accuracy: 0.001)
+        XCTAssertFalse(ingredient.evidence.contains {
+            $0.sourceID == PersonalMealDishPriorUsage.evidenceSourceID
+        })
     }
 
     func testUnverifiedModelGramClaimRequestsClarificationWithoutStaging() async throws {
@@ -848,12 +928,13 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         provider: ScriptedTextProvider,
         grantMealImage: Bool = false
     ) throws -> MealQuantityHarness {
-        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV12.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
         )
         let repository = SwiftDataAgentRepository(modelContainer: container)
+        let mealPortionPriorRepository = SwiftDataMealPortionPriorRepository(modelContainer: container)
         var grants: [(ProviderID, ProviderDataClass)] = [(.deepSeek, .healthText)]
         if grantMealImage { grants.append((.deepSeek, .mealImage)) }
         let governance = InMemoryProviderGovernanceRepository(granted: grants)
@@ -869,14 +950,19 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
             providerConfiguration: ProviderConfigurationPreferences(),
             governanceRepository: governance,
             usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
-            registry: ToolRegistry(),
+            registry: ToolRegistry(mealPortionPriorRepository: mealPortionPriorRepository),
             confirmationCoordinator: confirmation,
             readRepository: repository,
             conversationRepository: repository
         )
         let database = try FoodDatabase(seedJSON: Data(Self.foodSeed.utf8))
         session.foodDatabase = database
-        return MealQuantityHarness(container: container, session: session, foodDatabase: database)
+        return MealQuantityHarness(
+            container: container,
+            session: session,
+            foodDatabase: database,
+            mealPortionPriorRepository: mealPortionPriorRepository
+        )
     }
 
     private static let foodSeed = #"""
@@ -892,4 +978,5 @@ private struct MealQuantityHarness {
     let container: ModelContainer
     let session: AgentSession
     let foodDatabase: FoodDatabase
+    let mealPortionPriorRepository: SwiftDataMealPortionPriorRepository
 }

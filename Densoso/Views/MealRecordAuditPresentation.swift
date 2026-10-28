@@ -25,6 +25,7 @@ enum MealRecordAuditPresentation {
             "本地食物库",
             "商品营养来源",
             "个人份量先验",
+            "个人菜品模板",
             "个人份量校准",
             "用户补充",
             "实测",
@@ -37,10 +38,14 @@ enum MealRecordAuditPresentation {
             .prefix(64)
         let displayVersion = version.isEmpty ? "legacy" : String(version)
         let baseSummary = "来源：\(source) · 算法：\(displayVersion)"
-        guard let priorUsage = portionPriorUsageSummary(from: evidence) else {
+        let priorUsages = [
+            portionPriorUsageSummary(from: evidence),
+            dishPriorUsageSummary(from: evidence),
+        ].compactMap { $0 }
+        guard !priorUsages.isEmpty else {
             return baseSummary
         }
-        return "\(priorUsage) · \(baseSummary)"
+        return "\(priorUsages.joined(separator: " · ")) · \(baseSummary)"
     }
 
     static func sourceVersionSummary(evidenceData: Data?) -> String? {
@@ -95,9 +100,31 @@ enum MealRecordAuditPresentation {
         return "估算使用个人先验：" + Array(Set(details)).sorted().joined(separator: "；")
     }
 
+    private static func dishPriorUsageSummary(from evidence: [EvidenceSnapshot]) -> String? {
+        let matchingEvidence = evidence.filter {
+            $0.sourceID == PersonalMealDishPriorUsage.evidenceSourceID
+        }
+        guard !matchingEvidence.isEmpty else { return nil }
+        let details = matchingEvidence.compactMap { snapshot -> String? in
+            guard let usage = PersonalMealDishPriorUsage.usage(from: snapshot) else { return nil }
+            let sourceDescription = usage.isUserManaged
+                ? "用户管理模板"
+                : "重复确认 \(usage.observationCount) 次"
+            let massBasis = usage.massBasis.map { "（\(massBasisLabel($0))）" } ?? ""
+            return "\(usage.dishName) · \(usage.ingredientName) "
+                + "\(quantityLabel(usage.lowGrams))/\(quantityLabel(usage.likelyGrams))/"
+                + "\(quantityLabel(usage.highGrams)) g\(massBasis) · \(sourceDescription)"
+        }
+        guard !details.isEmpty else { return "估算使用个人菜品模板" }
+        return "估算使用个人菜品模板：" + Array(Set(details)).sorted().joined(separator: "；")
+    }
+
     private static func sourceLabel(for sourceID: String) -> String? {
         if sourceID == MealPortionPriorUsage.evidenceSourceID {
             return "个人份量先验"
+        }
+        if sourceID == PersonalMealDishPriorUsage.evidenceSourceID {
+            return "个人菜品模板"
         }
         if sourceID == MealPortionPriorCorrection.evidenceSourceID {
             return "个人份量校准"
@@ -148,6 +175,14 @@ enum MealRecordAuditPresentation {
         case "banana", "香蕉": "根香蕉"
         case "apple", "苹果": "个苹果"
         default: unit
+        }
+    }
+
+    private static func massBasisLabel(_ massBasis: FoodMassBasis) -> String {
+        switch massBasis {
+        case .asPurchased: "购买重量"
+        case .edibleRaw: "生可食重量"
+        case .cooked: "熟重"
         }
     }
 

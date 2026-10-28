@@ -109,4 +109,119 @@ final class MealRecordAuditPresentationTests: XCTestCase {
         XCTAssertFalse(summary.contains("P10/P50/P90"))
         XCTAssertFalse(summary.contains("PRIVATE RAW SNAPSHOT"))
     }
+
+    func testDishPriorUsageShowsSanitizedIngredientRangeAndLearningProvenance() throws {
+        let ingredient = try XCTUnwrap(PersonalMealDishIngredientPrior(
+            foodID: "tomato-id",
+            name: "番茄",
+            lowGrams: 70,
+            likelyGrams: 85,
+            highGrams: 100,
+            preparation: .cooked,
+            massBasis: .cooked,
+            sourceID: "food-table",
+            sourceRecordID: "tomato-001",
+            sourceVersion: "food-table-v1",
+            licenseStatus: "verified"
+        ))
+        let key = try XCTUnwrap(MealDishPriorStorageKey.make(
+            dishName: "番茄炒蛋",
+            cookingMethod: "stirFry",
+            ingredients: [ingredient]
+        ))
+        let prior = try XCTUnwrap(PersonalMealDishPrior(
+            id: UUID(),
+            priorKey: key.priorKey,
+            dishKey: key.dishKey,
+            dishName: "番茄炒蛋",
+            cookingMethod: "stirFry",
+            ingredients: [ingredient],
+            observationCount: 2,
+            isUserManaged: false,
+            sourceActionKey: "private-action-key",
+            createdAt: Date(timeIntervalSince1970: 1_750_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_750_000_100)
+        ))
+        let usage = try XCTUnwrap(PersonalMealDishPriorUsage(prior: prior, ingredient: ingredient))
+        let evidenceData = try JSONEncoder().encode([usage.evidenceSnapshot])
+
+        let summary = MealRecordAuditPresentation.summary(
+            evidenceData: evidenceData,
+            algorithmVersion: "meal-estimator-v3"
+        )
+
+        XCTAssertTrue(summary.contains("来源：个人菜品模板"))
+        XCTAssertTrue(summary.contains("估算使用个人菜品模板：番茄炒蛋 · 番茄 70/85/100 g（熟重）"))
+        XCTAssertTrue(summary.contains("重复确认 2 次"))
+        XCTAssertFalse(summary.contains("private-action-key"))
+        XCTAssertFalse(summary.contains("personal-meal-dish-prior-used"))
+    }
+
+    func testDishPriorUsageRejectsUnverifiedBasisAndMalformedStoredRanges() throws {
+        let ingredient = try XCTUnwrap(PersonalMealDishIngredientPrior(
+            foodID: "tomato-id",
+            name: "番茄",
+            lowGrams: 70,
+            likelyGrams: 85,
+            highGrams: 100,
+            preparation: .cooked,
+            massBasis: .cooked,
+            sourceID: "food-table",
+            sourceRecordID: "tomato-001",
+            sourceVersion: "food-table-v1",
+            licenseStatus: "verified"
+        ))
+        let key = try XCTUnwrap(MealDishPriorStorageKey.make(
+            dishName: "番茄炒蛋",
+            cookingMethod: "stirFry",
+            ingredients: [ingredient]
+        ))
+        let prior = try XCTUnwrap(PersonalMealDishPrior(
+            id: UUID(),
+            priorKey: key.priorKey,
+            dishKey: key.dishKey,
+            dishName: "番茄炒蛋",
+            cookingMethod: "stirFry",
+            ingredients: [ingredient],
+            observationCount: 2,
+            isUserManaged: false,
+            sourceActionKey: nil,
+            createdAt: Date(timeIntervalSince1970: 1_750_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_750_000_100)
+        ))
+        let validUsage = try XCTUnwrap(PersonalMealDishPriorUsage(prior: prior, ingredient: ingredient))
+        let validData = try XCTUnwrap(validUsage.evidenceSnapshot.summary.data(using: .utf8))
+        var invalidBasisObject = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: validData) as? [String: Any]
+        )
+        invalidBasisObject["licenseStatus"] = "unverified"
+        let invalidBasisData = try JSONSerialization.data(withJSONObject: invalidBasisObject)
+        let invalidBasisSummary = try XCTUnwrap(String(data: invalidBasisData, encoding: .utf8))
+        let invalidBasisEvidence = EvidenceSnapshot(
+            grade: .weak,
+            sourceID: PersonalMealDishPriorUsage.evidenceSourceID,
+            sourceVersion: validUsage.version,
+            summary: invalidBasisSummary
+        )
+
+        var invalidRangeObject = invalidBasisObject
+        invalidRangeObject["licenseStatus"] = "verified"
+        invalidRangeObject["lowGrams"] = 120
+        let invalidRangeData = try JSONSerialization.data(withJSONObject: invalidRangeObject)
+        let invalidRangeEvidence = EvidenceSnapshot(
+            grade: .weak,
+            sourceID: PersonalMealDishPriorUsage.evidenceSourceID,
+            sourceVersion: validUsage.version,
+            summary: try XCTUnwrap(String(data: invalidRangeData, encoding: .utf8))
+        )
+
+        XCTAssertNil(PersonalMealDishPriorUsage.usage(from: invalidBasisEvidence))
+        XCTAssertNil(PersonalMealDishPriorUsage.usage(from: invalidRangeEvidence))
+        let summary = MealRecordAuditPresentation.summary(
+            evidenceData: try JSONEncoder().encode([invalidBasisEvidence, invalidRangeEvidence]),
+            algorithmVersion: "meal-estimator-v3"
+        )
+        XCTAssertTrue(summary.contains("估算使用个人菜品模板"))
+        XCTAssertFalse(summary.contains("unverified"))
+    }
 }

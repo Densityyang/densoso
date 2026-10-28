@@ -470,6 +470,14 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
         XCTAssertNil(review.portion)
         XCTAssertEqual(review.clarification?.kind, .portion)
         XCTAssertGreaterThanOrEqual(review.candidateNames.count, 2)
+        XCTAssertNil(review.inferredOilGrams)
+        XCTAssertTrue(review.resolution?.candidates.allSatisfy { candidate in
+            candidate.entry.licenseStatus == "verified"
+                && candidate.entry.sourceID?.isEmpty == false
+                && candidate.entry.sourceRecordID?.isEmpty == false
+                && !candidate.entry.sourceVersion.isEmpty
+                && FoodMassBasis(rawValue: candidate.entry.massBasis ?? "") != nil
+        } == true)
         do {
             _ = try await harness.service.stageMeal(review: review, selectedFoodID: nil)
             XCTFail("Expected explicit candidate selection")

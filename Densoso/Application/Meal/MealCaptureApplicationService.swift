@@ -408,12 +408,44 @@ final class MealCaptureApplicationService {
             FoodResolutionV2Query(
                 label: label,
                 preparation: preparation,
-                massBasis: Self.massBasis(for: preparation),
+                massBasis: nil,
                 sourceQuality: observation.isOccluded ? 0.45 : 0.75,
                 confirmedHistoryFoodIDs: history,
                 evidence: localEvidence + visionEvidence
             )
         ).mealEstimatorResolution
+        let sourceBackedCandidates = resolution.candidates.filter {
+            Self.sourceBackedMassBasis(for: $0.entry) != nil
+        }
+        guard let selectedFood = resolution.autoPreselect,
+              Self.sourceBackedMassBasis(for: selectedFood.entry) != nil else {
+            guard !sourceBackedCandidates.isEmpty else {
+                return manualReview(evidence: localEvidence + visionEvidence)
+            }
+            // An unresolved identity cannot safely drive either a photo-based
+            // portion estimate or a provisional calorie calculation. Keep the
+            // source-backed candidates for explicit user selection and ask for
+            // the actual consumed grams before staging.
+            return MealCaptureReview(
+                id: UUID(),
+                route: .qwenVision,
+                evidence: localEvidence + visionEvidence,
+                label: label,
+                resolution: FoodResolution(
+                    candidates: sourceBackedCandidates,
+                    autoPreselect: nil
+                ),
+                portion: nil,
+                cookingMethod: observation.cookingMethod,
+                inferredOilGrams: nil,
+                clarification: ClarificationQuestion(
+                    kind: .portion,
+                    prompt: "请先选择实际食用的食物，并填写这次实际吃下的大约克数。"
+                ),
+                attribution: nil,
+                rawPhotoRetained: false
+            )
+        }
         guard let likelyGrams = Self.grams(from: observation.portionHint) else {
             // An absent vision quantity is unknown, not a generic 180 g portion.
             // Keep the recognized candidate, but require the user to supply the
@@ -910,7 +942,10 @@ final class MealCaptureApplicationService {
         cookingMethod: String?,
         oilRange: EstimateRange?
     ) throws -> ClarificationQuestion? {
-        guard !resolution.candidates.isEmpty else { return nil }
+        guard let selectedFood = resolution.autoPreselect,
+              let massBasis = Self.sourceBackedMassBasis(for: selectedFood.entry) else {
+            return nil
+        }
         let provisional = try PerformanceSignposts.measure("Meal.DeterministicEstimate") {
             try mealEstimator.estimateDish(
                 MealDishEstimationInput(
@@ -921,34 +956,21 @@ final class MealCaptureApplicationService {
                             label: label,
                             resolution: resolution,
                             portion: portion,
-                            massBasis: resolution.autoPreselect?.entry.preparation == .cooked
-                                ? .cooked
-                                : .edibleRaw
+                            massBasis: massBasis
                         )
                     ],
                     inferredOilGrams: oilRange
                 )
             )
         }
-        var candidates: [ClarificationCandidate] = []
-        if resolution.autoPreselect == nil {
-            candidates.append(
-                ClarificationCandidate(
-                    kind: .foodIdentity,
-                    prompt: "更接近 \(resolution.candidates.map { $0.entry.name }.joined(separator: "，")) 中的哪一种？",
-                    expectedEnergyRangeReduction: 0.45,
-                    userEffort: 1
-                )
-            )
-        }
-        candidates.append(
+        var candidates: [ClarificationCandidate] = [
             ClarificationCandidate(
                 kind: .portion,
-                    prompt: "这一份大约多少克？",
+                prompt: "这一份大约多少克？",
                 expectedEnergyRangeReduction: 0.35,
                 userEffort: 1
             )
-        )
+        ]
         if oilRange != nil {
             candidates.append(
                 ClarificationCandidate(

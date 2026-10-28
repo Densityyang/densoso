@@ -26,6 +26,7 @@ public enum PortionEvidence: Codable, Equatable, Sendable {
     case modelEstimate(likelyGrams: Double)
     case packageServing(gramsPerServing: Double, count: Double)
     case household(prior: HouseholdPortionPrior, count: Double)
+    case personalDishPrior(lowGrams: Double, likelyGrams: Double, highGrams: Double)
     case photo(likelyGrams: Double, hasScale: Bool, isMixedDish: Bool, isOccluded: Bool, unknownContainer: Bool)
 }
 
@@ -149,6 +150,23 @@ public struct PortionEstimator: PortionEstimating, Sendable {
                 isMeasured: false,
                 source: .householdPrior,
                 label: "household:\(prior.version):\(prior.unit)"
+            )
+        case .personalDishPrior(let low, let likely, let high):
+            _ = try PortionEstimate(
+                lowGrams: low,
+                likelyGrams: likely,
+                highGrams: high,
+                isMeasured: false,
+                source: .personalDishPrior
+            )
+            return Candidate(
+                low: low,
+                likely: likely,
+                high: high,
+                priority: 35,
+                isMeasured: false,
+                source: .personalDishPrior,
+                label: "personal-dish-prior"
             )
         case .photo(let likelyGrams, let hasScale, let isMixedDish, let isOccluded, let unknownContainer):
             let likely = try requirePositive(likelyGrams)

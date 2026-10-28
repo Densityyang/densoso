@@ -28,3 +28,4 @@ typealias ConversationToolSchemaVersionRecord = DensosoSchemaV7.ConversationTool
 typealias AgentRequestCostBudgetRecord = DensosoSchemaV9.AgentRequestCostBudgetRecord
 typealias PersonalMealPortionPriorRecord = DensosoSchemaV10.PersonalMealPortionPriorRecord
 typealias CloudHealthContextPolicyRecord = DensosoSchemaV11.CloudHealthContextPolicyRecord
+typealias PersonalMealDishPriorRecord = DensosoSchemaV12.PersonalMealDishPriorRecord

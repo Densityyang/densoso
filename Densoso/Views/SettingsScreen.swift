@@ -67,6 +67,7 @@ struct SettingsScreen: View {
                     intelligenceSection
                     profileSection
                     MealPortionPriorSettingsSection()
+                    MealDishPriorSettingsSection()
                     goalsSection
                     capabilitySections
                     notificationSection

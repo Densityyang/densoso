@@ -216,6 +216,12 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                         sourceActionKey: action.idempotencyKey,
                         now: now
                     )
+                    try SwiftDataMealPortionPriorRepository.recordConfirmedDishes(
+                        in: modelContext,
+                        dishes: draft.dishes,
+                        sourceActionKey: action.idempotencyKey,
+                        now: now
+                    )
                     localRecordID = meal.id
                     affectedDate = meal.date
                     healthSyncState = .pending

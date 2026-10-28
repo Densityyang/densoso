@@ -10,8 +10,8 @@ final class ExportService {
     var isExporting = false
     var lastError: String?
 
-    private static let formatVersion = 6
-    private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5, 6]
+    private static let formatVersion = 7
+    private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5, 6, 7]
     private static let backupReadBatchSize = 64
 
     struct BackupDocument: Codable {
@@ -37,6 +37,7 @@ final class ExportService {
         let dailyCheckIns: [DailyCheckInExport]?
         let userPreferences: [UserPreferenceExport]?
         let mealPortionPriors: [MealPortionPriorExport]?
+        let mealDishPriors: [MealDishPriorExport]?
 
         struct UserProfileExport: Codable {
             let name: String
@@ -393,6 +394,21 @@ final class ExportService {
             let updatedAt: Date
         }
 
+        struct MealDishPriorExport: Codable {
+            let id: UUID
+            let priorKey: String
+            let dishKey: String
+            let dishName: String
+            let cookingMethodKey: String
+            let cookingMethod: String?
+            let ingredients: [PersonalMealDishIngredientPrior]
+            let observationCount: Int
+            let isUserManaged: Bool
+            let sourceActionKey: String?
+            let createdAt: Date
+            let updatedAt: Date
+        }
+
         struct DailyMetricsProjectionExport: Codable {
             let date: Date
             let projectionVersion: String
@@ -474,6 +490,7 @@ final class ExportService {
         case invalidDailyCheckIn
         case invalidUserPreference
         case invalidMealPortionPrior
+        case invalidMealDishPrior
         case invalidTrainingPlan
 
         var errorDescription: String? {
@@ -483,6 +500,7 @@ final class ExportService {
             case .invalidDailyCheckIn: "The backup contains an invalid user-reported daily check-in."
             case .invalidUserPreference: "The backup contains an invalid user-reported preference."
             case .invalidMealPortionPrior: "The backup contains an invalid personal meal portion prior."
+            case .invalidMealDishPrior: "The backup contains an invalid personal dish prior."
             case .invalidTrainingPlan: "The backup contains an invalid confirmed training plan."
             }
         }
@@ -620,6 +638,71 @@ final class ExportService {
                 updatedAt: source.updatedAt
             )
         }
+        var dishPriorKeys = Set<String>()
+        var dishPriorIDs = Set<UUID>()
+        let mealDishPriors = try (document.payload.mealDishPriors ?? []).map { source in
+            let dishName = source.dishName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cookingMethod = source.cookingMethod?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedCookingMethod = cookingMethod?.isEmpty == true ? nil : cookingMethod
+            let ingredients = source.ingredients.compactMap { ingredient in
+                PersonalMealDishIngredientPrior(
+                    foodID: ingredient.foodID,
+                    name: ingredient.name,
+                    lowGrams: ingredient.lowGrams,
+                    likelyGrams: ingredient.likelyGrams,
+                    highGrams: ingredient.highGrams,
+                    preparation: ingredient.preparation,
+                    massBasis: ingredient.massBasis,
+                    sourceID: ingredient.sourceID,
+                    sourceRecordID: ingredient.sourceRecordID,
+                    sourceVersion: ingredient.sourceVersion,
+                    licenseStatus: ingredient.licenseStatus
+                )
+            }
+            let expectedKey = MealDishPriorStorageKey.make(
+                dishName: dishName,
+                cookingMethod: normalizedCookingMethod,
+                ingredients: ingredients
+            )
+            guard ingredients.count == source.ingredients.count,
+                  dishName.count <= 120,
+                  normalizedCookingMethod.map({ $0.count <= 40 }) ?? true,
+                  let expectedKey,
+                  source.priorKey == expectedKey.priorKey,
+                  source.dishKey == expectedKey.dishKey,
+                  source.cookingMethodKey == expectedKey.cookingMethodKey,
+                  dishPriorKeys.insert(source.priorKey).inserted,
+                  dishPriorIDs.insert(source.id).inserted,
+                  let prior = PersonalMealDishPrior(
+                    id: source.id,
+                    priorKey: source.priorKey,
+                    dishKey: source.dishKey,
+                    dishName: dishName,
+                    cookingMethod: normalizedCookingMethod,
+                    ingredients: ingredients,
+                    observationCount: source.observationCount,
+                    isUserManaged: source.isUserManaged,
+                    sourceActionKey: source.sourceActionKey,
+                    createdAt: source.createdAt,
+                    updatedAt: source.updatedAt
+                  ) else {
+                throw BackupError.invalidMealDishPrior
+            }
+            return BackupPayload.MealDishPriorExport(
+                id: prior.id,
+                priorKey: prior.priorKey,
+                dishKey: prior.dishKey,
+                dishName: prior.dishName,
+                cookingMethodKey: expectedKey.cookingMethodKey,
+                cookingMethod: prior.cookingMethod,
+                ingredients: prior.ingredients,
+                observationCount: prior.observationCount,
+                isUserManaged: prior.isUserManaged,
+                sourceActionKey: prior.sourceActionKey,
+                createdAt: prior.createdAt,
+                updatedAt: prior.updatedAt
+            )
+        }
         let legacyWeightEntries: [UserProfile.WeightEntry] = profileSource.flatMap { source in
             guard let data = source.weightHistoryJSON.data(using: .utf8) else { return nil }
             return try? JSONDecoder().decode([UserProfile.WeightEntry].self, from: data)
@@ -665,6 +748,7 @@ final class ExportService {
             try context.delete(model: DailyCheckInRecord.self)
             try context.delete(model: UserPreferenceRecord.self)
             try context.delete(model: PersonalMealPortionPriorRecord.self)
+            try context.delete(model: PersonalMealDishPriorRecord.self)
             try context.delete(model: DailyHealthSnapshotRecord.self)
             try context.delete(model: DailyBriefRecord.self)
             try context.delete(model: WeeklyBriefRecord.self)
@@ -742,6 +826,28 @@ final class ExportService {
                     p10Grams: source.p10Grams,
                     p50Grams: source.p50Grams,
                     p90Grams: source.p90Grams,
+                    sourceActionKey: source.sourceActionKey,
+                    createdAt: source.createdAt,
+                    updatedAt: source.updatedAt
+                ))
+            }
+            for source in mealDishPriors {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                let ingredientsData = try encoder.encode(source.ingredients)
+                guard let ingredientsJSON = String(data: ingredientsData, encoding: .utf8) else {
+                    throw BackupError.invalidMealDishPrior
+                }
+                context.insert(PersonalMealDishPriorRecord(
+                    id: source.id,
+                    priorKey: source.priorKey,
+                    dishKey: source.dishKey,
+                    dishName: source.dishName,
+                    cookingMethodKey: source.cookingMethodKey,
+                    cookingMethod: source.cookingMethod,
+                    ingredientsJSON: ingredientsJSON,
+                    observationCount: source.observationCount,
+                    isUserManaged: source.isUserManaged,
                     sourceActionKey: source.sourceActionKey,
                     createdAt: source.createdAt,
                     updatedAt: source.updatedAt
@@ -1000,6 +1106,7 @@ final class ExportService {
                 dailyCheckIns: dailyCheckIns.count,
                 userPreferences: userPreferences.count,
                 mealPortionPriors: mealPortionPriors.count,
+                mealDishPriors: mealDishPriors.count,
                 scheduledPlans: (document.payload.scheduleEvents ?? []).filter {
                     ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) != nil
                         || ConfirmedTrainingPlanEntry.decode(notes: $0.notes) != nil
@@ -1020,6 +1127,7 @@ final class ExportService {
         let dailyCheckIns: Int
         let userPreferences: Int
         let mealPortionPriors: Int
+        let mealDishPriors: Int
         let scheduledPlans: Int
     }
 
@@ -1189,6 +1297,62 @@ final class ExportService {
             ]
         ).sorted {
             $0.priorKey < $1.priorKey
+        }
+        let mealDishPriorRecords = try fetchAllRecords(
+            of: PersonalMealDishPriorRecord.self,
+            in: context,
+            sortedBy: [
+                SortDescriptor(\PersonalMealDishPriorRecord.dishName),
+                SortDescriptor(\PersonalMealDishPriorRecord.cookingMethodKey),
+                SortDescriptor(\PersonalMealDishPriorRecord.priorKey),
+            ]
+        )
+        let mealDishPriors = try mealDishPriorRecords.map { source in
+            let ingredientsData = source.ingredientsJSON.data(using: .utf8)
+            let ingredients = ingredientsData.flatMap {
+                try? JSONDecoder().decode([PersonalMealDishIngredientPrior].self, from: $0)
+            }
+            let key = ingredients.flatMap {
+                MealDishPriorStorageKey.make(
+                    dishName: source.dishName,
+                    cookingMethod: source.cookingMethod,
+                    ingredients: $0
+                )
+            }
+            guard let ingredients,
+                  let key,
+                  key.priorKey == source.priorKey,
+                  key.dishKey == source.dishKey,
+                  key.cookingMethodKey == source.cookingMethodKey,
+                  let prior = PersonalMealDishPrior(
+                    id: source.id,
+                    priorKey: source.priorKey,
+                    dishKey: source.dishKey,
+                    dishName: source.dishName,
+                    cookingMethod: source.cookingMethod,
+                    ingredients: ingredients,
+                    observationCount: source.observationCount,
+                    isUserManaged: source.isUserManaged,
+                    sourceActionKey: source.sourceActionKey,
+                    createdAt: source.createdAt,
+                    updatedAt: source.updatedAt
+                  ) else {
+                throw BackupError.invalidMealDishPrior
+            }
+            return BackupPayload.MealDishPriorExport(
+                id: prior.id,
+                priorKey: prior.priorKey,
+                dishKey: prior.dishKey,
+                dishName: prior.dishName,
+                cookingMethodKey: key.cookingMethodKey,
+                cookingMethod: prior.cookingMethod,
+                ingredients: prior.ingredients,
+                observationCount: prior.observationCount,
+                isUserManaged: prior.isUserManaged,
+                sourceActionKey: prior.sourceActionKey,
+                createdAt: prior.createdAt,
+                updatedAt: prior.updatedAt
+            )
         }
         let healthSnapshots = try fetchAllRecords(
             of: DailyHealthSnapshotRecord.self,
@@ -1481,7 +1645,8 @@ final class ExportService {
                     createdAt: source.createdAt,
                     updatedAt: source.updatedAt
                 )
-            }
+            },
+            mealDishPriors: mealDishPriors
         )
     }
 

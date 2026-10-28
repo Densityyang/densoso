@@ -1559,6 +1559,16 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "Densoso/Persistence/Schemas/DensosoSchemaV12.swift",
+            (
+                "enum DensosoSchemaV12: VersionedSchema",
+                "DensosoSchemaV11.models + [PersonalMealDishPriorRecord.self]",
+                "@Attribute(.unique) var priorKey: String",
+                "var ingredientsJSON: String",
+            ),
+            errors,
+        )
+        require(
             "Densoso/Persistence/DensosoMigrationPlan.swift",
             (
                 "DensosoSchemaV7.self",
@@ -1569,7 +1579,26 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 ".lightweight(fromVersion: DensosoSchemaV8.self, toVersion: DensosoSchemaV9.self)",
                 "DensosoSchemaV10.self",
                 ".lightweight(fromVersion: DensosoSchemaV9.self, toVersion: DensosoSchemaV10.self)",
+                "DensosoSchemaV11.self",
+                ".lightweight(fromVersion: DensosoSchemaV10.self, toVersion: DensosoSchemaV11.self)",
+                "DensosoSchemaV12.self",
+                ".lightweight(fromVersion: DensosoSchemaV11.self, toVersion: DensosoSchemaV12.self)",
             ),
+            errors,
+        )
+        require(
+            "Densoso/Infrastructure/Persistence/PersistenceBootstrap.swift",
+            ("Schema(versionedSchema: DensosoSchemaV12.self)",),
+            errors,
+        )
+        require(
+            "Densoso/Infrastructure/Persistence/PersistentStoreVersionInspector.swift",
+            ("DensosoSchemaV12.self", "DensosoSchemaV11.self"),
+            errors,
+        )
+        require(
+            "DensosoTests/DensosoMigrationTests.swift",
+            ("testV11DiskStoreMigratesToV12WithDishPriorTableAndPreservedPolicy",),
             errors,
         )
         require(

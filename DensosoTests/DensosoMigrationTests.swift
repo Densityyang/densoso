@@ -291,7 +291,7 @@ final class DensosoMigrationTests: XCTestCase {
         )
         XCTAssertTrue(sampleIndex.needsRequery)
         XCTAssertFalse(sampleIndex.isTombstoned)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "10.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "12.0.0")
     }
 
     func testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity() async throws {
@@ -333,7 +333,7 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "8.0.0")
 
         container = try openCurrentStore(at: location.storeURL)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "10.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "12.0.0")
         let migratedUsage = try XCTUnwrap(
             container!.mainContext.fetch(FetchDescriptor<ProviderUsageRecord>()).first
         )
@@ -853,13 +853,51 @@ final class DensosoMigrationTests: XCTestCase {
     }
 
     private func openCurrentStore(at url: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV10.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV12.self)
         let configuration = ModelConfiguration("Densoso", schema: schema, url: url)
         return try ModelContainer(
             for: schema,
             migrationPlan: DensosoMigrationPlan.self,
             configurations: [configuration]
         )
+    }
+
+    func testV11DiskStoreMigratesToV12WithDishPriorTableAndPreservedPolicy() throws {
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        let sourceSchema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let sourceConfiguration = ModelConfiguration("Densoso", schema: sourceSchema, url: location.storeURL)
+        var sourceContainer: ModelContainer? = try ModelContainer(
+            for: sourceSchema,
+            configurations: [sourceConfiguration]
+        )
+        var sourceContext: ModelContext? = ModelContext(sourceContainer!)
+        sourceContext?.insert(CloudHealthContextPolicyRecord(
+            policyKey: "cloud-health-context-policy|deepSeek",
+            schemaVersion: 1,
+            policyID: UUID(),
+            providerRaw: ProviderID.deepSeek.rawValue,
+            revision: 2,
+            stateRaw: CloudHealthPolicyState.active.rawValue,
+            allowedClassesRaw: ProviderDataClass.healthText.rawValue,
+            createdAt: date,
+            updatedAt: date,
+            confirmedAt: date,
+            policyHash: "v11-policy-hash",
+            changeSourceRaw: CloudHealthPolicyChangeSource.settings.rawValue
+        ))
+        try sourceContext?.save()
+        sourceContext = nil
+        sourceContainer = nil
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "11.0.0")
+
+        let migrated = try openCurrentStore(at: location.storeURL)
+        let context = ModelContext(migrated)
+        let policy = try XCTUnwrap(context.fetch(FetchDescriptor<CloudHealthContextPolicyRecord>()).first)
+        XCTAssertEqual(policy.policyHash, "v11-policy-hash")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<PersonalMealDishPriorRecord>()), 0)
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "12.0.0")
     }
 
     func testV9StoreMigratesToV10WithPreMigrationBackupAndRetrySafeOpen() throws {
