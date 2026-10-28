@@ -32,9 +32,14 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     static let scheduleEventFetchBatchSize = 64
 
     private var faultPoint: ConfirmationFaultPoint?
+    private var transactionReceiptReplayTestActionTypeRaw: String?
 
     func setFaultPoint(_ point: ConfirmationFaultPoint?) {
         faultPoint = point
+    }
+
+    func setTransactionReceiptReplayTestFixture(actionTypeRaw: String?) {
+        transactionReceiptReplayTestActionTypeRaw = actionTypeRaw
     }
 
     func stage(
@@ -262,7 +267,16 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
               try payload.canonicalPayloadHash(schemaVersion: action.schemaVersion) == storedPayloadHash else {
             throw ConfirmationError.payloadCorrupt
         }
-        if let receipt = try receipt(actionID: id) { return try map(receipt) }
+        if let receipt = try receipt(actionID: id) {
+            let mappedReceipt = try map(receipt)
+            try validate(
+                mappedReceipt,
+                actionID: action.id,
+                idempotencyKey: action.idempotencyKey,
+                actionType: payload.actionType
+            )
+            return mappedReceipt
+        }
         guard let state = PendingActionState(rawValue: action.stateRaw) else {
             throw ConfirmationError.invariantViolation("unknown pending action state \(action.stateRaw)")
         }
@@ -289,10 +303,18 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         do {
             var committedReceipt: CommitReceipt?
             try modelContext.transaction {
+                try injectTransactionReceiptReplayTestFixture(for: action, committedAt: now)
                 if let existingReceipt = try receipt(actionID: id) {
+                    let mappedReceipt = try map(existingReceipt)
+                    try validate(
+                        mappedReceipt,
+                        actionID: action.id,
+                        idempotencyKey: action.idempotencyKey,
+                        actionType: payload.actionType
+                    )
                     action.stateRaw = PendingActionState.committed.rawValue
                     action.updatedAt = now
-                    committedReceipt = try map(existingReceipt)
+                    committedReceipt = mappedReceipt
                     return
                 }
 
@@ -516,8 +538,21 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                     continue
                 }
 
-                if try receipt(actionID: action.id) != nil {
-                    action.stateRaw = PendingActionState.committed.rawValue
+                if let receipt = try receipt(actionID: action.id) {
+                    do {
+                        let mappedReceipt = try map(receipt)
+                        try validate(
+                            mappedReceipt,
+                            actionID: action.id,
+                            idempotencyKey: action.idempotencyKey,
+                            actionType: pendingAction.payload.actionType
+                        )
+                        action.stateRaw = PendingActionState.committed.rawValue
+                    } catch let error as ConfirmationError {
+                        action.stateRaw = PendingActionState.failed.rawValue
+                        action.failureCode = Self.failureCode(for: error)
+                        action.failureDetail = nil
+                    }
                 } else if try sourceRecordExists(
                     idempotencyKey: action.idempotencyKey,
                     actionType: pendingAction.payload.actionType
@@ -1170,6 +1205,49 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         guard record.actionTypeRaw == payload.actionType.rawValue else {
             throw ConfirmationError.payloadCorrupt
         }
+    }
+
+    private func validate(
+        _ receipt: CommitReceipt,
+        actionID: UUID,
+        idempotencyKey: String,
+        actionType: ActionType
+    ) throws {
+        guard receipt.actionID == actionID,
+              receipt.idempotencyKey == idempotencyKey,
+              receipt.actionType == actionType else {
+            throw ConfirmationError.invariantViolation("commit receipt does not match pending action")
+        }
+
+        let expectedOutboxIDs = Set(receipt.outboxIDs)
+        let receiptID = receipt.id
+        let linkedOutboxPredicate = #Predicate<HealthSyncOutboxEntry> {
+            $0.receiptID == receiptID
+        }
+        let linkedOutboxDescriptor = FetchDescriptor<HealthSyncOutboxEntry>(predicate: linkedOutboxPredicate)
+        let linkedOutboxIDs = try modelContext.fetch(linkedOutboxDescriptor).map(\.id)
+        guard expectedOutboxIDs.count == receipt.outboxIDs.count,
+              expectedOutboxIDs.isSubset(of: Set(linkedOutboxIDs)) else {
+            throw ConfirmationError.invariantViolation("commit receipt outbox links are inconsistent")
+        }
+    }
+
+    private func injectTransactionReceiptReplayTestFixture(
+        for action: PendingActionRecord,
+        committedAt: Date
+    ) throws {
+        guard let actionTypeRaw = transactionReceiptReplayTestActionTypeRaw else { return }
+        transactionReceiptReplayTestActionTypeRaw = nil
+        modelContext.insert(CommittedActionReceiptRecord(
+            id: UUID(),
+            actionID: action.id,
+            idempotencyKey: action.idempotencyKey,
+            actionTypeRaw: actionTypeRaw,
+            localRecordID: action.id,
+            outboxIDsData: try JSONEncoder().encode([UUID]()),
+            committedAt: committedAt,
+            healthSyncStateRaw: HealthSyncState.notApplicable.rawValue
+        ))
     }
 
     private static func sha256(_ data: Data) -> String {

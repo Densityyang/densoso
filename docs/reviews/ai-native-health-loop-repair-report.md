@@ -7,6 +7,36 @@ Branch: `codex/ai-native-health-loop`
 Original review baseline (historical): `33e5ea7908223a3316ea34f4a857d0f5537e2863`
 Associated pull request: none
 
+## Current continuation — 2026-10-28 (food, consent, and receipt-integrity repairs)
+
+**Branch state before this batch:** `codex/ai-native-health-loop` was at
+`0be765f9666b098f719bd5e8583293064603d31b`, synced with `origin`; there is no
+associated PR. The unrelated dirty audit note
+`docs/audits/cn-food-mcp-candidate-disposition.md` is excluded from this batch.
+
+**Latest full Build at batch start:** [#40696456807](https://github.com/Densityyang/densoso/actions/runs/40696456807)
+targets `0be765f`. Gates 16 and 17 passed; Gate 1, Gate 18, and Gate 19 were
+queued. Its Gate 17 result predates the importer change below. Older run
+[#40694978590](https://github.com/Densityyang/densoso/actions/runs/40694978590)
+targets `a067ec4`; Gate 19 was running its cloud-policy/42-day XCTest suite,
+while Gate 1 and Gate 18 were queued. Neither run is evidence for this batch.
+No run was cancelled, and no local tests, builds, or validators were run.
+
+**Coding in this batch:** verified redistributable food rows must provide an
+explicit edible percentage instead of inheriting 100%; Gate 17 gains a
+negative importer fixture. Consent changes now save their per-provider policy
+snapshot with matching consent records and roll back together on persistence
+failure. Confirmation replay and interrupted-commit recovery validate receipt
+identity, action type, and receipt/outbox links; the transactional second
+receipt lookup is covered by a targeted race regression. Gate 19 documentation
+records the selected per-type HealthKit Beta API on Xcode 27.
+
+The owner selected Apple's Beta `earliestAuthorizedSampleDate(for:)` API and
+Xcode 27. This batch still requires a commit and a new full Build on its exact
+SHA. Live HealthKit authorization-boundary evidence remains owner-run in Gate
+15; live meal field calibration remains `NOT_MEASURED`. Signing and release
+remain owner-owned.
+
 ## Current continuation — 2026-10-28 (backup, recovery, and consent-boundary review)
 
 **GitHub branch baseline:** `707c5fb62bb18bdbb0075cea03258abcef5f3099` on

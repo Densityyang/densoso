@@ -625,6 +625,11 @@ def probe_food_basis_and_record_identity(
     missing_mass_basis.pop("massBasis", None)
     expect_rejected("verified-missing-mass-basis", [missing_mass_basis])
 
+    missing_edible_percentage = dict(seed_row)
+    missing_edible_percentage["id"] = 80012
+    missing_edible_percentage.pop("edible", None)
+    expect_rejected("verified-missing-edible-percentage", [missing_edible_percentage])
+
     mismatched_raw_cooked = dict(seed_row)
     mismatched_raw_cooked["id"] = 80008
     mismatched_raw_cooked["preparation"] = "raw"

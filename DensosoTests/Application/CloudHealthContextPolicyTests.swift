@@ -144,6 +144,38 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         XCTAssertNotEqual(revoked.revision, updated.revision)
     }
 
+    func testPerClassRevocationPersistsMatchingConsentAndPolicySnapshot() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity, .healthSleep],
+            repository: repository,
+            confirmedAt: Date(timeIntervalSince1970: 1_798_000_000),
+            changeSource: .settings
+        )
+
+        let revokedSnapshot = try await CloudHealthContextPolicy.applyRestrictiveChange(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: repository,
+            changeSource: .settings
+        )
+        let persistedSnapshot = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+        let activityConsent = try await repository.isConsentGranted(provider: .deepSeek, dataClass: .healthActivity)
+        let sleepConsent = try await repository.isConsentGranted(provider: .deepSeek, dataClass: .healthSleep)
+
+        XCTAssertFalse(activityConsent)
+        XCTAssertTrue(sleepConsent)
+        XCTAssertEqual(revokedSnapshot.allowedClasses, [.healthSleep])
+        XCTAssertEqual(persistedSnapshot.allowedClasses, [.healthSleep])
+        XCTAssertEqual(persistedSnapshot.revision, revokedSnapshot.revision)
+    }
+
     func testPolicySnapshotPersistsMonotonicRevisionHashAndRequiresConfirmedExpansion() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV11.self)
         let container = try ModelContainer(

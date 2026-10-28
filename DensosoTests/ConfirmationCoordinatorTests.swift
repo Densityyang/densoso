@@ -53,6 +53,91 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 1)
     }
 
+    func testReceiptReplayRejectsReceiptThatDoesNotMatchConfirmedAction() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        _ = try await harness.coordinator.confirm(action: action)
+
+        let context = ModelContext(harness.container)
+        let actionID = action.id
+        let predicate = #Predicate<CommittedActionReceiptRecord> { $0.actionID == actionID }
+        let receipt = try XCTUnwrap(
+            context.fetch(FetchDescriptor<CommittedActionReceiptRecord>(predicate: predicate)).first
+        )
+        receipt.actionTypeRaw = ActionType.weight.rawValue
+        try context.save()
+
+        await XCTAssertThrowsErrorAsync(try await harness.coordinator.confirm(action: action)) { error in
+            XCTAssertEqual(
+                error as? ConfirmationError,
+                .invariantViolation("commit receipt does not match pending action")
+            )
+        }
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MealRecord>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
+    }
+
+    func testTransactionReceiptRecheckRejectsReceiptInsertedAfterInitialLookup() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        await harness.repository.setTransactionReceiptReplayTestFixture(
+            actionTypeRaw: ActionType.weight.rawValue
+        )
+
+        await XCTAssertThrowsErrorAsync(try await harness.coordinator.confirm(action: action)) { error in
+            XCTAssertEqual(
+                error as? ConfirmationError,
+                .invariantViolation("commit receipt does not match pending action")
+            )
+        }
+
+        let context = ModelContext(harness.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MealRecord>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
+        let actionID = action.id
+        let actionPredicate = #Predicate<PendingActionRecord> { $0.id == actionID }
+        let storedAction = try XCTUnwrap(
+            context.fetch(FetchDescriptor<PendingActionRecord>(predicate: actionPredicate)).first
+        )
+        XCTAssertEqual(storedAction.stateRaw, PendingActionState.committing.rawValue)
+    }
+
+    func testReceiptReplayRejectsReceiptIDThatNoLongerMatchesOutboxLink() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        _ = try await harness.coordinator.confirm(action: action)
+
+        let context = ModelContext(harness.container)
+        let actionID = action.id
+        let predicate = #Predicate<CommittedActionReceiptRecord> { $0.actionID == actionID }
+        let receipt = try XCTUnwrap(
+            context.fetch(FetchDescriptor<CommittedActionReceiptRecord>(predicate: predicate)).first
+        )
+        receipt.id = UUID()
+        try context.save()
+
+        await XCTAssertThrowsErrorAsync(try await harness.coordinator.confirm(action: action)) { error in
+            XCTAssertEqual(
+                error as? ConfirmationError,
+                .invariantViolation("commit receipt outbox links are inconsistent")
+            )
+        }
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MealRecord>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
+    }
+
     func testConfirmationRejectsDifferentConversationOwner() async throws {
         let harness = try Harness()
         let action = try await harness.coordinator.stage(
@@ -980,6 +1065,43 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         ).first)
         XCTAssertEqual(recoveredAction.stateRaw, PendingActionState.failed.rawValue)
         XCTAssertEqual(recoveredAction.failureCode, "record_without_receipt")
+    }
+
+    func testRecoveryFailsClosedWhenReceiptDoesNotMatchInterruptedAction() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        _ = try await harness.coordinator.confirm(action: action)
+
+        let context = ModelContext(harness.container)
+        let actionID = action.id
+        let actionPredicate = #Predicate<PendingActionRecord> { $0.id == actionID }
+        let actionRecord = try XCTUnwrap(
+            context.fetch(FetchDescriptor<PendingActionRecord>(predicate: actionPredicate)).first
+        )
+        actionRecord.stateRaw = PendingActionState.committing.rawValue
+        let receiptPredicate = #Predicate<CommittedActionReceiptRecord> { $0.actionID == actionID }
+        let receipt = try XCTUnwrap(
+            context.fetch(FetchDescriptor<CommittedActionReceiptRecord>(predicate: receiptPredicate)).first
+        )
+        receipt.actionTypeRaw = ActionType.weight.rawValue
+        try context.save()
+
+        try await harness.repository.recoverInterruptedCommits(
+            now: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+
+        let verificationContext = ModelContext(harness.container)
+        let recoveredAction = try XCTUnwrap(
+            verificationContext.fetch(FetchDescriptor<PendingActionRecord>(predicate: actionPredicate)).first
+        )
+        XCTAssertEqual(recoveredAction.stateRaw, PendingActionState.failed.rawValue)
+        XCTAssertEqual(recoveredAction.failureCode, "invalid_action_state")
+        XCTAssertEqual(try verificationContext.fetchCount(FetchDescriptor<MealRecord>()), 1)
+        XCTAssertEqual(try verificationContext.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 1)
+        XCTAssertEqual(try verificationContext.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
     }
 
     func testRejectAndExpiryNeverWriteHealthRecords() async throws {

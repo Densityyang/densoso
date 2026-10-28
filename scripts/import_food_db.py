@@ -328,6 +328,11 @@ def _prepare_items(
             and isinstance(source.get("licenseSPDX"), str)
             and bool(source.get("licenseSPDX").strip())
         )
+        if source_is_redistributable and "edible" not in item:
+            raise ValueError(
+                f"{record}: verified redistributable rows require an explicit edible percentage; "
+                "the importer will not assume 100%"
+            )
         if production and not source_is_redistributable:
             skipped_unverified += 1
             continue

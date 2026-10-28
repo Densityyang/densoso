@@ -16,14 +16,16 @@ expansion, backup reconfirmation, a shared 42-day analysis/initial-sync window,
 authorization-boundary handling, unknown-versus-absence coverage, and
 idempotent rebaseline and deletion recompute.
 
-The production HealthKit adapter does not depend on Apple's Beta
-`getEarliestAuthorizedSampleDate` API. The stable path rebuilds only the bounded
-42-day snapshot when that per-type boundary is unavailable; empty reads remain
-unknown and stale HealthKit-derived cache rows are purged before the export gate
-opens. Gate 19's software check reports the coordinator contract separately
-from `liveHealthKitAuthorizationBoundary`, which remains `NOT_MEASURED` until a
-signed-device authorization matrix is supplied. This device evidence is owned
-by Gate 15 and is not inferred from simulator/fake-provider tests.
+The production HealthKit adapter uses Apple's Beta per-type
+`earliestAuthorizedSampleDate(for:)` API on iOS 27 and later, built with the
+Xcode 27 SDK. Earlier OS versions report `authorizationBoundaryUnavailable`;
+the coordinator then rebuilds only the bounded 42-day snapshot. Empty reads
+remain unknown and stale HealthKit-derived cache rows are purged before the
+export gate opens. Gate 19's software check reports the coordinator contract
+separately from `liveHealthKitAuthorizationBoundary`, which remains
+`NOT_MEASURED` until a signed-device authorization matrix is supplied. This
+device evidence is owned by Gate 15 and is not inferred from simulator or
+fake-provider tests.
 
 The report must keep uncovered or unexecuted behavior `BLOCKED` or
 `NOT_MEASURED`; source-text presence cannot be promoted to runtime `PASS`. It
