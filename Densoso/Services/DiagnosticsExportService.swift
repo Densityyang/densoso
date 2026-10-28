@@ -8,14 +8,20 @@ struct DiagnosticsRuntimeInfo: Codable, Equatable, Sendable {
     let appBuild: String
     let schemaVersion: String
 
-    static func current(bundle: Bundle = .main, schemaVersion: String = "10.0.0") -> Self {
+    static func current(bundle: Bundle = .main, schemaVersion: String? = nil) -> Self {
         let version = ProcessInfo.processInfo.operatingSystemVersion
         return Self(
             osVersion: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)",
             appVersion: safeBuildValue(bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String),
             appBuild: safeBuildValue(bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String),
-            schemaVersion: schemaVersion
+            schemaVersion: schemaVersion ?? currentSchemaVersion
         )
+    }
+
+    private static var currentSchemaVersion: String {
+        // Keep diagnostics aligned with the app's active persistence schema.
+        let version = DensosoSchemaV12.versionIdentifier
+        return "\(version.major).\(version.minor).\(version.patch)"
     }
 
     private static func safeBuildValue(_ value: String?) -> String {
@@ -122,7 +128,32 @@ struct DiagnosticsDailyLoopStatus: Codable, Equatable, Sendable {
     static let unavailable = Self(lastGeneratedAt: nil, nextRefreshEarliestAt: nil)
 }
 
-/// This is an explicit whitelist. Never add user records, payloads, messages, permissions,
+struct DiagnosticsProviderPolicyRevision: Codable, Equatable, Sendable {
+    let provider: String
+    let revision: Int?
+}
+
+enum DiagnosticsCoverageStatus: String, Codable, Equatable, Sendable {
+    case known
+    case unknown
+}
+
+struct DiagnosticsMetricCoverage: Codable, Equatable, Sendable {
+    let metric: String
+    let expectedCalendarDays: Int
+    let coverageStatus: DiagnosticsCoverageStatus
+    let validCalendarDays: Int?
+    let missingCalendarDays: Int?
+    let authorizationLimited: Bool?
+    let dataAvailabilityLimited: Bool?
+}
+
+struct DiagnosticsHealthCoverage: Codable, Equatable, Sendable {
+    let analysisWindowDays: Int
+    let metrics: [DiagnosticsMetricCoverage]
+}
+
+/// This is an explicit whitelist. Never add user records, payloads, messages, permission grants,
 /// credentials, endpoints, workspace identifiers, or consent details to this document.
 struct DiagnosticsExportDocument: Codable, Equatable, Sendable {
     let formatVersion: Int
@@ -135,6 +166,8 @@ struct DiagnosticsExportDocument: Codable, Equatable, Sendable {
     let projections: DiagnosticsProjectionStatus
     let watch: DiagnosticsWatchStatus
     let dailyLoop: DiagnosticsDailyLoopStatus
+    let cloudPolicyRevisions: [DiagnosticsProviderPolicyRevision]
+    let healthCoverage: DiagnosticsHealthCoverage
 }
 
 @MainActor
@@ -171,6 +204,8 @@ final class DiagnosticsExportService {
         let usage = try makeUsageStatus(context: context, windowStart: windowStart, now: now)
         let sync = try makeSyncStatus(context: context)
         let projections = try makeProjectionStatus(context: context, windowStart: windowStart, now: now)
+        let cloudPolicyRevisions = try makeCloudPolicyRevisions(context: context)
+        let healthCoverage = try makeHealthCoverage(context: context, asOf: now)
 
         return DiagnosticsExportDocument(
             formatVersion: 1,
@@ -182,7 +217,9 @@ final class DiagnosticsExportService {
             sync: sync,
             projections: projections,
             watch: watch,
-            dailyLoop: dailyLoop
+            dailyLoop: dailyLoop,
+            cloudPolicyRevisions: cloudPolicyRevisions,
+            healthCoverage: healthCoverage
         )
     }
 
@@ -335,6 +372,65 @@ final class DiagnosticsExportService {
             qualityCounts: qualities
         )
     }
+
+    private func makeCloudPolicyRevisions(context: ModelContext) throws -> [DiagnosticsProviderPolicyRevision] {
+        // Export only the provider and revision; policy state and contents stay local.
+        var descriptor = FetchDescriptor<CloudHealthContextPolicyRecord>()
+        descriptor.fetchLimit = 64
+        let records = try context.fetch(descriptor)
+        var latestRevisionByProvider: [ProviderID: Int] = [:]
+        for record in records {
+            guard let provider = ProviderID(rawValue: record.providerRaw) else { continue }
+            let revision = max(record.revision, 0)
+            latestRevisionByProvider[provider] = max(latestRevisionByProvider[provider] ?? 0, revision)
+        }
+        return ProviderID.allCases.map { provider in
+            DiagnosticsProviderPolicyRevision(
+                provider: Self.safeProvider(provider.rawValue),
+                revision: latestRevisionByProvider[provider]
+            )
+        }
+    }
+
+    private func makeHealthCoverage(context: ModelContext, asOf date: Date) throws -> DiagnosticsHealthCoverage {
+        // The exported shape intentionally drops exact dates and all health values.
+        let calendar = Calendar.current
+        let days = try HealthIntelligenceReadModel(calendar: calendar).loadDays(through: date, in: context)
+        let summary = HealthIntelligenceEngine(calendar: calendar).makeContextSummary(
+            days: days,
+            asOf: date,
+            goals: nil,
+            recommendations: []
+        )
+        let metrics = Self.diagnosticsCoverageMetricKeys.compactMap { metric in
+            guard let coverage = summary.analysisWindowCoverage[metric] else { return nil }
+            return DiagnosticsMetricCoverage(
+                metric: metric,
+                expectedCalendarDays: coverage.expectedCalendarDays,
+                coverageStatus: coverage.validCalendarDays != nil && coverage.missingCalendarDays != nil
+                    ? .known
+                    : .unknown,
+                validCalendarDays: coverage.validCalendarDays,
+                missingCalendarDays: coverage.missingCalendarDays,
+                authorizationLimited: coverage.authorizationLimited,
+                dataAvailabilityLimited: coverage.dataAvailabilityLimited
+            )
+        }
+        return DiagnosticsHealthCoverage(
+            analysisWindowDays: HealthDataWindowContract.analysisLookbackDays,
+            metrics: metrics
+        )
+    }
+
+    private static let diagnosticsCoverageMetricKeys = [
+        "activeEnergy",
+        "bodyMass",
+        "dailyDeficitKcal",
+        "energyIntake",
+        "proteinGrams",
+        "sleep",
+        "steps",
+    ]
 
     private static func safeProvider(_ raw: String) -> String {
         switch raw.lowercased() {

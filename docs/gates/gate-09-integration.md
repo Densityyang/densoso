@@ -56,11 +56,13 @@ acceptance.
   physical iPhone render.
 - Privacy-focused diagnostics export offers a shareable JSON file with only
   OS/app/schema, provider/model, latency/usage/error codes, aggregate sync and
-  projection status, sanitized per-stream cursor watermarks, daily-loop
-  generation time, earliest requested background refresh, and Watch
-  availability. Meals, weights, HealthKit metrics/samples, opaque anchors,
-  notes, transcripts, preferences, API keys, and consent contents are excluded
-  and checked by `DiagnosticsExportPrivacyTests`.
+  projection status, provider-scoped cloud-policy revisions, bounded 42-day
+  per-metric coverage counts/limitation flags, sanitized per-stream cursor
+  watermarks, daily-loop generation time, earliest requested background
+  refresh, and Watch availability. Coverage omits target/sample dates and raw
+  values. Meals, weights, HealthKit metrics/samples, opaque anchors, notes,
+  transcripts, preferences, API keys, policy contents, and consent contents are
+  excluded and checked by `DiagnosticsExportPrivacyTests`.
 
 ## Gate contract
 

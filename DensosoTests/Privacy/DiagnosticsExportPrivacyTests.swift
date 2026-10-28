@@ -7,7 +7,7 @@ import XCTest
 final class DiagnosticsExportPrivacyTests: XCTestCase {
     func testExportContainsOnlyWhitelistedDiagnosticsAndIsReadOnly() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let schema = Schema(versionedSchema: DensosoSchemaV10.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV12.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -109,6 +109,40 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
                 granted: true
             )
         )
+        let privatePolicyHash = "PRIVATE-POLICY-HASH-DO-NOT-EXPORT"
+        let privatePolicyClasses = "PRIVATE-POLICY-CLASSES-DO-NOT-EXPORT"
+        context.insert(
+            CloudHealthContextPolicyRecord(
+                policyKey: "deepSeek",
+                schemaVersion: 1,
+                policyID: UUID(),
+                providerRaw: "deepSeek",
+                revision: 4,
+                stateRaw: "confirmed",
+                allowedClassesRaw: privatePolicyClasses,
+                createdAt: now.addingTimeInterval(-300),
+                updatedAt: now.addingTimeInterval(-120),
+                confirmedAt: now.addingTimeInterval(-120),
+                policyHash: privatePolicyHash,
+                changeSourceRaw: "userConfirmed"
+            )
+        )
+        context.insert(
+            CloudHealthContextPolicyRecord(
+                policyKey: "qwen",
+                schemaVersion: 1,
+                policyID: UUID(),
+                providerRaw: "qwen",
+                revision: 9,
+                stateRaw: "confirmed",
+                allowedClassesRaw: privatePolicyClasses,
+                createdAt: now.addingTimeInterval(-300),
+                updatedAt: now.addingTimeInterval(-120),
+                confirmedAt: now.addingTimeInterval(-120),
+                policyHash: privatePolicyHash,
+                changeSourceRaw: "userConfirmed"
+            )
+        )
         try context.save()
 
         let before = try [
@@ -123,6 +157,7 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
             context.fetch(FetchDescriptor<MessageRecord>()).count,
             context.fetch(FetchDescriptor<UserPreferenceRecord>()).count,
             context.fetch(FetchDescriptor<ConsentRecord>()).count,
+            context.fetch(FetchDescriptor<CloudHealthContextPolicyRecord>()).count,
         ]
         let logs = ProviderLogBuffer()
         logs.record(
@@ -163,7 +198,7 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
                 osVersion: "18.0.1",
                 appVersion: "1.2.3",
                 appBuild: "45",
-                schemaVersion: "10.0.0"
+                schemaVersion: "12.0.0"
             )
         )
         let exportService = DiagnosticsExportService(providerLogs: logs)
@@ -184,7 +219,8 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
 
         XCTAssertTrue(json.contains("18.0.1"))
         XCTAssertTrue(json.contains("1.2.3"))
-        XCTAssertTrue(json.contains("10.0.0"))
+        XCTAssertTrue(json.contains("12.0.0"))
+        XCTAssertTrue(sharedJSON.contains("12.0.0"))
         XCTAssertTrue(json.contains("qwen-flash"))
         XCTAssertTrue(json.contains("84"))
         XCTAssertTrue(json.contains("321"))
@@ -198,6 +234,28 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
         XCTAssertTrue(json.contains("complete"))
         XCTAssertTrue(json.contains("watch_error"))
         XCTAssertEqual(document.dailyLoop, dailyLoopStatus)
+        XCTAssertEqual(
+            document.cloudPolicyRevisions,
+            [
+                DiagnosticsProviderPolicyRevision(provider: "deepseek", revision: 4),
+                DiagnosticsProviderPolicyRevision(provider: "qwen", revision: 9),
+            ]
+        )
+        XCTAssertEqual(document.healthCoverage.analysisWindowDays, 42)
+        XCTAssertEqual(
+            document.healthCoverage.metrics.map(\.metric),
+            ["activeEnergy", "bodyMass", "dailyDeficitKcal", "energyIntake", "proteinGrams", "sleep", "steps"]
+        )
+        XCTAssertTrue(document.healthCoverage.metrics.allSatisfy { $0.expectedCalendarDays == 42 })
+        let sleepCoverage = try XCTUnwrap(document.healthCoverage.metrics.first { $0.metric == "sleep" })
+        XCTAssertEqual(sleepCoverage.coverageStatus, .unknown)
+        XCTAssertNil(sleepCoverage.validCalendarDays)
+        XCTAssertNil(sleepCoverage.missingCalendarDays)
+        XCTAssertNil(sleepCoverage.authorizationLimited)
+        XCTAssertNil(sleepCoverage.dataAvailabilityLimited)
+        XCTAssertTrue(json.contains("healthCoverage"))
+        XCTAssertFalse(json.contains("targetWindowStart"))
+        XCTAssertFalse(json.contains("actualEarliestDate"))
         XCTAssertEqual(document.sync.importCursorCount, 1)
         XCTAssertEqual(
             document.sync.importCursors,
@@ -220,6 +278,12 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
             "PRIVATE-DRAFT-NOTE",
             "PRIVATE-PREFERENCE",
             "PRIVATE-CONSENT",
+            privatePolicyHash,
+            privatePolicyClasses,
+            "policyHash",
+            "allowedClassesRaw",
+            "confirmedAt",
+            "changeSourceRaw",
             "estimatedCostMicros",
             "currency",
             "requestID",
@@ -252,6 +316,7 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
             context.fetch(FetchDescriptor<MessageRecord>()).count,
             context.fetch(FetchDescriptor<UserPreferenceRecord>()).count,
             context.fetch(FetchDescriptor<ConsentRecord>()).count,
+            context.fetch(FetchDescriptor<CloudHealthContextPolicyRecord>()).count,
         ]
         XCTAssertEqual(before, after)
     }

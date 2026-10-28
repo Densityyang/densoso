@@ -631,7 +631,7 @@ struct SettingsScreen: View {
             }
             .disabled(isExportingDiagnostics)
 
-            Text("仅包含版本、云端提供方与模型、延迟/用量/错误码、同步投影和 Watch 状态；不含健康记录、备注、转录、偏好、密钥或同意内容。")
+            Text("仅包含版本、云端提供方与模型、策略修订号、42 天逐指标覆盖统计、延迟/用量/错误码、同步投影和 Watch 状态；不含原始健康记录或指标值、备注、转录、偏好、密钥、策略内容或同意明细。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

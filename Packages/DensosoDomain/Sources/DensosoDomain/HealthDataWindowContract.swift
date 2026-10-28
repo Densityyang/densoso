@@ -1,3 +1,5 @@
+import Foundation
+
 /// Shared calendar-window requirements for health analysis and initial sync.
 ///
 /// Keeping these values in the domain package lets the app's HealthKit sync
