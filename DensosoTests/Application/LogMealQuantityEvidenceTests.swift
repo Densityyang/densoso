@@ -677,6 +677,37 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 0)
     }
 
+    func testUnknownPreparationAndMissingMassBasisRequireClarification() async throws {
+        let provider = provider(calls: [mealCall(
+            ingredientName: "米饭",
+            quantity: quantity("exactGrams", value: 100, unit: "g"),
+            preparation: "unknown",
+            massBasis: nil
+        )])
+        let harness = try makeHarness(provider: provider)
+        let request = MultimodalModelRequest(
+            userText: "我午餐吃了米饭100克。",
+            mealEvidence: [
+                MealEvidence(
+                    kind: .foodCandidate,
+                    value: "米饭",
+                    confidence: 1,
+                    sourceVersion: "fixture-food-candidate-v1"
+                ),
+            ]
+        )
+
+        _ = try await harness.session.send(multimodalRequest: request)
+
+        XCTAssertTrue(harness.session.pendingActions.isEmpty)
+        let results = toolResultContents(in: provider.recordedRequests().last)
+        XCTAssertTrue(results.contains {
+            $0.contains("clarification_required") && $0.contains("massBasis")
+        })
+        XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 0)
+        XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<PendingActionRecord>()), 0)
+    }
+
     private func quantity(
         _ kind: String,
         value: Double? = nil,
@@ -719,7 +750,9 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
     private func mealCall(
         ingredientName: String,
         quantity: JSONValue,
-        additionalIngredients: [(String, JSONValue)] = []
+        additionalIngredients: [(String, JSONValue)] = [],
+        preparation: String? = "cooked",
+        massBasis: String? = "cooked"
     ) -> ToolCall {
         let ingredientArguments = [(ingredientName, quantity)] + additionalIngredients
         return ToolCall(
@@ -736,8 +769,8 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
                             .object([
                                 "name": .string(name),
                                 "quantityEvidence": evidence,
-                                "preparation": .string("cooked"),
-                                "massBasis": .string("cooked"),
+                                "preparation": preparation.map(JSONValue.string) ?? .null,
+                                "massBasis": massBasis.map(JSONValue.string) ?? .null,
                             ])
                         }),
                         "lowConfidence": .boolean(false),

@@ -209,6 +209,7 @@ enum MealCaptureApplicationError: Equatable, SharedErrorDescribing {
     case candidateSelectionRequired
     case invalidCandidate
     case portionUnavailable
+    case massBasisUnavailable
     case mealVisionConsentRequired
     case clarificationAnswerRequired
 
@@ -224,6 +225,8 @@ enum MealCaptureApplicationError: Equatable, SharedErrorDescribing {
             (.actionConflict, .actionNotFound, "所选食物候选已经失效，请重新识别。")
         case .portionUnavailable:
             (.toolArgumentsInvalid, .invalidToolArguments, "请补充大致份量后再生成草稿。")
+        case .massBasisUnavailable:
+            (.toolArgumentsInvalid, .invalidToolArguments, "无法从已验证的食物记录确定这份重量的口径，请改用文字补充生重、熟重或购买重量。")
         case .mealVisionConsentRequired:
             (.actionConflict, .consentRequired, "开放式照片需要单独同意向 Qwen 上传处理后的图片。")
         case .clarificationAnswerRequired:
@@ -564,6 +567,16 @@ final class MealCaptureApplicationService {
         guard let portion = correctedPortion ?? review.portion else {
             throw MealCaptureApplicationError.portionUnavailable
         }
+        let massBasis: FoodMassBasis
+        switch review.route {
+        case .packagedBarcode, .nutritionLabel:
+            massBasis = .asPurchased
+        case .qwenVision, .manualDescription:
+            guard let sourceBackedMassBasis = Self.sourceBackedMassBasis(for: selected.entry) else {
+                throw MealCaptureApplicationError.massBasisUnavailable
+            }
+            massBasis = sourceBackedMassBasis
+        }
         let confirmedResolution = FoodResolution(
             candidates: originalResolution.candidates,
             autoPreselect: selected
@@ -657,7 +670,7 @@ final class MealCaptureApplicationService {
                             label: review.label,
                             resolution: confirmedResolution,
                             portion: portion,
-                            massBasis: selected.entry.preparation == .cooked ? .cooked : .edibleRaw,
+                            massBasis: massBasis,
                             additionalEvidence: captureEvidence
                         )
                     ],
@@ -868,12 +881,15 @@ final class MealCaptureApplicationService {
         ).mealEstimatorResolution
     }
 
-    private static func massBasis(for preparation: FoodPreparation) -> FoodMassBasis? {
-        switch preparation {
-        case .raw: .edibleRaw
-        case .cooked: .cooked
-        case .unknown: nil
+    private static func sourceBackedMassBasis(for entry: FoodCatalogEntry) -> FoodMassBasis? {
+        guard entry.licenseStatus == "verified",
+              let sourceID = entry.sourceID, !sourceID.isEmpty,
+              let sourceRecordID = entry.sourceRecordID, !sourceRecordID.isEmpty,
+              !entry.sourceVersion.isEmpty,
+              let rawMassBasis = entry.massBasis else {
+            return nil
         }
+        return FoodMassBasis(rawValue: rawMassBasis)
     }
 
     private static func consumedPortionClarification(

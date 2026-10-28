@@ -19,6 +19,60 @@ final class MealCaptureApplicationServiceTests: XCTestCase {
         XCTAssertEqual(consentError.localizedDescription, consentError.sharedErrorDescriptor.userMessage)
     }
 
+    func testManualMealRequiresSourceBackedMassBasisWhileLabelRouteUsesPurchasedBasis() async throws {
+        let harness = try await MealCaptureHarness(
+            scanner: FakeMealImageScanner(evidence: []),
+            visionProvider: FakeMealVisionProvider(),
+            imageConsent: false,
+            imageEnabled: false
+        )
+        let unverifiedFoodSeed = #"""
+        [
+          {"id":71,"name":"苹果","alias":"苹果","preparation":"raw","category":"水果类及制品","edible":50,"energyKcal":100,"proteinG":1,"fatG":1,"carbohydrateG":20,"fiberG":2}
+        ]
+        """#
+        let unverifiedDatabase = try FoodDatabase(seedJSON: Data(unverifiedFoodSeed.utf8))
+        let entries = try unverifiedDatabase.catalogEntries()
+        let resolution = FoodResolverV2(catalog: entries).resolve(
+            FoodResolutionV2Query(label: "苹果", preparation: .raw, sourceQuality: 1)
+        ).mealEstimatorResolution
+        let selected = try XCTUnwrap(resolution.autoPreselect)
+        let portion = try PortionEstimator().estimate(
+            evidence: [.userCorrection(low: 100, likely: 100, high: 100)],
+            food: selected
+        )
+        func review(route: MealCaptureReview.Route) -> MealCaptureReview {
+            MealCaptureReview(
+                id: UUID(), route: route, evidence: [], label: "苹果",
+                resolution: resolution, portion: portion, cookingMethod: nil,
+                inferredOilGrams: nil, clarification: nil, attribution: nil,
+                rawPhotoRetained: false
+            )
+        }
+
+        do {
+            _ = try await harness.service.stageMeal(
+                review: review(route: .manualDescription),
+                selectedFoodID: nil
+            )
+            XCTFail("Manual meal weights need an explicit or source-backed mass basis")
+        } catch {
+            XCTAssertEqual(error as? MealCaptureApplicationError, .massBasisUnavailable)
+        }
+        let context = ModelContext(harness.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<PendingActionRecord>()), 0)
+
+        let labelAction = try await harness.service.stageMeal(
+            review: review(route: .nutritionLabel),
+            selectedFoodID: nil
+        )
+        guard case .meal(let draft) = labelAction.payload else {
+            return XCTFail("Expected a packaged-label meal draft")
+        }
+        XCTAssertEqual(draft.totalNutrients?.energyKcal.likely ?? -1, 50, accuracy: 0.001)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<PendingActionRecord>()), 1)
+    }
+
     func testLocalMealPortionAnswerSupportsCountsAndRejectsPackageSpecsAsConsumedAmount() {
         let parser = LocalMealPortionAnswerParser()
 
@@ -740,8 +794,9 @@ private struct MealCaptureHarness {
 
     private static let seedJSON = """
     [
-      {"id":2,"name":"米饭(熟)","alias":"熟米饭|白米饭","preparation":"cooked","category":"谷类及制品","edible":100,"energyKcal":116,"proteinG":2.6,"fatG":0.3,"carbohydrateG":25.9,"fiberG":0.3},
-      {"id":31,"name":"大米(生)","alias":"生大米|大米","preparation":"raw","category":"谷类及制品","edible":100,"energyKcal":346,"proteinG":7.4,"fatG":0.8,"carbohydrateG":77.9,"fiberG":0.7}
+      {"id":2,"name":"米饭(熟)","alias":"熟米饭|白米饭","preparation":"cooked","category":"谷类及制品","edible":100,"energyKcal":116,"proteinG":2.6,"fatG":0.3,"carbohydrateG":25.9,"fiberG":0.3,"sourceID":"fixture-food-composition","sourceRecordID":"rice-cooked","sourceVersion":"fixture-v1","licenseStatus":"verified","sourceRecordJSON":"{\"massBasis\":\"cooked\"}"},
+      {"id":31,"name":"大米(生)","alias":"生大米|大米","preparation":"raw","category":"谷类及制品","edible":100,"energyKcal":346,"proteinG":7.4,"fatG":0.8,"carbohydrateG":77.9,"fiberG":0.7,"sourceID":"fixture-food-composition","sourceRecordID":"rice-raw","sourceVersion":"fixture-v1","licenseStatus":"verified","sourceRecordJSON":"{\"massBasis\":\"edibleRaw\"}"}
     ]
     """
+
 }

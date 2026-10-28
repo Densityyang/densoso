@@ -290,9 +290,11 @@ struct DeepSeekProvider: MultimodalModelProvider {
                 }
                 calls.append(ToolCall(id: callID, name: name, arguments: arguments))
             case "reasoning":
-                // Kept only in memory and supplied to the next tool round. It is redacted
-                // by AgentSession before any conversation record is written to disk.
-                reasoning.append(item)
+                // DeepSeek accepts reasoning continuation only as plain-text
+                // content. Do not forward response-only summary or encrypted fields.
+                if let supportedReasoning = DeepSeekReasoningInput.supportedInput(.object(object)) {
+                    reasoning.append(supportedReasoning)
+                }
             case "message":
                 guard case .array(let content) = object["content"] ?? .array([]) else {
                     throw ProviderError.malformedResponse
@@ -358,6 +360,47 @@ struct DeepSeekProvider: MultimodalModelProvider {
     private static func latencyMilliseconds(since start: Date) -> Int {
         let milliseconds = max(Date().timeIntervalSince(start) * 1_000, 0)
         return Int(min(milliseconds, Double(Int.max)))
+    }
+}
+
+private enum DeepSeekReasoningInput {
+    static func supportedInput(_ item: JSONValue) -> JSONValue? {
+        guard let object = item.objectValue,
+              object["type"]?.stringValue == "reasoning" else {
+            return nil
+        }
+
+        let contentParts: [JSONValue]
+        switch object["content"] {
+        case .string(let text) where !text.isEmpty:
+            contentParts = [
+                .object([
+                    "type": .string("reasoning_text"),
+                    "text": .string(text),
+                ]),
+            ]
+        case .array(let parts):
+            contentParts = parts.compactMap { part in
+                guard let partObject = part.objectValue,
+                      partObject["type"]?.stringValue == "reasoning_text",
+                      let text = partObject["text"]?.stringValue,
+                      !text.isEmpty else {
+                    return nil
+                }
+                return .object([
+                    "type": .string("reasoning_text"),
+                    "text": .string(text),
+                ])
+            }
+        default:
+            return nil
+        }
+
+        guard !contentParts.isEmpty else { return nil }
+        return .object([
+            "type": .string("reasoning"),
+            "content": .array(contentParts),
+        ])
     }
 }
 
@@ -466,8 +509,13 @@ private struct DeepSeekResponsesRequest: Encodable {
                     )
                 case .reasoning(let item):
                     flushMessage()
-                    guard case .object = item else { throw ProviderError.malformedResponse }
-                    result.append(item)
+                    // Response reasoning objects may contain `encrypted_content`
+                    // or `summary`, which DeepSeek does not accept as input. Keep
+                    // only its documented plain-text reasoning content; an opaque
+                    // reasoning item is safely omitted from stateless continuation.
+                    if let supportedReasoning = DeepSeekReasoningInput.supportedInput(item) {
+                        result.append(supportedReasoning)
+                    }
                 }
             }
             flushMessage()

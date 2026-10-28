@@ -80,7 +80,12 @@ final class DeepSeekProviderContractTests: XCTestCase {
         })
         XCTAssertTrue(events.contains { event in
             guard case .reasoning(let item) = event else { return false }
-            return item.objectValue?["encrypted_content"]?.stringValue == "opaque-reasoning-fixture"
+            let reasoningContent = item.objectValue?["content"]?.arrayValue
+            return item.objectValue?["type"]?.stringValue == "reasoning"
+                && reasoningContent?.first?.objectValue?["type"]?.stringValue == "reasoning_text"
+                && reasoningContent?.first?.objectValue?["text"]?.stringValue == "private reasoning fixture"
+                && item.objectValue?["encrypted_content"] == nil
+                && item.objectValue?["summary"] == nil
         })
         XCTAssertTrue(events.contains { event in
             guard case .usage(let usage) = event else { return false }
@@ -138,7 +143,21 @@ final class DeepSeekProviderContractTests: XCTestCase {
         )
         let reasoning = JSONValue.object([
             "type": .string("reasoning"),
+            "id": .string("same-process-only"),
+            "content": .array([
+                .object([
+                    "type": .string("reasoning_text"),
+                    "text": .string("supported continuation text"),
+                ]),
+            ]),
             "encrypted_content": .string("same-process-only"),
+            "summary": .array([
+                .object(["type": .string("summary_text"), "text": .string("unsupported")]),
+            ]),
+        ])
+        let opaqueReasoning = JSONValue.object([
+            "type": .string("reasoning"),
+            "encrypted_content": .string("encrypted-only-reasoning"),
         ])
         let format = StructuredOutputFormat(
             name: "MealVisionIntent",
@@ -155,6 +174,7 @@ final class DeepSeekProviderContractTests: XCTestCase {
                     role: .assistant,
                     content: [
                         .reasoning(reasoning),
+                        .reasoning(opaqueReasoning),
                         .toolCall(ToolCall(id: "tool_1", name: "log_weight", arguments: .object(["kilograms": .number(62.5)]))),
                     ]
                 ),
@@ -189,7 +209,14 @@ final class DeepSeekProviderContractTests: XCTestCase {
         XCTAssertEqual(userParts[1]["type"] as? String, "input_image")
         XCTAssertEqual(userParts[1]["detail"] as? String, "high")
         XCTAssertTrue((userParts[1]["image_url"] as? String)?.hasPrefix("data:image/jpeg;base64,") == true)
-        XCTAssertEqual(input[1]["type"] as? String, "reasoning")
+        let reasoningInputs = input.filter { $0["type"] as? String == "reasoning" }
+        XCTAssertEqual(reasoningInputs.count, 1, "Encrypted-only response reasoning must be omitted")
+        let reasoningInput = try XCTUnwrap(reasoningInputs.first)
+        XCTAssertEqual(Set(reasoningInput.keys), Set(["type", "content"]))
+        let reasoningContent = try XCTUnwrap(reasoningInput["content"] as? [[String: Any]])
+        XCTAssertEqual(reasoningContent.count, 1)
+        XCTAssertEqual(reasoningContent.first?["type"] as? String, "reasoning_text")
+        XCTAssertEqual(reasoningContent.first?["text"] as? String, "supported continuation text")
         XCTAssertEqual(input[2]["type"] as? String, "function_call")
         XCTAssertEqual(input[3]["type"] as? String, "function_call_output")
         let text = try XCTUnwrap(object["text"] as? [String: Any])

@@ -177,15 +177,30 @@ struct LogMealTool: ConfirmationRequiredTool {
             var ingredients: [MealIngredientEstimationInput] = []
             var hasExplicitOilIngredient = false
             for (ingredientIndex, ingredient) in rawDish.ingredients.enumerated() {
-                let preparation = FoodPreparation(rawValue: ingredient.preparation ?? "") ?? .unknown
-                let massBasis = FoodMassBasis(rawValue: ingredient.massBasis ?? "")
-                    ?? (preparation == .cooked ? .cooked : .edibleRaw)
+                let preparation: FoodPreparation
+                if let rawPreparation = ingredient.preparation {
+                    guard let parsedPreparation = FoodPreparation(rawValue: rawPreparation) else {
+                        throw DraftError.invalidMeal
+                    }
+                    preparation = parsedPreparation
+                } else {
+                    preparation = .unknown
+                }
+                let requestedMassBasis: FoodMassBasis?
+                if let rawMassBasis = ingredient.massBasis {
+                    guard let parsedMassBasis = FoodMassBasis(rawValue: rawMassBasis) else {
+                        throw DraftError.invalidMeal
+                    }
+                    requestedMassBasis = parsedMassBasis
+                } else {
+                    requestedMassBasis = nil
+                }
                 let confirmedHistory = await context.confirmedFoodIDs(matching: ingredient.name)
                 let resolution = resolver.resolve(
                     FoodResolutionV2Query(
                         label: ingredient.name,
                         preparation: preparation,
-                        massBasis: massBasis,
+                        massBasis: requestedMassBasis,
                         sourceQuality: rawDish.lowConfidence ? 0.7 : 1,
                         confirmedHistoryFoodIDs: confirmedHistory,
                         evidence: agentImageEvidence
@@ -202,6 +217,14 @@ struct LogMealTool: ConfirmationRequiredTool {
                     throw DraftError.ambiguousFood(
                         name: ingredient.name,
                         candidates: resolution.candidates.map { $0.entry.name }
+                    )
+                }
+                guard let massBasis = requestedMassBasis
+                    ?? Self.sourceBackedMassBasis(for: selectedFood.entry) else {
+                    throw DraftError.clarificationRequired(
+                        field: "massBasis",
+                        question: "“\(ingredient.name)”大约多少克？重量按生重、熟重，还是包含不可食部分的购买重量？",
+                        subject: ingredient.name
                     )
                 }
                 if FoodResolver.normalize(selectedFood.entry.category).contains("oil")
@@ -272,14 +295,18 @@ struct LogMealTool: ConfirmationRequiredTool {
                 } else if ingredient.quantityEvidence.kind == .unknown,
                           ingredient.quantityEvidence.value == nil,
                           let recipeIngredient,
+                          let recipePrior,
                           !recipeIngredient.isOptional,
                           !recipeIngredient.isAlternative,
-                          let sourceQuantity = recipePriorGramQuantity(recipeIngredient) {
-                    // Recipe source quantities describe a source recipe batch. The
-                    // quantity resolver deliberately converts this fallback into a
-                    // wide model estimate; it is never a measured or exact meal amount.
+                          let sourceQuantity = recipePriorGramQuantity(
+                            recipeIngredient,
+                            servingsSourceText: recipePrior.servingsSourceText
+                          ) {
+                    // Only use a recipe-batch quantity when its source states a
+                    // serving count. Divide by that count, then keep the meal amount
+                    // as an uncertain model estimate rather than measured grams.
                     quantityEvidence = MealQuantityEvidence(
-                        kind: .exactGrams,
+                        kind: .unknown,
                         value: sourceQuantity.likelyGrams,
                         unit: "g"
                     )
@@ -388,7 +415,10 @@ struct LogMealTool: ConfirmationRequiredTool {
             var recipeOilRetentionEvidence: EvidenceSnapshot?
             if !hasExplicitOilIngredient,
                let recipePrior,
-               let sourceQuantity = recipePriorGramQuantity(recipePrior.oilRetention) {
+               let sourceQuantity = recipePriorGramQuantity(
+                    recipePrior.oilRetention,
+                    servingsSourceText: recipePrior.servingsSourceText
+               ) {
                 let sourcePortionEvidence = try? quantityResolver.resolve(
                     MealQuantityEvidence(
                         kind: .exactGrams,
@@ -553,13 +583,18 @@ struct LogMealTool: ConfirmationRequiredTool {
     }
 
     private func recipePriorGramQuantity(
-        _ ingredient: RecipeIngredientPrior
+        _ ingredient: RecipeIngredientPrior,
+        servingsSourceText: String?
     ) -> RecipeGramQuantity? {
-        recipePriorGramQuantity(ingredient.quantityEvidence)
+        recipePriorGramQuantity(
+            ingredient.quantityEvidence,
+            servingsSourceText: servingsSourceText
+        )
     }
 
     private func recipePriorGramQuantity(
-        _ quantity: RecipePriorQuantityEvidence
+        _ quantity: RecipePriorQuantityEvidence,
+        servingsSourceText: String?
     ) -> RecipeGramQuantity? {
         guard ["sourceQuantity", "sourceRange", "formula"].contains(quantity.kind),
               let unit = quantity.unit?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
@@ -570,11 +605,104 @@ struct LogMealTool: ConfirmationRequiredTool {
         }
         let high = quantity.upperValue ?? low
         guard high.isFinite, high >= low, high <= 5_000 else { return nil }
-        return RecipeGramQuantity(
+        let batchQuantity = RecipeGramQuantity(
             lowGrams: low,
             likelyGrams: (low + high) / 2,
             highGrams: high
         )
+        guard let servings = recipeServingQuantity(servingsSourceText) else { return nil }
+        return RecipeGramQuantity(
+            lowGrams: batchQuantity.lowGrams / servings.high,
+            likelyGrams: batchQuantity.likelyGrams / servings.likely,
+            highGrams: batchQuantity.highGrams / servings.low
+        )
+    }
+
+    private func recipeServingQuantity(_ sourceText: String?) -> RecipeServingQuantity? {
+        guard let sourceText, !sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let numericPattern = try? NSRegularExpression(
+                pattern: #"([0-9]+(?:\.[0-9]+)?)(?:\s*(?:-|–|~|至|到)\s*([0-9]+(?:\.[0-9]+)?))?\s*(?:个)?人"#
+              ) else {
+            return nil
+        }
+        guard !sourceText.contains("或"),
+              !sourceText.localizedCaseInsensitiveContains(" or "),
+              let ambiguousChinesePattern = try? NSRegularExpression(
+                pattern: #"[一二两三四五六七八九][一二两三四五六七八九]\s*(?:个)?人"#
+              ) else {
+            return nil
+        }
+        let fullRange = NSRange(sourceText.startIndex..<sourceText.endIndex, in: sourceText)
+        guard ambiguousChinesePattern.firstMatch(in: sourceText, range: fullRange) == nil else {
+            return nil
+        }
+        if let match = numericPattern.firstMatch(in: sourceText, range: fullRange),
+           let lowerRange = Range(match.range(at: 1), in: sourceText),
+           let lower = Double(sourceText[lowerRange]) {
+            let upper: Double
+            if match.range(at: 2).location == NSNotFound {
+                upper = lower
+            } else if let upperRange = Range(match.range(at: 2), in: sourceText),
+                      let parsedUpper = Double(sourceText[upperRange]) {
+                upper = parsedUpper
+            } else {
+                return nil
+            }
+            guard lower > 0, upper >= lower, upper <= 20 else {
+                return nil
+            }
+            return RecipeServingQuantity(low: lower, likely: (lower + upper) / 2, high: upper)
+        }
+
+        let chineseDigits: [Character: Double] = [
+            "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+        ]
+        guard let chinesePattern = try? NSRegularExpression(
+            pattern: #"([一二两三四五六七八九十]+)(?:\s*(?:-|–|~|至|到)\s*([一二两三四五六七八九十]+))?\s*(?:个)?人"#
+        ), let match = chinesePattern.firstMatch(in: sourceText, range: fullRange),
+           let lowerRange = Range(match.range(at: 1), in: sourceText),
+           let lower = Self.chineseServingNumber(String(sourceText[lowerRange]), digits: chineseDigits) else {
+            return nil
+        }
+        let upper: Double
+        if match.range(at: 2).location == NSNotFound {
+            upper = lower
+        } else if let upperRange = Range(match.range(at: 2), in: sourceText),
+                  let parsedUpper = Self.chineseServingNumber(String(sourceText[upperRange]), digits: chineseDigits) {
+            upper = parsedUpper
+        } else {
+            return nil
+        }
+        guard lower > 0, upper >= lower, upper <= 20 else {
+            return nil
+        }
+        return RecipeServingQuantity(low: lower, likely: (lower + upper) / 2, high: upper)
+    }
+
+    private static func chineseServingNumber(
+        _ text: String,
+        digits: [Character: Double]
+    ) -> Double? {
+        if text == "十" { return 10 }
+        guard text.count <= 2 else { return nil }
+        let characters = Array(text)
+        if characters.count == 1 { return digits[characters[0]] }
+        guard let first = digits[characters[0]], let second = digits[characters[1]] else { return nil }
+        if characters[0] == "十" { return 10 + second }
+        if characters[1] == "十" { return first * 10 }
+        return nil
+    }
+
+    private static func sourceBackedMassBasis(for entry: FoodCatalogEntry) -> FoodMassBasis? {
+        guard entry.licenseStatus == "verified",
+              let sourceID = entry.sourceID, !sourceID.isEmpty,
+              let sourceRecordID = entry.sourceRecordID, !sourceRecordID.isEmpty,
+              !entry.sourceVersion.isEmpty,
+              let rawMassBasis = entry.massBasis else {
+            return nil
+        }
+        return FoodMassBasis(rawValue: rawMassBasis)
     }
 
     private func recipePriorEvidence(_ record: RecipePriorRecord) -> EvidenceSnapshot {
@@ -887,4 +1015,10 @@ private struct RecipeGramQuantity {
     let lowGrams: Double
     let likelyGrams: Double
     let highGrams: Double
+}
+
+private struct RecipeServingQuantity {
+    let low: Double
+    let likely: Double
+    let high: Double
 }

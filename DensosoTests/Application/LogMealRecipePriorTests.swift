@@ -75,9 +75,9 @@ final class LogMealRecipePriorTests: XCTestCase {
         })
 
         let eel = try XCTUnwrap(dish.ingredients.first { $0.name == "鳝丝" })
-        XCTAssertEqual(eel.amountGrams.low, 140, accuracy: 0.001)
-        XCTAssertEqual(eel.amountGrams.likely, 400, accuracy: 0.001)
-        XCTAssertEqual(eel.amountGrams.high, 660, accuracy: 0.001)
+        XCTAssertEqual(eel.amountGrams.low, 70, accuracy: 0.001)
+        XCTAssertEqual(eel.amountGrams.likely, 200, accuracy: 0.001)
+        XCTAssertEqual(eel.amountGrams.high, 330, accuracy: 0.001)
         XCTAssertTrue(eel.evidence.contains {
             $0.sourceID?.contains("recipe-prior:\(recipe.id):ingredient:") == true
                 && $0.summary.contains("400 g")
@@ -96,7 +96,33 @@ final class LogMealRecipePriorTests: XCTestCase {
         XCTAssertTrue(harness.session.foodDatabase === harness.foodDatabase)
     }
 
-    private func recipeMealCall(recipeID: String, dishName: String = "响油鳝丝") -> ToolCall {
+    func testRecipeBatchQuantityWithoutServingCountRequiresMealPortion() async throws {
+        let provider = ScriptedTextProvider(scripts: [])
+        let harness = try makeHarness(provider: provider)
+        let call = recipeMealCall(
+            recipeID: "anduin-howtocook:dishes/aquatic/小龙虾/小龙虾.md",
+            dishName: "小龙虾",
+            ingredientNames: ["桂皮"]
+        )
+        let argumentsData = try call.arguments.encodedData()
+        let argumentsJSON = try XCTUnwrap(String(data: argumentsData, encoding: .utf8))
+
+        do {
+            _ = try await LogMealTool().prepare(argumentsJSON: argumentsJSON, context: harness.session)
+            XCTFail("A batch ingredient amount without a source serving count cannot become meal grams")
+        } catch DraftError.clarificationRequired(let field, _, _) {
+            XCTAssertEqual(field, "quantityEvidence")
+        }
+        XCTAssertTrue(harness.session.pendingActions.isEmpty)
+        XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 0)
+        XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<PendingActionRecord>()), 0)
+    }
+
+    private func recipeMealCall(
+        recipeID: String,
+        dishName: String = "响油鳝丝",
+        ingredientNames: [String] = ["鳝丝", "猪油"]
+    ) -> ToolCall {
         func ingredient(_ name: String) -> JSONValue {
             .object([
                 "name": .string(name),
@@ -120,7 +146,7 @@ final class LogMealRecipePriorTests: XCTestCase {
                     .object([
                         "dishName": .string(dishName),
                         "cookingMethod": .string("stirFry"),
-                        "ingredients": .array([ingredient("鳝丝"), ingredient("猪油")]),
+                        "ingredients": .array(ingredientNames.map(ingredient)),
                         "lowConfidence": .boolean(false),
                         "recipePriorID": .string(recipeID),
                     ]),
@@ -166,7 +192,8 @@ final class LogMealRecipePriorTests: XCTestCase {
     private static let foodSeed = #"""
     [
       {"id":101,"name":"鳝丝","alias":"鳝丝|鳝鱼丝","preparation":"raw","category":"水产","edible":100,"energyKcal":90,"proteinG":18,"fatG":2,"carbohydrateG":0,"fiberG":0},
-      {"id":102,"name":"猪油","alias":"猪油","preparation":"raw","category":"油脂类及制品","edible":100,"energyKcal":900,"proteinG":0,"fatG":100,"carbohydrateG":0,"fiberG":0}
+      {"id":102,"name":"猪油","alias":"猪油","preparation":"raw","category":"油脂类及制品","edible":100,"energyKcal":900,"proteinG":0,"fatG":100,"carbohydrateG":0,"fiberG":0},
+      {"id":103,"name":"桂皮","alias":"桂皮","preparation":"raw","category":"调味品","edible":100,"energyKcal":247,"proteinG":4,"fatG":1.2,"carbohydrateG":80.6,"fiberG":53.1}
     ]
     """#
 }
