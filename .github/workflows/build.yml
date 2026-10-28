@@ -17,7 +17,7 @@ on:
         default: full
 
 concurrency:
-  group: v3-gates-${{ github.workflow }}-${{ github.ref }}
+  group: v3-gates-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
