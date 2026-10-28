@@ -1,5 +1,39 @@
 # AI-Native Health Loop Repair Report
 
+## Coding continuation — 2026-10-28 (provider-policy fail-closed)
+
+**Branch base:** `6495bdc6270befbfe7e3c35fa667616f31aeec92` on
+`codex/ai-native-health-loop`, synced with `origin`; there is no associated PR.
+The pre-existing unrelated audit-note change
+`docs/audits/cn-food-mcp-candidate-disposition.md` is excluded.
+
+**Latest full Build before this continuation:** [#40705358001](https://github.com/Densityyang/densoso/actions/runs/40705358001)
+targets the exact base SHA above. As of 2026-10-28 14:32 UTC, Gates 16 and 17
+passed while Gates 1, 18, and 19 were queued. Older diagnostic run
+[#40698711766](https://github.com/Densityyang/densoso/actions/runs/40698711766)
+targets `f8f1473`: Gate 18 failed while compiling two stale iOS test fixtures,
+so its focused XCTest assertions did not run and its manifest reports 46
+missing tests. Gate 1 had advanced to iOS 27 Simulator unit tests and Gate 19
+was running the cloud-policy/42-day XCTest suite. The fixture compile repairs
+are already on the base branch, but neither old run verifies the coding below.
+
+**Coding in this continuation:** policy snapshot lookup now propagates
+SwiftData fetch errors instead of treating them as a missing record and
+falling back to legacy consents. Legacy policy is migrated only after a
+successful lookup confirms no snapshot exists, and an unsuccessful snapshot
+upsert fails closed. Older coarse `healthText` consent does not become granular
+historical-health authorization; only explicit per-category consent and
+conversation-history records participate in legacy migration. A regression
+case covers the coarse-consent boundary. A parallel review of the meal capture
+path found the default Agent multimodal route and deterministic estimator
+contract in place, so it made no additional source change.
+
+`git diff --check` passed on the coding files. No local tests, builds, or
+validators were run. The resulting SHA needs a new full GitHub Actions Build.
+Gate 15 signed-device evidence, live meal field calibration, live Provider
+behavior, signing, and release remain separate owner/evidence items; meal field
+calibration is `NOT_MEASURED`.
+
 ## Verification update — 2026-10-28 (bounded-history negation and CI status)
 
 **Branch base before this follow-up:** `b919fe0bb5d92d577a226361be5b380ba8c4c3c8`

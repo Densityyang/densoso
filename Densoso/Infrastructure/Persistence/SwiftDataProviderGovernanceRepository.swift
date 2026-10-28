@@ -92,28 +92,29 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
             predicate: #Predicate { $0.policyKey == key }
         )
         descriptor.fetchLimit = 1
-        if let records = try? modelContext.fetch(descriptor) {
-            if let record = records.first {
-                if let decoded = decodePolicySnapshot(record) { return decoded }
-                return CloudHealthContextPolicySnapshot.make(
-                    provider: provider,
-                    policyID: record.policyID,
-                    revision: record.revision,
-                    state: .needsReconfirmation,
-                    allowedClasses: [],
-                    createdAt: record.createdAt,
-                    updatedAt: record.updatedAt,
-                    confirmedAt: nil,
-                    changeSource: .backupRestore
-                )
-            }
-            let legacy = try legacyPolicySnapshot(provider: provider)
-            if legacy.state != .notConfigured, upsertPolicySnapshot(legacy) {
-                try modelContext.save()
-            }
-            return legacy
+        let records = try modelContext.fetch(descriptor)
+        if let record = records.first {
+            if let decoded = decodePolicySnapshot(record) { return decoded }
+            return CloudHealthContextPolicySnapshot.make(
+                provider: provider,
+                policyID: record.policyID,
+                revision: record.revision,
+                state: .needsReconfirmation,
+                allowedClasses: [],
+                createdAt: record.createdAt,
+                updatedAt: record.updatedAt,
+                confirmedAt: nil,
+                changeSource: .backupRestore
+            )
         }
-        return try legacyPolicySnapshot(provider: provider)
+        let legacy = try legacyPolicySnapshot(provider: provider)
+        if legacy.state != .notConfigured {
+            guard upsertPolicySnapshot(legacy) else {
+                throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+            }
+            try modelContext.save()
+        }
+        return legacy
     }
 
     func withCurrentSendAuthorization<Result: Sendable>(

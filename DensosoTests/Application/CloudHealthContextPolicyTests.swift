@@ -236,6 +236,30 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         XCTAssertNotEqual(revoked.policyHash, expanded.policyHash)
     }
 
+    func testLegacyCoarseHealthTextConsentDoesNotEnableGranularHealthContext() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let legacyContext = ModelContext(container)
+        legacyContext.insert(ConsentRecord(
+            consentKey: "provider|deepSeek|healthText",
+            kind: ProviderDataClass.healthText.rawValue,
+            policyVersion: "cloud-health-text-v1",
+            granted: true,
+            decidedAt: Date(timeIntervalSince1970: 1_798_000_000)
+        ))
+        try legacyContext.save()
+
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        let snapshot = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+
+        XCTAssertEqual(snapshot.state, .notConfigured)
+        XCTAssertTrue(snapshot.allowedClasses.isEmpty)
+        XCTAssertEqual(snapshot.changeSource, .legacyConsent)
+    }
+
     func testPolicySnapshotIntersectsReadsWhenConsentIsRevokedMidLoad() async throws {
         let repository = RevokesSleepConsentDuringSnapshotRepository()
 
