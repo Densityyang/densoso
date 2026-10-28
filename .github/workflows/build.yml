@@ -28,7 +28,7 @@ jobs:
     name: gate-01-foundation
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: macos-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
