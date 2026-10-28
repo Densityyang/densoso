@@ -52,6 +52,13 @@ enum AgentProviderContextPolicy {
         let preferences: [HistoricalPreference]
     }
 
+    private static let preferenceNegationCues = [
+        "don't ", "dont ", "do not ", "doesn't ", "does not ", "didn't ", "did not ",
+        "not ", "avoid ", "never ", "without ", "no ",
+        "不要", "不想", "不需要", "不用", "不必", "别", "避免", "并非", "不希望", "无需",
+    ]
+    private static let preferenceClauseTerminators = CharacterSet(charactersIn: ".!?;:\n。！？；：")
+
     static func boundedMessages(
         _ messages: [ModelMessage],
         currentTurnStartIndex: Int,
@@ -298,18 +305,37 @@ enum AgentProviderContextPolicy {
         in text: String,
         groups: [(value: Value, cues: [String])]
     ) -> Value? {
-        var latestMatch: (value: Value, index: String.Index)?
+        var latestMatch: (value: Value, index: String.Index, isNegated: Bool)?
         for group in groups {
-            let latestCueIndex = group.cues.compactMap { cue in
-                text.range(of: cue, options: .backwards)?.lowerBound
-            }.max()
-            guard let latestCueIndex else { continue }
-            if let currentMatch = latestMatch {
-                guard currentMatch.index < latestCueIndex else { continue }
+            for cue in group.cues {
+                guard let cueMatch = latestCueMatch(in: text, cue: cue) else { continue }
+                if let currentMatch = latestMatch,
+                   currentMatch.index >= cueMatch.index {
+                    continue
+                }
+                latestMatch = (
+                    group.value,
+                    cueMatch.index,
+                    isNegatedPreferenceCue(at: cueMatch.index, in: text)
+                )
             }
-            latestMatch = (group.value, latestCueIndex)
         }
-        return latestMatch?.value
+        guard let latestMatch, !latestMatch.isNegated else { return nil }
+        return latestMatch.value
+    }
+
+    private static func latestCueMatch(in text: String, cue: String) -> (index: String.Index, isNegated: Bool)? {
+        guard let match = text.range(of: cue, options: .backwards) else { return nil }
+        return (match.lowerBound, isNegatedPreferenceCue(at: match.lowerBound, in: text))
+    }
+
+    private static func isNegatedPreferenceCue(at index: String.Index, in text: String) -> Bool {
+        let precedingText = text[..<index]
+        let clauseStart = precedingText.lastIndex { character in
+            character.unicodeScalars.contains { preferenceClauseTerminators.contains($0) }
+        }.map { precedingText.index(after: $0) } ?? precedingText.startIndex
+        let recentPrefix = precedingText[clauseStart...].suffix(80)
+        return preferenceNegationCues.contains { recentPrefix.contains($0) }
     }
 
     private static func historicalSummaryText(_ summary: HistoricalSummary) -> String? {

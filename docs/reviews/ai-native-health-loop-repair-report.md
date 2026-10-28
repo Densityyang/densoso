@@ -1,5 +1,31 @@
 # AI-Native Health Loop Repair Report
 
+## Verification update — 2026-10-28 (bounded-history negation and CI status)
+
+**Branch base before this follow-up:** `b919fe0bb5d92d577a226361be5b380ba8c4c3c8`
+on `codex/ai-native-health-loop`, synced with `origin`; no associated PR. This
+follow-up adds one preference-summary edge-case fix and this report update. The
+pre-existing dirty audit note `docs/audits/cn-food-mcp-candidate-disposition.md`
+is excluded.
+
+**Latest full Build before this follow-up:** [#40704063972](https://github.com/Densityyang/densoso/actions/runs/40704063972)
+targets `b919fe0`. Gate 16's contract validation and Gate 17 passed. Gates 1,
+18, and 19 were queued, so there was no complete Build result; that run does not
+include this follow-up. Earlier run [#40698711766](https://github.com/Densityyang/densoso/actions/runs/40698711766)
+targets `f8f1473` and is diagnostic only. No local tests, builds, or validators
+were run.
+
+**Coding in this follow-up:** historical provider-context preference matching
+now treats the latest explicit negated cue as a cancellation instead of
+reviving an older positive cue. English and Chinese negation regression cases
+cover language, response length, and format, while keeping only positive
+closed-vocabulary tone/unit preferences. The changed SHA requires a new full
+GitHub Actions Build.
+
+Gate 15 signed-device evidence, live meal field calibration, live Provider
+behavior, signing, and release remain separate owner/evidence items. The owner
+selected Apple's Beta `earliestAuthorizedSampleDate(for:)` API and Xcode 27.
+
 ## Current continuation — 2026-10-28 (bounded provider context and async health projection)
 
 **Branch base before this batch:** `f8f14737891b01534413d705de5d7bb6e1d711ef`

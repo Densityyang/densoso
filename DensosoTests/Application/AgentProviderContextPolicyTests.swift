@@ -347,6 +347,57 @@ final class AgentProviderContextPolicyTests: XCTestCase {
         })
     }
 
+    func testHistoricalSummaryIgnoresNegatedPreferenceCues() throws {
+        let provenance = Self.historyProvenance()
+        var messages: [ModelMessage] = [
+            ModelMessage(
+                role: .user,
+                text: "不要用中文回答。Please answer in English. Do not answer in English. I prefer concise answers. I don't want concise answers. I prefer bullet points. Don't use bullet points or put the result in a table. I prefer a friendly tone and metric units.",
+                healthContextPolicyProvenance: provenance
+            ),
+            ModelMessage(role: .assistant, text: "Acknowledged.", healthContextPolicyProvenance: provenance),
+        ]
+        for index in 0..<9 {
+            messages.append(ModelMessage(
+                role: .user,
+                text: "Neutral older turn \(index).",
+                healthContextPolicyProvenance: provenance
+            ))
+            messages.append(ModelMessage(
+                role: .assistant,
+                text: "Acknowledged \(index).",
+                healthContextPolicyProvenance: provenance
+            ))
+        }
+        let currentTurnStartIndex = messages.count
+        messages.append(ModelMessage(role: .user, text: "Current request."))
+
+        let context = try AgentProviderContextPolicy.boundedContext(
+            messages,
+            currentTurnStartIndex: currentTurnStartIndex
+        )
+        let summary = try XCTUnwrap(context.messages.first { message in
+            message.content.contains { content in
+                if case .text(let text) = content {
+                    return text.contains(AgentProviderContextPolicy.historicalSummaryMarker)
+                }
+                return false
+            }
+        })
+        let summaryText = summary.content.compactMap { content -> String? in
+            if case .text(let text) = content { return text }
+            return nil
+        }.joined()
+
+        XCTAssertTrue(summaryText.contains("friendly"))
+        XCTAssertTrue(summaryText.contains("metric"))
+        XCTAssertFalse(summaryText.contains("Chinese"))
+        XCTAssertFalse(summaryText.contains("English"))
+        XCTAssertFalse(summaryText.contains("concise"))
+        XCTAssertFalse(summaryText.contains("bullet_points"))
+        XCTAssertFalse(summaryText.contains("table"))
+    }
+
     func testHistoricalSummaryMapsHostilePreferenceTextToClosedVocabularyOnly() throws {
         let provenance = Self.historyProvenance()
         var messages: [ModelMessage] = [
