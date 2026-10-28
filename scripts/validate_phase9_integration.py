@@ -76,12 +76,23 @@ def main() -> int:
         ),
         errors,
     )
-    if "credentials" in export.lower() or "consentrecord" in export.lower():
-        errors.append("active credentials and provider consent must not be included in backups")
+    payload_fields = export.partition("struct BackupPayload: Codable {")[2].partition(
+        "struct UserProfileExport: Codable {"
+    )[0].lower()
+    if any(token in payload_fields for token in ("credential", "consentrecord", "consentkey")):
+        errors.append("backup payload fields must not include active credentials or provider consent")
+    make_payload = export.partition("private func makePayload(context: ModelContext) throws -> BackupPayload")[2]
+    make_payload = make_payload.partition("\n    private func")[0].lower()
+    if any(token in make_payload for token in ("credential", "consentrecord", "consentkey")):
+        errors.append("backup construction must not fetch or serialize active credentials or provider consent")
 
     require_text(
         "DensosoTests/ExportServiceTests.swift",
         (
+            "testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied",
+            'XCTAssertFalse(backupText.contains("ConsentRecord"))',
+            'XCTAssertFalse(backupText.contains("consentKey"))',
+            "XCTAssertFalse(backupText.contains(policyVersionSentinel))",
             "testLegacyV2BackupStillRestoresAfterGate5EvidenceFieldsWereAdded",
             "testLegacyV3BackupStillRestoresMealEvidenceAfterHealthDataWasAdded",
             "testV5BackupRestoresProfileHistoryAndHealthDataWithoutSyncQueueState",

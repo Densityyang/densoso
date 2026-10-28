@@ -262,7 +262,7 @@ def main() -> int:
         (
             "lookbackStart", "endDate: .distantFuture", "forceRebaseline",
             "failedStreams[metric]", "completedStreams.insert(metric)",
-            "onObserverSyncCompleted", "self.onObserverSyncCompleted?()",
+            "onObserverSyncCompleted", "await self.onObserverSyncCompleted?(metric, scanGeneration)",
             "requerySampleDays(",
             "private func requerySampleDays(",
             "HealthDataWindowPolicy.initialBackfillStart",
@@ -277,10 +277,11 @@ def main() -> int:
             "if forceRebaseline {",
             "try repository.resetHealthKitCursors()",
             "let start = min(cursor?.lookbackStart ?? plan.queryStart, plan.queryStart)",
-            "A failed authorization-boundary lookup cannot prove that cached",
+            "authorizationBoundaryUnavailable = true",
+            "if plan.authorizationBoundaryUnavailable || needsRebaseline",
+            "prepareHealthKitSnapshotRebuild(",
             "anchorData: anchor",
             "cursorStart: cursor?.lookbackStart",
-            "days: workoutDaysBeforeAuthorization(plan: plan, through: now)",
             "sampleDaysBeforeAuthorization(metric: metric, plan: plan, through: now)",
             "bucketsWithAuthorizationUnknowns(",
             "setHealthReadState(",
@@ -289,7 +290,7 @@ def main() -> int:
         errors,
     )
     normalized_sync_coordinator = " ".join(sync_coordinator.split())
-    affected_day_flow = " ".join(
+    allowed_page_flow = " ".join(
         """
         let allowedPage = HealthSamplePage(
             samples: page.samples.filter { $0.startDate >= allowedStart },
@@ -298,13 +299,17 @@ def main() -> int:
             hasMore: page.hasMore,
             readState: page.readState
         )
-        let affectedDays = try repository.affectedHealthSampleDays(for: allowedPage, stream: stream)
-            .filter { $0 >= plan.targetStart }
         """.split()
     )
-    if affected_day_flow not in normalized_sync_coordinator:
+    affected_days_flow = " ".join(
+        "let affectedDays = try repository.affectedHealthSampleDays(for: allowedPage, stream: stream)".split()
+    )
+    if (
+        allowed_page_flow not in normalized_sync_coordinator
+        or affected_days_flow not in normalized_sync_coordinator
+    ):
         errors.append(
-            "HealthKit sync must derive affected days from the allowed page and filter them at the analysis start"
+            "HealthKit sync must requery affected days from the authorization-filtered page while retaining the anchored cursor query start"
         )
     normalized_repository = " ".join(repository.split())
     repository_affected_day_union = " ".join(
@@ -487,7 +492,8 @@ def main() -> int:
             "BGTaskScheduler.shared.register(",
             "BGAppRefreshTaskRequest(identifier: Self.taskIdentifier)",
             "backgroundTask.expirationHandler",
-            "syncAvailableData(using: repository)",
+            "self.healthSyncCoordinator.syncAvailableData(",
+            "forceRebaseline: true",
             "self.healthIntelligenceService.refresh()",
             "self.dailyLoopSnapshotService.snapshot()",
             "updateSnapshot(snapshot)",
@@ -572,8 +578,8 @@ def main() -> int:
             "testObserverCompletionRunsAfterAnchoredWorkoutIsCommitted",
             "testInitialHealthKitBackfillUsesTheSame42DayWindowForEveryStreamType",
             "testLimitedHealthKitHistoryStartsAtAuthorizationBoundaryAndRecordsUnknownDays",
-            "testAuthorizationBoundaryLookupFailureMasksWindowAndResetsAnchoredCursor",
-            "testObserverBoundaryLookupFailureMasksWindowAndResetsAnchoredCursor",
+            "testUnavailableAuthorizationBoundaryRebuildsWindowAndKeepsEmptyDaysUnknown",
+            "testObserverWithUnavailableBoundaryRebuildsExistingSampleAndWorkoutAnchors",
             "testReadModelHidesAggregateHealthValuesWhenTheirReadStatesAreUnknown",
             "testAuthorizationBoundaryAdvanceRebaselinesAndExcludesPreviouslyIndexedSamples",
             "olderSampleDay",
@@ -692,7 +698,10 @@ def main() -> int:
         errors.append("Watch extension must not host a custom HealthKit Workout writer")
     require_text(
         "Densoso/App/DensosoApp.swift",
-        ("healthKitSyncCoordinator.syncAvailableData(using: healthRepository)",),
+        (
+            "dependencies.healthKitSyncCoordinator.syncAvailableData(",
+            "forceRebaseline: true",
+        ),
         errors,
     )
     require_text(

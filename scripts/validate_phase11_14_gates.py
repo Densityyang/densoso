@@ -296,7 +296,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "provider.descriptor.id == .deepSeek",
                 "provider.descriptor.capabilities.contains(.structuredOutput)",
                 "HealthNarrativePolicy.decode",
-                "exposeTextDeltas: !useStructuredHealthNarrative",
+                "exposeTextDeltas: !currentRoundUsesStructuredNarrative",
                 "HealthNarrativePolicy.deterministicFallback",
                 "encodedToolError(descriptor: descriptor)",
                 "fallback: .providerUnavailableFallback",
@@ -331,7 +331,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Services/HealthProjectionActor.swift",
             (
                 "@ModelActor",
-                "func refresh(asOf date: Date = Date()) throws -> HealthIntelligenceRefreshSnapshot",
+                "func refresh(",
+                "cacheGeneration: UInt64",
+                "briefCacheGenerationFence.withCurrentGeneration(cacheGeneration)",
                 "cachedDailyBrief(",
                 "cachedWeeklyBrief(",
                 "func todayHealthState(asOf date: Date = Date())",
@@ -350,7 +352,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Services/HealthIntelligenceService.swift",
             (
                 "func refresh(asOf date: Date = Date()) async throws -> DailyHealthBrief?",
-                "try await projectionActor.refresh(asOf: date)",
+                "cacheGeneration: expectedGeneration",
+                "briefCacheGenerationFence.currentGeneration == expectedGeneration",
                 "PerformanceSignposts.measureAsync(\"Health.StateRefresh\")",
                 "if snapshot.updatesWeeklyBrief",
                 "fallback: .projectionFailedFallback",
@@ -396,7 +399,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         if background_scheduler.count(cancellation_guard) < 6:
             errors.append("Background refresh must recheck cancellation before work and after each awaited stage")
         for await_step in (
-            "let syncResult = try await self.healthSyncCoordinator.syncAvailableData(using: repository)",
+            "let syncResult = try await self.healthSyncCoordinator.syncAvailableData(",
             "let recomputeResult = try await self.historicalMetricsRecomputer.recomputePendingMetrics(",
             "_ = try await self.healthIntelligenceService.refresh()",
             "let snapshot = try await self.dailyLoopSnapshotService.snapshot()",
@@ -457,7 +460,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "func todayHealthState(asOf date: Date, in context: ModelContext)",
                 "func healthHistory(",
                 "func subjectiveContext(asOf date: Date, in context: ModelContext) throws -> SubjectiveHealthContext?",
-                "static let subjectiveCheckInLookbackDays = 7",
+                "HealthDataWindowPolicy.subjectiveCheckInLookbackDays",
                 "descriptor.fetchLimit = Self.subjectiveCheckInFetchLimit",
                 "$0.sourceRaw == userReportedSource",
                 "userReportedCheckIn.\\(record.id.uuidString.lowercased())",
@@ -468,6 +471,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "Densoso/Services/HealthProjectionActor.swift",
             ("func subjectiveContext(asOf date: Date = Date()) throws -> SubjectiveHealthContext?",),
+            errors,
+        )
+        require(
+            "Densoso/Application/Health/HealthDataWindowPolicy.swift",
+            ("static let subjectiveCheckInLookbackDays = 7",),
             errors,
         )
         require(
@@ -484,7 +492,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/App/Dependencies.swift",
             (
                 "let healthProjectionActor: HealthProjectionActor",
-                "HealthIntelligenceService(projectionActor: healthProjectionActor)",
+                "let healthIntelligenceService = HealthIntelligenceService(",
+                "projectionActor: healthProjectionActor",
+                "briefCacheGenerationFence: briefCacheGenerationFence",
                 "try await healthProjectionActor.todayHealthState(asOf: date)",
                 "try await healthProjectionActor.healthHistory(from: start, through: end)",
                 "try await healthProjectionActor.healthNarrativeContext()",
@@ -497,7 +507,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Agent/AgentSession.swift",
             (
                 "(@Sendable () async throws -> HealthNarrativeContext?)?",
-                "narrativeContext = try await healthNarrativeContextProvider?()",
+                "unfilteredNarrativeContext = try await healthNarrativeContextProvider?()",
+                "CloudRequestPolicyGuard.filtered(",
                 "let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(for: promptUserText)",
                 "if wantsHealthNarrative",
                 "catch is CancellationError",
@@ -530,7 +541,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "@Sendable (Date) async throws -> HealthStateV2?",
                 "let state = try await stateProvider(date)",
                 "TodayTrainingLoadPayload(summary: state.trainingLoad)",
-                "summary.readiness == .noData ? nil : summary.recentSevenDayLoad",
+                "let isComplete = summary.dataCoverage == .complete",
+                "recentSevenDayLoad = isComplete && summary.readiness != .noData ? summary.recentSevenDayLoad : nil",
+                "priorTwentyEightDayAverage = isComplete ? summary.priorTwentyEightDayAverage : nil",
             ),
             errors,
         )
@@ -820,7 +833,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "healthKitSampleSummary",
                 "availableAggregate",
-                "healthReadStates?[HealthMetricID.sleepAnalysis.rawValue]",
+                "projectionReadStates[HealthMetricID.sleepAnalysis.rawValue] == .available",
             ),
             errors,
         )
@@ -1319,7 +1332,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "static func summary(evidenceData: Data?, algorithmVersion: String)",
                 "sourceID.hasPrefix(\"agent-image:\")",
-                "return \"来源：\\(source) · 算法：\\(displayVersion)\"",
+                "let baseSummary = \"来源：\\(source) · 算法：\\(displayVersion)\"",
+                "return baseSummary",
             ),
             errors,
         )
@@ -1485,8 +1499,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "Densoso/Application/Agent/PromptVersions.swift",
             (
-                'static let current = "agent-v2"',
-                'static let current = "health-narrative-v2"',
+                'static let current = "agent-v4"',
+                'static let current = "health-narrative-v3"',
                 'static let current = "meal-v2"',
                 'static let current = "meal-vision-v2"',
             ),
@@ -1496,7 +1510,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Application/Agent/ToolSchemaVersion.swift",
             (
                 "static let legacy = 1",
-                "static let current = 2",
+                "static let previous = 2",
+                "static let current = 3",
                 "static func supportsRestore(_ version: Int) -> Bool",
             ),
             errors,
@@ -1932,15 +1947,15 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     inbox_store = require(
         "Densoso/Infrastructure/WatchConnectivity/WatchMessageInboxStore.swift",
         (
-            "let pendingIDs = try pendingMessageIDs(in: context)",
-            "private func pendingMessageIDs(in context: ModelContext) throws -> Set<UUID>",
-            "pendingIDs.formUnion(receipts.compactMap { UUID(uuidString: $0.messageID) })",
+            "private func pendingInboxMessages(in context: ModelContext) throws -> [MessageRecord]",
+            "descriptor.fetchLimit = Self.pendingReceiptFetchBatchSize",
+            "pageMessageIDs.contains(receipt.messageID) && receipt.state == pending",
+            "messages.append(contentsOf: page.filter { message in",
+            "return pendingIDs.contains(requestID)",
+            "cursor = InboxMessageCursor(ordinal: lastMessage.ordinal, id: lastMessage.id)",
+            "$0.ordinal == $1.ordinal ? $0.id < $1.id : $0.ordinal < $1.ordinal",
             "message.conversationID == inboxID",
             "message.roleRaw == role",
-            "guard let requestID = message.requestID else { return false }",
-            "return pendingIDs.contains(requestID)",
-            "descriptor.fetchLimit = Self.pendingReceiptFetchBatchSize",
-            "$0.ordinal == $1.ordinal ? $0.id < $1.id : $0.ordinal < $1.ordinal",
             "descriptor.fetchLimit = boundedLimit",
             "SortDescriptor(\\.ordinal, order: .reverse)",
         ),
@@ -2401,7 +2416,12 @@ def main() -> int:
             errors.append(f"{job_name} must run focused contract {selector}")
     if "gate-15-real-device-acceptance:" in workflow:
         errors.append("Gate 15 must remain manual and cannot have an automated pass job")
-    if "gate-16-final-release-aggregate-report:" not in workflow:
+    aggregate_report_job = re.search(
+        r"^  gate-status:\n(?P<section>.*?)(?=^  [a-z0-9_-]+:|\Z)",
+        workflow,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if not aggregate_report_job or "name: gate-16-final-release-aggregate-report" not in aggregate_report_job.group("section"):
         errors.append("workflow must generate a Gate 16 aggregate report")
     if "gate-16-aggregate-contracts:" not in workflow:
         errors.append("Gate 16 contract validation must run independently of focused test scope")

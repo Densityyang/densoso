@@ -551,7 +551,9 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
     }
 
     func testObserverWithUnavailableBoundaryRebuildsExistingSampleAndWorkoutAnchors() async throws {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        // Observer-triggered syncs use Date() internally, so keep the fixture
+        // window aligned with the callback's clock instead of a stale fixed date.
+        let now = Date()
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         let targetStart = try XCTUnwrap(

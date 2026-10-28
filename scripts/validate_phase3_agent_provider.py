@@ -861,7 +861,7 @@ def main() -> int:
     require_text(
         ROOT / "DensosoTests" / "Application" / "ToolSchemaTests.swift",
         [
-            "registry.toolDefinitions.count, 19",
+            "registry.toolDefinitions.count, 20",
             "testSearchFoodIsStrictReadOnlyV2Tool",
             "testSearchFoodUsesV2AxesLimitsTopThreeAndOmitsStorageIdentifiers",
             "testGetTodayPlanHasEmptyStrictReadOnlySchema",

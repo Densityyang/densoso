@@ -69,7 +69,9 @@ def main() -> int:
         "Densoso/Services/HealthIntelligenceService.swift",
         (
             "func refresh(asOf date: Date = Date()) async throws",
-            "try await projectionActor.refresh(asOf: date)",
+            "try await projectionActor.refresh(",
+            "cacheGeneration: expectedGeneration",
+            "briefCacheGenerationFence.currentGeneration == expectedGeneration",
             "lastError = \"无法更新健康摘要：",
             "if snapshot.updatesWeeklyBrief",
             "func loadCachedBriefs() async",
@@ -82,7 +84,8 @@ def main() -> int:
         "Densoso/Services/HealthProjectionActor.swift",
         (
             "@ModelActor",
-            "func refresh(asOf date: Date = Date()) throws -> HealthIntelligenceRefreshSnapshot",
+            "cacheGeneration: UInt64",
+            "briefCacheGenerationFence.withCurrentGeneration(cacheGeneration)",
             "let reader = HealthIntelligenceReadModel(calendar: calendar)",
             "snapshotHash == snapshotHash",
             "cachedDailyBrief(",

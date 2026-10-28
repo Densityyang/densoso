@@ -135,7 +135,20 @@ def main() -> int:
     )
     require_text(
         ROOT / "Densoso/Views/Components/FoodConfirmationCard.swift",
-        ["约 \\(presentation.likelyKcal) kcal", "区间详情："],
+        [
+            "likelyText = \"约 \\(presentation.likelyKcal) kcal\"",
+            "detailsTitle = \"估算区间详情\"",
+            "rangeDetailsText = \"热量范围：",
+            "DisclosureGroup {",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests/Application/MealCalorieSummaryPresentationTests.swift",
+        (
+            'XCTAssertEqual(summary.detailsTitle, "估算区间详情")',
+            'XCTAssertEqual(summary.rangeDetailsText, "热量范围：100–1000 kcal")',
+        ),
         errors,
     )
 
