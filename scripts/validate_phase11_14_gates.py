@@ -2469,15 +2469,17 @@ def main() -> int:
         if f'--gate-result "{new_gate}=$GATE_{new_gate}"' not in workflow:
             errors.append(f"Gate 16 must aggregate Gate {new_gate}")
 
+    # Gate 15/16 status is intentionally updated by human evidence and final
+    # review. Focused software gates lock the manual boundary; Gate 16 owns the
+    # Gate 15 status and evidence validation.
     manual_gate15 = require(
         "docs/gates/gate-15-real-device-acceptance.md",
-        ("Status: NOT RUN", "signed iPhone", "paired Apple Watch", "Simulator run", "cannot mark Gate 15 as passed"),
+        ("signed iPhone", "paired Apple Watch", "Simulator run", "cannot mark Gate 15 as passed"),
         errors,
     )
     final_gate16 = require(
         "docs/gates/gate-16-final-release-acceptance.md",
         (
-            "Status: NOT RUN",
             "Gates 1–15 and 17–19",
             "manual review",
             "cannot be satisfied by a Simulator run",
