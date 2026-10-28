@@ -4,19 +4,19 @@ import DensosoDomain
 @MainActor
 protocol HealthSyncRepository {
     func cursorSnapshot(for stream: String) throws -> HealthKitCursorSnapshot?
-    func resetHealthKitCursors() throws
-    func resetHealthKitCursor(for stream: String) throws
-    func setHealthReadState(_ state: HealthReadState, metric: HealthMetricID, days: [Date]) throws
+    func resetHealthKitCursors() async throws
+    func resetHealthKitCursor(for stream: String) async throws
+    func setHealthReadState(_ state: HealthReadState, metric: HealthMetricID, days: [Date]) async throws
     func maskCachedHealthDataBeforeAuthorizationBoundary(
         for metric: HealthMetricID,
         authorizationStart: Date,
         through: Date
-    ) throws
+    ) async throws
     func prepareHealthKitSnapshotRebuild(
         for metrics: Set<HealthMetricID>,
         from start: Date,
         through end: Date
-    ) throws
+    ) async throws
     func affectedHealthSampleDays(for page: HealthSamplePage, stream: String) throws -> [Date]
     func changedHealthSampleDays(for page: HealthSamplePage, stream: String) throws -> [Date]
     func pendingHealthSampleDays(stream: String) throws -> [Date]
@@ -26,21 +26,21 @@ protocol HealthSyncRepository {
         nextAnchorData: Data,
         lookbackStart: Date?,
         stream: String
-    ) throws
+    ) async throws
     func applyImportedHealthSamples(
         _ page: HealthSamplePage,
         stream: String,
         lastSuccessfulAt: Date,
         lookbackStart: Date?,
         replacements: [HealthSampleDaySnapshot]
-    ) throws
+    ) async throws
     func applyHealthAggregates(
         _ buckets: [HealthAggregateBucket],
         metric: HealthMetricID,
         stream: String,
         lookbackStart: Date,
         lastSuccessfulAt: Date
-    ) throws
+    ) async throws
 }
 
 struct HealthSyncResult: Sendable {
@@ -108,19 +108,19 @@ final class HealthKitSyncCoordinator {
         return try await startBackgroundObservers(using: repository)
     }
 
-    /// Synchronously hides the current HealthKit window before a foreground task
-    /// is scheduled. The returned token lets the async sync reuse this purge.
+    /// Hides the current HealthKit window before foreground sync continues. The
+    /// returned token lets the async sync reuse this completed purge.
     func prepareForegroundSnapshotRebuild(
         using repository: any HealthSyncRepository,
         now: Date = Date()
-    ) throws -> HealthKitSnapshotRebuildPreparation {
+    ) async throws -> HealthKitSnapshotRebuildPreparation {
         guard let start = HealthDataWindowPolicy.initialBackfillStart(
             through: now,
             calendar: Calendar.current
         ) else {
             throw HealthStoreClientError.invalidAnchor
         }
-        _ = try prepareHealthKitSnapshotRebuild(
+        _ = try await prepareHealthKitSnapshotRebuild(
             for: Self.aggregateStreams.union(Self.sampleStreams).union([.workout]),
             from: start,
             through: now,
@@ -137,10 +137,10 @@ final class HealthKitSyncCoordinator {
         from start: Date,
         through end: Date,
         using repository: any HealthSyncRepository
-    ) throws -> [HealthMetricID: UInt64] {
+    ) async throws -> [HealthMetricID: UInt64] {
         let gateGeneration = onHealthCachePurgeWillBegin?()
         let scanGenerations = advanceScanGenerations(for: metrics)
-        try repository.prepareHealthKitSnapshotRebuild(
+        try await repository.prepareHealthKitSnapshotRebuild(
             for: metrics,
             from: start,
             through: end
@@ -235,15 +235,15 @@ final class HealthKitSyncCoordinator {
                 } else {
                     // Hide the prior cache before the first async HealthKit lookup so
                     // callers cannot use stale values while the rebaseline is running.
-                    _ = try prepareForegroundSnapshotRebuild(using: repository, now: now)
+                    _ = try await prepareForegroundSnapshotRebuild(using: repository, now: now)
                 }
-                // A full sync owns the stream generations after the synchronous
+                // A full sync owns the stream generations after the completed
                 // purge and supersedes observer work started in the scheduling gap.
                 scanGenerations = advanceScanGenerations(for: windowedMetrics)
             } catch {
                 for metric in windowedMetrics {
                     windowErrors[metric] = error
-                    try? markHealthWindowUnknown(metric, from: start, through: now, using: repository)
+                    try? await markHealthWindowUnknown(metric, from: start, through: now, using: repository)
                 }
             }
         }
@@ -259,7 +259,7 @@ final class HealthKitSyncCoordinator {
                 try ensureCurrentScanGeneration(scanGeneration, for: metric)
                 windowPlans[metric] = plan
                 if !plan.authorizationBoundaryUnavailable {
-                    if let generation = try maskCachedHealthDataIfNeeded(
+                    if let generation = try await maskCachedHealthDataIfNeeded(
                         for: metric,
                         plan: plan,
                         through: now,
@@ -305,7 +305,7 @@ final class HealthKitSyncCoordinator {
                     calendar: Calendar.current
                 ) {
                     do {
-                        try markHealthWindowUnknown(metric, from: analysisStart, through: now, using: repository)
+                        try await markHealthWindowUnknown(metric, from: analysisStart, through: now, using: repository)
                     } catch {
                         windowErrors[metric] = error
                     }
@@ -334,7 +334,7 @@ final class HealthKitSyncCoordinator {
                         through: now,
                         calendar: Calendar.current
                        ) {
-                        try? markHealthWindowUnknown(
+                        try? await markHealthWindowUnknown(
                             metric,
                             from: min(plan.targetStart, analysisStart),
                             through: now,
@@ -349,10 +349,10 @@ final class HealthKitSyncCoordinator {
         }
         try ensureCurrentScanGenerations(scanGenerations)
         if forceRebaseline {
-            try repository.resetHealthKitCursors()
+            try await repository.resetHealthKitCursors()
         } else {
             for stream in streamsToReset.sorted() {
-                try repository.resetHealthKitCursor(for: stream)
+                try await repository.resetHealthKitCursor(for: stream)
             }
         }
         var completedStreams = Set<HealthMetricID>()
@@ -435,7 +435,7 @@ final class HealthKitSyncCoordinator {
         plan: WindowPlan,
         through date: Date,
         using repository: any HealthSyncRepository
-    ) throws -> UInt64? {
+    ) async throws -> UInt64? {
         guard let authorizationStart = plan.authorizationStart else {
             maskedAuthorizationBoundaryByMetric.removeValue(forKey: metric)
             return nil
@@ -443,7 +443,7 @@ final class HealthKitSyncCoordinator {
         guard maskedAuthorizationBoundaryByMetric[metric] != authorizationStart else { return nil }
         let gateGeneration = onHealthCachePurgeWillBegin?()
         let scanGeneration = advanceScanGenerations(for: [metric])[metric]
-        try repository.maskCachedHealthDataBeforeAuthorizationBoundary(
+        try await repository.maskCachedHealthDataBeforeAuthorizationBoundary(
             for: metric,
             authorizationStart: authorizationStart,
             through: date
@@ -460,8 +460,8 @@ final class HealthKitSyncCoordinator {
         from start: Date,
         through end: Date,
         using repository: any HealthSyncRepository
-    ) throws {
-        try repository.setHealthReadState(
+    ) async throws {
+        try await repository.setHealthReadState(
             .dataUnavailableOrReadScopeUnknown,
             metric: metric,
             days: HealthDataWindowPolicy.days(from: start, through: end, calendar: Calendar.current)
@@ -499,13 +499,13 @@ final class HealthKitSyncCoordinator {
             } catch {
                 try ensureCurrentScanGeneration(scanGeneration, for: metric)
                 if let analysisStart = HealthDataWindowPolicy.analysisStart(through: now, calendar: Calendar.current) {
-                    try? markHealthWindowUnknown(metric, from: analysisStart, through: now, using: repository)
+                    try? await markHealthWindowUnknown(metric, from: analysisStart, through: now, using: repository)
                 }
-                try repository.resetHealthKitCursor(for: "workouts")
+                try await repository.resetHealthKitCursor(for: "workouts")
                 throw error
             }
             if !plan.authorizationBoundaryUnavailable {
-                if let generation = try maskCachedHealthDataIfNeeded(
+                if let generation = try await maskCachedHealthDataIfNeeded(
                     for: metric,
                     plan: plan,
                     through: now,
@@ -547,12 +547,12 @@ final class HealthKitSyncCoordinator {
             } catch {
                 try ensureCurrentScanGeneration(scanGeneration, for: metric)
                 if let analysisStart = HealthDataWindowPolicy.analysisStart(through: now, calendar: Calendar.current) {
-                    try? markHealthWindowUnknown(metric, from: analysisStart, through: now, using: repository)
+                    try? await markHealthWindowUnknown(metric, from: analysisStart, through: now, using: repository)
                 }
                 throw error
             }
             if !plan.authorizationBoundaryUnavailable {
-                if let generation = try maskCachedHealthDataIfNeeded(
+                if let generation = try await maskCachedHealthDataIfNeeded(
                     for: metric,
                     plan: plan,
                     through: now,
@@ -587,13 +587,13 @@ final class HealthKitSyncCoordinator {
             } catch {
                 try ensureCurrentScanGeneration(scanGeneration, for: metric)
                 if let analysisStart = HealthDataWindowPolicy.analysisStart(through: now, calendar: Calendar.current) {
-                    try? markHealthWindowUnknown(metric, from: analysisStart, through: now, using: repository)
+                    try? await markHealthWindowUnknown(metric, from: analysisStart, through: now, using: repository)
                 }
-                try repository.resetHealthKitCursor(for: metric.rawValue)
+                try await repository.resetHealthKitCursor(for: metric.rawValue)
                 throw error
             }
             if !plan.authorizationBoundaryUnavailable {
-                if let generation = try maskCachedHealthDataIfNeeded(
+                if let generation = try await maskCachedHealthDataIfNeeded(
                     for: metric,
                     plan: plan,
                     through: now,
@@ -706,14 +706,14 @@ final class HealthKitSyncCoordinator {
                 authorizationStart: plan.authorizationStart
             )
             let allowedWorkouts = page.added.filter { $0.startedAt >= allowedStart }
-            try repository.applyImportedWorkouts(
+            try await repository.applyImportedWorkouts(
                 allowedWorkouts,
                 deletedHealthKitUUIDs: page.deletedObjectIDs,
                 nextAnchorData: nextAnchor,
                 lookbackStart: start,
                 stream: "workouts"
             )
-            try repository.setHealthReadState(
+            try await repository.setHealthReadState(
                 .available,
                 metric: .workout,
                 days: allowedWorkouts.compactMap { workout in
@@ -750,7 +750,7 @@ final class HealthKitSyncCoordinator {
             through: now,
             calendar: calendar
         )
-        try repository.applyHealthAggregates(
+        try await repository.applyHealthAggregates(
             coveredBuckets,
             metric: metric,
             stream: stream,
@@ -812,7 +812,7 @@ final class HealthKitSyncCoordinator {
             let authorizationUnknowns = isFirstPage
                 ? sampleDaysBeforeAuthorization(metric: metric, plan: plan, through: now)
                 : []
-            try repository.applyImportedHealthSamples(
+            try await repository.applyImportedHealthSamples(
                 allowedPage,
                 stream: stream,
                 lastSuccessfulAt: now,

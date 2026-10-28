@@ -10,6 +10,12 @@ final class ExportService {
     var isExporting = false
     var lastError: String?
 
+    @ObservationIgnored private let willSaveProjection: (() throws -> Void)?
+
+    init(willSaveProjection: (() throws -> Void)? = nil) {
+        self.willSaveProjection = willSaveProjection
+    }
+
     private static let formatVersion = 7
     private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5, 6, 7]
     private static let backupReadBatchSize = 64
@@ -893,7 +899,10 @@ final class ExportService {
             return try? JSONDecoder().decode([UserProfile.WeightEntry].self, from: data)
         } ?? []
 
+        await DailyMetricsProjectionWriteGate.acquire(for: context)
+        defer { DailyMetricsProjectionWriteGate.release(for: context) }
         do {
+            try Task.checkCancellation()
             // Transcripts are deliberately not part of backups. Remove unfinished
             // request fragments and replace the request ledger/cost budgets below;
             // imported running or interrupted requests are terminal and cannot resume.
@@ -1240,10 +1249,6 @@ final class ExportService {
                 context.insert(event)
             }
 
-            for date in affectedDays {
-                try DailyMetricsProjector.reproject(on: date, in: context)
-            }
-
             for source in document.payload.dailyBriefs ?? [] {
                 let brief = DailyBriefRecord(
                     id: source.id,
@@ -1324,7 +1329,44 @@ final class ExportService {
                 ))
             }
             try invalidateCloudHealthPoliciesForRestore(in: context)
+            for date in affectedDays {
+                try DailyMetricsProjector.markPendingForReprojection(on: date, in: context)
+            }
             try context.save()
+            for date in affectedDays {
+                // The replacement data and every retry marker are already durable.
+                // A derived projection error must not report the restore as rolled back.
+                if Task.isCancelled { break }
+                do {
+                    try await DailyMetricsProjector.reprojectAndCommitWhileGateHeld(
+                        on: date,
+                        in: context,
+                        willSaveProjection: willSaveProjection
+                    )
+                } catch let projectionError {
+                    context.rollback()
+                    do {
+                        try DailyMetricsProjector.markPendingForReprojection(on: date, in: context)
+                        try context.save()
+                    } catch {
+                        context.rollback()
+                    }
+                    if projectionError is CancellationError { break }
+                }
+            }
+
+            let pendingProjectionDays = affectedDays.reduce(into: 0) { count, date in
+                let day = Calendar.current.startOfDay(for: date)
+                let predicate = #Predicate<DailyMetrics> { $0.date == day }
+                do {
+                    let metric = try context.fetch(FetchDescriptor<DailyMetrics>(predicate: predicate)).first
+                    if metric?.requiresRecompute ?? true { count += 1 }
+                } catch {
+                    // The restore is committed even if status inspection fails;
+                    // conservatively report this day as pending.
+                    count += 1
+                }
+            }
 
             return ImportSummary(
                 meals: document.payload.mealRecords.count,
@@ -1347,6 +1389,7 @@ final class ExportService {
                     .map(\.requestID)))
                     .sorted { $0.uuidString < $1.uuidString },
                 quarantinedAgentLedgerEntries: quarantinedAgentLedgerEntries,
+                pendingProjectionDays: pendingProjectionDays,
                 scheduledPlans: (document.payload.scheduleEvents ?? []).filter {
                     ConfirmedWorkoutPlanEntry.decode(notes: $0.notes) != nil
                         || ConfirmedTrainingPlanEntry.decode(notes: $0.notes) != nil
@@ -1373,6 +1416,7 @@ final class ExportService {
         let quarantinedAgentRequestIDs: [UUID]
         let quarantinedAgentRequestCostBudgetIDs: [UUID]
         let quarantinedAgentLedgerEntries: [QuarantinedAgentLedgerEntry]
+        let pendingProjectionDays: Int
         let scheduledPlans: Int
     }
 

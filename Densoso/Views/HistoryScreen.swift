@@ -442,50 +442,56 @@ struct HistoryScreen: View {
 
     private func deleteMeals(offsets: IndexSet) {
         let selected = offsets.compactMap { meals.indices.contains($0) ? meals[$0] : nil }
-        for meal in selected {
-            do {
-                try HealthRepository(modelContext: modelContext).delete(meal)
-                meals.removeAll { $0.id == meal.id }
-            } catch {
-                loadError = SharedErrorDescriptor.mapped(
-                    from: error,
-                    fallback: .actionConflictFallback
-                ).userMessage
+        Task { @MainActor in
+            for meal in selected {
+                do {
+                    try await HealthRepository(modelContext: modelContext).delete(meal)
+                    meals.removeAll { $0.id == meal.id }
+                } catch {
+                    loadError = SharedErrorDescriptor.mapped(
+                        from: error,
+                        fallback: .actionConflictFallback
+                    ).userMessage
+                }
             }
+            loadSyncSummary()
         }
-        loadSyncSummary()
     }
 
     private func deleteWorkouts(offsets: IndexSet) {
         let selected = offsets.compactMap { workouts.indices.contains($0) ? workouts[$0] : nil }
-        for workout in selected {
-            do {
-                try HealthRepository(modelContext: modelContext).delete(workout)
-                workouts.removeAll { $0.id == workout.id }
-            } catch {
-                loadError = SharedErrorDescriptor.mapped(
-                    from: error,
-                    fallback: .actionConflictFallback
-                ).userMessage
+        Task { @MainActor in
+            for workout in selected {
+                do {
+                    try await HealthRepository(modelContext: modelContext).delete(workout)
+                    workouts.removeAll { $0.id == workout.id }
+                } catch {
+                    loadError = SharedErrorDescriptor.mapped(
+                        from: error,
+                        fallback: .actionConflictFallback
+                    ).userMessage
+                }
             }
+            loadSyncSummary()
         }
-        loadSyncSummary()
     }
 
     private func deleteWeights(offsets: IndexSet) {
         let selected = offsets.compactMap { weights.indices.contains($0) ? weights[$0] : nil }
-        for weight in selected {
-            do {
-                try HealthRepository(modelContext: modelContext).delete(weight)
-                weights.removeAll { $0.id == weight.id }
-            } catch {
-                loadError = SharedErrorDescriptor.mapped(
-                    from: error,
-                    fallback: .actionConflictFallback
-                ).userMessage
+        Task { @MainActor in
+            for weight in selected {
+                do {
+                    try await HealthRepository(modelContext: modelContext).delete(weight)
+                    weights.removeAll { $0.id == weight.id }
+                } catch {
+                    loadError = SharedErrorDescriptor.mapped(
+                        from: error,
+                        fallback: .actionConflictFallback
+                    ).userMessage
+                }
             }
+            loadSyncSummary()
         }
-        loadSyncSummary()
     }
 }
 

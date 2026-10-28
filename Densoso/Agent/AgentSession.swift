@@ -1257,8 +1257,12 @@ final class AgentSession {
         if let evidenceMessage = Self.transientMealEvidenceMessage(transientMealImageEvidence) {
             providerMessages.insert(evidenceMessage, at: filteredUserIndex + 1)
         }
-        let boundedMessages = try AgentProviderContextPolicy.boundedMessages(
-            providerMessages,
+        let policyFilteredMessages = CloudRequestPolicyGuard.filterToolResults(
+            in: providerMessages,
+            by: cloudHealthPolicy
+        )
+        let boundedContext = try AgentProviderContextPolicy.boundedContext(
+            policyFilteredMessages,
             currentTurnStartIndex: filteredUserIndex,
             additionalContextBytes: AgentProviderContextPolicy.fixedContextBytes(
                 systemPrompt: providerSystemPrompt,
@@ -1266,17 +1270,22 @@ final class AgentSession {
                 responseFormat: responseFormat
             )
         )
-        let currentTurnMessageCount = providerMessages.count - filteredUserIndex
-        let includesConversationHistory = boundedMessages.count > currentTurnMessageCount
-        let filteredMessages = CloudRequestPolicyGuard.filterToolResults(in: boundedMessages, by: cloudHealthPolicy)
-            .map {
-                ModelMessage(
-                    role: $0.role,
-                    content: $0.content,
-                    healthContextPolicyProvenance: $0.healthContextPolicyProvenance
-                )
-            }
-        return (messages: filteredMessages, includesConversationHistory: includesConversationHistory)
+        return (
+            messages: Self.providerFacingMessages(from: boundedContext.messages),
+            includesConversationHistory: boundedContext.includesConversationHistory
+        )
+    }
+
+    /// Removes local-only input envelope metadata at the provider boundary.
+    /// The envelope remains on the persisted conversation message.
+    static func providerFacingMessages(from messages: [ModelMessage]) -> [ModelMessage] {
+        messages.map { message in
+            ModelMessage(
+                role: message.role,
+                content: message.content,
+                healthContextPolicyProvenance: message.healthContextPolicyProvenance
+            )
+        }
     }
 
     static func outboundConsentDependencies(
@@ -1324,7 +1333,8 @@ final class AgentSession {
                 guard let provenance = message.healthContextPolicyProvenance,
                       message.content.contains(where: { content in
                           if case .text(let text) = content {
-                              return HealthContextPromptBuilder.shouldIncludeSummary(for: text)
+                              return text.contains(AgentProviderContextPolicy.historicalSummaryMarker)
+                                  || HealthContextPromptBuilder.shouldIncludeSummary(for: text)
                           }
                           return false
                       }) else { continue }

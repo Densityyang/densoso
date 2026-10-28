@@ -713,6 +713,32 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(meals[0].totalCaloriesKcal, 777)
     }
 
+    func testProjectionFailureKeepsRestoreCommittedAndReportsPendingDay() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let date = Date()
+        source.insert(MealRecord(date: date, totalCaloriesKcal: 400))
+        try source.save()
+
+        let exportService = ExportService()
+        let backupURL = try await exportService.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let (_, target) = try makeContext()
+        let restoreService = ExportService(willSaveProjection: {
+            throw ExportProjectionSaveError.injected
+        })
+        let summary = try await restoreService.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(try target.fetch(FetchDescriptor<MealRecord>()).map(\.totalCaloriesKcal), [400])
+        XCTAssertEqual(summary.meals, 1)
+        XCTAssertEqual(summary.pendingProjectionDays, 1)
+        let day = Calendar.current.startOfDay(for: date)
+        let predicate = #Predicate<DailyMetrics> { $0.date == day }
+        let metric = try XCTUnwrap(target.fetch(FetchDescriptor<DailyMetrics>(predicate: predicate)).first)
+        XCTAssertTrue(metric.requiresRecompute)
+    }
+
     func testRestoreRejectsInvalidUserPreferenceBackupFields() async throws {
         let (sourceContainer, source) = try makeContext()
         _ = sourceContainer
@@ -1293,4 +1319,8 @@ final class ExportServiceTests: XCTestCase {
         )
         return (container, ModelContext(container))
     }
+}
+
+private enum ExportProjectionSaveError: Error {
+    case injected
 }

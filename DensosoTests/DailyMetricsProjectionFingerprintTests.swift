@@ -6,7 +6,7 @@ import DensosoDomain
 
 @MainActor
 final class DailyMetricsProjectionFingerprintTests: XCTestCase {
-    func testProjectionInputReaderUsesExplicitTimezoneForDayBoundaries() throws {
+    func testProjectionInputReaderUsesExplicitTimezoneForDayBoundaries() async throws {
         let (_, context) = try makeContext()
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
@@ -28,7 +28,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         XCTAssertEqual(inputs.meals.map(\.totalCaloriesKcal).reduce(0, +), 500)
     }
 
-    func testProjectionInputReaderUsesCalendarDayAcrossDSTTransition() throws {
+    func testProjectionInputReaderUsesCalendarDayAcrossDSTTransition() async throws {
         let (_, context) = try makeContext()
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
@@ -49,7 +49,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         XCTAssertEqual(inputs.meals.map(\.totalCaloriesKcal), [200])
     }
 
-    func testProjectionInputReaderFiltersHealthKitWorkoutsByDailyReadState() throws {
+    func testProjectionInputReaderFiltersHealthKitWorkoutsByDailyReadState() async throws {
         let (_, context) = try makeContext()
         let calendar = Calendar.current
         let unknownDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20)))
@@ -120,44 +120,44 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         XCTAssertEqual(unknownInputs.workouts.map(\.id), [localWorkoutID])
         XCTAssertEqual(availableInputs.workouts.compactMap(\.healthKitUUID), [availableHealthKitID])
         XCTAssertTrue(missingStateInputs.workouts.isEmpty)
-        try DailyMetricsProjector.reproject(on: unknownDay, in: context)
-        try DailyMetricsProjector.reproject(on: availableDay, in: context)
-        try DailyMetricsProjector.reproject(on: missingStateDay, in: context)
+        try await DailyMetricsProjector.reproject(on: unknownDay, in: context)
+        try await DailyMetricsProjector.reproject(on: availableDay, in: context)
+        try await DailyMetricsProjector.reproject(on: missingStateDay, in: context)
         let projectedMetrics = try context.fetch(FetchDescriptor<DailyMetrics>())
         XCTAssertEqual(projectedMetrics.first(where: { calendar.isDate($0.date, inSameDayAs: unknownDay) })?.workoutCount, 1)
         XCTAssertEqual(projectedMetrics.first(where: { calendar.isDate($0.date, inSameDayAs: availableDay) })?.workoutCount, 1)
         XCTAssertEqual(projectedMetrics.first(where: { calendar.isDate($0.date, inSameDayAs: missingStateDay) })?.workoutCount, 0)
     }
 
-    func testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected() throws {
+    func testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected() async throws {
         let (_, context) = try makeContext()
         let day = Calendar.current.startOfDay(for: Date())
 
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
         let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         let sentinel = Date(timeIntervalSince1970: 1_234_567)
         metric.computedAt = sentinel
         try context.save()
 
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
 
         XCTAssertEqual(metric.computedAt, sentinel)
 
         metric.requiresRecompute = true
         metric.computedAt = sentinel
         try context.save()
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
 
         XCTAssertNotEqual(metric.computedAt, sentinel)
         XCTAssertFalse(metric.requiresRecompute)
     }
 
-    func testSourceProfileAndGoalRevisionsChangeProjectionFingerprint() throws {
+    func testSourceProfileAndGoalRevisionsChangeProjectionFingerprint() async throws {
         let (_, context) = try makeContext()
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: Date())
 
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
         let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
 
         let meal = MealRecord(
@@ -169,7 +169,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
             carbsG: 55
         )
         context.insert(meal)
-        try reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
+        try await reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
 
         let cursor = HealthKitImportCursor(
             stream: "activeEnergy",
@@ -178,7 +178,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
             lookbackStart: day.addingTimeInterval(-86_400)
         )
         context.insert(cursor)
-        try reprojectAndAssertFingerprintUnchanged(day: day, metric: metric, in: context)
+        try await reprojectAndAssertFingerprintUnchanged(day: day, metric: metric, in: context)
 
         let fingerprintAfterCursorInsert = metric.sourceFingerprint
         let sentinel = Date(timeIntervalSince1970: 1_234_567)
@@ -187,7 +187,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         cursor.anchorData = Data([9, 8, 7])
         cursor.updatedAt = Date().addingTimeInterval(120)
         try context.save()
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
         XCTAssertEqual(metric.sourceFingerprint, fingerprintAfterCursorInsert)
         XCTAssertEqual(metric.computedAt, sentinel)
 
@@ -202,7 +202,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
             source: ProfileSource.userEdited.rawValue,
             createdAt: day.addingTimeInterval(1)
         ))
-        try reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
+        try await reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
 
         let futureGoalDay = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 2, to: day))
         let futureGoal = GoalProfileRecord(
@@ -212,18 +212,18 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
             effectiveFrom: futureGoalDay
         )
         context.insert(futureGoal)
-        try reprojectAndAssertFingerprintUnchanged(day: day, metric: metric, in: context)
+        try await reprojectAndAssertFingerprintUnchanged(day: day, metric: metric, in: context)
 
         futureGoal.dailyDeficitKcal = 300
         futureGoal.dailyProteinGrams = 120
         futureGoal.effectiveFrom = day
         futureGoal.updatedAt = day.addingTimeInterval(3)
-        try reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
+        try await reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
 
         futureGoal.targetWeightKilograms = 64
         futureGoal.dailyDeficitKcal = 325
         futureGoal.dailyProteinGrams = 125
-        try reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
+        try await reprojectAndAssertFingerprintChanged(day: day, metric: metric, in: context)
 
         let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
             on: day,
@@ -262,11 +262,11 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         XCTAssertNotEqual(baseVersionFingerprint, changedAlgorithmFingerprint)
     }
 
-    func testHealthKitSnapshotValueChangesProjectionFingerprint() throws {
+    func testHealthKitSnapshotValueChangesProjectionFingerprint() async throws {
         let (_, context) = try makeContext()
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: Date())
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
         let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         let originalFingerprint = metric.sourceFingerprint
 
@@ -288,16 +288,16 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         ))
         try context.save()
 
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
 
         XCTAssertNotEqual(metric.sourceFingerprint, originalFingerprint)
         XCTAssertEqual(metric.activeEnergyKcal, 475)
     }
 
-    func testUnrelatedHealthKitCursorDoesNotInvalidateDailyMetricsProjection() throws {
+    func testUnrelatedHealthKitCursorDoesNotInvalidateDailyMetricsProjection() async throws {
         let (_, context) = try makeContext()
         let day = Calendar.current.startOfDay(for: Date())
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
         let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         let fingerprint = metric.sourceFingerprint
         let sentinel = Date(timeIntervalSince1970: 1_234_567)
@@ -310,7 +310,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         ))
         try context.save()
 
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
 
         XCTAssertEqual(metric.sourceFingerprint, fingerprint)
         XCTAssertEqual(metric.computedAt, sentinel)
@@ -358,9 +358,9 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         in context: ModelContext,
         file: StaticString = #filePath,
         line: UInt = #line
-    ) throws {
+    ) async throws {
         let previousFingerprint = metric.sourceFingerprint
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
         XCTAssertNotEqual(metric.sourceFingerprint, previousFingerprint, file: file, line: line)
     }
 
@@ -370,9 +370,9 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         in context: ModelContext,
         file: StaticString = #filePath,
         line: UInt = #line
-    ) throws {
+    ) async throws {
         let previousFingerprint = metric.sourceFingerprint
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
         XCTAssertEqual(metric.sourceFingerprint, previousFingerprint, file: file, line: line)
     }
 

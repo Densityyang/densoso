@@ -19,91 +19,288 @@ enum DailyMetricsProjectionError: Equatable, Sendable, SharedErrorDescribing {
 }
 
 @MainActor
+enum DailyMetricsProjectionWriteGate {
+    private static var heldContexts = Set<ObjectIdentifier>()
+    private static var waiters: [ObjectIdentifier: [CheckedContinuation<Void, Never>]] = [:]
+    @TaskLocal private static var heldContextKeys = Set<ObjectIdentifier>()
+
+    static func withLock<T>(
+        for modelContext: ModelContext,
+        operation: @MainActor () async throws -> T
+    ) async rethrows -> T {
+        let key = ObjectIdentifier(modelContext)
+        if heldContextKeys.contains(key) {
+            return try await operation()
+        }
+
+        await acquire(for: modelContext)
+        defer { release(for: modelContext) }
+        return try await $heldContextKeys.withValue(heldContextKeys.union([key])) {
+            try await operation()
+        }
+    }
+
+    static func acquire(for modelContext: ModelContext) async {
+        let key = ObjectIdentifier(modelContext)
+        guard heldContexts.contains(key) else {
+            heldContexts.insert(key)
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters[key, default: []].append(continuation)
+        }
+    }
+
+    static func release(for modelContext: ModelContext) {
+        let key = ObjectIdentifier(modelContext)
+        if var contextWaiters = waiters[key], !contextWaiters.isEmpty {
+            let next = contextWaiters.removeFirst()
+            waiters[key] = contextWaiters.isEmpty ? nil : contextWaiters
+            next.resume()
+        } else {
+            heldContexts.remove(key)
+            waiters[key] = nil
+        }
+    }
+}
+
+private struct ExistingMetricProjectionSnapshot: Sendable {
+    let sourceFingerprint: String
+    let projectionVersion: String
+    let requiresRecompute: Bool
+}
+
+private struct DailyMetricsProjectionSnapshot: Sendable {
+    let calculationInput: DailyMetricsCalculationInput
+    let historicalInputsMissing: Bool
+    let existing: ExistingMetricProjectionSnapshot?
+    let effectiveProfile: EffectiveProfile?
+    let effectiveWeight: EffectiveWeight?
+}
+
+@MainActor
 enum DailyMetricsProjector {
-    static func reproject(on date: Date, now: Date = Date(), in modelContext: ModelContext) throws {
-        try withProjectionErrorMapping {
+
+    private static func projectionSnapshot(
+        on date: Date,
+        now: Date,
+        calendar: Calendar,
+        in modelContext: ModelContext
+    ) throws -> DailyMetricsProjectionSnapshot {
+        let day = calendar.startOfDay(for: date)
+        let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
+        let existing = try existingMetric(on: day, in: modelContext).map {
+            ExistingMetricProjectionSnapshot(
+                sourceFingerprint: $0.sourceFingerprint,
+                projectionVersion: $0.projectionVersion,
+                requiresRecompute: $0.requiresRecompute
+            )
+        }
+        let effectiveInputs = try resolveEffectiveInputs(on: day, asOf: asOf, in: modelContext)
+        let projectionInputs = try DailyMetricsProjectionInputReader.read(
+            on: day,
+            calendar: calendar,
+            in: modelContext
+        )
+        let healthSnapshot = try healthSnapshot(for: day, calendar: calendar, in: modelContext)
+        let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
+            on: day,
+            calendar: calendar,
+            asOf: asOf,
+            inputs: projectionInputs,
+            profileRevision: effectiveInputs.profileRevision,
+            weightObservations: effectiveInputs.weightObservations,
+            in: modelContext
+        )
+        let calculationInput = CaloricEngine.calculationInput(
+            date: day,
+            calendar: calendar,
+            meals: projectionInputs.meals,
+            workouts: projectionInputs.workouts,
+            effectiveProfile: effectiveInputs.profile,
+            effectiveWeight: effectiveInputs.weight,
+            healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
+            healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection,
+            healthKitSteps: healthSnapshot?.stepCountForProjection,
+            healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
+            fingerprintContext: fingerprintContext
+        )
+        let historicalInputsMissing = day < calendar.startOfDay(for: now)
+            && !HistoricalMetricsEligibilityPolicy.hasValidInputs(
+                profile: effectiveInputs.profile,
+                weight: effectiveInputs.weight,
+                asOf: asOf,
+                calendar: calendar
+            )
+        return DailyMetricsProjectionSnapshot(
+            calculationInput: calculationInput,
+            historicalInputsMissing: historicalInputsMissing,
+            existing: existing,
+            effectiveProfile: effectiveInputs.profile,
+            effectiveWeight: effectiveInputs.weight
+        )
+    }
+
+    private static func existingMetric(on day: Date, in modelContext: ModelContext) throws -> DailyMetrics? {
+        let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
+        return try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first
+    }
+
+    /// Serializes mutations and projections that share one ModelContext. The
+    /// lock is held while detached pure calculation runs, but the context itself
+    /// stays on MainActor and is never captured by the detached task.
+    static func reproject(on date: Date, now: Date = Date(), in modelContext: ModelContext) async throws {
+        try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
+            try Task.checkCancellation()
+            try await reprojectWhileGateHeld(on: date, now: now, in: modelContext)
+        }
+    }
+
+    /// Used by HealthRepository after it has acquired the same context gate for
+    /// the source mutation, so the source and projection cannot interleave with
+    /// another repository write.
+    static func reprojectWhileGateHeld(
+        on date: Date,
+        now: Date = Date(),
+        in modelContext: ModelContext
+    ) async throws {
+        try await withProjectionErrorMapping {
             let calendar = Calendar.current
             let day = calendar.startOfDay(for: date)
-            let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
-            let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
-            let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first
-            let effectiveInputs = try resolveEffectiveInputs(on: day, asOf: asOf, in: modelContext)
-            let projectionInputs = try DailyMetricsProjectionInputReader.read(
-                on: day,
-                calendar: calendar,
-                in: modelContext
-            )
-            let healthSnapshot = try healthSnapshot(for: day, calendar: calendar, in: modelContext)
-            let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
-                on: day,
-                calendar: calendar,
-                asOf: asOf,
-                inputs: projectionInputs,
-                profileRevision: effectiveInputs.profileRevision,
-                weightObservations: effectiveInputs.weightObservations,
-                in: modelContext
-            )
-            let expectedFingerprint = CaloricEngine.projectionFingerprint(
-                day: day,
-                meals: projectionInputs.meals,
-                workouts: projectionInputs.workouts,
-                profile: effectiveInputs.profile,
-                weight: effectiveInputs.weight,
-                activeEnergy: healthSnapshot?.activeEnergyForProjection,
-                basalEnergy: healthSnapshot?.restingEnergyForProjection,
-                steps: healthSnapshot?.stepCountForProjection,
-                exerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
-                context: fingerprintContext
-            )
-            let historicalInputsMissing = day < calendar.startOfDay(for: now)
-                && !HistoricalMetricsEligibilityPolicy.hasValidInputs(
-                    profile: effectiveInputs.profile,
-                    weight: effectiveInputs.weight,
-                    asOf: asOf,
+
+            // Re-read after calculation and retry if another writer changed any
+            // source input while the detached task was running. The gate covers
+            // repository/projector writes; this validation also protects callers
+            // that share the context through another coordinated path.
+            for _ in 0..<3 {
+                let snapshot = try projectionSnapshot(on: day, now: now, calendar: calendar, in: modelContext)
+                let expectedFingerprint = await Task.detached(priority: .utility) {
+                    CaloricEngine.projectionFingerprint(for: snapshot.calculationInput)
+                }.value
+
+                if let existing = snapshot.existing,
+                   DailyMetricsProjectionFingerprint.sourceMatches(
+                       storedFingerprint: existing.sourceFingerprint,
+                       storedAlgorithmVersion: existing.projectionVersion,
+                       expectedFingerprint: expectedFingerprint,
+                       expectedAlgorithmVersion: snapshot.calculationInput.fingerprintContext.algorithmVersion
+                   ) {
+                    let metric = try existingMetric(on: day, in: modelContext)
+                    if snapshot.historicalInputsMissing && metric?.requiresRecompute == true {
+                        if let metric {
+                            HistoricalMetricsEligibilityPolicy.markPendingIfHistoricalInputsAreMissing(
+                                metric,
+                                on: day,
+                                now: now,
+                                profile: snapshot.effectiveProfile,
+                                weight: snapshot.effectiveWeight,
+                                calendar: calendar
+                            )
+                        }
+                        return
+                    }
+                    if !snapshot.historicalInputsMissing && metric?.requiresRecompute == false { return }
+                }
+
+                let calculationResult = await Task.detached(priority: .utility) {
+                    CaloricEngine.computeDailyMetricsResult(
+                        for: snapshot.calculationInput,
+                        sourceFingerprint: expectedFingerprint
+                    )
+                }.value
+
+                let currentSnapshot = try projectionSnapshot(on: day, now: now, calendar: calendar, in: modelContext)
+                let currentFingerprint = await Task.detached(priority: .utility) {
+                    CaloricEngine.projectionFingerprint(for: currentSnapshot.calculationInput)
+                }.value
+                guard currentFingerprint == expectedFingerprint else { continue }
+
+                let projected = calculationResult.makeDailyMetrics()
+                HistoricalMetricsEligibilityPolicy.markPendingIfHistoricalInputsAreMissing(
+                    projected,
+                    on: day,
+                    now: now,
+                    profile: currentSnapshot.effectiveProfile,
+                    weight: currentSnapshot.effectiveWeight,
                     calendar: calendar
                 )
-            if let existing,
-               DailyMetricsProjectionFingerprint.sourceMatches(
-                   storedFingerprint: existing.sourceFingerprint,
-                   storedAlgorithmVersion: existing.projectionVersion,
-                   expectedFingerprint: expectedFingerprint,
-                   expectedAlgorithmVersion: fingerprintContext.algorithmVersion
-               ) {
-                if historicalInputsMissing && existing.requiresRecompute {
-                    HistoricalMetricsEligibilityPolicy.markPendingIfHistoricalInputsAreMissing(
-                        existing,
-                        on: day,
-                        now: now,
-                        profile: effectiveInputs.profile,
-                        weight: effectiveInputs.weight,
-                        calendar: calendar
-                    )
-                    return
-                }
-                if !historicalInputsMissing && !existing.requiresRecompute { return }
-            }
-            let projected = makeProjection(
-                on: day,
-                effectiveInputs: effectiveInputs,
-                projectionInputs: projectionInputs,
-                healthSnapshot: healthSnapshot,
-                fingerprintContext: fingerprintContext,
-                calendar: calendar
-            )
-            HistoricalMetricsEligibilityPolicy.markPendingIfHistoricalInputsAreMissing(
-                projected,
-                on: day,
-                now: now,
-                profile: effectiveInputs.profile,
-                weight: effectiveInputs.weight,
-                calendar: calendar
-            )
 
-            if let existing {
-                copy(projected, to: existing)
-            } else {
-                modelContext.insert(projected)
+                if let existing = try existingMetric(on: day, in: modelContext) {
+                    copy(projected, to: existing)
+                } else {
+                    modelContext.insert(projected)
+                }
+                return
             }
+
+            throw DailyMetricsProjectionError.failed
+        }
+    }
+
+    static func markPendingForReprojection(on date: Date, in modelContext: ModelContext) throws {
+        let day = Calendar.current.startOfDay(for: date)
+        if let metric = try existingMetric(on: day, in: modelContext) {
+            metric.requiresRecompute = true
+        } else {
+            modelContext.insert(DailyMetrics(
+                date: day,
+                projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+                sourceFingerprint: "",
+                requiresRecompute: true
+            ))
+        }
+    }
+
+    /// Rechecks the persisted projection after its save. A different ModelContext
+    /// can commit source changes while this context is awaiting detached math;
+    /// if that happened, retain a durable retry marker instead of presenting a
+    /// projection that no longer describes the saved source records.
+    static func validateSavedProjectionWhileGateHeld(
+        on date: Date,
+        now: Date = Date(),
+        in modelContext: ModelContext
+    ) async throws {
+        try await withProjectionErrorMapping {
+            let calendar = Calendar.current
+            let day = calendar.startOfDay(for: date)
+            let snapshot = try projectionSnapshot(on: day, now: now, calendar: calendar, in: modelContext)
+            let currentFingerprint = await Task.detached(priority: .utility) {
+                CaloricEngine.projectionFingerprint(for: snapshot.calculationInput)
+            }.value
+            guard let metric = try existingMetric(on: day, in: modelContext) else { return }
+            guard !DailyMetricsProjectionFingerprint.sourceMatches(
+                storedFingerprint: metric.sourceFingerprint,
+                storedAlgorithmVersion: metric.projectionVersion,
+                expectedFingerprint: currentFingerprint,
+                expectedAlgorithmVersion: snapshot.calculationInput.fingerprintContext.algorithmVersion
+            ) else { return }
+            metric.requiresRecompute = true
+            try modelContext.save()
+        }
+    }
+
+    static func reprojectAndCommitWhileGateHeld(
+        on date: Date,
+        now: Date = Date(),
+        in modelContext: ModelContext,
+        willSaveProjection: (() throws -> Void)? = nil
+    ) async throws {
+        do {
+            try await reprojectWhileGateHeld(on: date, now: now, in: modelContext)
+            try willSaveProjection?()
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+
+        do {
+            try await validateSavedProjectionWhileGateHeld(on: date, now: now, in: modelContext)
+        } catch {
+            try? markPendingForReprojection(on: date, in: modelContext)
+            try? modelContext.save()
+            throw error
         }
     }
 
@@ -133,73 +330,93 @@ enum DailyMetricsProjector {
         now: Date = Date(),
         in modelContext: ModelContext
     ) async throws -> Bool {
-        try await withProjectionErrorMapping {
-            let calendar = Calendar.current
-            let day = calendar.startOfDay(for: date)
-            let metricPredicate = #Predicate<DailyMetrics> { $0.date == day }
-            guard let existing = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first,
-                  isHistoricalRecomputeCandidate(existing) else { return false }
+        try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
+            try Task.checkCancellation()
+            try await withProjectionErrorMapping {
+                let calendar = Calendar.current
+                let day = calendar.startOfDay(for: date)
+                guard let existingSnapshot = try existingMetric(on: day, in: modelContext).map({ metric in
+                    ExistingMetricProjectionSnapshot(
+                        sourceFingerprint: metric.sourceFingerprint,
+                        projectionVersion: metric.projectionVersion,
+                        requiresRecompute: metric.requiresRecompute
+                    )
+                }), isHistoricalRecomputeCandidate(existingSnapshot) else {
+                    return false
+                }
 
-            let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
-            let effectiveInputs = try resolveEffectiveInputs(on: day, asOf: asOf, in: modelContext)
-            guard HistoricalMetricsEligibilityPolicy.hasValidInputs(
-                profile: effectiveInputs.profile,
-                weight: effectiveInputs.weight,
-                asOf: asOf,
-                calendar: calendar
-            ) else { return false }
+                let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
+                let effectiveInputs = try resolveEffectiveInputs(on: day, asOf: asOf, in: modelContext)
+                guard HistoricalMetricsEligibilityPolicy.hasValidInputs(
+                    profile: effectiveInputs.profile,
+                    weight: effectiveInputs.weight,
+                    asOf: asOf,
+                    calendar: calendar
+                ) else { return false }
 
-            let projectionInputs = try DailyMetricsProjectionInputReader.read(
-                on: day,
-                calendar: calendar,
-                in: modelContext
-            )
-            let healthSnapshot = try healthSnapshot(for: day, calendar: calendar, in: modelContext)
-            let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
-                on: day,
-                calendar: calendar,
-                asOf: asOf,
-                inputs: projectionInputs,
-                profileRevision: effectiveInputs.profileRevision,
-                weightObservations: effectiveInputs.weightObservations,
-                in: modelContext
-            )
-            // Copy all SwiftData-backed input into Sendable values before leaving
-            // this context. Only pure fingerprinting/accounting work runs detached.
-            let calculationInput = CaloricEngine.calculationInput(
-                date: day,
-                calendar: calendar,
-                meals: projectionInputs.meals,
-                workouts: projectionInputs.workouts,
-                effectiveProfile: effectiveInputs.profile,
-                effectiveWeight: effectiveInputs.weight,
-                healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
-                healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection,
-                healthKitSteps: healthSnapshot?.stepCountForProjection,
-                healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
-                fingerprintContext: fingerprintContext
-            )
-            let expectedFingerprint = await Task.detached(priority: .utility) {
-                CaloricEngine.projectionFingerprint(for: calculationInput)
-            }.value
-            if DailyMetricsProjectionFingerprint.sourceMatches(
-                storedFingerprint: existing.sourceFingerprint,
-                storedAlgorithmVersion: existing.projectionVersion,
-                expectedFingerprint: expectedFingerprint,
-                expectedAlgorithmVersion: fingerprintContext.algorithmVersion
-            ), !existing.requiresRecompute {
-                return false
-            }
-
-            let calculationResult = await Task.detached(priority: .utility) {
-                CaloricEngine.computeDailyMetricsResult(
-                    for: calculationInput,
-                    sourceFingerprint: expectedFingerprint
+                let projectionInputs = try DailyMetricsProjectionInputReader.read(
+                    on: day,
+                    calendar: calendar,
+                    in: modelContext
                 )
-            }.value
-            let projected = calculationResult.makeDailyMetrics()
-            copy(projected, to: existing)
-            return true
+                let healthSnapshot = try healthSnapshot(for: day, calendar: calendar, in: modelContext)
+                let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
+                    on: day,
+                    calendar: calendar,
+                    asOf: asOf,
+                    inputs: projectionInputs,
+                    profileRevision: effectiveInputs.profileRevision,
+                    weightObservations: effectiveInputs.weightObservations,
+                    in: modelContext
+                )
+                // Copy all SwiftData-backed input into Sendable values before leaving
+                // this context. Only pure fingerprinting/accounting work runs detached.
+                let calculationInput = CaloricEngine.calculationInput(
+                    date: day,
+                    calendar: calendar,
+                    meals: projectionInputs.meals,
+                    workouts: projectionInputs.workouts,
+                    effectiveProfile: effectiveInputs.profile,
+                    effectiveWeight: effectiveInputs.weight,
+                    healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
+                    healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection,
+                    healthKitSteps: healthSnapshot?.stepCountForProjection,
+                    healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
+                    fingerprintContext: fingerprintContext
+                )
+                let expectedFingerprint = await Task.detached(priority: .utility) {
+                    CaloricEngine.projectionFingerprint(for: calculationInput)
+                }.value
+                if DailyMetricsProjectionFingerprint.sourceMatches(
+                    storedFingerprint: existingSnapshot.sourceFingerprint,
+                    storedAlgorithmVersion: existingSnapshot.projectionVersion,
+                    expectedFingerprint: expectedFingerprint,
+                    expectedAlgorithmVersion: fingerprintContext.algorithmVersion
+                ), !existingSnapshot.requiresRecompute {
+                    return false
+                }
+
+                let calculationResult = await Task.detached(priority: .utility) {
+                    CaloricEngine.computeDailyMetricsResult(
+                        for: calculationInput,
+                        sourceFingerprint: expectedFingerprint
+                    )
+                }.value
+
+                let currentSnapshot = try projectionSnapshot(on: day, now: now, calendar: calendar, in: modelContext)
+                let currentFingerprint = await Task.detached(priority: .utility) {
+                    CaloricEngine.projectionFingerprint(for: currentSnapshot.calculationInput)
+                }.value
+                guard currentFingerprint == expectedFingerprint,
+                      let currentExisting = try existingMetric(on: day, in: modelContext),
+                      isHistoricalRecomputeCandidate(currentExisting) else { return false }
+
+                let projected = calculationResult.makeDailyMetrics()
+                copy(projected, to: currentExisting)
+                try modelContext.save()
+                try await validateSavedProjectionWhileGateHeld(on: day, now: now, in: modelContext)
+                return true
+            }
         }
     }
 
@@ -246,6 +463,12 @@ enum DailyMetricsProjector {
             || metrics.sourceFingerprint.isEmpty
     }
 
+    private static func isHistoricalRecomputeCandidate(_ snapshot: ExistingMetricProjectionSnapshot) -> Bool {
+        snapshot.requiresRecompute
+            || snapshot.projectionVersion != AlgorithmVersions.dailyMetricsProjection
+            || snapshot.sourceFingerprint.isEmpty
+    }
+
     private static func resolveEffectiveInputs(
         on day: Date,
         asOf referenceDate: Date,
@@ -283,29 +506,6 @@ enum DailyMetricsProjector {
             weight: effectiveWeight,
             profileRevision: effectiveRevision,
             weightObservations: weightObservations
-        )
-    }
-
-    private static func makeProjection(
-        on day: Date,
-        effectiveInputs: EffectiveProjectionInputs,
-        projectionInputs: DailyMetricsProjectionInputs,
-        healthSnapshot: DailyHealthSnapshot?,
-        fingerprintContext: DailyMetricsProjectionFingerprintContext,
-        calendar: Calendar
-    ) -> DailyMetrics {
-        CaloricEngine.computeDailyMetrics(
-            date: day,
-            calendar: calendar,
-            meals: projectionInputs.meals,
-            workouts: projectionInputs.workouts,
-            effectiveProfile: effectiveInputs.profile,
-            effectiveWeight: effectiveInputs.weight,
-            healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
-            healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection,
-            healthKitSteps: healthSnapshot?.stepCountForProjection,
-            healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
-            fingerprintContext: fingerprintContext
         )
     }
 

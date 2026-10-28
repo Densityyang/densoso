@@ -56,7 +56,7 @@ struct AppRoot: View {
         if dependencies.persistenceWriteGate.state.allowsWrites {
             ContentView()
                 .onAppear {
-                    prepareHealthRebaselineForCurrentForegroundActivation()
+                    Task { await prepareHealthRebaselineForCurrentForegroundActivation() }
                 }
                 .task {
                     await dependencies.setupFoodDB()
@@ -79,7 +79,7 @@ struct AppRoot: View {
                         let healthRepository = HealthRepository(modelContext: modelContext)
                         try? await dependencies.healthKitSyncCoordinator.startBackgroundObservers(using: healthRepository)
                     } else {
-                        prepareHealthRebaselineForCurrentForegroundActivation()
+                        await prepareHealthRebaselineForCurrentForegroundActivation()
                     }
                     dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
                     await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
@@ -111,8 +111,8 @@ struct AppRoot: View {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
-                        prepareHealthRebaselineForCurrentForegroundActivation()
                         Task {
+                            await prepareHealthRebaselineForCurrentForegroundActivation()
                             await rebaselineHealthForCurrentForegroundActivation()
                             AppIntentInbox.receivePendingDrafts(receiveWorkoutPlan: false)
                             await refreshStaleDailyBriefAfterActivation()
@@ -138,7 +138,7 @@ struct AppRoot: View {
     }
 
     @MainActor
-    private func prepareHealthRebaselineForCurrentForegroundActivation() {
+    private func prepareHealthRebaselineForCurrentForegroundActivation() async {
         guard !launchConfiguration.isUITesting else { return }
         guard dependencies.healthKitService.hasRequestedAuthorization else {
             // A restored snapshot can contain HealthKit markers even when its
@@ -146,7 +146,7 @@ struct AppRoot: View {
             // bounded cache locally without issuing HealthKit queries.
             guard !dependencies.healthContextExportGate.isOpen else { return }
             let repository = HealthRepository(modelContext: modelContext)
-            _ = try? dependencies.healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(using: repository)
+            _ = try? await dependencies.healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(using: repository)
             return
         }
 
@@ -162,7 +162,7 @@ struct AppRoot: View {
 
         isRebaseliningHealthForForeground = true
         let repository = HealthRepository(modelContext: modelContext)
-        preparedHealthSnapshotRebuild = try? dependencies.healthKitSyncCoordinator
+        preparedHealthSnapshotRebuild = try? await dependencies.healthKitSyncCoordinator
             .prepareForegroundSnapshotRebuild(using: repository)
     }
 
@@ -174,7 +174,7 @@ struct AppRoot: View {
               !isRunningForegroundHealthRebaselineTask else { return }
         if preparedHealthSnapshotRebuild == nil {
             let repository = HealthRepository(modelContext: modelContext)
-            preparedHealthSnapshotRebuild = try? dependencies.healthKitSyncCoordinator
+            preparedHealthSnapshotRebuild = try? await dependencies.healthKitSyncCoordinator
                 .prepareForegroundSnapshotRebuild(using: repository)
         }
         isRunningForegroundHealthRebaselineTask = true
@@ -198,7 +198,7 @@ struct AppRoot: View {
         hasRebaselinedHealthForForeground = !shouldRunQueuedRebaseline
         if shouldRunQueuedRebaseline {
             Task { @MainActor in
-                self.prepareHealthRebaselineForCurrentForegroundActivation()
+                await self.prepareHealthRebaselineForCurrentForegroundActivation()
                 await self.rebaselineHealthForCurrentForegroundActivation()
             }
         }

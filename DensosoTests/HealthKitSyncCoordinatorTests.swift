@@ -192,7 +192,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             value: 123.456789
         )
         let repository = HealthRepository(modelContext: context)
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [sample], nextAnchorData: Data([7]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: now,
@@ -208,7 +208,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let staleContextJSON = try XCTUnwrap(String(data: encoder.encode(staleContext), encoding: .utf8))
         XCTAssertTrue(staleContextJSON.contains("123.456789"))
 
-        let preparation = try coordinator.prepareForegroundSnapshotRebuild(using: repository, now: now)
+        let preparation = try await coordinator.prepareForegroundSnapshotRebuild(using: repository, now: now)
         let rebuiltContext = try XCTUnwrap(readModel.healthContextSummary(asOf: now, in: context))
         let rebuiltContextJSON = try XCTUnwrap(String(data: encoder.encode(rebuiltContext), encoding: .utf8))
         XCTAssertFalse(rebuiltContextJSON.contains("123.456789"))
@@ -260,7 +260,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
 
         XCTAssertFalse(gate.isOpen)
         let repository = HealthRepository(modelContext: context)
-        _ = try coordinator.prepareForegroundSnapshotRebuild(using: repository, now: now)
+        _ = try await coordinator.prepareForegroundSnapshotRebuild(using: repository, now: now)
 
         XCTAssertTrue(gate.isOpen)
         let exportedValue = try await gate.withAllowedExport { "current-health-context" }
@@ -289,9 +289,10 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             throw NSError(domain: "HealthSnapshotPurge", code: 1)
         })
 
-        XCTAssertThrowsError(
-            try coordinator.prepareForegroundSnapshotRebuild(using: failingRepository, now: now)
-        )
+        do {
+            try await coordinator.prepareForegroundSnapshotRebuild(using: failingRepository, now: now)
+            XCTFail("Expected the injected save failure")
+        } catch {}
         XCTAssertFalse(gate.isOpen)
         var exportWasRejected = false
         do {
@@ -346,7 +347,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             try await coordinator.syncAvailableData(using: repository, now: now, forceRebaseline: true)
         }
         await fake.waitUntilSampleResponseIsBlocked(for: .bodyMass)
-        _ = try coordinator.prepareForegroundSnapshotRebuild(using: repository, now: now)
+        _ = try await coordinator.prepareForegroundSnapshotRebuild(using: repository, now: now)
         await fake.resumeBlockedSampleResponse(for: .bodyMass)
 
         var dailyRefreshWasSuperseded = false
@@ -389,7 +390,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         ], for: .bodyMass)
         let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
         let repository = HealthRepository(modelContext: context)
-        let preparation = try coordinator.prepareForegroundSnapshotRebuild(using: repository, now: now)
+        let preparation = try await coordinator.prepareForegroundSnapshotRebuild(using: repository, now: now)
         await fake.blockNextSampleResponse(for: .bodyMass)
         defer { Task { await fake.resumeBlockedSampleResponse(for: .bodyMass) } }
 
@@ -458,7 +459,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
 
         await fake.triggerObserver(.bodyMass)
         await fake.waitUntilSampleResponseIsBlocked(for: .bodyMass)
-        _ = try coordinator.prepareForegroundSnapshotRebuild(using: repository, now: now)
+        _ = try await coordinator.prepareForegroundSnapshotRebuild(using: repository, now: now)
         await fake.resumeBlockedSampleResponse(for: .bodyMass)
         await fake.waitForObserverCompletion(after: previousCompletions)
 
@@ -484,27 +485,27 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             HealthDataWindowPolicy.initialBackfillStart(through: now, calendar: calendar)
         )
         let repository = HealthRepository(modelContext: context)
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], nextAnchorData: Data([21]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: now,
             lookbackStart: targetStart,
             replacements: []
         )
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], nextAnchorData: Data([22]), readState: .available),
             stream: HealthMetricID.heartRate.rawValue,
             lastSuccessfulAt: now,
             lookbackStart: targetStart,
             replacements: []
         )
-        try repository.applyImportedWorkouts(
+        try await repository.applyImportedWorkouts(
             [],
             deletedHealthKitUUIDs: [],
             nextAnchorData: Data([23]),
             lookbackStart: targetStart
         )
-        try repository.applyHealthAggregates(
+        try await repository.applyHealthAggregates(
             [HealthAggregateBucket(
                 startDate: targetStart,
                 endDate: try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: targetStart)),
@@ -577,14 +578,14 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             dataQuality: .complete
         )
         let repository = HealthRepository(modelContext: context)
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [sample], nextAnchorData: Data([8]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: now,
             lookbackStart: targetStart,
             replacements: [HealthSampleDaySnapshot(dayStart: sampleDay, samples: [sample], readState: .available)]
         )
-        try repository.applyImportedWorkouts(
+        try await repository.applyImportedWorkouts(
             [workout],
             deletedHealthKitUUIDs: [],
             nextAnchorData: Data([9]),
@@ -659,7 +660,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             value: 70
         )
         let repository = HealthRepository(modelContext: context)
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(
                 samples: [inWindowSample, outsideWindowSample],
                 nextAnchorData: Data([31]),
@@ -740,7 +741,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(outsideSnapshot.healthKitSampleSummary?.aggregate(for: .bodyMass)?.latestValue, 70)
     }
 
-    func testAuthorizationBoundaryMaskClearsDerivedBriefCaches() throws {
+    func testAuthorizationBoundaryMaskClearsDerivedBriefCaches() async throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let day = Calendar.current.startOfDay(for: now)
         context.insert(DailyBriefRecord(
@@ -760,7 +761,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         try context.save()
 
         let repository = HealthRepository(modelContext: context)
-        try repository.maskCachedHealthDataBeforeAuthorizationBoundary(
+        try await repository.maskCachedHealthDataBeforeAuthorizationBoundary(
             for: .bodyMass,
             authorizationStart: now,
             through: now
@@ -783,7 +784,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             (.exerciseMinutes, 55.0),
         ]
         for (metric, value) in aggregateCases {
-            try repository.applyHealthAggregates(
+            try await repository.applyHealthAggregates(
                 [HealthAggregateBucket(startDate: day, endDate: nextDay, value: value)],
                 metric: metric,
                 stream: metric.rawValue,
@@ -854,7 +855,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         context.insert(staleHealthKitWeight)
         try context.save()
         let repository = HealthRepository(modelContext: context)
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [oldSample, olderSample], nextAnchorData: Data([9]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: now,
@@ -864,7 +865,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
                 HealthSampleDaySnapshot(dayStart: olderSampleDay, samples: [olderSample], readState: .available),
             ]
         )
-        try repository.applyImportedWorkouts(
+        try await repository.applyImportedWorkouts(
             [staleWorkout],
             deletedHealthKitUUIDs: [],
             nextAnchorData: Data([8]),
@@ -929,7 +930,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             HealthDataWindowPolicy.initialBackfillStart(through: now, calendar: calendar)
         )
         let repository = HealthRepository(modelContext: context)
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], nextAnchorData: Data([1]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: now.addingTimeInterval(-60),
@@ -973,7 +974,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             value: 71
         )
         let repository = HealthRepository(modelContext: context)
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], nextAnchorData: Data([1]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: now.addingTimeInterval(-60),
@@ -1024,7 +1025,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             value: 74
         )
         let repository = HealthRepository(modelContext: context)
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: now.addingTimeInterval(-60),
@@ -1081,7 +1082,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             value: 73
         )
         let repository = HealthRepository(modelContext: context)
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: now,
@@ -1135,7 +1136,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(repeatedSnapshot.snapshotHash, firstSnapshotHash)
     }
 
-    func testHealthDataWindowPolicyUses42InclusiveDaysAndRespectsAuthorizationBoundary() throws {
+    func testHealthDataWindowPolicyUses42InclusiveDaysAndRespectsAuthorizationBoundary() async throws {
         let calendar = Calendar.current
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let today = calendar.startOfDay(for: now)
@@ -1310,7 +1311,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             value: 72
         )
         let repository = HealthRepository(modelContext: context)
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [existing], nextAnchorData: Data([1]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: date,

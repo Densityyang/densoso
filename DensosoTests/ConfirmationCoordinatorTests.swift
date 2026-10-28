@@ -551,7 +551,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         }
         try context.save()
 
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
         let initialMetric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(initialMetric.mealCount, existingRecordCount)
         XCTAssertEqual(initialMetric.workoutCount, existingRecordCount)
@@ -574,7 +574,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(confirmationMetric.carbsG, Double(existingRecordCount * 3 + 20))
 
         let standaloneContext = ModelContext(harness.container)
-        try DailyMetricsProjector.reproject(on: day, in: standaloneContext)
+        try await DailyMetricsProjector.reproject(on: day, in: standaloneContext)
         let standaloneMetric = try XCTUnwrap(standaloneContext.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(standaloneMetric.mealCount, confirmationMetric.mealCount)
         XCTAssertEqual(standaloneMetric.workoutCount, confirmationMetric.workoutCount)
@@ -882,7 +882,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         ))
         try context.save()
 
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
         try context.save()
         let standaloneMetric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(standaloneMetric.weightKg, 85)
@@ -1271,10 +1271,8 @@ final class ConfirmationCoordinatorTests: XCTestCase {
                 idempotencyKey: String(format: "recover-action-%03d", index),
                 actionTypeRaw: ActionType.meal.rawValue,
                 canonicalPayloadData: canonicalPayloadData,
-                canonicalPayloadHash: canonicalPayloadHash,
                 payloadData: payloadData,
                 clientRequestID: UUID(),
-                conversationID: ConfirmationCoordinator.defaultConversationID,
                 stateRaw: PendingActionState.committing.rawValue,
                 createdAt: createdAt,
                 expiresAt: now.addingTimeInterval(3_600)

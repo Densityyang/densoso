@@ -197,7 +197,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         try assertUnavailablePendingMetric(on: day, in: container)
     }
 
-    func testOrdinaryHistoricalReprojectKeepsPendingFlagWhenDOBMissingWithObservedEnergy() throws {
+    func testOrdinaryHistoricalReprojectKeepsPendingFlagWhenDOBMissingWithObservedEnergy() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
         let calendar = Calendar.current
@@ -215,12 +215,12 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         context.insert(unavailablePendingMetric(on: day))
         try context.save()
 
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
 
         try assertUnavailablePendingMetric(on: day, in: container)
     }
 
-    func testCurrentDayReprojectRetainsObservedEnergyBehaviorWithoutProfileOrWeight() throws {
+    func testCurrentDayReprojectRetainsObservedEnergyBehaviorWithoutProfileOrWeight() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
         let calendar = Calendar.current
@@ -229,7 +229,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         context.insert(unavailablePendingMetric(on: day))
         try context.save()
 
-        try DailyMetricsProjector.reproject(on: day, in: context)
+        try await DailyMetricsProjector.reproject(on: day, in: context)
         try context.save()
 
         let projected = try XCTUnwrap(
@@ -240,7 +240,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         XCTAssertFalse(projected.requiresRecompute)
     }
 
-    func testNewHistoricalProjectionWithoutRequiredInputsIsPersistedAsPending() throws {
+    func testNewHistoricalProjectionWithoutRequiredInputsIsPersistedAsPending() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
         let calendar = Calendar.current
@@ -248,7 +248,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         let day = try XCTUnwrap(calendar.date(byAdding: .day, value: -2, to: calendar.startOfDay(for: now)))
         try insertObservedEnergySnapshot(on: day, in: context)
 
-        try DailyMetricsProjector.reproject(on: day, now: now, in: context)
+        try await DailyMetricsProjector.reproject(on: day, now: now, in: context)
         try context.save()
 
         let projected = try XCTUnwrap(
@@ -259,7 +259,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         XCTAssertEqual(projected.totalExpenditureKcal, 0)
     }
 
-    func testCurrentDayUsesProfileAndWeightAddedAfterMidnight() throws {
+    func testCurrentDayUsesProfileAndWeightAddedAfterMidnight() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
         let calendar = Calendar.current
@@ -283,7 +283,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
             confidence: 0.9
         ))
 
-        try DailyMetricsProjector.reproject(on: day, now: now, in: context)
+        try await DailyMetricsProjector.reproject(on: day, now: now, in: context)
         try context.save()
 
         let projected = try XCTUnwrap(
@@ -294,7 +294,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         XCTAssertGreaterThan(projected.totalExpenditureKcal, 0)
     }
 
-    func testHistoricalProjectionUsesProfileAndWeightEffectiveLaterThatDay() throws {
+    func testHistoricalProjectionUsesProfileAndWeightEffectiveLaterThatDay() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
         let calendar = Calendar.current
@@ -320,7 +320,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
             confidence: 0.9
         ))
 
-        try DailyMetricsProjector.reproject(on: day, now: now, in: context)
+        try await DailyMetricsProjector.reproject(on: day, now: now, in: context)
         try context.save()
 
         let projected = try XCTUnwrap(
@@ -331,7 +331,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         XCTAssertGreaterThan(projected.totalExpenditureKcal, 0)
     }
 
-    func testProjectionReferenceUsesTodayAndHistoricalDayEndAcrossDST() throws {
+    func testProjectionReferenceUsesTodayAndHistoricalDayEndAcrossDST() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
         let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 3, day: 9, hour: 12)))

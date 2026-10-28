@@ -188,11 +188,11 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
             energyLikelyKcal: 420,
             proteinLikelyG: 20
         )
-        try repository.insert(meal)
+        try await repository.insert(meal)
         meal.totalCaloriesKcal = 580
         meal.energyLikelyKcal = 580
         meal.proteinLikelyG = 31
-        try repository.update(meal)
+        try await repository.update(meal)
 
         let entries = try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>())
             .sorted { $0.syncVersion < $1.syncVersion }
@@ -411,10 +411,10 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         )
         context.insert(weight)
         try context.save()
-        try repository.update(weight)
+        try await repository.update(weight)
         weight.kilograms = 67.8
-        try repository.update(weight)
-        try repository.delete(weight)
+        try await repository.update(weight)
+        try await repository.delete(weight)
 
         let entries = try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>())
             .sorted { $0.syncVersion < $1.syncVersion }

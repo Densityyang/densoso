@@ -95,6 +95,117 @@ final class HealthProjectionActorTests: XCTestCase {
         XCTAssertLessThan(p95, 1_000_000_000, "42-day local health-state refresh p95 exceeded 1 second")
     }
 
+    func testDailyProjectionRunsOffMainActorForFortyTwoDaysAndReportsP50P95() async throws {
+        var calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let firstDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -41, to: today))
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let days = try (0..<42).map { offset in
+            try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: firstDay))
+        }
+
+        for (dayIndex, day) in days.enumerated() {
+            for mealIndex in 0..<24 {
+                context.insert(MealRecord(
+                    date: day.addingTimeInterval(Double(mealIndex) * 60),
+                    mealType: "lunch",
+                    totalCaloriesKcal: 280 + mealIndex,
+                    proteinG: 18,
+                    fatG: 9,
+                    carbsG: 31,
+                    sourceActionKey: "projection-perf-\(dayIndex)-\(mealIndex)"
+                ))
+            }
+        }
+        try context.save()
+
+        var projectionStarted = false
+        var projectionFinished = false
+        var durationsNanoseconds: [UInt64] = []
+        let responsivenessProbe = Task { @MainActor in
+            while !projectionStarted && !projectionFinished {
+                await Task.yield()
+            }
+            return projectionStarted && !projectionFinished
+        }
+        let projectionTask = Task { @MainActor in
+            projectionStarted = true
+            defer { projectionFinished = true }
+            for day in days {
+                let startedAt = DispatchTime.now().uptimeNanoseconds
+                try await DailyMetricsProjector.reproject(on: day, in: context)
+                durationsNanoseconds.append(DispatchTime.now().uptimeNanoseconds - startedAt)
+            }
+        }
+
+        try await projectionTask.value
+        let actorResumedDuringProjection = await responsivenessProbe.value
+        XCTAssertTrue(actorResumedDuringProjection, "Projection calculation blocked MainActor instead of yielding to the detached worker")
+        let projectedMetrics = try context.fetch(FetchDescriptor<DailyMetrics>())
+        XCTAssertEqual(projectedMetrics.count, 42)
+        XCTAssertTrue(projectedMetrics.allSatisfy { $0.mealCount == 24 })
+
+        let sortedDurations = durationsNanoseconds.sorted()
+        let p50 = sortedDurations[(sortedDurations.count - 1) * 50 / 100]
+        let p95 = sortedDurations[(sortedDurations.count * 95 + 99) / 100 - 1]
+        let environment = ProcessInfo.processInfo.environment
+        print(
+            "DENSOSO_PERF scenario=daily_projection_42_days "
+                + "device=\(environment["SIMULATOR_DEVICE_NAME"] ?? "GitHub Actions simulator") "
+                + "model=\(environment["SIMULATOR_MODEL_IDENTIFIER"] ?? "CI destination") "
+                + "os=\(ProcessInfo.processInfo.operatingSystemVersionString) "
+                + "days=42 mealsPerDay=24 p50_ms=\(Double(p50) / 1_000_000) "
+                + "p95_ms=\(Double(p95) / 1_000_000)"
+        )
+        XCTAssertLessThan(p95, 1_000_000_000, "42-day daily projection p95 exceeded 1 second")
+    }
+
+    func testOverlappingRepositoryInsertsShareOneContextAndPersistCombinedProjection() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let repository = HealthRepository(modelContext: context)
+        let day = Calendar.current.startOfDay(for: Date())
+        let firstMeal = MealRecord(
+            date: day.addingTimeInterval(9 * 60 * 60),
+            mealType: "breakfast",
+            totalCaloriesKcal: 420,
+            proteinG: 24,
+            fatG: 12,
+            carbsG: 52,
+            sourceActionKey: "projection-gate-first-meal"
+        )
+        let secondMeal = MealRecord(
+            date: day.addingTimeInterval(13 * 60 * 60),
+            mealType: "lunch",
+            totalCaloriesKcal: 280,
+            proteinG: 18,
+            fatG: 9,
+            carbsG: 31,
+            sourceActionKey: "projection-gate-second-meal"
+        )
+
+        let firstInsert = Task { @MainActor in try await repository.insert(firstMeal) }
+        let secondInsert = Task { @MainActor in try await repository.insert(secondMeal) }
+        try await firstInsert.value
+        try await secondInsert.value
+
+        let meals = try context.fetch(FetchDescriptor<MealRecord>())
+        let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertEqual(meals.count, 2)
+        XCTAssertEqual(metrics.mealCount, 2)
+        XCTAssertEqual(metrics.totalIntakeKcal, 700)
+        XCTAssertFalse(metrics.requiresRecompute)
+    }
+
     func testTodayNarrativeAndBoundedHistoryShareDeterministicReadModelWithoutCacheWrites() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current

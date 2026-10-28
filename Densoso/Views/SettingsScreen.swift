@@ -1001,6 +1001,10 @@ struct SettingsScreen: View {
                 warnings.append("备份数据已恢复，但对话状态刷新失败：\(safeErrorMessage(error))")
             }
 
+            if summary.pendingProjectionDays > 0 {
+                warnings.append("备份数据已恢复，但有 \(summary.pendingProjectionDays) 天的每日指标仍待更新；系统已保留重试标记。")
+            }
+
             if !summary.quarantinedAgentLedgerEntries.isEmpty {
                 let examples = summary.quarantinedAgentLedgerEntries.prefix(3).map { entry in
                     "\(entry.recordType == .request ? "请求" : "成本预算") \(entry.requestID.uuidString)：\(quarantineReasonDescription(entry.reason))"
@@ -1302,13 +1306,13 @@ private struct ProfileEditorSheet: View {
                     Button("取消", systemImage: "xmark") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存", systemImage: "checkmark") { save() }
+                    Button("保存", systemImage: "checkmark") { Task { await save() } }
                 }
             }
         }
     }
 
-    private func save() {
+    private func save() async {
         guard let heightValue = Double(height), (80...250).contains(heightValue),
               let weightValue = Double(weight), (20...500).contains(weightValue),
               let targetValue = Int(deficitTarget), (0...5_000).contains(targetValue) else {
@@ -1318,56 +1322,88 @@ private struct ProfileEditorSheet: View {
 
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let now = Date()
-        let weightChanged = abs(profile.weightKg - weightValue) > 0.001
-        let revisionChanged = profile.name != trimmedName
-            || profile.biologicalSex != sex
-            || profile.dateOfBirth != dateOfBirth
-            || abs(profile.heightCm - heightValue) > 0.001
-            || weightChanged
-            || profile.activityLevel != activity
-            || profile.dailyDeficitTarget != targetValue
-
-        profile.name = trimmedName
-        profile.biologicalSex = sex
-        profile.dateOfBirth = dateOfBirth
-        profile.profileNeedsCompletion = dateOfBirth == nil
-        profile.heightCm = heightValue
-        profile.weightKg = weightValue
-        profile.activityLevel = activity
-        profile.dailyDeficitTarget = targetValue
-        profile.updatedAt = now
-
-        if revisionChanged {
-            modelContext.insert(
-                ProfileRevisionRecord(
-                    profileKey: profile.profileKey,
-                    effectiveFrom: now,
-                    dateOfBirth: dateOfBirth,
-                    biologicalSex: sex,
-                    heightCm: heightValue,
-                    weightKg: weightValue,
-                    activityLevel: activity,
-                    source: "userEdited",
-                    createdAt: now
-                )
-            )
-        }
-
+        var projectionPending = false
         do {
-            if weightChanged {
-                try HealthRepository(modelContext: modelContext).insert(
-                    WeightRecord(
-                        sourceActionKey: "settings-weight-\(UUID().uuidString.lowercased())",
-                        measuredAt: now,
-                        kilograms: weightValue,
-                        source: "manual",
-                        algorithmVersion: "weight-v2",
-                        confidence: 0.9
+            try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
+                try Task.checkCancellation()
+                let weightChanged = abs(profile.weightKg - weightValue) > 0.001
+                let revisionChanged = profile.name != trimmedName
+                    || profile.biologicalSex != sex
+                    || profile.dateOfBirth != dateOfBirth
+                    || abs(profile.heightCm - heightValue) > 0.001
+                    || weightChanged
+                    || profile.activityLevel != activity
+                    || profile.dailyDeficitTarget != targetValue
+
+                profile.name = trimmedName
+                profile.biologicalSex = sex
+                profile.dateOfBirth = dateOfBirth
+                profile.profileNeedsCompletion = dateOfBirth == nil
+                profile.heightCm = heightValue
+                profile.weightKg = weightValue
+                profile.activityLevel = activity
+                profile.dailyDeficitTarget = targetValue
+                profile.updatedAt = now
+
+                if revisionChanged {
+                    modelContext.insert(
+                        ProfileRevisionRecord(
+                            profileKey: profile.profileKey,
+                            effectiveFrom: now,
+                            dateOfBirth: dateOfBirth,
+                            biologicalSex: sex,
+                            heightCm: heightValue,
+                            weightKg: weightValue,
+                            activityLevel: activity,
+                            source: "userEdited",
+                            createdAt: now
+                        )
                     )
-                )
-            } else {
-                try DailyMetricsProjector.reproject(on: now, in: modelContext)
-                try modelContext.save()
+                }
+
+                if weightChanged {
+                    try await HealthRepository(modelContext: modelContext).insert(
+                        WeightRecord(
+                            sourceActionKey: "settings-weight-\(UUID().uuidString.lowercased())",
+                            measuredAt: now,
+                            kilograms: weightValue,
+                            source: "manual",
+                            algorithmVersion: "weight-v2",
+                            confidence: 0.9
+                        )
+                    )
+                    let day = Calendar.current.startOfDay(for: now)
+                    let predicate = #Predicate<DailyMetrics> { $0.date == day }
+                    projectionPending = (
+                        try? modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: predicate)).first?.requiresRecompute
+                    ) ?? true
+                } else {
+                    do {
+                        try DailyMetricsProjector.markPendingForReprojection(on: now, in: modelContext)
+                        try modelContext.save()
+                    } catch {
+                        modelContext.rollback()
+                        throw error
+                    }
+                    do {
+                        try Task.checkCancellation()
+                        try await DailyMetricsProjector.reprojectAndCommitWhileGateHeld(
+                            on: now,
+                            in: modelContext
+                        )
+                    } catch {
+                        // Profile/revision and the initial pending marker are durable.
+                        // Keep the editor open with a truthful saved-but-pending result.
+                        modelContext.rollback()
+                        try? DailyMetricsProjector.markPendingForReprojection(on: now, in: modelContext)
+                        try? modelContext.save()
+                        projectionPending = true
+                    }
+                }
+            }
+            if projectionPending {
+                validationError = "资料已保存，但每日指标仍待更新；系统已保留重试标记。"
+                return
             }
             dismiss()
         } catch {

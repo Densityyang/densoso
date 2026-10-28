@@ -392,46 +392,49 @@ struct OnboardingView: View {
                     )
                 }
             }
-            dependencies.intelligencePreferences.mode = intelligenceMode
-
             let now = Date()
-            let profile = UserProfile(
-                name: name,
-                biologicalSex: sex,
-                dateOfBirth: birthDate,
-                heightCm: heightValue,
-                weightKg: weightValue,
-                activityLevel: activity,
-                dailyDeficitTarget: targetValue
-            )
-            profile.profileNeedsCompletion = false
-            profile.profileKey = "primary"
-            profile.updatedAt = now
-            modelContext.insert(profile)
-            modelContext.insert(
-                ProfileRevisionRecord(
-                    profileKey: profile.profileKey,
-                    effectiveFrom: now,
-                    dateOfBirth: birthDate,
+            let profile = try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
+                try Task.checkCancellation()
+                dependencies.intelligencePreferences.mode = intelligenceMode
+                let profile = UserProfile(
+                    name: name,
                     biologicalSex: sex,
+                    dateOfBirth: birthDate,
                     heightCm: heightValue,
                     weightKg: weightValue,
                     activityLevel: activity,
-                    source: "onboarding",
-                    createdAt: now
+                    dailyDeficitTarget: targetValue
                 )
-            )
-            modelContext.insert(
-                WeightRecord(
-                    sourceActionKey: "onboarding-initial-weight-\(UUID().uuidString.lowercased())",
-                    measuredAt: now,
-                    kilograms: weightValue,
-                    source: "manual",
-                    algorithmVersion: "weight-v2",
-                    confidence: 0.9
+                profile.profileNeedsCompletion = false
+                profile.profileKey = "primary"
+                profile.updatedAt = now
+                modelContext.insert(profile)
+                modelContext.insert(
+                    ProfileRevisionRecord(
+                        profileKey: profile.profileKey,
+                        effectiveFrom: now,
+                        dateOfBirth: birthDate,
+                        biologicalSex: sex,
+                        heightCm: heightValue,
+                        weightKg: weightValue,
+                        activityLevel: activity,
+                        source: "onboarding",
+                        createdAt: now
+                    )
                 )
-            )
-            try modelContext.save()
+                modelContext.insert(
+                    WeightRecord(
+                        sourceActionKey: "onboarding-initial-weight-\(UUID().uuidString.lowercased())",
+                        measuredAt: now,
+                        kilograms: weightValue,
+                        source: "manual",
+                        algorithmVersion: "weight-v2",
+                        confidence: 0.9
+                    )
+                )
+                try modelContext.save()
+                return profile
+            }
 
             appState.isOnboarded = true
             appState.userProfile = profile

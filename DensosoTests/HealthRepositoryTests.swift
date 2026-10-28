@@ -21,7 +21,7 @@ final class HealthRepositoryTests: XCTestCase {
         try context.save()
     }
 
-    func testProjectionAffectedDaysDeduplicatesAndSortsLocalDays() throws {
+    func testProjectionAffectedDaysDeduplicatesAndSortsLocalDays() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
         let firstDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20)))
@@ -38,7 +38,7 @@ final class HealthRepositoryTests: XCTestCase {
         )
     }
 
-    func testHealthKitSnapshotRebuildInvalidatesOverlappingWeeklyReportsAndPreservesManualSources() throws {
+    func testHealthKitSnapshotRebuildInvalidatesOverlappingWeeklyReportsAndPreservesManualSources() async throws {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
         let start = try XCTUnwrap(calendar.date(byAdding: .day, value: -41, to: today))
@@ -71,7 +71,7 @@ final class HealthRepositoryTests: XCTestCase {
         context.insert(manualWeight)
         try context.save()
 
-        try HealthRepository(modelContext: context).prepareHealthKitSnapshotRebuild(
+        try await HealthRepository(modelContext: context).prepareHealthKitSnapshotRebuild(
             for: [.stepCount],
             from: start,
             through: end
@@ -91,7 +91,7 @@ final class HealthRepositoryTests: XCTestCase {
         super.tearDown()
     }
 
-    func testInsertAndDeleteReprojectsTheSameDay() throws {
+    func testInsertAndDeleteReprojectsTheSameDay() async throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let repository = HealthRepository(modelContext: context)
         let meal = MealRecord(
@@ -104,9 +104,9 @@ final class HealthRepositoryTests: XCTestCase {
         )
         let workout = WorkoutRecord(date: date, type: "walking", durationMinutes: 30, estimatedCaloriesBurned: 120)
 
-        try repository.insert(meal)
+        try await repository.insert(meal)
         let activeEnergyWithoutWorkout = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first?.activeCaloriesKcal)
-        try repository.insert(workout)
+        try await repository.insert(workout)
 
         var metrics = try context.fetch(FetchDescriptor<DailyMetrics>())
         XCTAssertEqual(metrics.count, 1)
@@ -116,7 +116,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metrics[0].activeCaloriesKcal, activeEnergyWithoutWorkout)
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).count, 1)
 
-        try repository.delete(meal)
+        try await repository.delete(meal)
         metrics = try context.fetch(FetchDescriptor<DailyMetrics>())
         XCTAssertEqual(metrics.count, 1)
         XCTAssertEqual(metrics[0].mealCount, 0)
@@ -126,7 +126,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).count, 2)
     }
 
-    func testMeasuredDailyActivityAggregateFeedsProjectionWithoutWorkoutEnergy() throws {
+    func testMeasuredDailyActivityAggregateFeedsProjectionWithoutWorkoutEnergy() async throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: now)
@@ -159,7 +159,7 @@ final class HealthRepositoryTests: XCTestCase {
             estimatedCaloriesBurned: 420
         ))
 
-        try DailyMetricsProjector.reproject(on: day, now: now, in: context)
+        try await DailyMetricsProjector.reproject(on: day, now: now, in: context)
 
         let metrics = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(metrics.bmrKcal, 1_420)
@@ -169,7 +169,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metrics.workoutCount, 1)
     }
 
-    func testLegacyPointEstimateIsNotProjectedAsCurrentIntakeOrMacros() throws {
+    func testLegacyPointEstimateIsNotProjectedAsCurrentIntakeOrMacros() async throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let meal = MealRecord(
             date: date,
@@ -212,7 +212,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertNil(readResult.deficit.value)
     }
 
-    func testOutboxEnqueueReadsMatchingVersionsAndLatestReceiptAmongManyRows() throws {
+    func testOutboxEnqueueReadsMatchingVersionsAndLatestReceiptAmongManyRows() async throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let recordID = UUID(uuidString: "00000000-0000-0000-0000-000000000601")!
         let syncIdentifier = "densoso.meal.\(recordID.uuidString.lowercased())"
@@ -295,8 +295,8 @@ final class HealthRepositoryTests: XCTestCase {
         try context.save()
 
         let repository = HealthRepository(modelContext: context)
-        try repository.update(meal)
-        try repository.update(weight)
+        try await repository.update(meal)
+        try await repository.update(weight)
 
         let targetPredicate = #Predicate<HealthSyncOutboxEntry> { $0.recordID == recordID }
         let targetEntries = try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>(predicate: targetPredicate))
@@ -349,7 +349,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(identifiers, Set(["shared-0", "shared-1", "shared-2", "later-page-only"]))
     }
 
-    func testDeletingLatestSameDayWeightFallsBackToNextLocalThenHealthKitWeight() throws {
+    func testDeletingLatestSameDayWeightFallsBackToNextLocalThenHealthKitWeight() async throws {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
         let morning = try XCTUnwrap(calendar.date(bySettingHour: 8, minute: 0, second: 0, of: day))
@@ -411,17 +411,17 @@ final class HealthRepositoryTests: XCTestCase {
             return try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData).weightKilograms
         }
 
-        try repository.delete(tiedHigherIDWeight)
+        try await repository.delete(tiedHigherIDWeight)
         XCTAssertEqual(try savedWeight(), 72)
 
-        try repository.delete(tiedLowerIDWeight)
+        try await repository.delete(tiedLowerIDWeight)
         XCTAssertEqual(try savedWeight(), 70)
 
-        try repository.delete(morningWeight)
+        try await repository.delete(morningWeight)
         XCTAssertEqual(try savedWeight(), 68)
     }
 
-    func testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData() throws {
+    func testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData() async throws {
         let calendar = Calendar.current
         let targetDate = Date(timeIntervalSince1970: 1_700_000_000)
         let targetDay = calendar.startOfDay(for: targetDate)
@@ -493,21 +493,21 @@ final class HealthRepositoryTests: XCTestCase {
         try context.save()
 
         let repository = HealthRepository(modelContext: context)
-        try repository.insert(WorkoutRecord(date: targetDay))
+        try await repository.insert(WorkoutRecord(date: targetDay))
         let firstMetric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first {
             calendar.isDate($0.date, inSameDayAs: targetDay)
         })
         XCTAssertEqual(firstMetric.weightKg, 70)
         XCTAssertEqual(firstMetric.activeCaloriesKcal, 500)
 
-        try repository.insert(WorkoutRecord(date: threeDaysLater))
+        try await repository.insert(WorkoutRecord(date: threeDaysLater))
         let laterMetric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first {
             calendar.isDate($0.date, inSameDayAs: threeDaysLater)
         })
         XCTAssertEqual(laterMetric.weightKg, 65)
     }
 
-    func testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays() throws {
+    func testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays() async throws {
         let calendar = Calendar.current
         let targetDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
         let olderDay = calendar.date(byAdding: .day, value: -200, to: targetDay)!
@@ -597,13 +597,13 @@ final class HealthRepositoryTests: XCTestCase {
         }
         try context.save()
 
-        try DailyMetricsProjector.reproject(on: targetDay, in: context)
+        try await DailyMetricsProjector.reproject(on: targetDay, in: context)
 
         let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(metric.weightKg, 70)
     }
 
-    func testBodyMassReplacementPrefersLatestSameDayLocalWeightOverHealthKitSummary() throws {
+    func testBodyMassReplacementPrefersLatestSameDayLocalWeightOverHealthKitSummary() async throws {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
         let morning = try XCTUnwrap(calendar.date(bySettingHour: 8, minute: 0, second: 0, of: day))
@@ -635,7 +635,7 @@ final class HealthRepositoryTests: XCTestCase {
         ))
         try context.save()
 
-        try HealthRepository(modelContext: context).applyImportedHealthSamples(
+        try await HealthRepository(modelContext: context).applyImportedHealthSamples(
             HealthSamplePage(
                 samples: [sample],
                 nextAnchorData: Data([1]),
@@ -655,7 +655,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(updated.weightKilograms, 73)
     }
 
-    func testWorkoutEffortReprojectionPagesSameDayWorkoutsAcross64RowBoundary() throws {
+    func testWorkoutEffortReprojectionPagesSameDayWorkoutsAcross64RowBoundary() async throws {
         let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
         var targetWorkoutID: UUID?
         var targetWorkoutStart: Date?
@@ -679,7 +679,7 @@ final class HealthRepositoryTests: XCTestCase {
             endDate: workoutStart.addingTimeInterval(5 * 60),
             value: 8
         )
-        try HealthRepository(modelContext: context).applyImportedHealthSamples(
+        try await HealthRepository(modelContext: context).applyImportedHealthSamples(
             HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
             stream: HealthMetricID.workoutEffort.rawValue,
             lastSuccessfulAt: sample.endDate,
@@ -699,7 +699,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(snapshot.healthKitSampleSummary?.effortScore(for: workoutID), 8)
     }
 
-    func testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner() throws {
+    func testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner() async throws {
         let calendar = Calendar.current
         let targetDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
         for offset in 1...130 {
@@ -732,13 +732,13 @@ final class HealthRepositoryTests: XCTestCase {
         ))
         try context.save()
 
-        try DailyMetricsProjector.reproject(on: targetDay, in: context)
+        try await DailyMetricsProjector.reproject(on: targetDay, in: context)
 
         let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(metric.weightKg, 66)
     }
 
-    func testImportedWorkoutDeduplicatesByHealthKitUUIDAndPersistsAnchor() throws {
+    func testImportedWorkoutDeduplicatesByHealthKitUUIDAndPersistsAnchor() async throws {
         let repository = HealthRepository(modelContext: context)
         let healthKitUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000020")!
         let logicalSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000021")!
@@ -795,8 +795,8 @@ final class HealthRepositoryTests: XCTestCase {
         context.insert(manualWorkout)
         try context.save()
 
-        try repository.applyImportedWorkouts([first, updated], deletedHealthKitUUIDs: [], nextAnchorData: Data([1]))
-        try repository.setHealthReadState(.available, metric: .workout, days: [date, unrelatedDay])
+        try await repository.applyImportedWorkouts([first, updated], deletedHealthKitUUIDs: [], nextAnchorData: Data([1]))
+        try await repository.setHealthReadState(.available, metric: .workout, days: [date, unrelatedDay])
 
         let workouts = try context.fetch(FetchDescriptor<WorkoutRecord>())
         let importedWorkouts = workouts.filter { $0.healthKitUUID == healthKitUUID }
@@ -822,7 +822,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metricsByDay[Calendar.current.startOfDay(for: unrelatedDay)], 2)
         XCTAssertEqual(metricsByDay[Calendar.current.startOfDay(for: unrelatedDuplicateDay)], 0)
 
-        try repository.applyImportedWorkouts([], deletedHealthKitUUIDs: [healthKitUUID], nextAnchorData: Data([2]))
+        try await repository.applyImportedWorkouts([], deletedHealthKitUUIDs: [healthKitUUID], nextAnchorData: Data([2]))
 
         XCTAssertEqual(try context.fetch(FetchDescriptor<WorkoutRecord>()).filter {
             $0.healthKitUUID == healthKitUUID
@@ -838,7 +838,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metrics.first(where: { Calendar.current.isDate($0.date, inSameDayAs: date) })?.workoutCount, 0)
     }
 
-    func testImportedWorkoutDedupProcessesUUIDGroupsAcrossFetchBatchBoundary() throws {
+    func testImportedWorkoutDedupProcessesUUIDGroupsAcrossFetchBatchBoundary() async throws {
         let repository = HealthRepository(modelContext: context)
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         for value in 1...399 {
@@ -869,7 +869,7 @@ final class HealthRepositoryTests: XCTestCase {
         context.insert(duplicate)
         try context.save()
 
-        try repository.applyImportedWorkouts([], deletedHealthKitUUIDs: [], nextAnchorData: Data([9]))
+        try await repository.applyImportedWorkouts([], deletedHealthKitUUIDs: [], nextAnchorData: Data([9]))
 
         let stored = try context.fetch(FetchDescriptor<WorkoutRecord>())
         XCTAssertEqual(stored.count, 400)
@@ -880,7 +880,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.cursor(for: "workouts")?.anchorData, Data([9]))
     }
 
-    func testImportedWorkoutAndAnchorRollbackTogetherWhenSaveFails() throws {
+    func testImportedWorkoutAndAnchorRollbackTogetherWhenSaveFails() async throws {
         let repository = HealthRepository(modelContext: context, willSave: { throw TestSaveError.injected })
         let snapshot = try WorkoutSnapshot(
             healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000023")!,
@@ -894,15 +894,18 @@ final class HealthRepositoryTests: XCTestCase {
             dataQuality: .complete
         )
 
-        XCTAssertThrowsError(try repository.applyImportedWorkouts(
-            [snapshot], deletedHealthKitUUIDs: [], nextAnchorData: Data([7])
-        ))
+        do {
+            try await repository.applyImportedWorkouts(
+                [snapshot], deletedHealthKitUUIDs: [], nextAnchorData: Data([7])
+            )
+            XCTFail("Expected the injected save failure")
+        } catch {}
         XCTAssertTrue(try context.fetch(FetchDescriptor<WorkoutRecord>()).isEmpty)
         XCTAssertNil(try repository.cursor(for: "workouts"))
         XCTAssertTrue(try context.fetch(FetchDescriptor<DailyMetrics>()).isEmpty)
     }
 
-    func testCursorAndSampleProjectionRollbackTogetherWhenSaveFails() throws {
+    func testCursorAndSampleProjectionRollbackTogetherWhenSaveFails() async throws {
         let repository = HealthRepository(modelContext: context, willSave: { throw TestSaveError.injected })
         let sample = HealthSampleSnapshot(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000030")!,
@@ -918,26 +921,54 @@ final class HealthRepositoryTests: XCTestCase {
         )
 
         let day = Calendar.current.startOfDay(for: sample.startDate)
-        XCTAssertThrowsError(try repository.applyImportedHealthSamples(
-            page,
-            stream: "bodyMass",
-            lastSuccessfulAt: Date(),
-            lookbackStart: nil,
-            replacements: [HealthSampleDaySnapshot(dayStart: day, samples: [sample], readState: .available)]
-        ))
+        do {
+            try await repository.applyImportedHealthSamples(
+                page,
+                stream: "bodyMass",
+                lastSuccessfulAt: Date(),
+                lookbackStart: nil,
+                replacements: [HealthSampleDaySnapshot(dayStart: day, samples: [sample], readState: .available)]
+            )
+            XCTFail("Expected the injected save failure")
+        } catch {}
         XCTAssertNil(try repository.cursor(for: "bodyMass"))
         XCTAssertTrue(try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).isEmpty)
         XCTAssertTrue(try context.fetch(FetchDescriptor<DailyMetrics>()).isEmpty)
     }
 
-    func testHealthSamplePagesUpdateDeleteAndDeduplicateByHealthKitUUID() throws {
+    func testProjectionSaveFailureReturnsCommittedSourceWithDurableRetryMarker() async throws {
+        let repository = HealthRepository(
+            modelContext: context,
+            willSaveProjection: { throw TestSaveError.injected }
+        )
+        let day = Calendar.current.startOfDay(for: Date())
+        let meal = MealRecord(
+            date: day.addingTimeInterval(9 * 60 * 60),
+            mealType: "breakfast",
+            totalCaloriesKcal: 360,
+            proteinG: 22,
+            fatG: 10,
+            carbsG: 44,
+            sourceActionKey: "projection-save-failure-committed-meal"
+        )
+
+        try await repository.insert(meal)
+
+        XCTAssertEqual(try context.fetch(FetchDescriptor<MealRecord>()).map(\.id), [meal.id])
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
+        let pendingMetric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
+        XCTAssertTrue(pendingMetric.requiresRecompute)
+        XCTAssertTrue(pendingMetric.sourceFingerprint.isEmpty)
+    }
+
+    func testHealthSamplePagesUpdateDeleteAndDeduplicateByHealthKitUUID() async throws {
         let repository = HealthRepository(modelContext: context)
         let sampleID = UUID(uuidString: "00000000-0000-0000-0000-000000000031")!
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let first = HealthSampleSnapshot(id: sampleID, metric: .bodyMass, startDate: date, endDate: date, value: 70)
         let updated = HealthSampleSnapshot(id: sampleID, metric: .bodyMass, startDate: date, endDate: date, value: 71)
 
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [first], nextAnchorData: Data([1]), readState: .available),
             stream: "bodyMass",
             lastSuccessfulAt: Date(),
@@ -948,7 +979,7 @@ final class HealthRepositoryTests: XCTestCase {
                 readState: .available
             )]
         )
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [updated, updated], nextAnchorData: Data([2]), readState: .available),
             stream: "bodyMass",
             lastSuccessfulAt: Date(),
@@ -971,7 +1002,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).count, 1)
         XCTAssertEqual(try repository.cursor(for: "bodyMass")?.anchorData, Data([2]))
 
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], deletedSampleIDs: [sampleID], nextAnchorData: Data([3]), readState: .available),
             stream: "bodyMass",
             lastSuccessfulAt: Date(),
@@ -991,7 +1022,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertTrue(try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).isEmpty)
         XCTAssertEqual(try repository.cursor(for: "bodyMass")?.anchorData, Data([3]))
 
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], nextAnchorData: Data([4]), readState: .dataUnavailableOrReadScopeUnknown),
             stream: "bodyMass",
             lastSuccessfulAt: Date(),
@@ -1001,12 +1032,12 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.cursor(for: "bodyMass")?.anchorData, Data([4]))
         XCTAssertNotNil(try repository.cursor(for: "bodyMass")?.lastSuccessfulAt)
 
-        try repository.resetHealthKitCursors()
+        try await repository.resetHealthKitCursors()
         XCTAssertNil(try repository.cursor(for: "bodyMass")?.anchorData)
         XCTAssertNil(try repository.cursor(for: "bodyMass")?.lastSuccessfulAt)
     }
 
-    func testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion() throws {
+    func testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion() async throws {
         let repository = HealthRepository(modelContext: context)
         let sampleID = UUID(uuidString: "00000000-0000-0000-0000-000000000033")!
         let date = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1018,14 +1049,14 @@ final class HealthRepositoryTests: XCTestCase {
             endDate: date,
             value: 69
         )
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: date,
             lookbackStart: day,
             replacements: [HealthSampleDaySnapshot(dayStart: day, samples: [sample], readState: .available)]
         )
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(
                 samples: [],
                 deletedSampleIDs: [sampleID],
@@ -1059,7 +1090,7 @@ final class HealthRepositoryTests: XCTestCase {
             [Self.dayKey(day)]
         )
 
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], nextAnchorData: Data([3]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: date.addingTimeInterval(120),
@@ -1075,7 +1106,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertTrue(try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).isEmpty)
     }
 
-    func testAnchoredAdditionStaysIndexedWhenFullDayReadIsUnknown() throws {
+    func testAnchoredAdditionStaysIndexedWhenFullDayReadIsUnknown() async throws {
         let repository = HealthRepository(modelContext: context)
         let sampleID = UUID(uuidString: "00000000-0000-0000-0000-000000000034")!
         let date = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1087,7 +1118,7 @@ final class HealthRepositoryTests: XCTestCase {
             endDate: date,
             value: 71
         )
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: date,
@@ -1116,7 +1147,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertNil(snapshot.healthKitSampleSummary?.aggregate(for: .bodyMass))
     }
 
-    func testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown() throws {
+    func testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown() async throws {
         let repository = HealthRepository(modelContext: context)
         let calendar = Calendar.current
         let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
@@ -1160,7 +1191,7 @@ final class HealthRepositoryTests: XCTestCase {
             HealthSampleDaySnapshot(dayStart: secondDay, samples: [], readState: .dataUnavailableOrReadScopeUnknown),
         ]
 
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(
                 samples: [olderVersion, newerVersion, laterTie, earlierTie],
                 nextAnchorData: Data([1]),
@@ -1171,7 +1202,7 @@ final class HealthRepositoryTests: XCTestCase {
             lookbackStart: firstDay,
             replacements: unknownReplacements
         )
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(
                 samples: [earlierTie, laterTie, newerVersion, olderVersion],
                 nextAnchorData: Data([2]),
@@ -1202,7 +1233,7 @@ final class HealthRepositoryTests: XCTestCase {
         )
     }
 
-    func testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches() throws {
+    func testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches() async throws {
         let repository = HealthRepository(modelContext: context)
         let calendar = Calendar.current
         let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
@@ -1231,7 +1262,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(Set(affectedDays), expectedDays)
     }
 
-    func testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages() throws {
+    func testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages() async throws {
         let repository = HealthRepository(modelContext: context)
         let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
         let dayKey = Self.dayKey(day)
@@ -1250,7 +1281,7 @@ final class HealthRepositoryTests: XCTestCase {
         }
         try context.save()
 
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], nextAnchorData: Data([4]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: day,
@@ -1261,7 +1292,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertTrue(try context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).isEmpty)
     }
 
-    func testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval() throws {
+    func testSleepDeletionTargetsOnlyWakeDaysIntersectingTheStoredInterval() async throws {
         let repository = HealthRepository(modelContext: context)
         let calendar = Calendar.current
         let startDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
@@ -1278,7 +1309,7 @@ final class HealthRepositoryTests: XCTestCase {
             sourceBundleIdentifier: "com.example.health",
             deviceModel: "Watch6,1"
         )
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
             stream: HealthMetricID.sleepAnalysis.rawValue,
             lastSuccessfulAt: sampleEnd,
@@ -1302,7 +1333,7 @@ final class HealthRepositoryTests: XCTestCase {
         )
     }
 
-    func testUpdatedSampleMovingToAnotherDayRemovesOldProjection() throws {
+    func testUpdatedSampleMovingToAnotherDayRemovesOldProjection() async throws {
         let repository = HealthRepository(modelContext: context)
         let sampleID = UUID(uuidString: "00000000-0000-0000-0000-000000000032")!
         let firstDate = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1321,7 +1352,7 @@ final class HealthRepositoryTests: XCTestCase {
             endDate: movedDate,
             value: 72
         )
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [first], nextAnchorData: Data([1]), readState: .available),
             stream: "bodyMass",
             lastSuccessfulAt: Date(),
@@ -1332,7 +1363,7 @@ final class HealthRepositoryTests: XCTestCase {
                 readState: .available
             )]
         )
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [moved], nextAnchorData: Data([2]), readState: .available),
             stream: "bodyMass",
             lastSuccessfulAt: Date(),
@@ -1366,7 +1397,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(movedDay.weightKilograms, 72)
     }
 
-    func testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable() throws {
+    func testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable() async throws {
         let repository = HealthRepository(modelContext: context)
         let calendar = Calendar.current
         let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
@@ -1389,14 +1420,14 @@ final class HealthRepositoryTests: XCTestCase {
             syncVersion: 2
         )
 
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [original], nextAnchorData: Data([1]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: firstDay,
             lookbackStart: firstDay,
             replacements: [HealthSampleDaySnapshot(dayStart: firstDay, samples: [original], readState: .available)]
         )
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [moved], nextAnchorData: Data([2]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: secondDay,
@@ -1431,7 +1462,7 @@ final class HealthRepositoryTests: XCTestCase {
             [firstDay, secondDay]
         )
 
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], nextAnchorData: Data([3]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: secondDay.addingTimeInterval(60),
@@ -1454,7 +1485,7 @@ final class HealthRepositoryTests: XCTestCase {
             [Self.dayKey(firstDay)]
         )
 
-        try repository.applyImportedHealthSamples(
+        try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [], nextAnchorData: Data([4]), readState: .available),
             stream: HealthMetricID.bodyMass.rawValue,
             lastSuccessfulAt: secondDay.addingTimeInterval(120),
@@ -1471,7 +1502,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(resolvedIndex.dayKey, Self.dayKey(secondDay))
     }
 
-    func testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue() throws {
+    func testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue() async throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let day = Calendar.current.startOfDay(for: date)
         let components = Calendar.current.dateComponents([.year, .month, .day], from: day)
@@ -1498,7 +1529,7 @@ final class HealthRepositoryTests: XCTestCase {
         ))
         try context.save()
 
-        try HealthRepository(modelContext: context).applyHealthAggregates(
+        try await HealthRepository(modelContext: context).applyHealthAggregates(
             [HealthAggregateBucket(
                 startDate: day,
                 endDate: Calendar.current.date(byAdding: .day, value: 1, to: day)!,
@@ -1522,9 +1553,9 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metric.energyQuality, "unavailable")
     }
 
-    func testDuplicateHealthAggregateBucketsKeepLastBucketPerDay() throws {
+    func testDuplicateHealthAggregateBucketsKeepLastBucketPerDay() async throws {
         let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
-        try HealthRepository(modelContext: context).applyHealthAggregates(
+        try await HealthRepository(modelContext: context).applyHealthAggregates(
             [
                 HealthAggregateBucket(
                     startDate: day,
@@ -1557,7 +1588,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertTrue(metric.requiresRecompute)
     }
 
-    func testHealthSnapshotUpsertUpdatesOnlyTheMatchingDayKey() throws {
+    func testHealthSnapshotUpsertUpdatesOnlyTheMatchingDayKey() async throws {
         let targetDate = Date(timeIntervalSince1970: 1_700_000_000)
         let targetDay = Calendar.current.startOfDay(for: targetDate)
         let neighboringDay = Calendar.current.date(byAdding: .day, value: 1, to: targetDay)!
@@ -1581,7 +1612,7 @@ final class HealthRepositoryTests: XCTestCase {
         }
         try context.save()
 
-        try HealthRepository(modelContext: context).applyHealthAggregates(
+        try await HealthRepository(modelContext: context).applyHealthAggregates(
             [HealthAggregateBucket(
                 startDate: targetDay,
                 endDate: Calendar.current.date(byAdding: .day, value: 1, to: targetDay)!,

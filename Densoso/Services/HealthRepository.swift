@@ -20,7 +20,10 @@ private struct HealthKitSampleIndexUpdate {
 }
 
 /// Coordinates local health-record writes and their derived daily metrics.
-/// SwiftData persists both the source change and its projection with one save.
+/// Source changes and pending markers commit before detached calculation; each
+/// verified projection then commits on this context actor, leaving a durable
+/// retry marker if calculation fails. A post-commit projection failure is
+/// reported through that marker rather than as a failed source write.
 @MainActor
 final class HealthRepository: HealthSyncRepository {
     private static let healthKitSampleIndexBatchSize = 400
@@ -30,30 +33,36 @@ final class HealthRepository: HealthSyncRepository {
 
     private let modelContext: ModelContext
     private let willSave: (() throws -> Void)?
+    private let willSaveProjection: (() throws -> Void)?
 
-    init(modelContext: ModelContext, willSave: (() throws -> Void)? = nil) {
+    init(
+        modelContext: ModelContext,
+        willSave: (() throws -> Void)? = nil,
+        willSaveProjection: (() throws -> Void)? = nil
+    ) {
         self.modelContext = modelContext
         self.willSave = willSave
+        self.willSaveProjection = willSaveProjection
     }
 
-    func insert(_ meal: MealRecord) throws {
-        try write(affecting: [meal.date]) { _ in
+    func insert(_ meal: MealRecord) async throws {
+        try await write(affecting: [meal.date]) { _ in
             modelContext.insert(meal)
             try enqueue(operation: "upsertMeal", recordID: meal.id, syncType: "meal")
         }
     }
 
     /// Persists an edited local meal and creates a newer HealthKit sync version.
-    func update(_ meal: MealRecord) throws {
-        try write(affecting: [meal.date]) { _ in
+    func update(_ meal: MealRecord) async throws {
+        try await write(affecting: [meal.date]) { _ in
             try enqueue(operation: "upsertMeal", recordID: meal.id, syncType: "meal")
         }
     }
 
-    func update(_ weight: WeightRecord, previouslyAt previousDate: Date? = nil) throws {
+    func update(_ weight: WeightRecord, previouslyAt previousDate: Date? = nil) async throws {
         guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
         let affectedDates = [weight.measuredAt] + (previousDate.map { [$0] } ?? [])
-        try write(affecting: affectedDates) { _ in
+        try await write(affecting: affectedDates) { _ in
             try enqueue(operation: "upsertWeight", recordID: weight.id, syncType: "weight")
             try refreshDailyWeightSnapshot(on: weight.measuredAt)
             if let previousDate, !Calendar.current.isDate(previousDate, inSameDayAs: weight.measuredAt) {
@@ -62,39 +71,39 @@ final class HealthRepository: HealthSyncRepository {
         }
     }
 
-    func insert(_ weight: WeightRecord) throws {
+    func insert(_ weight: WeightRecord) async throws {
         guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
-        try write(affecting: [weight.measuredAt]) { _ in
+        try await write(affecting: [weight.measuredAt]) { _ in
             modelContext.insert(weight)
             try enqueue(operation: "upsertWeight", recordID: weight.id, syncType: "weight")
             try refreshDailyWeightSnapshot(on: weight.measuredAt)
         }
     }
 
-    func delete(_ weight: WeightRecord) throws {
+    func delete(_ weight: WeightRecord) async throws {
         guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
-        try write(affecting: [weight.measuredAt]) { _ in
+        try await write(affecting: [weight.measuredAt]) { _ in
             try enqueue(operation: "deleteWeight", recordID: weight.id, syncType: "weight")
             modelContext.delete(weight)
             try refreshDailyWeightSnapshot(on: weight.measuredAt, excluding: weight.id)
         }
     }
 
-    func insert(_ workout: WorkoutRecord) throws {
-        try write(affecting: [workout.date]) { _ in
+    func insert(_ workout: WorkoutRecord) async throws {
+        try await write(affecting: [workout.date]) { _ in
             modelContext.insert(workout)
         }
     }
 
-    func delete(_ meal: MealRecord) throws {
-        try write(affecting: [meal.date]) { _ in
+    func delete(_ meal: MealRecord) async throws {
+        try await write(affecting: [meal.date]) { _ in
             try enqueue(operation: "deleteMeal", recordID: meal.id, syncType: "meal")
             modelContext.delete(meal)
         }
     }
 
-    func delete(_ workout: WorkoutRecord) throws {
-        try write(affecting: [workout.date]) { _ in
+    func delete(_ workout: WorkoutRecord) async throws {
+        try await write(affecting: [workout.date]) { _ in
             modelContext.delete(workout)
         }
     }
@@ -107,8 +116,8 @@ final class HealthRepository: HealthSyncRepository {
         nextAnchorData: Data,
         lookbackStart: Date? = nil,
         stream: String = "workouts"
-    ) throws {
-        try write(affecting: snapshots.map(\.startedAt)) { affectedDates in
+    ) async throws {
+        try await write(affecting: snapshots.map(\.startedAt)) { affectedDates in
             let importedPredicate = #Predicate<WorkoutRecord> { $0.healthKitUUID != nil }
             var importedDescriptor = FetchDescriptor<WorkoutRecord>(
                 predicate: importedPredicate,
@@ -235,8 +244,8 @@ final class HealthRepository: HealthSyncRepository {
     }
 
     /// Explicit settings sync can rebaseline anchored reads after the user changes HealthKit access.
-    func resetHealthKitCursors() throws {
-        try write(affecting: []) { _ in
+    func resetHealthKitCursors() async throws {
+        try await write(affecting: []) { _ in
             let cursors = try modelContext.fetch(FetchDescriptor<HealthKitImportCursor>())
             for cursor in cursors {
                 cursor.anchorData = nil
@@ -247,8 +256,8 @@ final class HealthRepository: HealthSyncRepository {
         }
     }
 
-    func resetHealthKitCursor(for stream: String) throws {
-        try write(affecting: []) { _ in
+    func resetHealthKitCursor(for stream: String) async throws {
+        try await write(affecting: []) { _ in
             guard let cursor = try cursorRecord(stream: stream) else { return }
             cursor.anchorData = nil
             cursor.lastSuccessfulAt = nil
@@ -257,11 +266,11 @@ final class HealthRepository: HealthSyncRepository {
         }
     }
 
-    func setHealthReadState(_ state: HealthReadState, metric: HealthMetricID, days: [Date]) throws {
+    func setHealthReadState(_ state: HealthReadState, metric: HealthMetricID, days: [Date]) async throws {
         let calendar = Calendar.current
         let normalizedDays = Array(Set(days.map { calendar.startOfDay(for: $0) })).sorted()
         guard !normalizedDays.isEmpty else { return }
-        try write(affecting: normalizedDays) { _ in
+        try await write(affecting: normalizedDays) { _ in
             for day in normalizedDays {
                 var snapshot = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
                 var readStates = snapshot.healthReadStates ?? [:]
@@ -276,7 +285,7 @@ final class HealthRepository: HealthSyncRepository {
         for metric: HealthMetricID,
         authorizationStart: Date,
         through: Date
-    ) throws {
+    ) async throws {
         let calendar = Calendar.current
         let firstAuthorizedDay = HealthDataWindowPolicy.firstFullyAuthorizedDay(
             for: metric,
@@ -286,7 +295,7 @@ final class HealthRepository: HealthSyncRepository {
         let cutoffDayKey = Self.dayKey(for: firstAuthorizedDay)
         let projectionStart = calendar.startOfDay(for: authorizationStart)
 
-        try write(affecting: []) { affectedDates in
+        try await write(affecting: []) { affectedDates in
             var removedSourceRecords = false
             if metric == .workout {
                 removedSourceRecords = try removeImportedWorkouts(
@@ -324,7 +333,7 @@ final class HealthRepository: HealthSyncRepository {
         for metrics: Set<HealthMetricID>,
         from start: Date,
         through end: Date
-    ) throws {
+    ) async throws {
         guard !metrics.isEmpty else { return }
         let calendar = Calendar.current
         let firstDay = calendar.startOfDay(for: start)
@@ -340,7 +349,7 @@ final class HealthRepository: HealthSyncRepository {
             clearedMetrics.insert(.workoutEffort)
         }
 
-        try write(affecting: days) { affectedDates in
+        try await write(affecting: days) { affectedDates in
             for metric in orderedMetrics {
                 if metric == .workout {
                     try removeImportedWorkouts(
@@ -711,7 +720,7 @@ final class HealthRepository: HealthSyncRepository {
         lastSuccessfulAt: Date,
         lookbackStart: Date?,
         replacements: [HealthSampleDaySnapshot]
-    ) throws {
+    ) async throws {
         guard let nextAnchorData = page.nextAnchorData else {
             throw HealthRepositoryError.missingHealthKitAnchor
         }
@@ -722,7 +731,7 @@ final class HealthRepository: HealthSyncRepository {
             uniquingKeysWith: { _, latest in latest }
         )
         let affectedDays = Array(replacementsByDay.keys)
-        try write(affecting: affectedDays) { affectedProjectionDates in
+        try await write(affecting: affectedDays) { affectedProjectionDates in
             for (day, replacement) in replacementsByDay {
                 let existing = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
                 let priorSummary = existing.healthKitSampleSummary
@@ -882,7 +891,7 @@ final class HealthRepository: HealthSyncRepository {
         stream: String,
         lookbackStart: Date,
         lastSuccessfulAt: Date = Date()
-    ) throws {
+    ) async throws {
         let calendar = Calendar.current
         let bucketsByDay = Dictionary(
             buckets.map { (calendar.startOfDay(for: $0.startDate), $0) },
@@ -890,7 +899,7 @@ final class HealthRepository: HealthSyncRepository {
         )
         let days = Array(bucketsByDay.keys)
         let containsMeasuredValues = buckets.contains { $0.readState == .available && $0.value != nil }
-        try write(affecting: days) { _ in
+        try await write(affecting: days) { _ in
             for (day, bucket) in bucketsByDay {
                 let value = bucket.value
                 var snapshot = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
@@ -942,18 +951,46 @@ final class HealthRepository: HealthSyncRepository {
         workout.updatedAt = Date()
     }
 
-    private func write(affecting dates: [Date], _ change: (inout Set<Date>) throws -> Void) throws {
-        do {
-            var affectedDates = Set(dates)
-            try change(&affectedDates)
-            for date in Self.affectedProjectionDays(from: affectedDates) {
-                try DailyMetricsProjector.reproject(on: date, in: modelContext)
+    private func write(affecting dates: [Date], _ change: (inout Set<Date>) throws -> Void) async throws {
+        try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
+            var projectedDays: [Date] = []
+            do {
+                try Task.checkCancellation()
+                var affectedDates = Set(dates)
+                try change(&affectedDates)
+                projectedDays = Self.affectedProjectionDays(from: affectedDates)
+                for date in projectedDays {
+                    try DailyMetricsProjector.markPendingForReprojection(on: date, in: modelContext)
+                }
+                try willSave?()
+                try modelContext.save()
+            } catch {
+                modelContext.rollback()
+                throw error
             }
-            try willSave?()
-            try modelContext.save()
-        } catch {
-            modelContext.rollback()
-            throw error
+            for date in projectedDays {
+                do {
+                    try Task.checkCancellation()
+                    try await DailyMetricsProjector.reprojectAndCommitWhileGateHeld(
+                        on: date,
+                        in: modelContext,
+                        willSaveProjection: willSaveProjection
+                    )
+                } catch {
+                    // The source change and retry marker are already durable.
+                    // Discard any uncommitted projection edits, preserve the
+                    // marker, and report the source operation as committed so
+                    // callers cannot duplicate a mutation or replay an anchor.
+                    modelContext.rollback()
+                    do {
+                        try DailyMetricsProjector.markPendingForReprojection(on: date, in: modelContext)
+                        try modelContext.save()
+                    } catch {
+                        modelContext.rollback()
+                    }
+                    if error is CancellationError { return }
+                }
+            }
         }
     }
 

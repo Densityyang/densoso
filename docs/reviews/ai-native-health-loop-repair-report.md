@@ -1,5 +1,40 @@
 # AI-Native Health Loop Repair Report
 
+## Current continuation — 2026-10-28 (bounded provider context and async health projection)
+
+**Branch base before this batch:** `f8f14737891b01534413d705de5d7bb6e1d711ef`
+on `codex/ai-native-health-loop`, synced with `origin`; no associated PR. The
+working tree contains this coding batch and an unrelated dirty audit note,
+`docs/audits/cn-food-mcp-candidate-disposition.md`, which is excluded.
+
+**Latest full Build at review:** [#40698711766](https://github.com/Densityyang/densoso/actions/runs/40698711766)
+targets `f8f1473`. Gates 16 and 17 passed. Gate 18 passed its deterministic
+meal-domain and quantity contracts and was preparing the iOS Simulator for its
+focused integration suite. Gate 1 and Gate 19 were queued; the run was not
+complete and is not evidence for this uncommitted batch. Earlier attempts on
+`0be765f` exposed test-target compile errors in the request-resume test and the
+confirmation recovery fixture; this batch updates both fixtures. No local
+tests, builds, or validators were run.
+
+**Coding in this batch:** move daily projection fingerprinting and calorie
+calculation to detached work over copied `Sendable` values while keeping
+`ModelContext` access on MainActor. A per-context reentrant write gate now
+serializes health-source changes, profile edits, restore projection and other
+same-context writers. Source writes and durable retry markers commit before
+projection; projection failures preserve the committed source and expose a
+pending status. Backup restore reports days whose derived projection remains
+pending. Provider history can retain bounded closed-vocabulary response
+preferences after existing consent/tool filtering; it carries no historical
+raw prose or health facts, and provider-facing messages still strip local-only
+`InputEnvelope` metadata. Regression coverage includes 42-day projection load,
+overlapping same-context writes, committed-source/retry behavior, and the
+provider boundary. GitHub Actions on the batch's exact SHA is still required.
+
+The owner selected Apple's Beta `earliestAuthorizedSampleDate(for:)` API and
+Xcode 27. Live HealthKit authorization-boundary evidence remains owner-run in
+Gate 15; live meal field calibration remains `NOT_MEASURED`. Signing and
+release remain owner-owned.
+
 Date: 2026-10-28
 Repository: `Densityyang/densoso`  
 Worktree: `E:\howtodo\densoso-ai-native-loop`  

@@ -296,7 +296,7 @@ struct ChatScreen: View {
                         isSaving: correctingMealID == meal.id,
                         errorMessage: mealCorrectionError,
                         onSaveCorrection: { correctedLikelyKcal in
-                            saveMealCorrection(meal, correctedLikelyKcal: correctedLikelyKcal)
+                            Task { await saveMealCorrection(meal, correctedLikelyKcal: correctedLikelyKcal) }
                         }
                     )
                 }
@@ -557,7 +557,7 @@ struct ChatScreen: View {
         }
     }
 
-    private func saveMealCorrection(_ meal: MealRecord, correctedLikelyKcal: Double) {
+    private func saveMealCorrection(_ meal: MealRecord, correctedLikelyKcal: Double) async {
         guard correctingMealID == nil else { return }
         guard MealRecordEnergyPresentation(
             totalCaloriesKcal: meal.totalCaloriesKcal,
@@ -607,20 +607,23 @@ struct ChatScreen: View {
                 )
             }
 
-            meal.totalCaloriesKcal = Int(correctedEnergy.likely.rounded())
-            meal.energyLowKcal = correctedEnergy.low
-            meal.energyLikelyKcal = correctedEnergy.likely
-            meal.energyHighKcal = correctedEnergy.high
-            meal.evidenceData = encodedMealEvidence
-            for update in dishUpdates {
-                update.dish.energyLowKcal = update.energy.low
-                update.dish.energyLikelyKcal = update.energy.likely
-                update.dish.energyHighKcal = update.energy.high
-                update.dish.estimatedCaloriesKcal = Int(update.energy.likely.rounded())
-                update.dish.evidenceData = update.evidenceData
-            }
+            try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
+                try Task.checkCancellation()
+                meal.totalCaloriesKcal = Int(correctedEnergy.likely.rounded())
+                meal.energyLowKcal = correctedEnergy.low
+                meal.energyLikelyKcal = correctedEnergy.likely
+                meal.energyHighKcal = correctedEnergy.high
+                meal.evidenceData = encodedMealEvidence
+                for update in dishUpdates {
+                    update.dish.energyLowKcal = update.energy.low
+                    update.dish.energyLikelyKcal = update.energy.likely
+                    update.dish.energyHighKcal = update.energy.high
+                    update.dish.estimatedCaloriesKcal = Int(update.energy.likely.rounded())
+                    update.dish.evidenceData = update.evidenceData
+                }
 
-            try HealthRepository(modelContext: modelContext).update(meal)
+                try await HealthRepository(modelContext: modelContext).update(meal)
+            }
             refreshTodayMeals()
             dependencies.watchConnectivityCoordinator.refreshApplicationContext()
             addMessage(

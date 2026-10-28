@@ -1160,7 +1160,7 @@ private final class GatePausedTextProvider: TextModelProvider, @unchecked Sendab
                         }
                     }.joined(separator: "\n")
                     let responseSchema = request.responseFormat.flatMap {
-                        try? String(data: $0.encodedData(), encoding: .utf8)
+                        try? String(data: JSONEncoder().encode($0.schema), encoding: .utf8)
                     } ?? ""
                     let payload = [request.systemPrompt ?? "", messageText, responseSchema]
                         .joined(separator: "\n")
