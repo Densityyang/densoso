@@ -1520,7 +1520,7 @@ final class AgentSession {
                     : "训练计划已在本机确认；请到计划页完成 WorkoutKit 安排。"
             }
             do {
-                try await confirmedWorkoutPlanHandler(id)
+                try await confirmedWorkoutPlanHandler(action.id)
                 return receipt.actionType == .trainingPlan
                     ? "多日训练计划已确认，并已交给 WorkoutKit 安排。"
                     : "训练计划已确认，并已交给 WorkoutKit 安排。"
@@ -1565,10 +1565,10 @@ final class AgentSession {
                 includesImage: includesImage,
                 operation: {
                     try Task.checkCancellation()
-                    await sendAttempt.markProviderStreamStarted()
                     return provider.stream(request)
                 }
             )
+            await sendAttempt.markProviderStreamStarted()
             for try await event in providerEvents {
                 try Task.checkCancellation()
                 switch event {
