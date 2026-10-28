@@ -58,12 +58,15 @@ final class GetMetricsToolTests: XCTestCase {
         let pending = DailyMetrics(
             date: day,
             totalIntakeKcal: 1_750,
+            proteinG: 80,
+            fatG: 50,
+            carbsG: 180,
             mealCount: 1,
             intakeEnergyLowKcal: 1_700,
             intakeEnergyLikelyKcal: 1_750,
             intakeEnergyHighKcal: 1_800,
             energyQuality: EnergyQuality.unavailable.rawValue,
-            dataCoverageJSON: #"{"intake":true,"protein":false,"fat":false,"carbs":false}"#,
+            dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true}"#,
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
             sourceFingerprint: "pending-get-metrics",
             requiresRecompute: true
@@ -95,6 +98,26 @@ final class GetMetricsToolTests: XCTestCase {
         XCTAssertEqual(intakeCoverage["availableDays"] as? Int, 0)
         XCTAssertTrue(intakeTotal["value"] is NSNull)
         XCTAssertEqual(intakeTotal["availability"] as? String, "pendingRecompute")
+
+        for nutrient in ["proteinG", "fatG", "carbsG"] {
+            let dailyValue = try XCTUnwrap(firstDay[nutrient] as? [String: Any])
+            let dailyCoverage = try XCTUnwrap(coverage[nutrient] as? [String: Any])
+            let aggregate = try XCTUnwrap(response[nutrient] as? [String: Any])
+            let total = try XCTUnwrap(aggregate["total"] as? [String: Any])
+            let average = try XCTUnwrap(aggregate["average"] as? [String: Any])
+            let aggregateCoverage = try XCTUnwrap(aggregate["coverage"] as? [String: Any])
+
+            XCTAssertTrue(dailyValue["value"] is NSNull)
+            XCTAssertEqual(dailyValue["availability"] as? String, "pendingRecompute")
+            XCTAssertEqual(dailyCoverage["pendingRecomputeDays"] as? Int, 1)
+            XCTAssertEqual(dailyCoverage["availableDays"] as? Int, 0)
+            XCTAssertTrue(total["value"] is NSNull)
+            XCTAssertEqual(total["availability"] as? String, "pendingRecompute")
+            XCTAssertTrue(average["value"] is NSNull)
+            XCTAssertEqual(average["availability"] as? String, "pendingRecompute")
+            XCTAssertEqual(aggregateCoverage["pendingRecomputeDays"] as? Int, 1)
+            XCTAssertEqual(aggregateCoverage["availableDays"] as? Int, 0)
+        }
     }
 
     func testNoValidDaysReturnsInsufficientDataWithoutZeroTotals() throws {

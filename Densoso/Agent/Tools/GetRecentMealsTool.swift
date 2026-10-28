@@ -14,7 +14,7 @@ struct GetRecentMealsTool: AgentTool {
     var definition: ToolSchema {
         .strictObject(
             name: "get_recent_meals",
-            description: "只读查看最近记录的餐食摘要，按用户本地日期从新到旧排序。默认查看近 7 天、最多 10 餐；仅返回餐类、估算范围和菜名，不返回备注、原始食材 JSON、证据数据或存储标识。",
+            description: "只读查看最近记录的餐食摘要，按用户本地日期从新到旧排序。默认查看近 7 天、最多 10 餐；仅返回餐类、可用的估算范围和菜名。菜品热量仅在可用时返回，未知热量不会用 0 表示；不返回备注、原始食材 JSON、证据数据或存储标识。",
             properties: [
                 "days": .integer(
                     minimum: 1,
@@ -176,7 +176,7 @@ private struct RecentMealEnergyOutput: Encodable {
 
 private struct RecentDishOutput: Encodable {
     let name: String
-    let likelyKcal: Int
+    let likelyKcal: Int?
 }
 
 private enum GetRecentMealsToolError: Error, LocalizedError {

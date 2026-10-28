@@ -51,22 +51,23 @@ enum DailyMetricsReadModelMapper {
             sourceReferences: references
         )
         let deficit = DailyMetricsUsabilityPolicy.deficit(expenditure: expenditure, intake: intake)
+        let nutrientAvailability = metric.requiresRecompute ? MetricAvailability.pendingRecompute : .estimated
 
         let protein = DailyMetricsUsabilityPolicy.value(
             finiteNonNegative(metric.proteinG),
-            availability: .estimated,
+            availability: nutrientAvailability,
             hasEvidence: hasCurrentProjectionEvidence && nutrition.protein == true,
             sourceReferences: references
         )
         let fat = DailyMetricsUsabilityPolicy.value(
             finiteNonNegative(metric.fatG),
-            availability: .estimated,
+            availability: nutrientAvailability,
             hasEvidence: hasCurrentProjectionEvidence && nutrition.fat == true,
             sourceReferences: references
         )
         let carbs = DailyMetricsUsabilityPolicy.value(
             finiteNonNegative(metric.carbsG),
-            availability: .estimated,
+            availability: nutrientAvailability,
             hasEvidence: hasCurrentProjectionEvidence && nutrition.carbs == true,
             sourceReferences: references
         )

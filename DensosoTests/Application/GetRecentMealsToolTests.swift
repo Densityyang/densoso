@@ -1,4 +1,5 @@
 import Foundation
+import DensosoDomain
 import SwiftData
 import XCTest
 @testable import Densoso
@@ -172,6 +173,8 @@ final class GetRecentMealsToolTests: XCTestCase {
         let output = try XCTUnwrap(outputs.first)
         XCTAssertEqual(output["mealType"] as? String, "lunch")
         XCTAssertNotNil(output["energyEstimate"] as? [String: Any])
+        let dishOutputs = try XCTUnwrap(output["dishes"] as? [[String: Any]])
+        XCTAssertEqual(dishOutputs.first?["likelyKcal"] as? Int, 500)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<MealRecord>()), beforeMealCount)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyBriefRecord>()), beforeBriefCount)
         XCTAssertFalse(response.contains("private-ingredient-json-marker"))
@@ -181,6 +184,86 @@ final class GetRecentMealsToolTests: XCTestCase {
         XCTAssertFalse(response.contains("evidenceData"))
         XCTAssertFalse(response.contains("notes"))
         XCTAssertFalse(response.contains("algorithmVersion"))
+    }
+
+    func testUnavailableLegacyDishEnergyIsOmittedWhileEvidenceBackedZeroIsPreserved() async throws {
+        let calendar = localCalendar()
+        let date = try date(2026, 10, 16, 12, 0, calendar: calendar)
+        let legacyEvidenceData = try JSONEncoder().encode([
+            EvidenceSnapshot(
+                grade: .legacyPointEstimate,
+                sourceID: "swiftdata-v2",
+                summary: "Migrated without recalculating the historical point estimate."
+            ),
+        ])
+        let measuredZeroEvidenceData = try JSONEncoder().encode([
+            EvidenceSnapshot(
+                grade: .measured,
+                sourceID: "user-confirmed-measurement",
+                summary: "Explicitly measured as zero energy."
+            ),
+        ])
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let meal = MealRecord(
+            date: date,
+            mealType: "lunch",
+            totalCaloriesKcal: 0,
+            sourceActionKey: "legacy-meal-with-unavailable-energy",
+            energyLowKcal: 0,
+            energyLikelyKcal: 0,
+            energyHighKcal: 0,
+            evidenceData: legacyEvidenceData
+        )
+        meal.dishes = [
+            DishEntry(
+                dishName: "未估算菜品",
+                estimatedCaloriesKcal: 0,
+                evidenceData: legacyEvidenceData
+            ),
+            DishEntry(
+                dishName: "已确认零热量的水",
+                estimatedCaloriesKcal: 0,
+                evidenceData: measuredZeroEvidenceData
+            ),
+        ]
+        context.insert(meal)
+        try context.save()
+
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let summaries = try await repository.recentMeals(from: date, through: date, limit: 1)
+
+        let summary = try XCTUnwrap(summaries.first)
+        XCTAssertNil(summary.energyEstimate)
+        let legacyDish = try XCTUnwrap(summary.dishes.first { $0.name == "未估算菜品" })
+        let measuredZeroDish = try XCTUnwrap(summary.dishes.first { $0.name == "已确认零热量的水" })
+        XCTAssertNil(legacyDish.likelyKcal)
+        XCTAssertEqual(measuredZeroDish.likelyKcal, 0)
+
+        let start = calendar.startOfDay(for: date)
+        let response = try GetRecentMealsTool(calendar: calendar).response(
+            meals: summaries,
+            from: start,
+            through: date,
+            limit: 1
+        )
+        let object = try jsonObject(response)
+        let outputs = try XCTUnwrap(object["meals"] as? [[String: Any]])
+        let output = try XCTUnwrap(outputs.first)
+        XCTAssertNil(output["energyEstimate"])
+        let dishOutputs = try XCTUnwrap(output["dishes"] as? [[String: Any]])
+        let legacyDishOutput = try XCTUnwrap(
+            dishOutputs.first { $0["name"] as? String == "未估算菜品" }
+        )
+        let measuredZeroDishOutput = try XCTUnwrap(
+            dishOutputs.first { $0["name"] as? String == "已确认零热量的水" }
+        )
+        XCTAssertNil(legacyDishOutput["likelyKcal"])
+        XCTAssertEqual(measuredZeroDishOutput["likelyKcal"] as? Int, 0)
     }
 
     private func localCalendar() -> Calendar {

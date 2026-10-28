@@ -18,7 +18,7 @@ struct AgentMealEnergyEstimate: Equatable, Sendable {
 
 struct AgentMealDishSummary: Equatable, Sendable {
     let name: String
-    let likelyKcal: Int
+    let likelyKcal: Int?
 }
 
 /// A narrow, presentation-safe meal summary. It intentionally excludes storage IDs,

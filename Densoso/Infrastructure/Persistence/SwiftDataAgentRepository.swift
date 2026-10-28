@@ -375,7 +375,7 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
                         guard !name.isEmpty, dish.estimatedCaloriesKcal >= 0 else { return nil }
                         return AgentMealDishSummary(
                             name: String(name.prefix(AgentRecentMealsLimits.maximumDishNameLength)),
-                            likelyKcal: dish.estimatedCaloriesKcal
+                            likelyKcal: Self.availableLikelyKcal(for: dish)
                         )
                     }
 
@@ -386,6 +386,21 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
                     dishes: dishes
                 )
             }
+    }
+
+    private static func availableLikelyKcal(for dish: DishEntry) -> Int? {
+        let likelyKcal = dish.estimatedCaloriesKcal
+        guard likelyKcal >= 0 else { return nil }
+        guard likelyKcal == 0 else { return likelyKcal }
+        guard let evidenceData = dish.evidenceData,
+              let evidence = try? JSONDecoder().decode([EvidenceSnapshot].self, from: evidenceData),
+              !evidence.isEmpty,
+              evidence.allSatisfy({
+                  $0.grade != .legacyPointEstimate && $0.grade != .unresolved
+              }) else {
+            return nil
+        }
+        return likelyKcal
     }
 
     func recentWorkouts(from startDate: Date, through endDate: Date, limit: Int) throws -> [AgentRecentWorkout] {
