@@ -69,10 +69,12 @@ checked export gate blocks Agent health context until that purge succeeds. A
 failed purge keeps the gate closed; an export already reading while a new
 rebaseline starts is rejected after its generation changes. Daily background
 refresh also forces a full-window rebaseline. Observer updates continue from
-stored anchors when the per-type authorization boundary is available. When the
-stable adapter reports `authorizationBoundaryUnavailable`, observer-triggered
-sample and workout syncs also clear the bounded cache and cursor before reading
-the 42-day window; the shipped stable adapter currently takes this fallback.
+stored anchors when the per-type authorization boundary is available. On iOS
+27, the adapter calls Apple's Beta `earliestAuthorizedSampleDate(for:)` API.
+Earlier OS versions report `authorizationBoundaryUnavailable`; observer-triggered
+sample and workout syncs then clear the bounded cache and cursor before reading
+the 42-day window. The API's live limited-history behavior remains
+`NOT_MEASURED` until signed-device evidence is supplied.
 This does not claim immediate detection of arbitrary HealthKit permission
 changes made outside the app. HealthKit workouts
 are excluded from both daily-metric projection inputs and

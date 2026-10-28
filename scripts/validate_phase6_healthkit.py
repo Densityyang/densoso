@@ -343,14 +343,14 @@ def main() -> int:
     )
     if "throw HealthStoreClientError.authorizationBoundaryUnavailable" not in boundary_body:
         errors.append("unsupported HealthKit authorization-boundary lookup must fail closed")
-    if (
-        "getEarliestAuthorizedSampleDate" in boundary_body
-        or "earliestPermittedSampleDate" in boundary_body
-    ):
-        errors.append(
-            "stable HealthKit boundary fallback must not call a missing beta API "
-            "or substitute a systemwide date"
-        )
+    if "guard #available(iOS 27.0, *) else {" not in boundary_body:
+        errors.append("the Beta HealthKit authorization-boundary API must be availability-guarded for iOS 27")
+    if "store.earliestAuthorizedSampleDate(for: [type])" not in boundary_body:
+        errors.append("iOS 27 must query Apple's per-type earliest authorized sample date")
+    if "return dates[type]" not in boundary_body:
+        errors.append("the HealthKit authorization boundary must be mapped to the requested metric type")
+    if "earliestPermittedSampleDate" in boundary_body:
+        errors.append("HealthKit authorization boundaries must not use the unrelated systemwide permitted date")
     if "import SwiftData" in sync_coordinator:
         errors.append("application HealthKit coordinator must depend on a persistence protocol, not SwiftData")
 

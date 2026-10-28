@@ -940,13 +940,16 @@ SOURCE_CONTRACTS: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] 
         (),
     ),
     (
-        "stable_healthkit_authorization_boundary_is_explicit_without_global_proxy",
+        "beta_healthkit_authorization_boundary_is_per_type_and_fail_closed",
         "Densoso/Infrastructure/HealthKit/HealthKitHealthStoreClient.swift",
         (
             "func earliestAuthorizedSampleDate(for metric: HealthMetricID) async throws -> Date?",
+            "guard #available(iOS 27.0, *) else {",
+            "let dates = try await store.earliestAuthorizedSampleDate(for: [type])",
+            "return dates[type]",
             "throw HealthStoreClientError.authorizationBoundaryUnavailable",
         ),
-        ("earliestPermittedSampleDate", "getEarliestAuthorizedSampleDate"),
+        ("earliestPermittedSampleDate",),
     ),
     (
         "unknown_partial_domain_and_legacy_cache_fail_closed",
@@ -1838,7 +1841,9 @@ def build_report(
             "reason": (
                 "No signed-device authorization matrix was supplied. The software contract tests verify "
                 "bounded 42-day rebuilding, explicit unknown coverage, and coordinator behavior when a "
-                "boundary is available; the production adapter does not depend on Apple's Beta boundary API."
+                "boundary is available. On iOS 27 the production adapter calls Apple's Beta per-type "
+                "boundary API; earlier iOS versions use the bounded unknown-safe rebuild. Device behavior "
+                "of the Beta API remains unmeasured."
             ),
             "evidenceLevel": "device-evidence",
         },

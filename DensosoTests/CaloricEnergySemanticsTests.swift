@@ -113,7 +113,7 @@ final class CaloricEnergySemanticsTests: XCTestCase {
             ])
         )
 
-        let measured = CaloricEngine.computeDailyMetrics(
+        let measuredInput = CaloricEngine.calculationInput(
             date: day,
             calendar: .current,
             meals: [measuredZero],
@@ -121,13 +121,21 @@ final class CaloricEnergySemanticsTests: XCTestCase {
             effectiveProfile: nil,
             effectiveWeight: nil
         )
-        let legacy = CaloricEngine.computeDailyMetrics(
+        let measured = CaloricEngine.computeDailyMetricsResult(
+            for: measuredInput,
+            sourceFingerprint: "measured-zero-energy-test"
+        )
+        let legacyInput = CaloricEngine.calculationInput(
             date: day,
             calendar: .current,
             meals: [legacyUnknownZero],
             workouts: [],
             effectiveProfile: nil,
             effectiveWeight: nil
+        )
+        let legacy = CaloricEngine.computeDailyMetricsResult(
+            for: legacyInput,
+            sourceFingerprint: "legacy-unknown-zero-energy-test"
         )
 
         XCTAssertEqual(measured.totalIntakeKcal, 0)

@@ -39,7 +39,8 @@ must not be treated as the current main-line PR.
   HealthKit-origin workouts and weight rows before that timestamp are removed,
   and body-mass dependent historical projections are recomputed. Sleep uses the
   wake-day window beginning at 18:00 on the prior day.
-- If the stable SDK cannot report a per-type limited-history boundary, a fresh
+- On iOS 27, the adapter uses Apple's Beta per-type limited-history boundary
+  API. On earlier iOS versions, or when the boundary API cannot be used, a fresh
   bounded snapshot can still rebuild the current 42-day window. Before querying,
   only HealthKit-derived cache/index data in that window is removed and every
   affected daily read state is set to unknown; window-external records and manual
@@ -47,13 +48,15 @@ must not be treated as the current main-line PR.
   successfully read records become available. The foreground and daily
   background refresh paths force this rebaseline; ordinary observer wakeups keep
   using an existing anchored cursor.
-- The Xcode 26.6 CI SDK does not expose Apple's documented authorization-boundary
-  method in its stable HealthKit interface; Apple currently marks that method
-  Beta. The adapter therefore emits the typed
-  `healthKitAuthorizationBoundaryUnavailable` failure instead of calling a
-  missing member or substituting the system-wide `earliestPermittedSampleDate`.
-  The app does not claim immediate detection of arbitrary permission changes
-  made outside the app. Rebaseline is triggered when authorization is confirmed
+- CI uses the Xcode 27 runner to compile the Beta HealthKit API. The adapter
+  calls `earliestAuthorizedSampleDate(for:)` behind an iOS 27 availability
+  check; on earlier OS versions it emits the typed
+  `healthKitAuthorizationBoundaryUnavailable` result and rebuilds the bounded
+  42-day window. It never substitutes the system-wide
+  `earliestPermittedSampleDate`. Device behavior of Apple's Beta API remains
+  unmeasured until the owner supplies signed-device evidence. The app does not
+  claim immediate detection of arbitrary permission changes made outside the
+  app. Rebaseline is triggered when authorization is confirmed
   in Settings, when the app returns to foreground, and during the daily
   background health refresh. Cloud-facing health reads stay closed until the
   synchronous cache purge succeeds; a failed purge leaves the export gate closed.

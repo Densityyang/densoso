@@ -645,9 +645,9 @@ final class HealthKitSyncCoordinator {
                 authorizationStart = try await provider.earliestAuthorizedSampleDate(for: metric)
                 authorizationBoundaryUnavailable = false
             } catch let error as HealthStoreClientError where error == .authorizationBoundaryUnavailable {
-                // Keep the difference between “no limited window” and “the stable
-                // SDK cannot report a boundary.” Rebuild the bounded cache from a
-                // current HealthKit snapshot rather than treating unavailable as nil.
+                // Keep the difference between “no limited window” and “the API is
+                // unavailable on this OS.” Rebuild the bounded cache from a current
+                // HealthKit snapshot rather than treating unavailable as no boundary.
                 authorizationStart = nil
                 authorizationBoundaryUnavailable = true
             }

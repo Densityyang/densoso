@@ -7,6 +7,36 @@ Branch: `codex/ai-native-health-loop`
 Original review baseline (historical): `33e5ea7908223a3316ea34f4a857d0f5537e2863`
 Associated pull request: none
 
+## Current continuation — 2026-10-28 (HealthKit Beta boundary and CI repair)
+
+**Owner decision:** adopt Apple's Beta `earliestAuthorizedSampleDate(for:)`
+per-type API and keep the full Build and unsigned IPA workflows on the Xcode 27
+runner. Apple's documentation marks the API Beta and explains that omitted
+types do not provide an identifiable limited-history boundary; the implementation
+does not use the unrelated system-wide permitted date.
+
+**Latest full Build:** [#40656118265](https://github.com/Densityyang/densoso/actions/runs/40656118265)
+targets `1bc95beddeb5fb1dec74f6333ed862c5d622c602` through the isolated ref
+`codex/ci-verify-health-loop-1bc95be`. Gates 16 and 17 passed. Gate 18 failed
+to compile because `CaloricEnergySemanticsTests` passed `DailyMetrics` to a helper
+that accepts `DailyMetricsCalculationResult`; the two callers now construct the
+calculation result directly. Gate 1 was still running and Gate 19 was queued at
+this report revision. No full-CI PASS is claimed.
+
+**Coding in this batch:** the production adapter already calls the Beta API on
+iOS 27 and takes the typed, bounded-rebuild fallback on earlier OS versions.
+Gate 6 and Gate 19 validators now require the iOS 27 availability guard and
+per-type API call, and reject the unrelated system-wide date. Their gate docs
+now describe the Beta API and its unmeasured signed-device behavior. The Gate 18
+test compile error is corrected. Both workflow files already select the
+`xcode-27` runner. These changes await a full GitHub Actions run on their
+resulting SHA; no local tests, validators, or builds were run.
+
+**Remaining evidence:** the API is Beta, so its real limited-history behavior
+still needs owner-provided signed-device evidence in Gate 15. A Simulator/fake
+provider result cannot establish that behavior. Gate 15, signing, and launch
+remain with the owner.
+
 ## Current continuation — 2026-10-28 (single-target Watch migration)
 
 **Base branch state:** `codex/ai-native-health-loop` was at `11ab4ae2328c3374ba825e7bb72adf3db3978ba4`, matching `origin`, before this coding batch; there is no associated PR. The migration changes form one coherent batch and require a same-SHA GitHub Actions run before acceptance.
