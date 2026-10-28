@@ -244,9 +244,9 @@ def main() -> int:
     window_policy = require_text(
         "Densoso/Application/Health/HealthDataWindowPolicy.swift",
         (
-            "static let analysisLookbackDays = 42",
-            "static let initialBackfillDays = 42",
-            "static let subjectiveCheckInLookbackDays = 7",
+            "static let analysisLookbackDays = HealthDataWindowContract.analysisLookbackDays",
+            "static let initialBackfillDays = HealthDataWindowContract.initialBackfillDays",
+            "static let subjectiveCheckInLookbackDays = HealthDataWindowContract.subjectiveCheckInLookbackDays",
             "static func analysisStart(",
             "static func initialBackfillStart(",
             "static func effectiveStart(",
@@ -254,6 +254,16 @@ def main() -> int:
             "static func firstFullyAuthorizedDay(",
             "static func requiresRebaseline(",
             "protocol HealthAuthorizationBoundaryProviding: Sendable",
+        ),
+        errors,
+    )
+    require_text(
+        "Packages/DensosoDomain/Sources/DensosoDomain/HealthDataWindowContract.swift",
+        (
+            "public static let analysisLookbackDays = 42",
+            "public static let initialBackfillDays = 42",
+            "public static let subjectiveCheckInLookbackDays = 7",
+            "public static func startOfWindow(",
         ),
         errors,
     )
@@ -763,7 +773,8 @@ def main() -> int:
             "analysisLookbackDays": 42,
             "initialBackfillDays": 42,
             "authorizationBoundaryContractPresent": True,
-            "stableSDKAuthorizationBoundaryFallback": "FAIL_CLOSED_UNKNOWN_WITH_TYPED_ERROR",
+            "betaAPI": "IOS_27_PER_TYPE_AUTHORIZATION_BOUNDARY",
+            "unsupportedOSAuthorizationBoundaryFallback": "FAIL_CLOSED_UNKNOWN_WITH_TYPED_ERROR",
             "anchoredIncrementalContractPresent": True,
             "runtimeTestExecution": "NOT_MEASURED",
             "liveHealthKitAuthorizationBoundary": "NOT_MEASURED",

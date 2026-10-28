@@ -475,7 +475,14 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "Densoso/Application/Health/HealthDataWindowPolicy.swift",
-            ("static let subjectiveCheckInLookbackDays = 7",),
+            (
+                "static let subjectiveCheckInLookbackDays = HealthDataWindowContract.subjectiveCheckInLookbackDays",
+            ),
+            errors,
+        )
+        require(
+            "Packages/DensosoDomain/Sources/DensosoDomain/HealthDataWindowContract.swift",
+            ("public static let subjectiveCheckInLookbackDays = 7",),
             errors,
         )
         require(

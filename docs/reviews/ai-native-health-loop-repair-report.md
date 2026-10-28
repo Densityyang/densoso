@@ -7,6 +7,24 @@ Branch: `codex/ai-native-health-loop`
 Original review baseline (historical): `33e5ea7908223a3316ea34f4a857d0f5537e2863`
 Associated pull request: none
 
+## Current continuation — 2026-10-28 (Gate 6 shared window contract)
+
+**Latest full Build:** [#40658568337](https://github.com/Densityyang/densoso/actions/runs/40658568337)
+targets `1f67d922bf879033676aa22aa73e0a97844b7d0e` through
+`codex/ci-verify-health-loop-1f67d92`. Gates 1–5 and 16–19 passed. Gate 6
+failed during static validation, before its XCTest suite: the validator expected
+42/42/7-day constants to be defined directly in `HealthDataWindowPolicy`, while
+the implementation correctly forwards to the single shared
+`HealthDataWindowContract`. No Gate 6 runtime test result is available from this
+run; Gate 7 was queued at this report revision.
+
+**Coding in this batch:** align Gate 6 and Gate 11–14 validators with the shared
+window contract. They now check both the app-layer forwarding aliases and the
+42-day analysis / initial-backfill plus 7-day subjective values in the Domain
+contract. Gate 6's generated report now describes the iOS 27 Beta authorization
+API and the bounded fallback on unsupported OS versions. These changes need a
+new same-SHA GitHub Actions run. No local tests, validators, or builds were run.
+
 ## Current continuation — 2026-10-28 (HealthKit Beta boundary and CI repair)
 
 **Owner decision:** adopt Apple's Beta `earliestAuthorizedSampleDate(for:)`
