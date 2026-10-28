@@ -197,7 +197,7 @@ def main() -> int:
         require(gate15_evidence["testedSourceSHA"] == tested_source_sha, "Gate 15 report records the tested source SHA")
         require(gate15_evidence["currentWorkflowSHA"] == current_workflow_sha, "Gate 15 report records the aggregate workflow SHA")
         require(len(gate15_evidence["scenarios"]["iPhone"]) == 5, "Gate 15 report lists every iPhone scenario")
-        require(len(gate15_evidence["scenarios"]["Apple Watch"]) == 5, "Gate 15 report lists every Watch scenario")
+        require(len(gate15_evidence["scenarios"]["Apple Watch"]) == 6, "Gate 15 report lists every Watch scenario")
 
         gate15_path.write_text(gate15_shell_document(), encoding="utf-8")
         shell_status, _, _ = manual_gate15_status(gate15_path, current_workflow_sha, repository)
