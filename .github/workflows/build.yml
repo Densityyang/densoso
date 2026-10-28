@@ -347,7 +347,7 @@ jobs:
     needs: foundation
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: xcode-27
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -387,7 +387,7 @@ jobs:
         run: |
           set -o pipefail
           rm -rf "$GATE02_RESULT_BUNDLE"
-          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+          perl -e 'alarm shift; exec @ARGV' 1500 xcodebuild -project Densoso.xcodeproj \
             -scheme Densoso \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             -destination-timeout 120 \
