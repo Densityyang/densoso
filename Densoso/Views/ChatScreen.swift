@@ -559,6 +559,13 @@ struct ChatScreen: View {
 
     private func saveMealCorrection(_ meal: MealRecord, correctedLikelyKcal: Double) {
         guard correctingMealID == nil else { return }
+        guard MealRecordEnergyPresentation(
+            totalCaloriesKcal: meal.totalCaloriesKcal,
+            evidenceData: meal.evidenceData
+        ).isAvailable else {
+            mealCorrectionError = "这条历史餐食没有可用热量估算，不能以默认 0 kcal 作为修正基准。"
+            return
+        }
         correctingMealID = meal.id
         defer { correctingMealID = nil }
         mealCorrectionError = nil

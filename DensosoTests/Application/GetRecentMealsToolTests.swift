@@ -266,6 +266,87 @@ final class GetRecentMealsToolTests: XCTestCase {
         XCTAssertEqual(measuredZeroDishOutput["likelyKcal"] as? Int, 0)
     }
 
+    func testRepositoryPreservesEvidenceBackedMealZeroAndOmitsLegacyOrUnresolvedZero() async throws {
+        let calendar = localCalendar()
+        let date = try date(2026, 10, 16, 12, 0, calendar: calendar)
+        func evidenceData(_ grade: EvidenceGrade, sourceID: String) throws -> Data {
+            try JSONEncoder().encode([
+                EvidenceSnapshot(
+                    grade: grade,
+                    sourceID: sourceID,
+                    summary: "Zero-energy evidence fixture."
+                ),
+            ])
+        }
+
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let measured = makeZeroEnergyMeal(
+            at: date,
+            mealType: "evidence-backed-zero",
+            evidenceData: try evidenceData(.measured, sourceID: "confirmed-zero")
+        )
+        let legacy = makeZeroEnergyMeal(
+            at: date,
+            mealType: "legacy-zero",
+            evidenceData: try evidenceData(.legacyPointEstimate, sourceID: "legacy-zero")
+        )
+        let unresolved = makeZeroEnergyMeal(
+            at: date,
+            mealType: "unresolved-zero",
+            evidenceData: try evidenceData(.unresolved, sourceID: "unresolved-zero")
+        )
+        context.insert(measured)
+        context.insert(legacy)
+        context.insert(unresolved)
+        try context.save()
+
+        let start = calendar.startOfDay(for: date)
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let summaries = try await repository.recentMeals(from: start, through: date, limit: 3)
+
+        let measuredSummary = try XCTUnwrap(summaries.first { $0.mealType == "evidence-backed-zero" })
+        XCTAssertEqual(measuredSummary.energyEstimate?.lowKcal, 0)
+        XCTAssertEqual(measuredSummary.energyEstimate?.likelyKcal, 0)
+        XCTAssertEqual(measuredSummary.energyEstimate?.highKcal, 0)
+        XCTAssertEqual(measuredSummary.dishes.first?.likelyKcal, 0)
+        let legacySummary = try XCTUnwrap(summaries.first { $0.mealType == "legacy-zero" })
+        XCTAssertNil(legacySummary.energyEstimate)
+        XCTAssertNil(legacySummary.dishes.first?.likelyKcal)
+        let unresolvedSummary = try XCTUnwrap(summaries.first { $0.mealType == "unresolved-zero" })
+        XCTAssertNil(unresolvedSummary.energyEstimate)
+        XCTAssertNil(unresolvedSummary.dishes.first?.likelyKcal)
+
+        let response = try GetRecentMealsTool(calendar: calendar).response(
+            meals: summaries,
+            from: start,
+            through: date,
+            limit: 3
+        )
+        let object = try jsonObject(response)
+        let outputMeals = try XCTUnwrap(object["meals"] as? [[String: Any]])
+        let measuredOutput = try XCTUnwrap(outputMeals.first { $0["mealType"] as? String == "evidence-backed-zero" })
+        let measuredEnergy = try XCTUnwrap(measuredOutput["energyEstimate"] as? [String: Any])
+        for key in ["lowKcal", "likelyKcal", "highKcal"] {
+            XCTAssertEqual(try XCTUnwrap(measuredEnergy[key] as? NSNumber).doubleValue, 0, accuracy: 0.001)
+        }
+        let measuredDish = try XCTUnwrap(
+            (measuredOutput["dishes"] as? [[String: Any]])?.first
+        )
+        XCTAssertEqual(measuredDish["likelyKcal"] as? Int, 0)
+
+        for mealType in ["legacy-zero", "unresolved-zero"] {
+            let output = try XCTUnwrap(outputMeals.first { $0["mealType"] as? String == mealType })
+            XCTAssertNil(output["energyEstimate"])
+            let dish = try XCTUnwrap((output["dishes"] as? [[String: Any]])?.first)
+            XCTAssertNil(dish["likelyKcal"])
+        }
+    }
+
     private func localCalendar() -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
@@ -313,6 +394,27 @@ final class GetRecentMealsToolTests: XCTestCase {
                 estimatedCaloriesKcal: 500,
                 evidenceData: Data(rawMarker.utf8),
                 algorithmVersion: "private-algorithm-version"
+            ),
+        ]
+        return meal
+    }
+
+    private func makeZeroEnergyMeal(at date: Date, mealType: String, evidenceData: Data) -> MealRecord {
+        let meal = MealRecord(
+            date: date,
+            mealType: mealType,
+            totalCaloriesKcal: 0,
+            sourceActionKey: "zero-energy-\(mealType)",
+            energyLowKcal: 0,
+            energyLikelyKcal: 0,
+            energyHighKcal: 0,
+            evidenceData: evidenceData
+        )
+        meal.dishes = [
+            DishEntry(
+                dishName: "零热量样本",
+                estimatedCaloriesKcal: 0,
+                evidenceData: evidenceData
             ),
         ]
         return meal

@@ -71,6 +71,76 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         XCTAssertEqual(savedReceipt.metrics, [.dietaryEnergy, .dietaryProtein, .dietaryCarbohydrates])
     }
 
+    func testLegacyAndUnresolvedZeroEnergyMealsBecomeTerminalWithoutHealthKitWrites() async throws {
+        HealthKitConnectionPreference.hasRequestedAuthorization = true
+        let legacyEvidence = try JSONEncoder().encode([
+            EvidenceSnapshot(grade: .legacyPointEstimate, sourceID: "legacy-v2-default-zero-energy", summary: "Legacy default")
+        ])
+        let unresolvedEvidence = try JSONEncoder().encode([
+            EvidenceSnapshot(grade: .unresolved, sourceID: "migration", summary: "Unknown energy")
+        ])
+        let legacyMeal = MealRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000861")!,
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            totalCaloriesKcal: 0,
+            energyLikelyKcal: 0,
+            evidenceData: legacyEvidence
+        )
+        let unresolvedMeal = MealRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000862")!,
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            totalCaloriesKcal: 0,
+            energyLikelyKcal: 0,
+            evidenceData: unresolvedEvidence
+        )
+        let entries = [
+            HealthSyncOutboxEntry(operation: "upsertMeal", recordID: legacyMeal.id),
+            HealthSyncOutboxEntry(operation: "upsertMeal", recordID: unresolvedMeal.id),
+        ]
+        context.insert(legacyMeal)
+        context.insert(unresolvedMeal)
+        for entry in entries { context.insert(entry) }
+        try context.save()
+
+        let fake = FakeHealthStoreClient()
+        await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
+            .processPending(in: context)
+
+        XCTAssertEqual(entries.map(\.state), ["terminal", "terminal"])
+        let attemptedWrites = await fake.attemptedWritesSnapshot()
+        XCTAssertTrue(attemptedWrites.isEmpty)
+    }
+
+    func testEvidenceBackedZeroEnergyMealCanWriteExplicitZeroToHealthKit() async throws {
+        HealthKitConnectionPreference.hasRequestedAuthorization = true
+        let evidenceData = try JSONEncoder().encode([
+            EvidenceSnapshot(grade: .measured, sourceID: "verified-measurement", summary: "Explicit zero energy")
+        ])
+        let meal = MealRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000863")!,
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            totalCaloriesKcal: 0,
+            energyLikelyKcal: 0,
+            evidenceData: evidenceData
+        )
+        let entry = HealthSyncOutboxEntry(operation: "upsertMeal", recordID: meal.id)
+        context.insert(meal)
+        context.insert(entry)
+        try context.save()
+
+        let fake = FakeHealthStoreClient()
+        await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
+            .processPending(in: context)
+
+        XCTAssertEqual(entry.state, "succeeded")
+        let writes = await fake.successfulWritesSnapshot()
+        let command = try XCTUnwrap(writes.first)
+        guard case .nutrition(let nutrition) = command.payload else {
+            return XCTFail("Expected a meal nutrition write")
+        }
+        XCTAssertEqual(nutrition.energyKilocalories, 0)
+    }
+
     func testRetryReusesStableSyncIdentifierAndVersion() async throws {
         HealthKitConnectionPreference.hasRequestedAuthorization = true
         let weight = WeightRecord(

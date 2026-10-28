@@ -39,6 +39,13 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(meal.energyLowKcal, Double(seed.mealCalories))
         XCTAssertEqual(meal.energyLikelyKcal, Double(seed.mealCalories))
         XCTAssertEqual(meal.energyHighKcal, Double(seed.mealCalories))
+        XCTAssertEqual(
+            MealRecordEnergyPresentation(
+                totalCaloriesKcal: meal.totalCaloriesKcal,
+                evidenceData: meal.evidenceData
+            ).label,
+            "\(seed.mealCalories) kcal"
+        )
         XCTAssertEqual(meal.dishes.count, 1)
         XCTAssertEqual(dish.mealRecord?.id, meal.id)
         XCTAssertEqual(dish.dishName, "fixture dish")
@@ -99,6 +106,13 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(meal.id, seed.mealID)
         XCTAssertEqual(meal.algorithmVersion, seed.mealAlgorithmVersion)
         XCTAssertEqual(meal.energyLikelyKcal, Double(seed.mealCalories))
+        XCTAssertEqual(
+            MealRecordEnergyPresentation(
+                totalCaloriesKcal: meal.totalCaloriesKcal,
+                evidenceData: meal.evidenceData
+            ).label,
+            "\(seed.mealCalories) kcal"
+        )
         XCTAssertEqual(meal.dishes.count, 1)
         XCTAssertEqual(dish.mealRecord?.id, meal.id)
         XCTAssertEqual(dish.estimatedCaloriesKcal, seed.mealCalories)
@@ -160,6 +174,73 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual([dish.proteinLowG, dish.proteinLikelyG, dish.proteinHighG], [8.5, 8.5, 8.5])
         XCTAssertEqual([dish.fatLowG, dish.fatLikelyG, dish.fatHighG], [2.75, 2.75, 2.75])
         XCTAssertEqual([dish.carbsLowG, dish.carbsLikelyG, dish.carbsHighG], [11.25, 11.25, 11.25])
+    }
+
+    func testV2DefaultZeroEnergyMigratesAsUnavailableInHistory() throws {
+        let seed = try Gate02FixtureLoader.load("v2-seed", as: Gate02Seed.self)
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        try createV2Store(
+            seed: seed,
+            at: location.storeURL,
+            mealCalories: 0,
+            dishCalories: 0
+        )
+
+        let container = try openCurrentStore(at: location.storeURL)
+        let context = ModelContext(container)
+        let meal = try XCTUnwrap(context.fetch(FetchDescriptor<MealRecord>()).first)
+        let dish = try XCTUnwrap(context.fetch(FetchDescriptor<DishEntry>()).first)
+        let mealEvidence = try XCTUnwrap(meal.evidenceData)
+        let dishEvidence = try XCTUnwrap(dish.evidenceData)
+        let decoder = JSONDecoder()
+        let decodedMealEvidence = try decoder.decode([EvidenceSnapshot].self, from: mealEvidence)
+        let decodedDishEvidence = try decoder.decode([EvidenceSnapshot].self, from: dishEvidence)
+
+        // Schema V3's nonoptional compatibility fields retain the old sentinel,
+        // while evidence and History presentation treat it as unavailable.
+        XCTAssertEqual(meal.energyLikelyKcal, 0)
+        XCTAssertTrue(decodedMealEvidence.contains { $0.grade == .legacyPointEstimate })
+        XCTAssertTrue(decodedMealEvidence.contains {
+            $0.sourceID == "legacy-v2-default-zero-energy" && $0.grade == .unresolved
+        })
+        let historyEnergy = MealRecordEnergyPresentation(
+            totalCaloriesKcal: meal.totalCaloriesKcal,
+            evidenceData: meal.evidenceData
+        )
+        XCTAssertEqual(historyEnergy.label, "热量不可用")
+        XCTAssertFalse(historyEnergy.isAvailable)
+        XCTAssertEqual(dish.energyLikelyKcal, 0)
+        XCTAssertTrue(decodedDishEvidence.contains {
+            $0.sourceID == "legacy-v2-default-zero-energy" && $0.grade == .unresolved
+        })
+    }
+
+    func testHistoryMealEnergyPresentationDistinguishesZeroFromUnavailable() throws {
+        let encoder = JSONEncoder()
+        let legacyZero = try encoder.encode([
+            EvidenceSnapshot(grade: .legacyPointEstimate, sourceID: "swiftdata-v2", summary: "old point"),
+            EvidenceSnapshot(grade: .unresolved, sourceID: "legacy-v2-default-zero-energy", summary: "unknown"),
+        ])
+        let measuredZero = try encoder.encode([
+            EvidenceSnapshot(grade: .measured, sourceID: "user-measured", summary: "measured zero"),
+        ])
+
+        let legacyPresentation = MealRecordEnergyPresentation(totalCaloriesKcal: 0, evidenceData: legacyZero)
+        XCTAssertEqual(legacyPresentation.label, "热量不可用")
+        XCTAssertFalse(legacyPresentation.isAvailable)
+
+        let measuredPresentation = MealRecordEnergyPresentation(totalCaloriesKcal: 0, evidenceData: measuredZero)
+        XCTAssertEqual(measuredPresentation.label, "0 kcal")
+        XCTAssertTrue(measuredPresentation.isAvailable)
+
+        let legacyPointPresentation = MealRecordEnergyPresentation(totalCaloriesKcal: 640, evidenceData: legacyZero)
+        XCTAssertEqual(legacyPointPresentation.label, "640 kcal")
+        XCTAssertTrue(legacyPointPresentation.isAvailable)
+
+        let missingEvidencePresentation = MealRecordEnergyPresentation(totalCaloriesKcal: 0, evidenceData: nil)
+        XCTAssertEqual(missingEvidencePresentation.label, "热量不可用")
+        XCTAssertFalse(missingEvidencePresentation.isAvailable)
     }
 
     func testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords() throws {
@@ -812,14 +893,16 @@ final class DensosoMigrationTests: XCTestCase {
         seed: Gate02Seed,
         at url: URL,
         mealNutrients: (proteinG: Double, fatG: Double, carbsG: Double) = (0, 0, 0),
-        dishNutrients: (proteinG: Double, fatG: Double, carbsG: Double) = (0, 0, 0)
+        dishNutrients: (proteinG: Double, fatG: Double, carbsG: Double) = (0, 0, 0),
+        mealCalories: Int? = nil,
+        dishCalories: Int? = nil
     ) throws {
         var container: ModelContainer? = try makeContainer(version: DensosoSchemaV2.self, url: url)
         var context: ModelContext? = ModelContext(container!)
         let date = Date(timeIntervalSince1970: seed.recordedAt)
         let meal = DensosoSchemaV2.MealRecord(
             date: date,
-            totalCaloriesKcal: seed.mealCalories,
+            totalCaloriesKcal: mealCalories ?? seed.mealCalories,
             proteinG: mealNutrients.proteinG,
             fatG: mealNutrients.fatG,
             carbsG: mealNutrients.carbsG,
@@ -829,7 +912,7 @@ final class DensosoMigrationTests: XCTestCase {
         meal.dishes = [
             DensosoSchemaV2.DishEntry(
                 dishName: "fixture dish",
-                estimatedCaloriesKcal: seed.mealCalories,
+                estimatedCaloriesKcal: dishCalories ?? seed.mealCalories,
                 estimatedProteinG: dishNutrients.proteinG,
                 estimatedFatG: dishNutrients.fatG,
                 estimatedCarbsG: dishNutrients.carbsG

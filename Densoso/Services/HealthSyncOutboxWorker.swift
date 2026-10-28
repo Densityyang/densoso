@@ -160,8 +160,20 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
             guard let meal = try modelContext.fetch(descriptor).first else {
                 throw HealthOutboxError.missingSourceRecord
             }
+            let energyKilocalories = meal.energyLikelyKcal
+            guard energyKilocalories.isFinite, energyKilocalories >= 0 else {
+                throw HealthOutboxError.unavailableMealEnergy
+            }
+            if energyKilocalories == 0 {
+                let evidence = meal.evidenceData.flatMap {
+                    try? JSONDecoder().decode([EvidenceSnapshot].self, from: $0)
+                } ?? []
+                guard MealEnergyAvailabilityPolicy.supportsExplicitZero(evidence) else {
+                    throw HealthOutboxError.unavailableMealEnergy
+                }
+            }
             let payload = HealthWritePayload.nutrition(HealthNutritionWrite(
-                energyKilocalories: meal.energyLikelyKcal,
+                energyKilocalories: energyKilocalories,
                 proteinGrams: meal.proteinLikelyG,
                 fatGrams: meal.fatLikelyG,
                 carbohydrateGrams: meal.carbsLikelyG
@@ -286,7 +298,7 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
         }
         guard let error = error as? HealthOutboxError else { return false }
         switch error {
-        case .missingSourceRecord, .refuseHealthKitEcho, .unsupportedOperation:
+        case .missingSourceRecord, .refuseHealthKitEcho, .unavailableMealEnergy, .unsupportedOperation:
             return true
         }
     }
@@ -295,6 +307,7 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
 private enum HealthOutboxError: SharedErrorDescribing {
     case missingSourceRecord
     case refuseHealthKitEcho
+    case unavailableMealEnergy
     case unsupportedOperation(String)
 
     var sharedErrorDescriptor: SharedErrorDescriptor {
@@ -312,6 +325,13 @@ private enum HealthOutboxError: SharedErrorDescribing {
                 userMessage: "此记录来自 Apple Health，无需再次写回。",
                 subsystem: .healthKit,
                 reason: .refusedHealthKitEcho
+            )
+        case .unavailableMealEnergy:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "该餐食热量来源无法确认，因此未写入 Apple Health。",
+                subsystem: .healthKit,
+                reason: .healthMealEnergyUnavailable
             )
         case .unsupportedOperation(_):
             SharedErrorDescriptor(

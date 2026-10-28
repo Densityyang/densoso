@@ -83,6 +83,59 @@ final class CaloricEnergySemanticsTests: XCTestCase {
         XCTAssertTrue(result.requiresRecompute == false)
     }
 
+    func testEvidenceBackedZeroMealRemainsDistinctFromLegacyUnknownZero() throws {
+        let day = Date(timeIntervalSince1970: 1_700_000_000)
+        let measuredZero = MealRecord(
+            date: day,
+            totalCaloriesKcal: 0,
+            evidenceData: try JSONEncoder().encode([
+                EvidenceSnapshot(
+                    grade: .measured,
+                    sourceID: "measured-zero-energy",
+                    summary: "Explicit zero-energy value."
+                ),
+            ])
+        )
+        let legacyUnknownZero = MealRecord(
+            date: day,
+            totalCaloriesKcal: 0,
+            evidenceData: try JSONEncoder().encode([
+                EvidenceSnapshot(
+                    grade: .legacyPointEstimate,
+                    sourceID: "swiftdata-v2",
+                    summary: "Legacy point estimate."
+                ),
+                EvidenceSnapshot(
+                    grade: .unresolved,
+                    sourceID: "legacy-v2-default-zero-energy",
+                    summary: "V2's default zero cannot prove zero kcal."
+                ),
+            ])
+        )
+
+        let measured = CaloricEngine.computeDailyMetrics(
+            date: day,
+            calendar: .current,
+            meals: [measuredZero],
+            workouts: [],
+            effectiveProfile: nil,
+            effectiveWeight: nil
+        )
+        let legacy = CaloricEngine.computeDailyMetrics(
+            date: day,
+            calendar: .current,
+            meals: [legacyUnknownZero],
+            workouts: [],
+            effectiveProfile: nil,
+            effectiveWeight: nil
+        )
+
+        XCTAssertEqual(measured.totalIntakeKcal, 0)
+        XCTAssertTrue(try intakeIsPresent(in: measured))
+        XCTAssertEqual(legacy.totalIntakeKcal, 0)
+        XCTAssertFalse(try intakeIsPresent(in: legacy))
+    }
+
     func testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics() {
         let day = Date(timeIntervalSince1970: 1_700_000_000)
         let profile = effectiveProfile(at: day, activityLevel: .moderate)
@@ -215,5 +268,12 @@ final class CaloricEnergySemanticsTests: XCTestCase {
             summary: "Regression fixture with current estimate evidence."
         )
         return try! JSONEncoder().encode([evidence])
+    }
+
+    private func intakeIsPresent(in result: DailyMetricsCalculationResult) throws -> Bool {
+        let coverage = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(result.dataCoverageJSON.utf8)) as? [String: Any]
+        )
+        return try XCTUnwrap(coverage["intake"] as? Bool)
     }
 }

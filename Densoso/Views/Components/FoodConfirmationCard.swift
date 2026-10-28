@@ -18,6 +18,34 @@ struct MealCalorieSummaryPresentation: Equatable {
     }
 }
 
+/// Presents persisted meal energy without treating V2's default zero as a
+/// measured or estimated value. Positive legacy point estimates remain visible
+/// as historical estimates; zero requires non-legacy, resolved evidence.
+struct MealRecordEnergyPresentation: Equatable {
+    let label: String
+    let isAvailable: Bool
+
+    init(totalCaloriesKcal: Int, evidenceData: Data?) {
+        guard totalCaloriesKcal >= 0 else {
+            label = "热量不可用"
+            isAvailable = false
+            return
+        }
+        guard totalCaloriesKcal == 0 else {
+            label = "\(totalCaloriesKcal) kcal"
+            isAvailable = true
+            return
+        }
+
+        let evidence = evidenceData.flatMap {
+            try? JSONDecoder().decode([EvidenceSnapshot].self, from: $0)
+        } ?? []
+        let hasCurrentZeroEvidence = MealEnergyAvailabilityPolicy.supportsExplicitZero(evidence)
+        label = hasCurrentZeroEvidence ? "0 kcal" : "热量不可用"
+        isAvailable = hasCurrentZeroEvidence
+    }
+}
+
 /// 食物热量估算确认卡片
 struct FoodConfirmationCard: View {
     let summary: String
@@ -331,37 +359,43 @@ struct TodayConfirmedMealCard: View {
                     .accessibilityIdentifier("today-meal-correction-evidence")
             }
 
-            Divider()
+            if energyRange != nil {
+                Divider()
 
-            Text("仅更正这餐的 likely kcal")
-                .font(.subheadline.weight(.medium))
-            HStack(spacing: 10) {
-                TextField("更正后的 kcal", text: $correctedLikelyText)
-                    .keyboardType(.decimalPad)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityIdentifier("today-meal-corrected-kcal-input")
-                Button("保存修正") {
-                    guard let value = parsedCorrectedLikely else { return }
-                    onSaveCorrection(value)
+                Text("仅更正这餐的 likely kcal")
+                    .font(.subheadline.weight(.medium))
+                HStack(spacing: 10) {
+                    TextField("更正后的 kcal", text: $correctedLikelyText)
+                        .keyboardType(.decimalPad)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("today-meal-corrected-kcal-input")
+                    Button("保存修正") {
+                        guard let value = parsedCorrectedLikely else { return }
+                        onSaveCorrection(value)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isSaving || !canSaveCorrection)
+                    .accessibilityIdentifier("today-meal-save-correction")
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(isSaving || !canSaveCorrection)
-                .accessibilityIdentifier("today-meal-save-correction")
-            }
-            if canSaveCorrection,
-               let parsedCorrectedLikely,
-               let factor = try? ConfirmedMealCalorieCorrection.correctionFactor(
-                    currentLikelyKcal: meal.energyLikelyKcal,
-                    correctedLikelyKcal: parsedCorrectedLikely
-               ) {
-                Text("复核热量：\(Self.kcalText(meal.energyLikelyKcal)) → \(Self.kcalText(parsedCorrectedLikely)) kcal（热量范围 ×\(factor.formatted(.number.precision(.fractionLength(2))))）；蛋白质、脂肪、碳水和食材份量保持原记录。")
+                if canSaveCorrection,
+                   let parsedCorrectedLikely,
+                   let factor = try? ConfirmedMealCalorieCorrection.correctionFactor(
+                        currentLikelyKcal: meal.energyLikelyKcal,
+                        correctedLikelyKcal: parsedCorrectedLikely
+                   ) {
+                    Text("复核热量：\(Self.kcalText(meal.energyLikelyKcal)) → \(Self.kcalText(parsedCorrectedLikely)) kcal（热量范围 ×\(factor.formatted(.number.precision(.fractionLength(2))))）；蛋白质、脂肪、碳水和食材份量保持原记录。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("today-meal-correction-preview")
+                }
+                Text("保存后只更新热量估算范围。蛋白质、脂肪、碳水、菜品和食材份量保持原记录；更正前后的热量与时间会追加为证据。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("today-meal-correction-preview")
+            } else {
+                Text("旧记录的热量来源无法确认，不能以默认 0 kcal 作为修正基准。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Text("保存后只更新热量估算范围。蛋白质、脂肪、碳水、菜品和食材份量保持原记录；更正前后的热量与时间会追加为证据。")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
 
             if isSaving {
                 Label("正在保存并更新今日汇总", systemImage: "arrow.triangle.2.circlepath")
@@ -393,7 +427,11 @@ struct TodayConfirmedMealCard: View {
     }
 
     private var energyRange: EstimateRange? {
-        try? EstimateRange(
+        guard MealRecordEnergyPresentation(
+            totalCaloriesKcal: meal.totalCaloriesKcal,
+            evidenceData: meal.evidenceData
+        ).isAvailable else { return nil }
+        return try? EstimateRange(
             low: meal.energyLowKcal,
             likely: meal.energyLikelyKcal,
             high: meal.energyHighKcal

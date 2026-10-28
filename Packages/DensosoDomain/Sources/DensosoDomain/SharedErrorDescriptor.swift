@@ -56,6 +56,7 @@ public enum SharedErrorReason: String, Codable, CaseIterable, Sendable {
     case healthDataRestricted
     case healthDataLocked
     case unsupportedHealthMetric
+    case healthMealEnergyUnavailable
     case invalidHealthKitAnchor
     case healthKitQueryFailed
     case missingHealthKitAnchor

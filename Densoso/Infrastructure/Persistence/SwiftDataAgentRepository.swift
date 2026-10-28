@@ -358,7 +358,8 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
                 let likely = meal.energyLikelyKcal
                 let high = meal.energyHighKcal
                 if low.isFinite, likely.isFinite, high.isFinite,
-                   low >= 0, likely >= low, high >= likely, high > 0 {
+                   low >= 0, likely >= low, high >= likely,
+                   high > 0 || Self.hasNonLegacyEvidence(meal.evidenceData) {
                     estimate = AgentMealEnergyEstimate(lowKcal: low, likelyKcal: likely, highKcal: high)
                 } else {
                     estimate = nil
@@ -392,15 +393,19 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         let likelyKcal = dish.estimatedCaloriesKcal
         guard likelyKcal >= 0 else { return nil }
         guard likelyKcal == 0 else { return likelyKcal }
-        guard let evidenceData = dish.evidenceData,
-              let evidence = try? JSONDecoder().decode([EvidenceSnapshot].self, from: evidenceData),
-              !evidence.isEmpty,
-              evidence.allSatisfy({
-                  $0.grade != .legacyPointEstimate && $0.grade != .unresolved
-              }) else {
+        guard hasNonLegacyEvidence(dish.evidenceData) else {
             return nil
         }
         return likelyKcal
+    }
+
+    private static func hasNonLegacyEvidence(_ evidenceData: Data?) -> Bool {
+        guard let evidenceData,
+              let evidence = try? JSONDecoder().decode([EvidenceSnapshot].self, from: evidenceData),
+              MealEnergyAvailabilityPolicy.hasCurrentResolvedEvidence(evidence) else {
+            return false
+        }
+        return true
     }
 
     func recentWorkouts(from startDate: Date, through endDate: Date, limit: Int) throws -> [AgentRecentWorkout] {

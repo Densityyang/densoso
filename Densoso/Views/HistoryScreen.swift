@@ -182,9 +182,14 @@ struct HistoryScreen: View {
                         }
 
                         Spacer()
-                        Text("\(meal.totalCaloriesKcal) kcal")
+                        let energy = MealRecordEnergyPresentation(
+                            totalCaloriesKcal: meal.totalCaloriesKcal,
+                            evidenceData: meal.evidenceData
+                        )
+                        Text(energy.label)
                             .font(.subheadline.weight(.semibold))
                             .monospacedDigit()
+                            .foregroundStyle(energy.isAvailable ? Color.primary : Color.secondary)
                     }
                     .padding(.vertical, 6)
                 }

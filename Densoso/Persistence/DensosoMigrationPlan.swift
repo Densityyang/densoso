@@ -55,7 +55,11 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                         FetchDescriptor<DensosoSchemaV2Bridge.MealRecord>()
                     )
                     for meal in meals {
-                        let energy = Double(meal.totalCaloriesKcal)
+                        let legacyEnergy = Self.legacyEnergyPoint(meal.totalCaloriesKcal)
+                        // Schema V3 requires scalar/range energy columns. Keep zero in
+                        // those compatibility fields, but mark it unavailable below;
+                        // V2 used zero as its missing-value default.
+                        let energy = legacyEnergy ?? 0
                         meal.energyLowKcal = energy
                         meal.energyLikelyKcal = energy
                         meal.energyHighKcal = energy
@@ -72,18 +76,15 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                         meal.carbsLikelyG = carbs
                         meal.carbsHighG = carbs
                         meal.sourceActionKey = "legacy-meal-\(meal.id.uuidString.lowercased())"
-                        meal.evidenceData = try encoder.encode([
-                            EvidenceSnapshot(
-                                id: meal.id,
-                                grade: .legacyPointEstimate,
-                                sourceID: "swiftdata-v2",
-                                sourceVersion: meal.algorithmVersion,
-                                summary: "Migrated without recalculating the historical point estimate."
-                            )
-                        ])
+                        meal.evidenceData = try encoder.encode(Self.legacyMealEvidence(
+                            id: meal.id,
+                            algorithmVersion: meal.algorithmVersion,
+                            energyIsAvailable: legacyEnergy != nil
+                        ))
 
                         for dish in meal.dishes {
-                            let dishEnergy = Double(dish.estimatedCaloriesKcal)
+                            let legacyDishEnergy = Self.legacyEnergyPoint(dish.estimatedCaloriesKcal)
+                            let dishEnergy = legacyDishEnergy ?? 0
                             dish.id = UUID()
                             dish.energyLowKcal = dishEnergy
                             dish.energyLikelyKcal = dishEnergy
@@ -100,7 +101,11 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                             dish.carbsLowG = carbs
                             dish.carbsLikelyG = carbs
                             dish.carbsHighG = carbs
-                            dish.evidenceData = meal.evidenceData
+                            dish.evidenceData = try encoder.encode(Self.legacyMealEvidence(
+                                id: dish.id ?? UUID(),
+                                algorithmVersion: meal.algorithmVersion,
+                                energyIsAvailable: legacyDishEnergy != nil
+                            ))
                             dish.algorithmVersion = meal.algorithmVersion
                         }
                     }
@@ -419,6 +424,41 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
     private static func legacyMacroPoint(_ value: Double) -> Double? {
         guard value.isFinite, value > 0 else { return nil }
         return value
+    }
+
+    /// V2 used zero as the default for missing meal energy, so zero cannot safely
+    /// become a historical point estimate. The current V3 compatibility columns are
+    /// nonoptional, so unavailable energy remains encoded as a zero sentinel plus
+    /// explicit unresolved evidence; presentation and read models must honor it.
+    private static func legacyEnergyPoint(_ value: Int) -> Double? {
+        guard value > 0 else { return nil }
+        return Double(value)
+    }
+
+    private static func legacyMealEvidence(
+        id: UUID,
+        algorithmVersion: String,
+        energyIsAvailable: Bool
+    ) -> [EvidenceSnapshot] {
+        let legacyEvidence = EvidenceSnapshot(
+            id: id,
+            grade: .legacyPointEstimate,
+            sourceID: "swiftdata-v2",
+            sourceVersion: algorithmVersion,
+            summary: energyIsAvailable
+                ? "Migrated without recalculating the historical point estimate."
+                : "Historical energy is unavailable; V2's default zero cannot prove zero kcal."
+        )
+        guard !energyIsAvailable else { return [legacyEvidence] }
+        return [
+            legacyEvidence,
+            EvidenceSnapshot(
+                grade: .unresolved,
+                sourceID: "legacy-v2-default-zero-energy",
+                sourceVersion: "swiftdata-v2",
+                summary: "V2 stored zero both for missing energy and explicit values; treat this zero as unavailable."
+            ),
+        ]
     }
 }
 

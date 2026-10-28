@@ -323,7 +323,6 @@ enum CaloricEngine {
         let intakeComplete = !dayMeals.isEmpty
             && evidenceBackedMeals.count == dayMeals.count
             && intakeRanges.count == dayMeals.count
-            && intakeRanges.allSatisfy { $0.likely > 0 }
         // DailyMetrics still has required scalar/range columns for compatibility.
         // Keep their sentinel at zero when any meal lacks usable evidence; the
         // coverage bit is the canonical signal consumed by read models.
@@ -480,7 +479,7 @@ enum CaloricEngine {
               !evidence.isEmpty else {
             return false
         }
-        return !evidence.contains { $0.grade == .legacyPointEstimate }
+        return MealEnergyAvailabilityPolicy.hasCurrentResolvedEvidence(evidence)
     }
 
     private static func roundedInteger(_ value: Double) -> Int {
