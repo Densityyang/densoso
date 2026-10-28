@@ -220,7 +220,8 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
                   ) else {
                 continue
             }
-            let predicate = #Predicate<PersonalMealDishPriorRecord> { $0.priorKey == key.priorKey }
+            let priorKey = key.priorKey
+            let predicate = #Predicate<PersonalMealDishPriorRecord> { $0.priorKey == priorKey }
             var descriptor = FetchDescriptor(predicate: predicate)
             descriptor.fetchLimit = 1
             if let record = try context.fetch(descriptor).first {
