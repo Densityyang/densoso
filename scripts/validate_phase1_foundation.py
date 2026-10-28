@@ -139,7 +139,7 @@ def main() -> int:
         "IPHONEOS_DEPLOYMENT_TARGET=18.0",
         "Record Gate 1 execution status",
         "gate01-execution-summary.json",
-        "Test units on iOS 26 Simulator",
+        "Test units on iOS 27.0 Simulator",
         "id: unit_tests",
         "-only-testing:DensosoTests",
         "Test UI fixtures and capture screenshots",
