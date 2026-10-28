@@ -5,7 +5,7 @@ on:
 
 jobs:
   build-ipa:
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - name: Checkout
         uses: actions/checkout@v4

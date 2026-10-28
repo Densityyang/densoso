@@ -30,16 +30,23 @@ final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient,
 
     func earliestAuthorizedSampleDate(for metric: HealthMetricID) async throws -> Date? {
         guard HKHealthStore.isHealthDataAvailable() else { throw HealthStoreClientError.unavailable }
-        guard sampleTypeIfAvailable(for: metric) != nil else {
+        guard let type = sampleTypeIfAvailable(for: metric) else {
             throw HealthStoreClientError.unsupportedMetric(metric)
         }
 
-        // The per-type authorized-history boundary APIs are currently Beta in
-        // Apple's SDK. Do not substitute the systemwide earliest-permitted date,
-        // and do not represent an unavailable boundary as `nil` (which means no
-        // limited-history boundary). The coordinator handles this explicit signal
-        // by rebuilding the bounded local snapshot and keeping empty days unknown.
-        throw HealthStoreClientError.authorizationBoundaryUnavailable
+        // This per-type boundary API is Beta in the current HealthKit SDK. Keep
+        // older OS versions on the explicit unavailable path; never substitute
+        // the unrelated systemwide earliest-permitted date. An omitted type in
+        // Apple's result means there is no identifiable limited-history boundary.
+        guard #available(iOS 27.0, *) else {
+            throw HealthStoreClientError.authorizationBoundaryUnavailable
+        }
+        do {
+            let dates = try await store.earliestAuthorizedSampleDate(for: [type])
+            return dates[type]
+        } catch {
+            throw Self.mapHealthKitError(error)
+        }
     }
 
     func aggregate(_ request: HealthAggregateRequest) async throws -> [HealthAggregateBucket] {

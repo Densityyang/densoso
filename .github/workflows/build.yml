@@ -27,7 +27,7 @@ jobs:
   foundation:
     name: gate-01-foundation
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -135,13 +135,13 @@ jobs:
           diff -ru "$RUNNER_TEMP/Densoso.first.xcodeproj" Densoso.xcodeproj \
             | tee gate01-xcodegen-determinism.log
 
-      - name: Prepare iOS 26 Simulator
+      - name: Prepare iOS 27.0 Simulator
         id: prepare_simulator
         if: ${{ always() && steps.generate_project.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |
           set -euo pipefail
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -160,7 +160,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             clean build 2>&1 | tee gate01-ios18-build.log
 
-      - name: Test units on iOS 26 Simulator
+      - name: Test units on iOS 27.0 Simulator
         id: unit_tests
         if: ${{ always() && steps.prepare_simulator.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |
@@ -346,7 +346,7 @@ jobs:
     name: gate-02-domain-persistence
     needs: foundation
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -373,11 +373,11 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Prepare iOS 26 Simulator
+      - name: Prepare iOS 27.0 Simulator
         run: |
           set -euo pipefail
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -437,7 +437,7 @@ jobs:
     name: gate-03-agent-provider
     needs: domain-persistence
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -472,13 +472,13 @@ jobs:
         if: ${{ always() && steps.install_xcodegen.outcome == 'success' }}
         run: xcodegen generate
 
-      - name: Prepare iOS 26 Simulator
+      - name: Prepare iOS 27.0 Simulator
         id: prepare_simulator
         if: ${{ always() && steps.generate_project.outcome == 'success' }}
         run: |
           set -euo pipefail
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -627,7 +627,7 @@ jobs:
     name: gate-04-speech
     needs: agent-provider
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -655,11 +655,11 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Prepare iOS 26 Simulator
+      - name: Prepare iOS 27.0 Simulator
         run: |
           set -euo pipefail
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -713,7 +713,7 @@ jobs:
     name: gate-05-meal-capture
     needs: speech
     if: ${{ always() }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 35
     steps:
       - name: Checkout
@@ -748,13 +748,13 @@ jobs:
         if: ${{ always() && steps.install_xcodegen.outcome == 'success' }}
         run: xcodegen generate
 
-      - name: Prepare iOS 26 Simulator
+      - name: Prepare iOS 27.0 Simulator
         id: prepare_simulator
         if: ${{ always() && steps.generate_project.outcome == 'success' }}
         run: |
           set -euo pipefail
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -893,7 +893,7 @@ jobs:
     name: gate-06-healthkit
     needs: meal-capture
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -921,11 +921,11 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Prepare iOS 26 Simulator
+      - name: Prepare iOS 27.0 Simulator
         run: |
           set -euo pipefail
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -977,7 +977,7 @@ jobs:
     name: gate-07-health-intelligence
     needs: healthkit
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -1004,11 +1004,11 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
-      - name: Prepare iOS 26 Simulator
+      - name: Prepare iOS 27.0 Simulator
         run: |
           set -euo pipefail
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -1058,7 +1058,7 @@ jobs:
     name: gate-08-watch
     needs: health-intelligence
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 50
     steps:
       - name: Checkout
@@ -1101,11 +1101,11 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tee gate08-watch-build.log
 
-      - name: Prepare iOS 26 Simulator
+      - name: Prepare iOS 27.0 Simulator
         run: |
           set -euo pipefail
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -1157,7 +1157,7 @@ jobs:
     name: gate-09-integration
     needs: watch
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -1184,11 +1184,11 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
-      - name: Prepare iPhone 17 Pro iOS 26 Simulator
+      - name: Prepare iPhone 18 Pro iOS 27.0 Simulator
         run: |
           set -euo pipefail
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -1271,7 +1271,7 @@ jobs:
       - watch
       - integration
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 20
     env:
       ACCEPTANCE_WORKFLOW_SHA: ${{ github.sha }}
@@ -1415,7 +1415,7 @@ jobs:
     name: gate-11-ai-native-health-loop
     needs: final-acceptance
     if: ${{ always() }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 50
     steps:
       - name: Checkout
@@ -1444,7 +1444,7 @@ jobs:
           brew install xcodegen
           xcodegen generate
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -1532,7 +1532,7 @@ jobs:
     name: gate-12-multimodal-agent
     needs: gate-11-ai-native-health-loop
     if: ${{ always() && (inputs.run_scope != 'focused-pr-tests' || needs.gate-11-ai-native-health-loop.result == 'success') }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -1554,7 +1554,7 @@ jobs:
           brew install xcodegen
           xcodegen generate
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -1661,7 +1661,7 @@ jobs:
     name: gate-13-energy-accounting
     needs: gate-12-multimodal-agent
     if: ${{ always() && (inputs.run_scope != 'focused-pr-tests' || needs.gate-12-multimodal-agent.result == 'success') }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 35
     steps:
       - name: Checkout
@@ -1684,7 +1684,7 @@ jobs:
           brew install xcodegen
           xcodegen generate
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -1736,7 +1736,7 @@ jobs:
     name: gate-14-watch-daily-loop
     needs: gate-13-energy-accounting
     if: ${{ always() && (inputs.run_scope != 'focused-pr-tests' || needs.gate-13-energy-accounting.result == 'success') }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -1762,7 +1762,7 @@ jobs:
           brew install xcodegen
           xcodegen generate
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -1949,7 +1949,7 @@ jobs:
   gate-18-meal-estimates:
     name: gate-18-meal-estimate-usefulness
     if: ${{ always() }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 45
     outputs:
       gate_status: ${{ steps.gate18_report.outputs.gate_status }}
@@ -2020,7 +2020,7 @@ jobs:
           brew install xcodegen
           xcodegen generate
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -2168,7 +2168,7 @@ jobs:
   gate-19-cloud-health-window:
     name: gate-19-cloud-policy-health-window
     if: ${{ always() }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 45
     outputs:
       gate_status: ${{ steps.gate19_status.outputs.gate_status }}
@@ -2238,7 +2238,7 @@ jobs:
           brew install xcodegen
           xcodegen generate
           SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
-          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
