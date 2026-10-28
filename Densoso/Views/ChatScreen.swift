@@ -549,10 +549,11 @@ struct ChatScreen: View {
             todayMealsReadError = nil
         } catch {
             todayMeals = []
-            todayMealsReadError = "读取今日已确认餐食失败：\(SharedErrorDescriptor.mapped(
+            let descriptor = SharedErrorDescriptor.mapped(
                 from: error,
                 fallback: .projectionFailedFallback
-            ).userMessage)"
+            )
+            todayMealsReadError = "读取今日已确认餐食失败：\(descriptor.userMessage)"
         }
     }
 
