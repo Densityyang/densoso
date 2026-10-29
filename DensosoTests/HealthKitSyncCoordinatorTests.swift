@@ -179,6 +179,72 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(snapshot.healthReadStates?[HealthMetricID.workout.rawValue], .dataUnavailableOrReadScopeUnknown)
     }
 
+    func testLimitedHistoryRetainsSamplesAndWorkoutsEndingAfterAuthorizationBoundary() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        let boundaryDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -30, to: today))
+        let authorizationStart = try XCTUnwrap(
+            calendar.date(bySettingHour: 12, minute: 0, second: 0, of: boundaryDay)
+        )
+        let sampleID = UUID(uuidString: "00000000-0000-0000-0000-000000000781")!
+        let crossingSleepSample = HealthSampleSnapshot(
+            id: sampleID,
+            metric: .sleepAnalysis,
+            startDate: authorizationStart.addingTimeInterval(-1_800),
+            endDate: authorizationStart.addingTimeInterval(1_800),
+            categoryValue: "asleepCore"
+        )
+        let workoutID = UUID(uuidString: "00000000-0000-0000-0000-000000000782")!
+        let crossingWorkout = try WorkoutSnapshot(
+            healthKitUUID: workoutID,
+            startedAt: authorizationStart.addingTimeInterval(-900),
+            duration: 1_800,
+            activityType: "running",
+            energyInput: .init(measuredKilocalories: 120),
+            origin: .externalHealthKit,
+            dataQuality: .complete
+        )
+        let fake = FakeHealthStoreClient()
+        await fake.setEarliestAuthorizedSampleDate(authorizationStart, for: .sleepAnalysis)
+        await fake.setEarliestAuthorizedSampleDate(authorizationStart, for: .workout)
+        await fake.setSampleResponses([
+            HealthSamplePage(
+                samples: [crossingSleepSample],
+                nextAnchorData: Data([78]),
+                readState: .available
+            ),
+        ], for: .sleepAnalysis)
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [crossingWorkout], deletedObjectIDs: [], nextAnchorData: Data([79]))
+        ])
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+
+        let result = try await coordinator.syncAvailableData(
+            using: HealthRepository(modelContext: context),
+            now: now
+        )
+
+        XCTAssertTrue(result.completedStreams.contains(.sleepAnalysis))
+        XCTAssertTrue(result.completedStreams.contains(.workout))
+        XCTAssertNil(result.failedStreams[.sleepAnalysis])
+        XCTAssertNil(result.failedStreams[.workout])
+        let indexedSample = try XCTUnwrap(
+            context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>())
+                .first(where: { $0.sampleID == sampleID })
+        )
+        XCTAssertEqual(indexedSample.endDate, crossingSleepSample.endDate)
+        let importedWorkout = try XCTUnwrap(
+            context.fetch(FetchDescriptor<WorkoutRecord>())
+                .first(where: { $0.healthKitUUID == workoutID })
+        )
+        XCTAssertEqual(importedWorkout.date, crossingWorkout.startedAt)
+        let sampleRequests = await fake.sampleRequests(for: .sleepAnalysis)
+        XCTAssertEqual(try XCTUnwrap(sampleRequests.first).startDate, authorizationStart)
+        let workoutStarts = await fake.workoutRequestStartDates()
+        XCTAssertEqual(try XCTUnwrap(workoutStarts.first), authorizationStart)
+    }
+
     func testUnavailableAuthorizationBoundaryRebuildsWindowAndKeepsEmptyDaysUnknown() async throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let calendar = Calendar.current

@@ -705,7 +705,12 @@ final class HealthKitSyncCoordinator {
                 policyStart: start,
                 authorizationStart: plan.authorizationStart
             )
-            let allowedWorkouts = page.added.filter { $0.startedAt >= allowedStart }
+            // HealthKit evaluates limited-history authorization at the sample's
+            // end date, so a workout may start before the boundary and still be
+            // readable when its end date is within the authorized range.
+            let allowedWorkouts = page.added.filter {
+                $0.startedAt.addingTimeInterval($0.duration) >= allowedStart
+            }
             try await repository.applyImportedWorkouts(
                 allowedWorkouts,
                 deletedHealthKitUUIDs: page.deletedObjectIDs,
@@ -789,8 +794,11 @@ final class HealthKitSyncCoordinator {
                 policyStart: start,
                 authorizationStart: plan.authorizationStart
             )
+            // HealthKit authorizes limited-history samples by end date. Keep
+            // returned samples that overlap the boundary instead of dropping
+            // them solely because they began before it.
             let allowedPage = HealthSamplePage(
-                samples: page.samples.filter { $0.startDate >= allowedStart },
+                samples: page.samples.filter { $0.endDate >= allowedStart },
                 deletedSampleIDs: page.deletedSampleIDs,
                 nextAnchorData: page.nextAnchorData,
                 hasMore: page.hasMore,

@@ -277,10 +277,14 @@ enum AgentProviderContextPolicy {
         if let value = latestMatchedValue(in: normalized, groups: [
             (value: HistoricalPreferenceValue.formal, cues: [
                 "i prefer a formal tone", "i prefer formal tone",
+                "i prefer a formal tone and metric units", "i prefer formal tone and metric units",
+                "i prefer a formal tone and imperial units", "i prefer formal tone and imperial units",
                 "我偏好正式语气", "我更喜欢正式语气",
             ]),
             (value: HistoricalPreferenceValue.friendly, cues: [
                 "i prefer a friendly tone", "i prefer friendly tone",
+                "i prefer a friendly tone and metric units", "i prefer friendly tone and metric units",
+                "i prefer a friendly tone and imperial units", "i prefer friendly tone and imperial units",
                 "我偏好友好语气", "我更喜欢友好语气",
             ]),
         ]) {
@@ -289,10 +293,14 @@ enum AgentProviderContextPolicy {
         if let value = latestMatchedValue(in: normalized, groups: [
             (value: HistoricalPreferenceValue.metric, cues: [
                 "i prefer metric units", "i prefer the metric system",
+                "i prefer a friendly tone and metric units", "i prefer friendly tone and metric units",
+                "i prefer a formal tone and metric units", "i prefer formal tone and metric units",
                 "我偏好公制单位", "我更喜欢公制单位",
             ]),
             (value: HistoricalPreferenceValue.imperial, cues: [
                 "i prefer imperial units", "i prefer the imperial system",
+                "i prefer a friendly tone and imperial units", "i prefer friendly tone and imperial units",
+                "i prefer a formal tone and imperial units", "i prefer formal tone and imperial units",
                 "我偏好英制单位", "我更喜欢英制单位",
             ]),
         ]) {

@@ -498,7 +498,7 @@ def main() -> int:
             "requestSnapshot.resumeCount > 0",
             "AgentError.transientImageRequired",
             "withoutSensitiveTransientContent",
-            "AgentProviderContextPolicy.boundedMessages(",
+            "AgentProviderContextPolicy.boundedContext(",
             "maximumRequestCostEstimate(",
             "reserveAgentRequestCost(",
             "recordWithCostAvailability(",

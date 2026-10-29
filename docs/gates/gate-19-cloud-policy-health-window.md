@@ -27,6 +27,11 @@ separately from `liveHealthKitAuthorizationBoundary`, which remains
 device evidence is owned by Gate 15 and is not inferred from simulator or
 fake-provider tests.
 
+HealthKit evaluates limited-history authorization by sample end date. Samples
+and workouts returned by HealthKit that begin before the boundary but end at or
+after it remain eligible for import; a daily projection window that crosses the
+boundary remains unknown until the full window is readable.
+
 The report must keep uncovered or unexecuted behavior `BLOCKED` or
 `NOT_MEASURED`; source-text presence cannot be promoted to runtime `PASS`. It
 does not inspect provider traffic. A sanitized request artifact must be

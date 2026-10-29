@@ -124,6 +124,7 @@ REQUIRED_TESTS = (
     "testRestoreInvalidatesCloudHealthAuthorizationAlreadyPresentInTargetStore",
     "testInitialHealthKitBackfillUsesTheSame42DayWindowForEveryStreamType",
     "testLimitedHealthKitHistoryStartsAtAuthorizationBoundaryAndRecordsUnknownDays",
+    "testLimitedHistoryRetainsSamplesAndWorkoutsEndingAfterAuthorizationBoundary",
     "testUnavailableAuthorizationBoundaryRebuildsWindowAndKeepsEmptyDaysUnknown",
     "testHealthContextExportGateStartsClosedAndOpensAfterSuccessfulPurge",
     "testHealthContextExportGateCanAllowManualOnlyContextWithoutHealthKitCache",
@@ -255,6 +256,7 @@ BEHAVIOR_CHECKS: dict[str, BehaviorCheck] = {
             "HealthIntelligenceTests/testMetricWindowCoverageReportsThirtyAuthorizedDaysWithinFortyTwoDayTarget",
             "HealthIntelligenceTests/testSleepWindowCoverageUsesFirstFullyAuthorizedWakeDay",
             "testLimitedHealthKitHistoryStartsAtAuthorizationBoundaryAndRecordsUnknownDays",
+            "testLimitedHistoryRetainsSamplesAndWorkoutsEndingAfterAuthorizationBoundary",
             "testUnavailableAuthorizationBoundaryRebuildsWindowAndKeepsEmptyDaysUnknown",
             "testHealthContextExportGateStartsClosedAndOpensAfterSuccessfulPurge",
             "testHealthContextExportGateCanAllowManualOnlyContextWithoutHealthKitCache",
@@ -1101,6 +1103,7 @@ TEST_FILE_CONTRACTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         (
             "testInitialHealthKitBackfillUsesTheSame42DayWindowForEveryStreamType",
             "testLimitedHealthKitHistoryStartsAtAuthorizationBoundaryAndRecordsUnknownDays",
+            "testLimitedHistoryRetainsSamplesAndWorkoutsEndingAfterAuthorizationBoundary",
             "testUnavailableAuthorizationBoundaryRebuildsWindowAndKeepsEmptyDaysUnknown",
             "testUnavailableBoundaryRebuildsOnlyAffectedStreamsAndAggregateFailureStaysUnknown",
             "testObserverWithUnavailableBoundaryRebuildsExistingSampleAndWorkoutAnchors",

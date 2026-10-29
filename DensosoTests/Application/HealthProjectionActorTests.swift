@@ -174,6 +174,13 @@ final class HealthProjectionActorTests: XCTestCase {
         let context = ModelContext(container)
         let repository = HealthRepository(modelContext: context)
         let day = Calendar.current.startOfDay(for: Date())
+        let currentMealEvidence = try JSONEncoder().encode([
+            EvidenceSnapshot(
+                grade: .userReported,
+                sourceID: "projection-gate-test",
+                summary: "Explicit evidence for the projection concurrency fixture."
+            ),
+        ])
         let firstMeal = MealRecord(
             date: day.addingTimeInterval(9 * 60 * 60),
             mealType: "breakfast",
@@ -181,7 +188,8 @@ final class HealthProjectionActorTests: XCTestCase {
             proteinG: 24,
             fatG: 12,
             carbsG: 52,
-            sourceActionKey: "projection-gate-first-meal"
+            sourceActionKey: "projection-gate-first-meal",
+            evidenceData: currentMealEvidence
         )
         let secondMeal = MealRecord(
             date: day.addingTimeInterval(13 * 60 * 60),
@@ -190,7 +198,8 @@ final class HealthProjectionActorTests: XCTestCase {
             proteinG: 18,
             fatG: 9,
             carbsG: 31,
-            sourceActionKey: "projection-gate-second-meal"
+            sourceActionKey: "projection-gate-second-meal",
+            evidenceData: currentMealEvidence
         )
 
         let firstInsert = Task { @MainActor in try await repository.insert(firstMeal) }

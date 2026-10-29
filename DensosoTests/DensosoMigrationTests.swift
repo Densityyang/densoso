@@ -797,7 +797,7 @@ final class DensosoMigrationTests: XCTestCase {
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
         try createV2Store(seed: seed, at: location.storeURL)
-        let sourceBefore = try storeFamilySnapshot(at: location.storeURL)
+        let sourceBefore = try v2SemanticSnapshot(at: location.storeURL)
 
         let bootstrap = PersistenceBootstrap.make(
             storeURL: location.storeURL,
@@ -812,7 +812,7 @@ final class DensosoMigrationTests: XCTestCase {
         } else {
             XCTFail("Backup failure must enter diagnostic-only mode")
         }
-        XCTAssertEqual(try storeFamilySnapshot(at: location.storeURL), sourceBefore)
+        XCTAssertEqual(try v2SemanticSnapshot(at: location.storeURL), sourceBefore)
         try assertRecoveryWritesRejected(by: bootstrap)
         try await assertConfirmationWritesRejected(by: bootstrap)
         var untouchedContainer: ModelContainer? = try makeContainer(

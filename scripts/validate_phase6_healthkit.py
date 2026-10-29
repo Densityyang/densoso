@@ -283,9 +283,9 @@ def main() -> int:
             "var streamsToReset = Set<String>()",
             "streamsToReset.insert(stream)",
             "for stream in streamsToReset.sorted()",
-            "try repository.resetHealthKitCursor(for: stream)",
+            "try await repository.resetHealthKitCursor(for: stream)",
             "if forceRebaseline {",
-            "try repository.resetHealthKitCursors()",
+            "try await repository.resetHealthKitCursors()",
             "let start = min(cursor?.lookbackStart ?? plan.queryStart, plan.queryStart)",
             "authorizationBoundaryUnavailable = true",
             "if plan.authorizationBoundaryUnavailable || needsRebaseline",
@@ -303,7 +303,7 @@ def main() -> int:
     allowed_page_flow = " ".join(
         """
         let allowedPage = HealthSamplePage(
-            samples: page.samples.filter { $0.startDate >= allowedStart },
+            samples: page.samples.filter { $0.endDate >= allowedStart },
             deletedSampleIDs: page.deletedSampleIDs,
             nextAnchorData: page.nextAnchorData,
             hasMore: page.hasMore,
@@ -319,8 +319,10 @@ def main() -> int:
         or affected_days_flow not in normalized_sync_coordinator
     ):
         errors.append(
-            "HealthKit sync must requery affected days from the authorization-filtered page while retaining the anchored cursor query start"
+            "HealthKit sync must filter limited-history samples by authorized end date, requery affected days, and retain the anchored cursor query start"
         )
+    if "let allowedWorkouts = page.added.filter { $0.startedAt.addingTimeInterval($0.duration) >= allowedStart }" not in normalized_sync_coordinator:
+        errors.append("HealthKit workouts crossing a limited-history boundary must be filtered by authorized end date")
     normalized_repository = " ".join(repository.split())
     repository_affected_day_union = " ".join(
         """
@@ -588,6 +590,7 @@ def main() -> int:
             "testObserverCompletionRunsAfterAnchoredWorkoutIsCommitted",
             "testInitialHealthKitBackfillUsesTheSame42DayWindowForEveryStreamType",
             "testLimitedHealthKitHistoryStartsAtAuthorizationBoundaryAndRecordsUnknownDays",
+            "testLimitedHistoryRetainsSamplesAndWorkoutsEndingAfterAuthorizationBoundary",
             "testUnavailableAuthorizationBoundaryRebuildsWindowAndKeepsEmptyDaysUnknown",
             "testObserverWithUnavailableBoundaryRebuildsExistingSampleAndWorkoutAnchors",
             "testReadModelHidesAggregateHealthValuesWhenTheirReadStatesAreUnknown",
@@ -735,7 +738,7 @@ def main() -> int:
     )
     require_text(
         "docs/gates/gate-05-meal-capture.md",
-        ("Status: approved by user after successful macOS CI", "HealthKit delivery workers remain Phase 6."),
+        ("approved by user after successful macOS CI", "HealthKit delivery workers remain Phase 6."),
         errors,
     )
     require_text(

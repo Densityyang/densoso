@@ -48,6 +48,10 @@ must not be treated as the current main-line PR.
   successfully read records become available. The foreground and daily
   background refresh paths force this rebaseline; ordinary observer wakeups keep
   using an existing anchored cursor.
+- HealthKit evaluates limited-history authorization using a sample's end date.
+  Returned samples and workouts that start before the boundary but end at or
+  after it remain eligible for import. A calendar day whose complete projection
+  window crosses the boundary remains unknown until that window is fully readable.
 - CI uses the Xcode 27 runner to compile the Beta HealthKit API. The adapter
   calls `earliestAuthorizedSampleDate(for:)` behind an iOS 27 availability
   check; on earlier OS versions it emits the typed
