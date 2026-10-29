@@ -663,7 +663,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "Densoso/Services/HealthRepository.swift",
             (
-                "for date in Self.affectedProjectionDays(from: affectedDates)",
+                "projectedDays = Self.affectedProjectionDays(from: affectedDates)",
+                "for date in projectedDays",
                 "static func affectedProjectionDays(from dates: Set<Date>, calendar: Calendar = .current)",
             ),
             errors,
@@ -760,11 +761,12 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "static func reprojectHistoricalIfInputsAvailable(",
                 "async throws -> Bool",
                 "HistoricalMetricsEligibilityPolicy.hasValidInputs(",
-                "existing.requiresRecompute",
+                "!existingSnapshot.requiresRecompute",
                 "day < calendar.startOfDay(for: now)",
                 "Task.detached(priority: .utility)",
                 "CaloricEngine.calculationInput(",
                 "CaloricEngine.computeDailyMetricsResult(",
+                "try modelContext.save()",
             ),
             errors,
         )
@@ -789,7 +791,6 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "descriptor.fetchLimit = Self.lookbackDayCount",
                 "DailyMetricsProjector.hasValidHistoricalRecomputeInputs(on: day, now: now, in: queryContext)",
                 "try await DailyMetricsProjector.reprojectHistoricalIfInputsAvailable(on: day, now: now, in: queryContext)",
-                "try queryContext.save()",
                 "await Task.yield()",
                 "shouldStop()",
             ),
@@ -1042,7 +1043,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "func sendEvents(\n        multimodalRequest: MultimodalModelRequest,\n        requestID: UUID? = nil",
                 "func sendEvents(\n        userText: String,\n        inputEnvelope: InputEnvelope",
-                "emit(.committing(actionID: id))",
+                "emit(.committing(actionID: action.id))",
             ),
             errors,
         )
@@ -2498,6 +2499,7 @@ def main() -> int:
         "scope": scope,
         "status": "blocked" if blocked else ("pass" if not errors else "error"),
         "blockers": [error for error in errors if "Gate 12 is blocked:" in error],
+        "errors": errors,
         "gate15IsManualDeviceAcceptance": True,
         "gate16RequiresHumanReleaseDecision": True,
         "simulatorCanMarkGate15Or16Passed": False,

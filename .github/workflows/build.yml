@@ -2180,6 +2180,7 @@ jobs:
         run: |
           echo "GATE19_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate19DerivedData" >> "$GITHUB_ENV"
           echo "GATE19_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate19PolicyHealthWindowTests.xcresult" >> "$GITHUB_ENV"
+          echo "GATE19_RETRY_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate19PolicyHealthWindowRetryTests.xcresult" >> "$GITHUB_ENV"
 
       - name: Run unknown and partial health-intelligence package contracts
         id: gate19_domain_health_intelligence
@@ -2248,40 +2249,100 @@ jobs:
         id: gate19_ios
         if: ${{ always() && steps.gate19_simulator.outcome == 'success' }}
         run: |
-          set -o pipefail
-          perl -e 'alarm shift; exec @ARGV' 1500 xcodebuild -project Densoso.xcodeproj \
-            -scheme Densoso \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            -destination-timeout 120 \
-            -derivedDataPath "$GATE19_DERIVED_DATA_PATH" \
-            -only-testing:DensosoTests/CloudHealthContextPolicyTests \
-            -only-testing:DensosoTests/HealthKitSyncCoordinatorTests \
-            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testProjectionInputReaderFiltersHealthKitWorkoutsByDailyReadState \
-            -only-testing:DensosoTests/GetRecentWorkoutsToolTests/testRepositoryOmitsHealthKitWorkoutsWithUnknownOrMissingReadState \
-            -only-testing:DensosoTests/HealthRepositoryTests/testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue \
-            -only-testing:DensosoTests/AgentProviderContextPolicyTests/testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies \
-            -only-testing:DensosoTests/DeepSeekProviderContractTests/testPreSerializationConsentCheckStopsBeforeDeepSeekRequestIsSent \
-            -only-testing:DensosoTests/QwenProviderContractTests/testPreSerializationConsentCheckStopsBeforeQwenRequestIsSent \
-            -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testSerializationConsentGateStopsBeforeNetworkRequest \
-            -only-testing:DensosoTests/ProviderRetryPolicyTests/testDeepSeekStreamRetryRevalidatesCapturedPolicyRevision \
-            -only-testing:DensosoTests/ProviderRetryPolicyTests/testQwenTextRetryRevalidatesCapturedPolicyRevision \
-            -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testQwenVisionRetryRevalidatesCapturedImagePolicyRevision \
-            -only-testing:DensosoTests/ProviderRetryPolicyTests/testQwenASRRetryRejectsRevokedAndReconfirmedSpeechAudioConsent \
-            -only-testing:DensosoTests/AgentRequestResumeTests/testPolicyRevocationDuringHealthToolExecutionFiltersTheContinuationRequest \
-            -only-testing:DensosoTests/AgentRequestResumeTests/testAgentHealthPolicyAlignmentStagesDraftAndRequiresConversationConfirmation \
-            -only-testing:DensosoTests/AgentRequestResumeTests/testConversationHistoryConsentDefaultsToCurrentTurnOnlyInProviderPayload \
-            -only-testing:DensosoTests/AgentRequestResumeTests/testConfirmedConversationHistoryConsentIncludesCurrentRevisionHistoryInProviderPayload \
-            -only-testing:DensosoTests/HealthIntelligenceServiceTests/testReadModelReportsPerMetricCoverageAcrossTheFortyTwoDayHealthWindow \
-            -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHealthBriefCacheGenerationFenceRejectsPrePurgeWrites \
-            -only-testing:DensosoTests/HealthIntelligenceServiceTests/testInvalidatedBriefCacheDoesNotReloadPrePurgeBriefs \
-            -only-testing:DensosoTests/ExportServiceTests/testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied \
-            -only-testing:DensosoTests/ExportServiceTests/testRestoreInvalidatesCloudHealthAuthorizationAlreadyPresentInTargetStore \
-            -only-testing:DensosoTests/GetHealthHistoryToolTests/testHistoryResponsePreservesUnknownAndPartialCoverageWithoutAbsenceOrZero \
-            -only-testing:DensosoTests/GetHealthHistoryToolTests/testReadModelHistoryKeepsUnknownHealthKitCoverageTypedWithoutZeroObservations \
-            -only-testing:DensosoTests/GetTodayHealthStateToolTests/testUnknownTrainingLoadOmitsZeroAndDerivedValuesAndReportsCoverage \
-            -resultBundlePath "$GATE19_RESULT_BUNDLE" \
-            CODE_SIGNING_ALLOWED=NO \
-            test 2>&1 | tee gate19-cloud-health-window-tests.log
+          set -uo pipefail
+
+          run_gate19_xctests() {
+            local result_bundle="$1"
+            local log_path="$2"
+            rm -rf "$result_bundle"
+            perl -e 'alarm shift; exec @ARGV' 1500 xcodebuild -project Densoso.xcodeproj \
+              -scheme Densoso \
+              -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+              -destination-timeout 120 \
+              -derivedDataPath "$GATE19_DERIVED_DATA_PATH" \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests \
+              -only-testing:DensosoTests/HealthKitSyncCoordinatorTests \
+              -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testProjectionInputReaderFiltersHealthKitWorkoutsByDailyReadState \
+              -only-testing:DensosoTests/GetRecentWorkoutsToolTests/testRepositoryOmitsHealthKitWorkoutsWithUnknownOrMissingReadState \
+              -only-testing:DensosoTests/HealthRepositoryTests/testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies \
+              -only-testing:DensosoTests/DeepSeekProviderContractTests/testPreSerializationConsentCheckStopsBeforeDeepSeekRequestIsSent \
+              -only-testing:DensosoTests/QwenProviderContractTests/testPreSerializationConsentCheckStopsBeforeQwenRequestIsSent \
+              -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testSerializationConsentGateStopsBeforeNetworkRequest \
+              -only-testing:DensosoTests/ProviderRetryPolicyTests/testDeepSeekStreamRetryRevalidatesCapturedPolicyRevision \
+              -only-testing:DensosoTests/ProviderRetryPolicyTests/testQwenTextRetryRevalidatesCapturedPolicyRevision \
+              -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testQwenVisionRetryRevalidatesCapturedImagePolicyRevision \
+              -only-testing:DensosoTests/ProviderRetryPolicyTests/testQwenASRRetryRejectsRevokedAndReconfirmedSpeechAudioConsent \
+              -only-testing:DensosoTests/AgentRequestResumeTests/testPolicyRevocationDuringHealthToolExecutionFiltersTheContinuationRequest \
+              -only-testing:DensosoTests/AgentRequestResumeTests/testAgentHealthPolicyAlignmentStagesDraftAndRequiresConversationConfirmation \
+              -only-testing:DensosoTests/AgentRequestResumeTests/testConversationHistoryConsentDefaultsToCurrentTurnOnlyInProviderPayload \
+              -only-testing:DensosoTests/AgentRequestResumeTests/testConfirmedConversationHistoryConsentIncludesCurrentRevisionHistoryInProviderPayload \
+              -only-testing:DensosoTests/HealthIntelligenceServiceTests/testReadModelReportsPerMetricCoverageAcrossTheFortyTwoDayHealthWindow \
+              -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHealthBriefCacheGenerationFenceRejectsPrePurgeWrites \
+              -only-testing:DensosoTests/HealthIntelligenceServiceTests/testInvalidatedBriefCacheDoesNotReloadPrePurgeBriefs \
+              -only-testing:DensosoTests/ExportServiceTests/testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied \
+              -only-testing:DensosoTests/ExportServiceTests/testRestoreInvalidatesCloudHealthAuthorizationAlreadyPresentInTargetStore \
+              -only-testing:DensosoTests/GetHealthHistoryToolTests/testHistoryResponsePreservesUnknownAndPartialCoverageWithoutAbsenceOrZero \
+              -only-testing:DensosoTests/GetHealthHistoryToolTests/testReadModelHistoryKeepsUnknownHealthKitCoverageTypedWithoutZeroObservations \
+              -only-testing:DensosoTests/GetTodayHealthStateToolTests/testUnknownTrainingLoadOmitsZeroAndDerivedValuesAndReportsCoverage \
+              -resultBundlePath "$result_bundle" \
+              CODE_SIGNING_ALLOWED=NO \
+              test 2>&1 | tee "$log_path"
+            local xcodebuild_exit=${PIPESTATUS[0]}
+            return "$xcodebuild_exit"
+          }
+
+          if run_gate19_xctests "$GATE19_RESULT_BUNDLE" gate19-cloud-health-window-tests.log; then
+            exit 0
+          else
+            first_attempt_exit=$?
+          fi
+
+          # Retry only a known simulator runner launch failure and only when
+          # XCTest recorded no assertion failures. A test or build failure is
+          # never retried or converted into a pass.
+          if ! grep -Fq 'Failed to install or launch the test runner' gate19-cloud-health-window-tests.log \
+            || ! grep -Fq 'Mach error -308' gate19-cloud-health-window-tests.log; then
+            exit "$first_attempt_exit"
+          fi
+          if ! xcrun xcresulttool get test-results summary --path "$GATE19_RESULT_BUNDLE" > gate19-first-attempt-summary.json; then
+            echo "Gate 19 retry withheld: the first-attempt XCTest result summary is unavailable."
+            exit "$first_attempt_exit"
+          fi
+          if ! python3 - gate19-first-attempt-summary.json <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          try:
+              summary = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError):
+              raise SystemExit(1)
+          if summary.get("failedTests") != 0 or summary.get("testFailures"):
+              raise SystemExit(1)
+          print("Gate 19 retry allowed: simulator runner died before any XCTest assertion failure.")
+          PY
+          then
+            echo "Gate 19 retry withheld: first-attempt result contains test failures or is incomplete."
+            exit "$first_attempt_exit"
+          fi
+
+          echo "Resetting the iOS Simulator and retrying the same Gate 19 XCTest selectors once."
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl shutdown "$SIMULATOR_UDID" || true
+          if ! perl -e 'alarm shift; exec @ARGV' 120 xcrun simctl erase "$SIMULATOR_UDID"; then
+            echo "Gate 19 retry aborted: simulator erase failed."
+            exit 1
+          fi
+          if ! perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID"; then
+            echo "Gate 19 retry aborted: simulator boot failed."
+            exit 1
+          fi
+          if ! perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b; then
+            echo "Gate 19 retry aborted: simulator did not finish booting."
+            exit 1
+          fi
+          echo "GATE19_RESULT_BUNDLE=$GATE19_RETRY_RESULT_BUNDLE" >> "$GITHUB_ENV"
+          run_gate19_xctests "$GATE19_RETRY_RESULT_BUNDLE" gate19-cloud-health-window-tests-retry.log
 
       - name: Export sanitized provider request evidence from XCTest attachments
         id: gate19_sanitized_request_export
@@ -2294,12 +2355,12 @@ jobs:
           rm -rf "$export_dir"
           rm -f "$destination"
           mkdir -p "$export_dir"
-          if [ ! -d Gate19PolicyHealthWindowTests.xcresult ]; then
+          if [ ! -d "$GATE19_RESULT_BUNDLE" ]; then
             echo "Gate 19 XCTest result bundle is unavailable; sanitized request evidence is missing."
             exit 1
           fi
           xcrun xcresulttool export attachments \
-            --path Gate19PolicyHealthWindowTests.xcresult \
+            --path "$GATE19_RESULT_BUNDLE" \
             --output-path "$export_dir"
           python3 - "$export_dir" "$destination" <<'PY'
           import json
@@ -2391,8 +2452,9 @@ jobs:
           import subprocess
           import sys
           from pathlib import Path
+          import os
 
-          bundle = Path("Gate19PolicyHealthWindowTests.xcresult")
+          bundle = Path(os.environ.get("GATE19_RESULT_BUNDLE", "Gate19PolicyHealthWindowTests.xcresult"))
           raw_path = Path("gate19-xcresult-tests.json")
           if bundle.is_dir():
               extraction = subprocess.run(
@@ -2473,7 +2535,8 @@ jobs:
           else:
               test_status = "BLOCKED"
 
-          evidence_ref = "Gate19PolicyHealthWindowTests.xcresult; gate19-domain-*.log"
+          result_bundle_name = Path(os.environ.get("GATE19_RESULT_BUNDLE", "Gate19PolicyHealthWindowTests.xcresult")).name
+          evidence_ref = f"{result_bundle_name}; gate19-domain-*.log"
           sanitized_request_artifact = "gate19-sanitized-provider-request-evidence.json"
 
           def behavior_evidence(check_id):
@@ -2605,7 +2668,10 @@ jobs:
           name: gate-19-cloud-health-window-results
           path: |
             Gate19PolicyHealthWindowTests.xcresult
+            Gate19PolicyHealthWindowRetryTests.xcresult
+            gate19-first-attempt-summary.json
             gate19-cloud-health-window-tests.log
+            gate19-cloud-health-window-tests-retry.log
             gate19-xcresult-tests.json
             gate19-xctest-manifest.json
             gate19-domain-health-intelligence.log
