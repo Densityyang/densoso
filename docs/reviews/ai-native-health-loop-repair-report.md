@@ -128,9 +128,9 @@ Gate 15; live meal field calibration remains `NOT_MEASURED`. Signing and
 release remain owner-owned.
 
 Date: 2026-10-28
-Repository: `Densityyang/densoso`  
-Worktree: `E:\howtodo\densoso-ai-native-loop`  
-Branch: `codex/ai-native-health-loop`  
+- Repository: `Densityyang/densoso`
+- Worktree: `E:\howtodo\densoso-ai-native-loop`
+- Branch: `codex/ai-native-health-loop`
 Original review baseline (historical): `33e5ea7908223a3316ea34f4a857d0f5537e2863`
 Associated pull request: none
 

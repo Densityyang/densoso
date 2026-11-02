@@ -343,7 +343,10 @@ def main() -> int:
         hashes = manifest.get("sha256", {})
         for filename in ("food-catalog.json", "food-resolution.json", "portion-reference.json"):
             path = ROOT / "evals/gate05" / filename
-            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            # Hash canonical UTF-8 text so Git core.autocrlf does not make
+            # the same JSON fixture produce a different digest on Windows.
+            canonical_bytes = path.read_text(encoding="utf-8").encode("utf-8")
+            actual = hashlib.sha256(canonical_bytes).hexdigest()
             if hashes.get(filename) != actual:
                 errors.append(f"Gate 5 manifest hash mismatch for {filename}")
 

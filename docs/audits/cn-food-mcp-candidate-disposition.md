@@ -1,6 +1,7 @@
 # `cn-food-mcp` source candidate disposition
 
 **Reviewed:** 2026-10-28
+
 **Disposition:** Candidate only; excluded from Densoso's production food catalog.
 
 ## Scope and evidence
