@@ -177,15 +177,11 @@ final class AVAudioFrameStreamer: AudioFrameStreaming {
         }
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        input.installTap(onBus: 0, bufferSize: 4_096, format: format) { buffer, time in
-            guard let captured = CapturedSpeechBuffer(copying: buffer, at: time) else {
-                droppedFrames.increment()
-                return
-            }
-            if case .dropped = rawContinuation.yield(captured) {
-                droppedFrames.increment()
-            }
-        }
+        let tapHandler = makeAudioTapHandler(
+            rawContinuation: rawContinuation,
+            droppedFrames: droppedFrames
+        )
+        input.installTap(onBus: 0, bufferSize: 4_096, format: format, block: tapHandler)
         isTapInstalled = true
         return stream
     }
@@ -258,6 +254,23 @@ private final class LockedCounter: @unchecked Sendable {
     var value: Int { lock.withLock { storage } }
     func increment() { lock.withLock { storage += 1 } }
     func reset() { lock.withLock { storage = 0 } }
+}
+
+/// Constructed outside the main-actor-isolated streamer so AVAudioEngine's
+/// realtime callback doesn't inherit MainActor isolation from `installTap()`.
+private func makeAudioTapHandler(
+    rawContinuation: AsyncStream<CapturedSpeechBuffer>.Continuation,
+    droppedFrames: LockedCounter
+) -> AVAudioNodeTapBlock {
+    { buffer, time in
+        guard let captured = CapturedSpeechBuffer(copying: buffer, at: time) else {
+            droppedFrames.increment()
+            return
+        }
+        if case .dropped = rawContinuation.yield(captured) {
+            droppedFrames.increment()
+        }
+    }
 }
 
 private final class SpeechPCM16Converter: @unchecked Sendable {
