@@ -189,18 +189,56 @@ def main() -> int:
     ):
         if expected not in workflow_text:
             errors.append(f"foundation workflow is missing {expected}")
-    simulator_setup_count = workflow_text.count("xcrun simctl bootstatus")
-    bounded_simulator_setup_count = workflow_text.count("SIMULATOR_LIST=")
-    if simulator_setup_count != bounded_simulator_setup_count:
-        errors.append("every iOS Simulator setup must bound its simulator-list lookup")
-    if workflow_text.count("alarm shift; exec @ARGV' 60 xcrun simctl boot ") != simulator_setup_count:
+    simulator_list_lookup_count = workflow_text.count("xcrun simctl list devices available")
+    bounded_simulator_list_lookup_count = len(
+        re.findall(r"alarm shift; exec @ARGV' \d+ xcrun simctl list devices available", workflow_text)
+    )
+    if simulator_list_lookup_count != bounded_simulator_list_lookup_count:
+        errors.append("every iOS Simulator device-list lookup must have a timeout")
+    for timeout in re.findall(
+        r"alarm shift; exec @ARGV' (\d+) xcrun simctl list devices available", workflow_text
+    ):
+        if int(timeout) <= 0:
+            errors.append("every iOS Simulator device-list lookup must have a positive timeout")
+            break
+    simulator_preparation_blocks = [
+        block
+        for block in re.split(r"(?m)^      - name:", workflow_text)[1:]
+        if re.match(
+            r"\s*(?:Prepare iOS 27\.0 Simulator|Generate project and prepare iOS Simulator)(?:\r?\n|$)",
+            block,
+        )
+    ]
+    if not simulator_preparation_blocks:
+        errors.append("workflow must contain an iOS Simulator preparation step")
+    for block in simulator_preparation_blocks:
+        if "xcrun simctl list devices available" not in block:
+            errors.append("every iOS Simulator preparation step must list its available device")
+            break
+        if "xcrun simctl bootstatus" not in block:
+            errors.append("every iOS Simulator preparation step must wait for boot status")
+            break
+
+    simulator_boot_count = workflow_text.count("xcrun simctl boot ")
+    bounded_simulator_boot_count = len(
+        re.findall(r"alarm shift; exec @ARGV' \d+ xcrun simctl boot ", workflow_text)
+    )
+    if simulator_boot_count != bounded_simulator_boot_count:
         errors.append("every iOS Simulator boot request must have a timeout")
-    bounded_bootstatus_count = workflow_text.count("xcrun simctl bootstatus")
+    for timeout in re.findall(r"alarm shift; exec @ARGV' (\d+) xcrun simctl boot ", workflow_text):
+        if int(timeout) <= 0:
+            errors.append("every iOS Simulator boot request must have a positive timeout")
+            break
+
+    simulator_bootstatus_count = workflow_text.count("xcrun simctl bootstatus")
+    bounded_simulator_bootstatus_count = len(
+        re.findall(r"alarm shift; exec @ARGV' \d+ xcrun simctl bootstatus", workflow_text)
+    )
     for timeout in re.findall(r"alarm shift; exec @ARGV' (\d+) xcrun simctl bootstatus", workflow_text):
         if int(timeout) <= 0:
             errors.append("every iOS Simulator boot-status wait must have a positive timeout")
             break
-    if len(re.findall(r"alarm shift; exec @ARGV' \d+ xcrun simctl bootstatus", workflow_text)) != bounded_bootstatus_count:
+    if bounded_simulator_bootstatus_count != simulator_bootstatus_count:
         errors.append("every iOS Simulator boot-status wait must have a timeout")
     gate19_parts = workflow_text.split("id: gate19_simulator", 1)
     gate19_simulator_block = gate19_parts[1].split("id: gate19_ios", 1)[0] if len(gate19_parts) == 2 else ""

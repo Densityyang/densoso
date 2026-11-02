@@ -347,7 +347,7 @@ jobs:
     needs: foundation
     if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
     runs-on: xcode-27
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -381,7 +381,22 @@ jobs:
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
           perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
-          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          if ! perl -e 'alarm shift; exec @ARGV' 300 xcrun simctl bootstatus "$SIMULATOR_UDID" -b; then
+            echo "Initial iOS Simulator startup failed; resetting the selected device and retrying once."
+            perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl shutdown "$SIMULATOR_UDID" || true
+            if ! perl -e 'alarm shift; exec @ARGV' 120 xcrun simctl erase "$SIMULATOR_UDID"; then
+              echo "Gate 2 simulator retry aborted: simulator erase failed."
+              exit 1
+            fi
+            if ! perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID"; then
+              echo "Gate 2 simulator retry aborted: simulator boot failed."
+              exit 1
+            fi
+            if ! perl -e 'alarm shift; exec @ARGV' 300 xcrun simctl bootstatus "$SIMULATOR_UDID" -b; then
+              echo "Gate 2 simulator retry aborted: simulator did not finish booting."
+              exit 1
+            fi
+          fi
 
       - name: Test migration and confirmation transactions
         run: |
