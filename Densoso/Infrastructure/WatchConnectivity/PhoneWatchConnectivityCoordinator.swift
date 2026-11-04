@@ -308,14 +308,16 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
             sortBy: [SortDescriptor(\.committedAt, order: .reverse)]
         )
         receiptDescriptor.fetchLimit = Self.watchSnapshotEntryLimit
-        let healthSyncSummaries = try ModelContext(modelContainer).fetch(receiptDescriptor).compactMap { receipt in
-            guard let state = HealthSyncState(rawValue: receipt.healthSyncStateRaw) else { return nil }
-            return WatchHealthSyncSummary(
-                actionID: receipt.actionID,
-                actionType: receipt.actionTypeRaw,
-                state: state,
-                updatedAt: receipt.committedAt
-            )
+        let healthSyncSummaries: [WatchHealthSyncSummary] = try ModelContext(modelContainer)
+            .fetch(receiptDescriptor)
+            .compactMap { receipt -> WatchHealthSyncSummary? in
+                guard let state = HealthSyncState(rawValue: receipt.healthSyncStateRaw) else { return nil }
+                return WatchHealthSyncSummary(
+                    actionID: receipt.actionID,
+                    actionType: receipt.actionTypeRaw,
+                    state: state,
+                    updatedAt: receipt.committedAt
+                )
         }
         return WatchTodaySnapshot(
             generatedAt: generatedAt,
@@ -327,11 +329,6 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
             workoutPlans: scheduledPlans,
             acknowledgedMessageIDs: received,
             terminalCausalSequenceWatermark: terminalCausalSequenceWatermark,
-            sourceValidatedAt: sourceValidatedAt,
-            sourceFingerprint: sourceFingerprint,
-            refreshState: refreshState,
-            snapshotRevision: nextSnapshotRevision(),
-            healthSyncSummaries: healthSyncSummaries,
             tomorrowGuidance: todayBrief?.healthState?.tomorrowGuidance.map { guidance in
                 WatchTomorrowGuidanceSummary(
                     expectedState: guidance.expectedState,
@@ -346,7 +343,12 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                     confidence: healthState.recovery.confidence,
                     recommendedAction: healthState.recovery.recommendedAction
                 )
-            }
+            },
+            sourceValidatedAt: sourceValidatedAt,
+            sourceFingerprint: sourceFingerprint,
+            refreshState: refreshState,
+            snapshotRevision: nextSnapshotRevision(),
+            healthSyncSummaries: healthSyncSummaries
         )
     }
 
