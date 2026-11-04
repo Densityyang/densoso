@@ -1253,6 +1253,22 @@ final class HealthRepository: HealthSyncRepository {
                 linkedReceiptID = try modelContext.fetch(receiptDescriptor).first?.receiptID
             }
         }
+
+        if let linkedReceiptID {
+            let receiptPredicate = #Predicate<CommittedActionReceiptRecord> {
+                $0.id == linkedReceiptID
+            }
+            var receiptDescriptor = FetchDescriptor<CommittedActionReceiptRecord>(predicate: receiptPredicate)
+            receiptDescriptor.fetchLimit = 1
+            if let receipt = try modelContext.fetch(receiptDescriptor).first {
+                // A new generation means HealthKit must retry the local action,
+                // even if an earlier generation already marked its receipt done.
+                // This mutation and the outbox insert are persisted together by
+                // the caller's source-write transaction.
+                receipt.healthSyncStateRaw = HealthSyncState.pending.rawValue
+            }
+        }
+
         modelContext.insert(HealthSyncOutboxEntry(
             operation: operation,
             recordID: recordID,

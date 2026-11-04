@@ -286,18 +286,22 @@ public enum PersonalMealDishPriorUserPortionEvidence {
         )
     }
 
-    public static func isExplicit(in evidence: [EvidenceSnapshot]) -> Bool {
-        evidence.contains { snapshot in
+    public static func reportedGrams(in evidence: [EvidenceSnapshot]) -> Double? {
+        evidence.compactMap { snapshot -> Double? in
             guard snapshot.grade == .userReported,
                   snapshot.sourceID == evidenceSourceID,
                   snapshot.sourceVersion == evidenceVersion,
                   snapshot.summary.hasPrefix("user-reported-grams=") else {
-                return false
+                return nil
             }
             let value = snapshot.summary.dropFirst("user-reported-grams=".count)
-            guard let grams = Double(String(value)), grams.isFinite else { return false }
-            return (0.1...5_000).contains(grams)
-        }
+            guard let grams = Double(String(value)), grams.isFinite else { return nil }
+            return (0.1...5_000).contains(grams) ? grams : nil
+        }.first
+    }
+
+    public static func isExplicit(in evidence: [EvidenceSnapshot]) -> Bool {
+        reportedGrams(in: evidence) != nil
     }
 }
 

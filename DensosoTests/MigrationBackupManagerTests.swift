@@ -154,18 +154,23 @@ final class MigrationBackupManagerTests: XCTestCase {
         for (url, data) in originalFiles { try data.write(to: url) }
         let backup = try XCTUnwrap(MigrationBackupManager.createBackupIfPresent(storeURL: storeURL))
         var installMoveCount = 0
-        var rollbackMoveCount = 0
+        var rollbackMoveNames: [String] = []
 
         XCTAssertThrowsError(try MigrationBackupManager.restore(
             manifest: backup,
-            willMove: { kind, _, _ in
+            willMove: { kind, _, destinationURL in
                 switch kind {
                 case .stagedToDestination:
                     installMoveCount += 1
                     if installMoveCount == 2 { throw InjectedMoveFailure.install }
                 case .rollbackToOriginal:
-                    rollbackMoveCount += 1
-                    if rollbackMoveCount == 2 { throw InjectedMoveFailure.rollback }
+                    rollbackMoveNames.append(destinationURL.lastPathComponent)
+                    // Inject the failure for a specific member of the SQLite
+                    // family; a call-count based fault changes meaning if the
+                    // file enumeration order changes.
+                    if destinationURL.lastPathComponent == storeURL.lastPathComponent + "-shm" {
+                        throw InjectedMoveFailure.rollback
+                    }
                 case .originalToRollback:
                     break
                 }
@@ -184,7 +189,11 @@ final class MigrationBackupManagerTests: XCTestCase {
             XCTAssertTrue(rollbackFiles?.contains { $0.lastPathComponent == storeURL.lastPathComponent + "-shm" } == true)
         }
         XCTAssertEqual(installMoveCount, 2)
-        XCTAssertEqual(rollbackMoveCount, 3)
+        XCTAssertEqual(rollbackMoveNames.count, 3)
+        XCTAssertEqual(
+            Set(rollbackMoveNames),
+            Set([storeURL.lastPathComponent, storeURL.lastPathComponent + "-shm", storeURL.lastPathComponent + "-wal"])
+        )
 
         try MigrationBackupManager.recoverInterruptedRestores(storeURL: storeURL)
         for (url, expected) in originalFiles {

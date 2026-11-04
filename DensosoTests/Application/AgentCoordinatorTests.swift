@@ -75,6 +75,8 @@ final class AgentCoordinatorTests: XCTestCase {
         let persistedText = persistedMessages.compactMap { String(data: $0.contentData, encoding: .utf8) }.joined()
         XCTAssertFalse(persistedText.contains("same-process-private-reasoning"))
 
+        // A vague follow-up after a logged measurement should remain a normal
+        // provider turn, rather than being routed to a health-only fallback.
         _ = try await harness.session.send(userText: "继续刚才的话题")
         let recordedRequests = provider.recordedRequests()
         XCTAssertEqual(recordedRequests.count, 3, "Each user turn must create its own provider request")

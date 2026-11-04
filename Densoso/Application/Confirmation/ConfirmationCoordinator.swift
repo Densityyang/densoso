@@ -103,18 +103,31 @@ actor ConfirmationCoordinator {
         )
     }
 
-    func failToolExecution(invocationID: String, resultData: Data?) async {
-        try? await repository.failToolExecution(
+    func failToolExecution(invocationID: String, resultData: Data?) async throws {
+        try await repository.failToolExecution(
             invocationID: invocationID,
             resultData: resultData,
             updatedAt: now()
         )
     }
 
-    func failToolExecutions(pendingActionID: UUID, resultData: Data) async {
-        try? await repository.failToolExecutions(
+    func interruptToolExecution(invocationID: String) async throws {
+        try await repository.interruptToolExecution(
+            invocationID: invocationID,
+            updatedAt: now()
+        )
+    }
+
+    func rejectAndUpdateLinkedToolExecution(
+        pendingActionID: UUID,
+        conversationID: UUID = ConfirmationConversationIdentity.defaultID,
+        failureResultData: Data
+    ) async throws {
+        try requireWritable()
+        try await repository.rejectAndUpdateLinkedToolExecution(
             pendingActionID: pendingActionID,
-            resultData: resultData,
+            conversationID: conversationID,
+            failureResultData: failureResultData,
             updatedAt: now()
         )
     }

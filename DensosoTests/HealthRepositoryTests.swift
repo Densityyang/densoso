@@ -410,6 +410,182 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(weightEntries.count, 5)
     }
 
+    func testNewOutboxGenerationResetsLinkedReceiptToPending() async throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let meal = MealRecord(date: date, totalCaloriesKcal: 420)
+        context.insert(meal)
+        let receiptID = UUID()
+        let previousOutbox = try seedLinkedMealOutbox(
+            mealID: meal.id,
+            receiptID: receiptID,
+            syncVersion: 4,
+            operation: "upsertMeal"
+        )
+
+        try await HealthRepository(modelContext: ModelContext(container)).updateMeal(id: meal.id)
+
+        let verificationContext = ModelContext(container)
+        let recordID = meal.id
+        let outboxPredicate = #Predicate<HealthSyncOutboxEntry> { $0.recordID == recordID }
+        let outboxEntries = try verificationContext.fetch(
+            FetchDescriptor<HealthSyncOutboxEntry>(predicate: outboxPredicate)
+        )
+        XCTAssertEqual(outboxEntries.count, 2)
+        let nextGeneration = try XCTUnwrap(outboxEntries.first { $0.syncVersion == previousOutbox.syncVersion + 1 })
+        XCTAssertEqual(nextGeneration.operation, "upsertMeal")
+        XCTAssertEqual(nextGeneration.receiptID, receiptID)
+        XCTAssertEqual(nextGeneration.state, HealthSyncState.pending.rawValue)
+
+        let receiptPredicate = #Predicate<CommittedActionReceiptRecord> { $0.id == receiptID }
+        let receipt = try XCTUnwrap(
+            verificationContext.fetch(FetchDescriptor<CommittedActionReceiptRecord>(predicate: receiptPredicate)).first
+        )
+        XCTAssertEqual(receipt.healthSyncStateRaw, HealthSyncState.pending.rawValue)
+    }
+
+    func testMealDeletionResetsLinkedReceiptSyncState() async throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let meal = MealRecord(date: date, totalCaloriesKcal: 420)
+        context.insert(meal)
+        let receiptID = UUID()
+        let previousOutbox = try seedLinkedMealOutbox(
+            mealID: meal.id,
+            receiptID: receiptID,
+            syncVersion: 2,
+            operation: "upsertMeal"
+        )
+
+        try await HealthRepository(modelContext: ModelContext(container)).deleteMeal(id: meal.id)
+
+        let verificationContext = ModelContext(container)
+        let mealID = meal.id
+        XCTAssertNil(try verificationContext.fetch(
+            FetchDescriptor<MealRecord>(predicate: #Predicate { $0.id == mealID })
+        ).first)
+        let outboxPredicate = #Predicate<HealthSyncOutboxEntry> { $0.recordID == mealID }
+        let outboxEntries = try verificationContext.fetch(
+            FetchDescriptor<HealthSyncOutboxEntry>(predicate: outboxPredicate)
+        )
+        XCTAssertEqual(outboxEntries.count, 2)
+        let nextGeneration = try XCTUnwrap(outboxEntries.first { $0.syncVersion == previousOutbox.syncVersion + 1 })
+        XCTAssertEqual(nextGeneration.operation, "deleteMeal")
+        XCTAssertEqual(nextGeneration.receiptID, receiptID)
+        XCTAssertEqual(nextGeneration.state, HealthSyncState.pending.rawValue)
+
+        let receiptPredicate = #Predicate<CommittedActionReceiptRecord> { $0.id == receiptID }
+        let receipt = try XCTUnwrap(
+            verificationContext.fetch(FetchDescriptor<CommittedActionReceiptRecord>(predicate: receiptPredicate)).first
+        )
+        XCTAssertEqual(receipt.healthSyncStateRaw, HealthSyncState.pending.rawValue)
+    }
+
+    func testOutboxGenerationAndLinkedReceiptResetRollbackTogetherOnSaveFailure() async throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let meal = MealRecord(date: date, totalCaloriesKcal: 420)
+        context.insert(meal)
+        let receiptID = UUID()
+        let previousOutbox = try seedLinkedMealOutbox(
+            mealID: meal.id,
+            receiptID: receiptID,
+            syncVersion: 1,
+            operation: "upsertMeal"
+        )
+        let repository = HealthRepository(
+            modelContext: ModelContext(container),
+            willSave: { throw TestSaveError.injected }
+        )
+
+        do {
+            try await repository.updateMeal(id: meal.id)
+            XCTFail("Expected the injected source-write failure")
+        } catch TestSaveError.injected {
+        } catch {
+            XCTFail("Expected the injected failure, received \(error)")
+        }
+
+        let verificationContext = ModelContext(container)
+        let recordID = meal.id
+        let outboxPredicate = #Predicate<HealthSyncOutboxEntry> { $0.recordID == recordID }
+        let outboxEntries = try verificationContext.fetch(
+            FetchDescriptor<HealthSyncOutboxEntry>(predicate: outboxPredicate)
+        )
+        XCTAssertEqual(outboxEntries.map(\.id), [previousOutbox.id])
+        let receiptPredicate = #Predicate<CommittedActionReceiptRecord> { $0.id == receiptID }
+        let receipt = try XCTUnwrap(
+            verificationContext.fetch(FetchDescriptor<CommittedActionReceiptRecord>(predicate: receiptPredicate)).first
+        )
+        XCTAssertEqual(receipt.healthSyncStateRaw, HealthSyncState.succeeded.rawValue)
+    }
+
+    func testMealDeletionOutboxAndLinkedReceiptResetRollbackTogetherOnSaveFailure() async throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let meal = MealRecord(date: date, totalCaloriesKcal: 420)
+        context.insert(meal)
+        let receiptID = UUID()
+        let previousOutbox = try seedLinkedMealOutbox(
+            mealID: meal.id,
+            receiptID: receiptID,
+            syncVersion: 3,
+            operation: "upsertMeal"
+        )
+        let repository = HealthRepository(
+            modelContext: ModelContext(container),
+            willSave: { throw TestSaveError.injected }
+        )
+
+        do {
+            try await repository.deleteMeal(id: meal.id)
+            XCTFail("Expected the injected source-write failure")
+        } catch TestSaveError.injected {
+        } catch {
+            XCTFail("Expected the injected failure, received \(error)")
+        }
+
+        let verificationContext = ModelContext(container)
+        let mealID = meal.id
+        XCTAssertNotNil(try verificationContext.fetch(
+            FetchDescriptor<MealRecord>(predicate: #Predicate { $0.id == mealID })
+        ).first)
+        let outboxPredicate = #Predicate<HealthSyncOutboxEntry> { $0.recordID == mealID }
+        let outboxEntries = try verificationContext.fetch(
+            FetchDescriptor<HealthSyncOutboxEntry>(predicate: outboxPredicate)
+        )
+        XCTAssertEqual(outboxEntries.map(\.id), [previousOutbox.id])
+        let receiptPredicate = #Predicate<CommittedActionReceiptRecord> { $0.id == receiptID }
+        let receipt = try XCTUnwrap(
+            verificationContext.fetch(FetchDescriptor<CommittedActionReceiptRecord>(predicate: receiptPredicate)).first
+        )
+        XCTAssertEqual(receipt.healthSyncStateRaw, HealthSyncState.succeeded.rawValue)
+    }
+
+    private func seedLinkedMealOutbox(
+        mealID: UUID,
+        receiptID: UUID,
+        syncVersion: Int,
+        operation: String
+    ) throws -> HealthSyncOutboxEntry {
+        let outbox = HealthSyncOutboxEntry(
+            operation: operation,
+            recordID: mealID,
+            receiptID: receiptID,
+            state: HealthSyncState.succeeded.rawValue,
+            syncIdentifier: "densoso.meal.\(mealID.uuidString.lowercased())",
+            syncVersion: syncVersion
+        )
+        context.insert(outbox)
+        context.insert(CommittedActionReceiptRecord(
+            id: receiptID,
+            actionID: UUID(),
+            idempotencyKey: "outbox-receipt-\(receiptID.uuidString.lowercased())",
+            actionTypeRaw: ActionType.meal.rawValue,
+            localRecordID: mealID,
+            outboxIDsData: try JSONEncoder().encode([outbox.id]),
+            healthSyncStateRaw: HealthSyncState.succeeded.rawValue
+        ))
+        try context.save()
+        return outbox
+    }
+
     func testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs() async throws {
         let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
         let mealCount = ConfirmedFoodHistoryReadLimits.mealPageSize + 1

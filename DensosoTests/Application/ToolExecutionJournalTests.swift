@@ -6,20 +6,28 @@ import XCTest
 
 @MainActor
 final class ToolExecutionJournalTests: XCTestCase {
+    private var temporaryStoreDirectories: [URL] = []
+
+    override func tearDown() {
+        for directory in temporaryStoreDirectories {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        temporaryStoreDirectories.removeAll()
+        super.tearDown()
+    }
+
     func testDeepSeekHTTPProviderStagesAndConfirmsActionInDiskStore() async throws {
         let location = try storeLocation()
-        defer { try? FileManager.default.removeItem(at: location.directory) }
-        let server = try await LocalHTTPTestServer.start(responses: [
-            try Gate03FixtureLoader.data("deepseek-responses-stream", extension: "sse"),
-            try Self.completedTextResponse("体重草稿已准备，等待你确认。"),
+        let transport = ScriptedProviderHTTPTransport(steps: [
+            .response(status: 200, headers: ["Content-Type": "text/event-stream"], data: try Gate03FixtureLoader.data("deepseek-responses-stream", extension: "sse")),
+            .response(status: 200, headers: ["Content-Type": "text/event-stream"], data: try Self.completedTextResponse("体重草稿已准备，等待你确认。")),
         ])
-        defer { server.stop() }
         let container = try makeDiskContainer(at: location.storeURL)
         let repository = SwiftDataAgentRepository(modelContainer: container)
         let conversationID = UUID()
         let provider = DeepSeekProvider(
-            endpoint: server.endpoint,
             credentialSource: TestCredentialSource(values: [.deepSeek: "fixture"]),
+            transport: transport,
             jitter: { _ in 0 }
         )
         let harness = makeHarness(
@@ -47,7 +55,7 @@ final class ToolExecutionJournalTests: XCTestCase {
         )
         let request = try XCTUnwrap(requestSnapshot)
         XCTAssertEqual(draft.kilograms, 62.5)
-        XCTAssertEqual(draft.measuredAt, request.startedAt)
+        assertSameRequestTimeAnchor(draft.measuredAt, request.startedAt)
 
         let journal = try await harness.confirmation.toolExecutionJournal(
             requestID: requestID,
@@ -57,14 +65,14 @@ final class ToolExecutionJournalTests: XCTestCase {
         XCTAssertEqual(journal.first?.state, .completed)
         XCTAssertEqual(journal.first?.pendingActionID, action.id)
 
-        let requests = server.recordedRequestBodies()
+        let requests = await transport.recordedRequests()
         XCTAssertEqual(requests.count, 2)
-        let firstBody = try XCTUnwrap(requests.first)
+        let firstBody = try XCTUnwrap(requests.first?.httpBody)
         let firstObject = try XCTUnwrap(JSONSerialization.jsonObject(with: firstBody) as? [String: Any])
         XCTAssertEqual(firstObject["model"] as? String, ProviderCapabilityCatalog.deepSeekFlashModel)
         XCTAssertTrue(String(decoding: firstBody, as: UTF8.self).contains("log_weight"))
         XCTAssertTrue(String(decoding: firstBody, as: UTF8.self).contains("记录体重 62.5 千克"))
-        let secondBody = try XCTUnwrap(requests.last)
+        let secondBody = try XCTUnwrap(requests.last?.httpBody)
         let secondObject = try XCTUnwrap(JSONSerialization.jsonObject(with: secondBody) as? [String: Any])
         let secondInput = try XCTUnwrap(secondObject["input"] as? [[String: Any]])
         XCTAssertTrue(secondInput.contains { $0["type"] as? String == "function_call_output" })
@@ -76,7 +84,6 @@ final class ToolExecutionJournalTests: XCTestCase {
 
     func testResumeAfterStagedWeightActionDoesNotCreateDuplicatePendingAction() async throws {
         let location = try storeLocation()
-        defer { try? FileManager.default.removeItem(at: location.directory) }
         let requestID = UUID()
         let conversationID = UUID()
         let call = weightCall()
@@ -108,7 +115,7 @@ final class ToolExecutionJournalTests: XCTestCase {
             conversationID: conversationID
         )
         let request = try XCTUnwrap(requestSnapshot)
-        XCTAssertEqual(draft.measuredAt, request.startedAt)
+        assertSameRequestTimeAnchor(draft.measuredAt, request.startedAt)
         let journal = try await harness.confirmation.toolExecutionJournal(
             requestID: requestID,
             conversationID: conversationID
@@ -116,7 +123,7 @@ final class ToolExecutionJournalTests: XCTestCase {
         XCTAssertEqual(journal.count, 1)
         XCTAssertEqual(journal.first?.state, .completed)
         XCTAssertEqual(journal.first?.pendingActionID, action.id)
-        XCTAssertEqual(journal.first?.requestTimeAnchor, request.startedAt)
+        assertSameRequestTimeAnchor(journal.first?.requestTimeAnchor, request.startedAt)
 
         _ = try await harness.session.confirmPendingAction(action)
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<WeightRecord>()), 1)
@@ -124,7 +131,6 @@ final class ToolExecutionJournalTests: XCTestCase {
 
     func testToolCompletingAfterDeadlineCannotStageAction() async throws {
         let location = try storeLocation()
-        defer { try? FileManager.default.removeItem(at: location.directory) }
         let container = try makeDiskContainer(at: location.storeURL)
         let repository = SwiftDataAgentRepository(modelContainer: container)
         let slowPrior = SlowMealPortionPriorRepository(delayNanoseconds: 6_000_000_000)
@@ -169,7 +175,6 @@ final class ToolExecutionJournalTests: XCTestCase {
 
     func testDeadlineExpirationDoesNotLeaveOrphanPendingAction() async throws {
         let location = try storeLocation()
-        defer { try? FileManager.default.removeItem(at: location.directory) }
         let container = try makeDiskContainer(at: location.storeURL)
         let repository = SwiftDataAgentRepository(modelContainer: container)
         let slowPrior = SlowMealPortionPriorRepository(delayNanoseconds: 4_000_000_000)
@@ -214,7 +219,6 @@ final class ToolExecutionJournalTests: XCTestCase {
 
     func testCancellationPropagatesIntoToolExecution() async throws {
         let location = try storeLocation()
-        defer { try? FileManager.default.removeItem(at: location.directory) }
         let container = try makeDiskContainer(at: location.storeURL)
         let repository = SwiftDataAgentRepository(modelContainer: container)
         let slowPrior = SlowMealPortionPriorRepository(delayNanoseconds: 60_000_000_000)
@@ -255,12 +259,164 @@ final class ToolExecutionJournalTests: XCTestCase {
             requestID: requestID,
             conversationID: conversationID
         )
-        XCTAssertEqual(journal.map(\.state), [.failed])
+        XCTAssertEqual(journal.map(\.state), [.interrupted])
+
+        let resumedProvider = ScriptedTextProvider(scripts: [
+            [.toolCall(mealCall(id: "cancel-meal", mealType: "lunch")), .completed(.toolUse)],
+            [.textDelta("已恢复原餐食操作。"), .completed(.completed)],
+        ])
+        let resumedHarness = makeHarness(
+            container: container,
+            repository: repository,
+            provider: resumedProvider,
+            conversationID: conversationID,
+            needsFoodDatabase: true
+        )
+        try await resumedHarness.session.restore()
+        XCTAssertTrue(resumedHarness.session.pendingActions.isEmpty)
+        _ = try await resumedHarness.session.send(userText: "继续", requestID: requestID)
+
+        XCTAssertEqual(resumedHarness.session.pendingActions.count, 1)
+        let resumedJournal = try await resumedHarness.confirmation.toolExecutionJournal(
+            requestID: requestID,
+            conversationID: conversationID
+        )
+        XCTAssertEqual(resumedJournal.count, 1)
+        XCTAssertEqual(resumedJournal.first?.invocationID, journal.first?.invocationID)
+        XCTAssertEqual(resumedJournal.first?.state, .completed)
+        let resumedAction = try XCTUnwrap(resumedHarness.session.pendingActions.first)
+        _ = try await resumedHarness.session.confirmPendingAction(resumedAction)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<MealRecord>()), 1)
+    }
+
+    func testResetCancelsActiveRequestBeforeDeletingConversationJournal() async throws {
+        let location = try storeLocation()
+        let container = try makeDiskContainer(at: location.storeURL)
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let slowPrior = SlowMealPortionPriorRepository(delayNanoseconds: 60_000_000_000)
+        let requestID = UUID()
+        let conversationID = UUID()
+        let provider = ScriptedTextProvider(scripts: [[
+            .toolCall(mealCall(id: "reset-meal", mealType: "lunch")),
+            .completed(.toolUse),
+        ]])
+        let harness = makeHarness(
+            container: container,
+            repository: repository,
+            provider: provider,
+            conversationID: conversationID,
+            needsFoodDatabase: true,
+            mealPortionPriorRepository: slowPrior
+        )
+        let requestTask = Task {
+            try await harness.session.send(userText: "我午餐吃了一碗米饭", requestID: requestID)
+        }
+        await slowPrior.waitUntilDishPriorStarts()
+
+        try await harness.session.reset()
+
+        do {
+            _ = try await requestTask.value
+            XCTFail("Reset must cancel and await the active request")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .cancelled)
+        }
+        let persistedMessages = try await repository.messageData(conversationID: conversationID)
+        let persistedRequest = try await repository.agentRequest(requestID: requestID, conversationID: conversationID)
+        let persistedJournal = try await harness.confirmation.toolExecutionJournal(
+            requestID: requestID,
+            conversationID: conversationID
+        )
+        XCTAssertTrue(persistedMessages.isEmpty)
+        XCTAssertNil(persistedRequest)
+        XCTAssertTrue(persistedJournal.isEmpty)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<PendingActionRecord>()), 0)
+    }
+
+    func testCompletedAndFailedJournalStatesRejectIllegalTransitions() async throws {
+        let location = try storeLocation()
+        let container = try makeDiskContainer(at: location.storeURL)
+        let repository = SwiftDataConfirmationRepository(modelContainer: container)
+        let coordinator = ConfirmationCoordinator(
+            repository: repository,
+            writeGate: PersistenceWriteGate(state: .writable)
+        )
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let completedID = "completed-invocation"
+        let requestID = UUID()
+        let conversationID = UUID()
+        let entry = ToolExecutionJournalEntry(
+            invocationID: completedID,
+            requestID: requestID,
+            conversationID: conversationID,
+            logicalRound: 1,
+            callIndex: 0,
+            toolCallID: "completed-call",
+            toolName: "log_weight",
+            argumentsHash: String(repeating: "a", count: 64),
+            requestTimeAnchor: now,
+            state: .prepared,
+            preparedPayloadData: nil,
+            pendingActionID: nil,
+            resultData: nil,
+            createdAt: now,
+            updatedAt: now,
+            completedAt: nil
+        )
+        _ = try await coordinator.beginToolExecution(entry)
+        let resultData = Data("completed result".utf8)
+        try await coordinator.completeToolExecution(invocationID: completedID, resultData: resultData)
+
+        await XCTAssertThrowsErrorAsync(
+            try await coordinator.completeToolExecution(invocationID: completedID, resultData: Data("replacement".utf8))
+        ) { error in
+            XCTAssertEqual(error as? ToolExecutionJournalError, .invalidStateTransition)
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await coordinator.failToolExecution(invocationID: completedID, resultData: nil)
+        ) { error in
+            XCTAssertEqual(error as? ToolExecutionJournalError, .invalidStateTransition)
+        }
+
+        let failedID = "failed-invocation"
+        let failedEntry = ToolExecutionJournalEntry(
+            invocationID: failedID,
+            requestID: requestID,
+            conversationID: conversationID,
+            logicalRound: 1,
+            callIndex: 1,
+            toolCallID: "failed-call",
+            toolName: "log_weight",
+            argumentsHash: String(repeating: "b", count: 64),
+            requestTimeAnchor: now,
+            state: .prepared,
+            preparedPayloadData: nil,
+            pendingActionID: nil,
+            resultData: nil,
+            createdAt: now,
+            updatedAt: now,
+            completedAt: nil
+        )
+        _ = try await coordinator.beginToolExecution(failedEntry)
+        try await coordinator.failToolExecution(invocationID: failedID, resultData: Data("failed".utf8))
+        await XCTAssertThrowsErrorAsync(
+            try await coordinator.completeToolExecution(invocationID: failedID, resultData: Data("replacement".utf8))
+        ) { error in
+            XCTAssertEqual(error as? ToolExecutionJournalError, .invalidStateTransition)
+        }
+
+        let journal = try await coordinator.toolExecutionJournal(requestID: requestID, conversationID: conversationID)
+        XCTAssertEqual(journal.count, 2)
+        let completedEntry = journal.first(where: { $0.invocationID == completedID })
+        let failedResultEntry = journal.first(where: { $0.invocationID == failedID })
+        XCTAssertEqual(completedEntry?.state, .completed)
+        XCTAssertEqual(completedEntry?.resultData, resultData)
+        XCTAssertEqual(failedResultEntry?.state, .failed)
+        XCTAssertEqual(failedResultEntry?.result, "failed")
     }
 
     func testCancellationDoesNotRejectAnotherRequestPendingAction() async throws {
         let location = try storeLocation()
-        defer { try? FileManager.default.removeItem(at: location.directory) }
         let container = try makeDiskContainer(at: location.storeURL)
         let repository = SwiftDataAgentRepository(modelContainer: container)
         let slowPrior = SlowMealPortionPriorRepository(delayNanoseconds: 60_000_000_000)
@@ -314,7 +470,6 @@ final class ToolExecutionJournalTests: XCTestCase {
 
     func testResumeAfterStagedMealActionReplaysOriginalDraft() async throws {
         let location = try storeLocation()
-        defer { try? FileManager.default.removeItem(at: location.directory) }
         let requestID = UUID()
         let conversationID = UUID()
         let call = mealCall(id: "meal-replay", mealType: "lunch")
@@ -347,7 +502,7 @@ final class ToolExecutionJournalTests: XCTestCase {
             conversationID: conversationID
         )
         let request = try XCTUnwrap(requestSnapshot)
-        XCTAssertEqual(draft.occurredAt, request.startedAt)
+        assertSameRequestTimeAnchor(draft.occurredAt, request.startedAt)
         let journal = try await harness.confirmation.toolExecutionJournal(
             requestID: requestID,
             conversationID: conversationID
@@ -364,7 +519,6 @@ final class ToolExecutionJournalTests: XCTestCase {
 
     func testResumeAfterStagedCheckInDoesNotCreateDuplicateEntry() async throws {
         let location = try storeLocation()
-        defer { try? FileManager.default.removeItem(at: location.directory) }
         let requestID = UUID()
         let conversationID = UUID()
         let call = checkInCall()
@@ -395,7 +549,7 @@ final class ToolExecutionJournalTests: XCTestCase {
             conversationID: conversationID
         )
         let request = try XCTUnwrap(requestSnapshot)
-        XCTAssertEqual(draft.occurredAt, request.startedAt)
+        assertSameRequestTimeAnchor(draft.occurredAt, request.startedAt)
         let journal = try await harness.confirmation.toolExecutionJournal(
             requestID: requestID,
             conversationID: conversationID
@@ -410,7 +564,6 @@ final class ToolExecutionJournalTests: XCTestCase {
 
     func testSameRequestAllowsMultipleDistinctMealInvocations() async throws {
         let location = try storeLocation()
-        defer { try? FileManager.default.removeItem(at: location.directory) }
         let requestID = UUID()
         let conversationID = UUID()
         let calls = [mealCall(id: "lunch", mealType: "lunch"), mealCall(id: "dinner", mealType: "dinner")]
@@ -431,12 +584,17 @@ final class ToolExecutionJournalTests: XCTestCase {
 
         _ = try await harness.session.send(userText: userText, requestID: requestID)
 
-        XCTAssertEqual(harness.session.pendingActions.count, 2)
-        XCTAssertNotEqual(harness.session.pendingActions[0].id, harness.session.pendingActions[1].id)
         let journal = try await harness.confirmation.toolExecutionJournal(
             requestID: requestID,
             conversationID: conversationID
         )
+        XCTAssertEqual(
+            harness.session.pendingActions.count,
+            2,
+            "Expected two staged meals; journal states: \(journal.map(\.state)), pending links: \(journal.map(\.pendingActionID))"
+        )
+        guard harness.session.pendingActions.count == 2 else { return }
+        XCTAssertNotEqual(harness.session.pendingActions[0].id, harness.session.pendingActions[1].id)
         XCTAssertEqual(journal.count, 2)
         XCTAssertEqual(journal.map(\.callIndex), [0, 1])
         XCTAssertEqual(Set(journal.map(\.invocationID)).count, 2)
@@ -449,7 +607,6 @@ final class ToolExecutionJournalTests: XCTestCase {
 
     func testToolExecutionJournalSurvivesProcessRestart() async throws {
         let location = try storeLocation()
-        defer { try? FileManager.default.removeItem(at: location.directory) }
         let requestID = UUID()
         let conversationID = UUID()
         let call = weightCall()
@@ -483,7 +640,6 @@ final class ToolExecutionJournalTests: XCTestCase {
 
     func testResumedInvocationWithChangedArgumentsFailsClosed() async throws {
         let location = try storeLocation()
-        defer { try? FileManager.default.removeItem(at: location.directory) }
         let requestID = UUID()
         let conversationID = UUID()
         let originalCall = weightCall()
@@ -549,6 +705,20 @@ final class ToolExecutionJournalTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? AgentError, .emptyResponse)
         }
+
+        let stagedActions = try await harness!.confirmation.activeActions(conversationID: conversationID)
+        let stagedJournal = try await harness!.confirmation.toolExecutionJournal(
+            requestID: requestID,
+            conversationID: conversationID
+        )
+        XCTAssertEqual(
+            stagedActions.count,
+            1,
+            "The setup must persist one action before testing replay; journal states: \(stagedJournal.map(\.state))"
+        )
+        XCTAssertEqual(stagedJournal.count, 1)
+        XCTAssertEqual(stagedJournal.first?.state, .completed)
+        XCTAssertEqual(stagedJournal.first?.pendingActionID, stagedActions.first?.id)
 
         harness = nil
         repository = nil
@@ -638,7 +808,28 @@ final class ToolExecutionJournalTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("densoso-tool-journal-\(UUID().uuidString.lowercased())", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        temporaryStoreDirectories.append(directory)
         return (directory, directory.appendingPathComponent("default.store"))
+    }
+
+    private func assertSameRequestTimeAnchor(
+        _ actual: Date?,
+        _ expected: Date,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard let actual else {
+            XCTFail("Expected a persisted request time anchor", file: file, line: line)
+            return
+        }
+        XCTAssertEqual(
+            abs(actual.timeIntervalSince(expected)),
+            0,
+            accuracy: 0.001,
+            "Persisted date encoding may round to the nearest millisecond; the business time anchor must still match.",
+            file: file,
+            line: line
+        )
     }
 
     private func weightCall(kilograms: Double = 62.5) -> ToolCall {

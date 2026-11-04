@@ -6,6 +6,7 @@ enum ToolExecutionJournalState: String, Codable, Sendable {
     case staged
     case completed
     case failed
+    case interrupted
 }
 
 struct ToolExecutionJournalEntry: Equatable, Sendable {
@@ -33,6 +34,7 @@ struct ToolExecutionJournalEntry: Equatable, Sendable {
 
 enum ToolExecutionJournalError: Error, Equatable {
     case invocationIdentityMismatch
+    case invalidStateTransition
 }
 
 enum ToolExecutionPayloadCodec {

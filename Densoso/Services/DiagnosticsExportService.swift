@@ -228,14 +228,16 @@ final class DiagnosticsExportService {
         mode: IntelligenceMode,
         watch: DiagnosticsWatchStatus,
         dailyLoop: DiagnosticsDailyLoopStatus = .unavailable,
-        now: Date = Date()
+        now: Date = Date(),
+        runtime: DiagnosticsRuntimeInfo = .current()
     ) throws -> URL {
         let document = try makeDocument(
             context: context,
             mode: mode,
             watch: watch,
             dailyLoop: dailyLoop,
-            now: now
+            now: now,
+            runtime: runtime
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

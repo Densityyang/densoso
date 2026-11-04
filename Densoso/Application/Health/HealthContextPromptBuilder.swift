@@ -29,6 +29,19 @@ enum HealthContextPromptBuilder {
         "what about", "and then", "that", "this", "those", "continue", "it ",
     ]
     private static let healthRetrievalIntentTerms = analysisIntentTerms + ["什么"]
+    // "状态" alone is too broad to identify a health request. These phrases
+    // make common personal check-ins explicit without matching app/system state.
+    private static let personalWellbeingEntityTerms = [
+        "我的状态", "我今天的状态", "我今天状态", "我最近的状态", "我现在的状态",
+        "身体状态", "健康状态", "精神状态", "精力状态",
+    ]
+    private static let nonHealthStateTerms = [
+        "应用状态", "系统状态", "账号状态", "网络状态", "设备状态", "工作状态",
+    ]
+    private static let captureIntentTerms = [
+        "记录", "记一下", "保存", "打卡", "估算", "估一估", "安排", "plan", "log", "estimate", "track",
+        "吃了", "摄入", "安排训练", "训练计划",
+    ]
     private static let readinessActivityTerms = [
         "跑", "训练", "运动", "锻炼", "健身", "游泳", "骑行", "骑车", "步行", "散步", "举铁", "练",
         "run", "running", "walk", "walking", "workout", "exercise", "train", "swim", "cycle", "cycling", "hike", "lift",
@@ -50,16 +63,24 @@ enum HealthContextPromptBuilder {
 
     static func hasPriorHealthContext(in priorUserMessages: [String]) -> Bool {
         for message in priorUserMessages.reversed() {
-            if containsHealthEntity(in: message) { return true }
-            guard isContextualFollowUp(message.lowercased()) else { return false }
+            let normalized = message.lowercased()
+            // A logged measurement or meal is an action record, not a prior
+            // health interpretation to which a vague follow-up should attach.
+            if isCaptureIntent(normalized) { return false }
+            if containsHealthEntity(in: normalized) { return true }
+            guard isContextualFollowUp(normalized) else { return false }
         }
         return false
     }
 
     static func containsHealthEntity(in userText: String) -> Bool {
         let normalized = userText.lowercased()
-        return healthEntityTerms.contains { normalized.contains($0) }
-            || isActivityReadinessQuestion(normalized)
+        if healthEntityTerms.contains(where: { normalized.contains($0) })
+            || isActivityReadinessQuestion(normalized) {
+            return true
+        }
+        guard !nonHealthStateTerms.contains(where: { normalized.contains($0) }) else { return false }
+        return personalWellbeingEntityTerms.contains(where: { normalized.contains($0) })
     }
 
     static func prompt(
@@ -117,11 +138,7 @@ enum HealthContextPromptBuilder {
     static func requiresNarrative(for userText: String, priorHealthContext: Bool = false) -> Bool {
         guard shouldIncludeSummary(for: userText, priorHealthContext: priorHealthContext) else { return false }
         let normalized = userText.lowercased()
-        let captureTerms = [
-            "记录", "记一下", "保存", "打卡", "吃了", "摄入", "估算", "估一估", "安排训练", "训练计划",
-            "log", "track", "estimate", "plan",
-        ]
-        guard !captureTerms.contains(where: normalized.contains) else { return false }
+        guard !isCaptureIntent(normalized) else { return false }
         return analysisIntentTerms.contains(where: normalized.contains)
             || (priorHealthContext && followUpTerms.contains(where: normalized.contains))
             || isActivityReadinessQuestion(normalized)
@@ -134,6 +151,10 @@ enum HealthContextPromptBuilder {
 
     private static func isContextualFollowUp(_ normalized: String) -> Bool {
         followUpTerms.contains(where: normalized.contains)
+    }
+
+    private static func isCaptureIntent(_ normalized: String) -> Bool {
+        captureIntentTerms.contains(where: { normalized.contains($0) })
     }
 
     private static func encoded(_ summary: HealthContextSummary) throws -> Data {

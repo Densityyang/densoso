@@ -54,12 +54,368 @@ final class MealPortionPriorTests: XCTestCase {
 
         let storedMeal = try XCTUnwrap(ModelContext(harness.container)
             .fetch(FetchDescriptor<MealRecord>()).first { $0.sourceActionKey == action.idempotencyKey })
-        XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealPriorContributionRecord>()), 1)
+        let contributions = try ModelContext(harness.container).fetch(FetchDescriptor<MealPriorContributionRecord>())
+        XCTAssertEqual(
+            contributions.filter { $0.kindRaw == MealPriorContributionKind.portion.rawValue }.count,
+            1
+        )
+        XCTAssertEqual(
+            contributions.filter { $0.kindRaw == MealPriorContributionKind.dish.rawValue }.count,
+            1
+        )
         try await HealthRepository(modelContext: ModelContext(harness.container)).deleteMeal(id: storedMeal.id)
 
         let remainingPriors = try await repository.all()
         XCTAssertTrue(remainingPriors.isEmpty)
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealPriorContributionRecord>()), 0)
+    }
+
+    func testDeletingLearnedPriorsClearsOnlyMatchingContributionLedgerAndPreventsResurrection() async throws {
+        let harness = try Harness()
+        let repository = SwiftDataMealPortionPriorRepository(modelContainer: harness.container)
+        let correction = try XCTUnwrap(MealPortionPriorCorrection(unit: "碗", unitCount: 1, totalGrams: 180))
+        var riceActions: [PendingAction] = []
+        for (foodID, foodName) in [("rice-id", "米饭"), ("rice-id", "米饭"), ("oats-id", "燕麦")] {
+            let action = try await harness.coordinator.stage(
+                payload: .meal(try Self.mealDraft(
+                    evidence: [correction.evidenceSnapshot],
+                    foodName: foodName,
+                    foodID: foodID
+                )),
+                clientRequestID: UUID()
+            )
+            _ = try await harness.coordinator.confirm(action: action)
+            if foodID == "rice-id" { riceActions.append(action) }
+        }
+
+        let initialPortions = try await repository.all()
+        let initialDishPriors = try await repository.allDishPriors()
+        let ricePortion = try XCTUnwrap(initialPortions.first { $0.foodName == "米饭" })
+        let riceDish = try XCTUnwrap(initialDishPriors.first { $0.dishName == "米饭" })
+        let oatsPortion = try XCTUnwrap(initialPortions.first { $0.foodName == "燕麦" })
+        let oatsDish = try XCTUnwrap(initialDishPriors.first { $0.dishName == "燕麦" })
+        try await repository.save(PersonalMealPortionPriorEdit(
+            id: nil,
+            foodID: "manual-id",
+            foodName: "手动管理",
+            unit: "碗",
+            gramsPerUnit: 130
+        ))
+        let portionsAfterManualCreate = try await repository.all()
+        let userManagedPortion = try XCTUnwrap(portionsAfterManualCreate.first { $0.foodName == "手动管理" })
+
+        try await repository.delete(id: ricePortion.id)
+        var contributions = try ModelContext(harness.container).fetch(FetchDescriptor<MealPriorContributionRecord>())
+        XCTAssertEqual(contributions.filter {
+            $0.kindRaw == MealPriorContributionKind.portion.rawValue && $0.priorKey == ricePortion.priorKey
+        }.count, 0)
+        XCTAssertEqual(contributions.filter {
+            $0.kindRaw == MealPriorContributionKind.dish.rawValue && $0.priorKey == riceDish.priorKey
+        }.count, 2)
+        XCTAssertEqual(contributions.filter {
+            $0.kindRaw == MealPriorContributionKind.portion.rawValue && $0.priorKey == oatsPortion.priorKey
+        }.count, 1)
+        XCTAssertEqual(contributions.filter {
+            $0.kindRaw == MealPriorContributionKind.dish.rawValue && $0.priorKey == oatsDish.priorKey
+        }.count, 1)
+
+        try await repository.deleteDishPrior(id: riceDish.id)
+        contributions = try ModelContext(harness.container).fetch(FetchDescriptor<MealPriorContributionRecord>())
+        XCTAssertEqual(contributions.filter {
+            $0.kindRaw == MealPriorContributionKind.dish.rawValue && $0.priorKey == riceDish.priorKey
+        }.count, 0)
+        XCTAssertEqual(contributions.filter {
+            $0.kindRaw == MealPriorContributionKind.portion.rawValue && $0.priorKey == oatsPortion.priorKey
+        }.count, 1)
+        XCTAssertEqual(contributions.filter {
+            $0.kindRaw == MealPriorContributionKind.dish.rawValue && $0.priorKey == oatsDish.priorKey
+        }.count, 1)
+        let portionsAfterPriorDeletes = try await repository.all()
+        XCTAssertTrue(portionsAfterPriorDeletes.contains { $0.id == userManagedPortion.id })
+
+        let mealContext = ModelContext(harness.container)
+        let riceMealIDs = try mealContext.fetch(FetchDescriptor<MealRecord>())
+            .filter { meal in riceActions.contains { $0.idempotencyKey == meal.sourceActionKey } }
+            .map(\.id)
+        for mealID in riceMealIDs {
+            try await HealthRepository(modelContext: ModelContext(harness.container)).deleteMeal(id: mealID)
+        }
+
+        let finalPortions = try await repository.all()
+        let finalDishPriors = try await repository.allDishPriors()
+        XCTAssertFalse(finalPortions.contains { $0.priorKey == ricePortion.priorKey })
+        XCTAssertFalse(finalDishPriors.contains { $0.priorKey == riceDish.priorKey })
+        XCTAssertTrue(finalPortions.contains { $0.priorKey == oatsPortion.priorKey })
+        XCTAssertTrue(finalDishPriors.contains { $0.priorKey == oatsDish.priorKey })
+        XCTAssertTrue(finalPortions.contains { $0.id == userManagedPortion.id })
+    }
+
+    func testManualPriorEditWaitsForConfirmationStoreLease() async throws {
+        let harness = try Harness()
+        let repository = SwiftDataMealPortionPriorRepository(modelContainer: harness.container)
+        let correction = try XCTUnwrap(MealPortionPriorCorrection(unit: "碗", unitCount: 1, totalGrams: 180))
+        let initialAction = try await harness.coordinator.stage(
+            payload: .meal(try Self.mealDraft(evidence: [correction.evidenceSnapshot])),
+            clientRequestID: UUID()
+        )
+        _ = try await harness.coordinator.confirm(action: initialAction)
+        let initialPriors = try await repository.all()
+        let learned = try XCTUnwrap(initialPriors.first { $0.foodName == "米饭" })
+        let concurrentAction = try await harness.coordinator.stage(
+            payload: .meal(try Self.mealDraft(evidence: [correction.evidenceSnapshot])),
+            clientRequestID: UUID()
+        )
+        let confirmationDay = DailyMetricsProjectionWriteGate.dayKey(
+            for: Date(timeIntervalSince1970: 1_750_000_000)
+        )
+        let owner = try await DailyMetricsProjectionWriteGate.acquire(
+            for: harness.container,
+            dayKeys: [confirmationDay]
+        )
+        let confirmation = Task { try await harness.coordinator.confirm(action: concurrentAction) }
+        await DailyMetricsProjectionWriteGate.waitUntilWaitingCount(
+            1,
+            storeID: ObjectIdentifier(harness.container)
+        )
+        let manualEdit = Task {
+            try await repository.save(PersonalMealPortionPriorEdit(
+                id: learned.id,
+                foodID: "rice-id",
+                foodName: "米饭",
+                unit: "碗",
+                gramsPerUnit: 120
+            ))
+        }
+        await DailyMetricsProjectionWriteGate.waitUntilWaitingCount(
+            2,
+            storeID: ObjectIdentifier(harness.container)
+        )
+
+        DailyMetricsProjectionWriteGate.release(owner)
+        _ = try await confirmation.value
+        try await manualEdit.value
+
+        let savedPortions = try await repository.all()
+        let saved = try XCTUnwrap(savedPortions.first { $0.foodName == "米饭" })
+        XCTAssertEqual(saved.prior.p50Grams, 120, accuracy: 0.001)
+        let contributions = try ModelContext(harness.container).fetch(FetchDescriptor<MealPriorContributionRecord>())
+        XCTAssertEqual(contributions.filter {
+            $0.kindRaw == MealPriorContributionKind.portion.rawValue && $0.priorKey == saved.priorKey
+        }.count, 0)
+
+        try await repository.save(PersonalMealPortionPriorEdit(
+            id: saved.id,
+            foodName: "糙米",
+            unit: "碗",
+            gramsPerUnit: 125
+        ))
+        let renamedPriors = try await repository.all()
+        XCTAssertTrue(renamedPriors.contains { $0.id == saved.id && $0.foodName == "糙米" })
+        XCTAssertFalse(renamedPriors.contains { $0.priorKey == saved.priorKey })
+
+        let mealIDs = try ModelContext(harness.container).fetch(FetchDescriptor<MealRecord>())
+            .filter { meal in
+                [initialAction.idempotencyKey, concurrentAction.idempotencyKey].contains(meal.sourceActionKey)
+            }
+            .map(\.id)
+        for mealID in mealIDs {
+            try await HealthRepository(modelContext: ModelContext(harness.container)).deleteMeal(id: mealID)
+        }
+        let afterOriginMealDeletion = try await repository.all()
+        XCTAssertTrue(afterOriginMealDeletion.contains { $0.id == saved.id && $0.foodName == "糙米" })
+        XCTAssertFalse(afterOriginMealDeletion.contains { $0.priorKey == saved.priorKey })
+    }
+
+    func testPriorSaveAndDeleteFailuresRollbackRowsAndContributionLedger() async throws {
+        let harness = try Harness()
+        let repository = SwiftDataMealPortionPriorRepository(modelContainer: harness.container)
+        let failedCreateEdit = PersonalMealPortionPriorEdit(
+            id: nil,
+            foodID: "failed-id",
+            foodName: "失败写入",
+            unit: "碗",
+            gramsPerUnit: 125
+        )
+        await repository.failNextSaveForTesting()
+        do {
+            try await repository.save(failedCreateEdit)
+            XCTFail("Injected save failure should be rethrown")
+        } catch MealPortionPriorInjectedFailure.beforeSave {
+            // Expected: the pending insertion must be rolled back.
+        }
+        let afterFailedCreate = try await repository.all()
+        XCTAssertFalse(afterFailedCreate.contains { $0.foodName == "失败写入" })
+        try await repository.save(failedCreateEdit)
+        let afterSuccessfulRetry = try await repository.all()
+        let retriedPrior = try XCTUnwrap(afterSuccessfulRetry.first { $0.foodName == "失败写入" })
+        XCTAssertEqual(afterSuccessfulRetry.filter { $0.foodName == "失败写入" }.count, 1)
+        XCTAssertEqual(retriedPrior.prior.p50Grams, 125, accuracy: 0.001)
+
+        let correction = try XCTUnwrap(MealPortionPriorCorrection(unit: "碗", unitCount: 1, totalGrams: 180))
+        let action = try await harness.coordinator.stage(
+            payload: .meal(try Self.mealDraft(evidence: [correction.evidenceSnapshot])),
+            clientRequestID: UUID()
+        )
+        _ = try await harness.coordinator.confirm(action: action)
+        let learnedPortions = try await repository.all()
+        let learned = try XCTUnwrap(learnedPortions.first { $0.foodName == "米饭" })
+        await repository.failNextSaveForTesting()
+        do {
+            try await repository.delete(id: learned.id)
+            XCTFail("Injected save failure should be rethrown")
+        } catch MealPortionPriorInjectedFailure.beforeSave {
+            // Expected: both the row and its contribution must survive rollback.
+        }
+
+        let afterFailedDelete = try await repository.all()
+        XCTAssertTrue(afterFailedDelete.contains { $0.id == learned.id })
+        let contributions = try ModelContext(harness.container).fetch(FetchDescriptor<MealPriorContributionRecord>())
+        XCTAssertEqual(contributions.filter {
+            $0.kindRaw == MealPriorContributionKind.portion.rawValue && $0.priorKey == learned.priorKey
+        }.count, 1)
+    }
+
+    func testDishTemplateEditWaitsForConfirmationStoreLease() async throws {
+        let harness = try Harness()
+        let repository = SwiftDataMealPortionPriorRepository(modelContainer: harness.container)
+        let manualIngredient = try XCTUnwrap(PersonalMealDishIngredientPrior(
+            foodID: "template-egg-id",
+            name: "鸡蛋",
+            lowGrams: 90,
+            likelyGrams: 100,
+            highGrams: 110
+        ))
+        try await repository.saveDishPrior(PersonalMealDishPriorEdit(
+            id: nil,
+            dishName: "番茄炒蛋",
+            cookingMethod: "steam",
+            ingredients: [manualIngredient]
+        ))
+        let initialPriors = try await repository.allDishPriors()
+        let manualTemplate = try XCTUnwrap(initialPriors.first { $0.ingredients.first?.foodID == "template-egg-id" })
+
+        let explicitPortion = try XCTUnwrap(PersonalMealDishPriorUserPortionEvidence.evidenceSnapshot(grams: 85))
+        let firstAction = try await harness.coordinator.stage(
+            payload: .meal(try Self.dishMealDraft(
+                dishName: "番茄炒蛋",
+                cookingMethod: "stirFry",
+                ingredientName: "番茄",
+                ingredientID: "tomato-id",
+                ingredientEvidence: [explicitPortion],
+                dishEvidence: []
+            )),
+            clientRequestID: UUID()
+        )
+        _ = try await harness.coordinator.confirm(action: firstAction)
+        let learnedPriors = try await repository.allDishPriors()
+        let learnedDish = try XCTUnwrap(learnedPriors.first { $0.ingredients.first?.foodID == "tomato-id" })
+
+        let concurrentAction = try await harness.coordinator.stage(
+            payload: .meal(try Self.dishMealDraft(
+                dishName: "番茄炒蛋",
+                cookingMethod: "stirFry",
+                ingredientName: "番茄",
+                ingredientID: "tomato-id",
+                ingredientEvidence: [explicitPortion],
+                dishEvidence: []
+            )),
+            clientRequestID: UUID()
+        )
+        let confirmationDay = DailyMetricsProjectionWriteGate.dayKey(
+            for: Date(timeIntervalSince1970: 1_750_000_000)
+        )
+        let owner = try await DailyMetricsProjectionWriteGate.acquire(
+            for: harness.container,
+            dayKeys: [confirmationDay]
+        )
+        let confirmation = Task { try await harness.coordinator.confirm(action: concurrentAction) }
+        await DailyMetricsProjectionWriteGate.waitUntilWaitingCount(
+            1,
+            storeID: ObjectIdentifier(harness.container)
+        )
+        let updatedManualIngredient = try XCTUnwrap(PersonalMealDishIngredientPrior(
+            foodID: "template-egg-id",
+            name: "鸡蛋",
+            lowGrams: 125,
+            likelyGrams: 130,
+            highGrams: 135
+        ))
+        let manualEdit = Task {
+            try await repository.saveDishPrior(PersonalMealDishPriorEdit(
+                id: manualTemplate.id,
+                dishName: "番茄炒蛋",
+                cookingMethod: "stirFry",
+                ingredients: [updatedManualIngredient]
+            ))
+        }
+        await DailyMetricsProjectionWriteGate.waitUntilWaitingCount(
+            2,
+            storeID: ObjectIdentifier(harness.container)
+        )
+
+        DailyMetricsProjectionWriteGate.release(owner)
+        _ = try await confirmation.value
+        try await manualEdit.value
+
+        let finalPriors = try await repository.allDishPriors()
+        let finalManualTemplate = try XCTUnwrap(finalPriors.first { $0.id == manualTemplate.id })
+        XCTAssertTrue(finalManualTemplate.isUserManaged)
+        XCTAssertEqual(try XCTUnwrap(finalManualTemplate.ingredients.first).likelyGrams, 130, accuracy: 0.001)
+        let finalLearnedDish = try XCTUnwrap(finalPriors.first { $0.id == learnedDish.id })
+        XCTAssertEqual(finalLearnedDish.observationCount, 2)
+        let contributions = try ModelContext(harness.container).fetch(FetchDescriptor<MealPriorContributionRecord>())
+        XCTAssertEqual(contributions.filter {
+            $0.kindRaw == MealPriorContributionKind.dish.rawValue && $0.priorKey == learnedDish.priorKey
+        }.count, 2)
+        XCTAssertFalse(contributions.contains { $0.kindRaw == MealPriorContributionKind.dish.rawValue
+            && $0.priorKey == finalManualTemplate.priorKey })
+
+        let mealIDs = try ModelContext(harness.container).fetch(FetchDescriptor<MealRecord>())
+            .filter { meal in
+                [firstAction.idempotencyKey, concurrentAction.idempotencyKey].contains(meal.sourceActionKey)
+            }
+            .map(\.id)
+        for mealID in mealIDs {
+            try await HealthRepository(modelContext: ModelContext(harness.container)).deleteMeal(id: mealID)
+        }
+        let afterOriginMealDeletion = try await repository.allDishPriors()
+        XCTAssertTrue(afterOriginMealDeletion.contains { $0.id == finalManualTemplate.id })
+        XCTAssertFalse(afterOriginMealDeletion.contains { $0.id == learnedDish.id })
+    }
+
+    func testDishPriorSaveFailureRollsBackAndNextSaveOnSameActorIsClean() async throws {
+        let harness = try Harness()
+        let repository = SwiftDataMealPortionPriorRepository(modelContainer: harness.container)
+        let ingredient = try XCTUnwrap(PersonalMealDishIngredientPrior(
+            foodID: "soup-tofu-id",
+            name: "豆腐",
+            lowGrams: 90,
+            likelyGrams: 100,
+            highGrams: 110
+        ))
+        let edit = PersonalMealDishPriorEdit(
+            id: nil,
+            dishName: "豆腐汤",
+            cookingMethod: "boil",
+            ingredients: [ingredient]
+        )
+        await repository.failNextSaveForTesting()
+        do {
+            try await repository.saveDishPrior(edit)
+            XCTFail("Injected save failure should be rethrown")
+        } catch MealPortionPriorInjectedFailure.beforeSave {
+            // Expected: the pending insertion must be rolled back.
+        }
+        let afterFailure = try await repository.allDishPriors()
+        XCTAssertTrue(afterFailure.isEmpty)
+
+        try await repository.saveDishPrior(edit)
+        let savedPriors = try await repository.allDishPriors()
+        XCTAssertEqual(savedPriors.count, 1)
+        let saved = try XCTUnwrap(savedPriors.first)
+        XCTAssertTrue(saved.isUserManaged)
+        XCTAssertEqual(saved.observationCount, 0)
+        XCTAssertEqual(saved.ingredients, [ingredient])
     }
 
     func testDeletingOriginMealPreservesUserManagedDishPrior() async throws {
@@ -376,12 +732,16 @@ final class MealPortionPriorTests: XCTestCase {
         XCTAssertTrue(remainingPriors.isEmpty)
     }
 
-    private static func mealDraft(evidence: [EvidenceSnapshot]) throws -> MealDraft {
+    private static func mealDraft(
+        evidence: [EvidenceSnapshot],
+        foodName: String = "米饭",
+        foodID: String = "rice-id"
+    ) throws -> MealDraft {
         let portion = try EstimateRange(low: 160, likely: 180, high: 200)
         let macros = try EstimateRange.point(20)
         let ingredient = MealIngredientDraft(
-            foodID: "rice-id",
-            name: "米饭",
+            foodID: foodID,
+            name: foodName,
             amountGrams: portion,
             nutrients: NutrientEstimate(
                 energyKcal: try EstimateRange(low: 190, likely: 210, high: 230),
@@ -392,7 +752,7 @@ final class MealPortionPriorTests: XCTestCase {
             evidence: evidence
         )
         let dish = MealDishDraft(
-            name: "米饭",
+            name: foodName,
             portionGrams: portion,
             nutrients: NutrientEstimate(
                 energyKcal: try EstimateRange(low: 190, likely: 210, high: 230),

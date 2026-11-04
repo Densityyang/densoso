@@ -220,6 +220,125 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         XCTAssertEqual(nutrition.proteinGrams, 31)
     }
 
+    func testFailedSupersededWriteDoesNotOverwriteNewReceiptOrRetryOldVersion() async throws {
+        try await assertSupersededWritePreservesPendingReceipt(failOldWrite: true)
+    }
+
+    func testSuccessfulSupersededWriteDoesNotOverwriteNewReceipt() async throws {
+        try await assertSupersededWritePreservesPendingReceipt(failOldWrite: false)
+    }
+
+    func testSupersededReceiptReconciliationDoesNotOverwriteNewReceiptState() async throws {
+        HealthKitConnectionPreference.hasRequestedAuthorization = false
+        let meal = MealRecord(date: Date(timeIntervalSince1970: 1_800_000_000), totalCaloriesKcal: 430)
+        let receiptID = UUID()
+        let oldOutbox = HealthSyncOutboxEntry(
+            operation: "upsertMeal",
+            recordID: meal.id,
+            receiptID: receiptID,
+            state: "receiptReconciliation-retryable",
+            syncIdentifier: "densoso.meal.\(meal.id.uuidString.lowercased())",
+            syncVersion: 1
+        )
+        let newOutbox = HealthSyncOutboxEntry(
+            operation: "upsertMeal",
+            recordID: meal.id,
+            receiptID: receiptID,
+            state: HealthSyncState.pending.rawValue,
+            syncIdentifier: oldOutbox.syncIdentifier,
+            syncVersion: 2
+        )
+        let receipt = CommittedActionReceiptRecord(
+            id: receiptID,
+            actionID: UUID(),
+            idempotencyKey: "superseded-reconciliation-\(receiptID.uuidString.lowercased())",
+            actionTypeRaw: ActionType.meal.rawValue,
+            localRecordID: meal.id,
+            outboxIDsData: try JSONEncoder().encode([oldOutbox.id, newOutbox.id]),
+            healthSyncStateRaw: HealthSyncState.pending.rawValue
+        )
+        context.insert(meal)
+        context.insert(oldOutbox)
+        context.insert(newOutbox)
+        context.insert(receipt)
+        try context.save()
+
+        let healthStore = FakeHealthStoreClient()
+        await HealthSyncOutboxWorker(healthStore: healthStore, modelContainer: container)
+            .processPending(in: context)
+
+        let persisted = try persistedOutboxSnapshots()
+        XCTAssertEqual(persisted[oldOutbox.id]?.state, "succeeded")
+        XCTAssertEqual(persisted[newOutbox.id]?.state, HealthSyncState.pending.rawValue)
+        XCTAssertEqual(try persistedActionReceiptState(id: receiptID), HealthSyncState.pending.rawValue)
+        let attemptedWrites = await healthStore.attemptedWritesSnapshot()
+        XCTAssertTrue(attemptedWrites.isEmpty)
+    }
+
+    private func assertSupersededWritePreservesPendingReceipt(failOldWrite: Bool) async throws {
+        HealthKitConnectionPreference.hasRequestedAuthorization = true
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let meal = MealRecord(date: now, totalCaloriesKcal: 430, energyLikelyKcal: 430)
+        let receiptID = UUID()
+        let oldOutbox = HealthSyncOutboxEntry(
+            operation: "upsertMeal",
+            recordID: meal.id,
+            receiptID: receiptID,
+            syncIdentifier: "densoso.meal.\(meal.id.uuidString.lowercased())",
+            syncVersion: 1
+        )
+        let receipt = CommittedActionReceiptRecord(
+            id: receiptID,
+            actionID: UUID(),
+            idempotencyKey: "superseded-outbox-\(receiptID.uuidString.lowercased())",
+            actionTypeRaw: ActionType.meal.rawValue,
+            localRecordID: meal.id,
+            outboxIDsData: try JSONEncoder().encode([oldOutbox.id]),
+            healthSyncStateRaw: HealthSyncState.succeeded.rawValue
+        )
+        context.insert(meal)
+        context.insert(oldOutbox)
+        context.insert(receipt)
+        try context.save()
+
+        let healthStore = FakeHealthStoreClient()
+        await healthStore.blockNextHealthWrite()
+        if failOldWrite { await healthStore.failNextWrites(1) }
+        let worker = HealthSyncOutboxWorker(healthStore: healthStore, modelContainer: container)
+        let processingTask = Task {
+            await worker.processPending(in: context, now: now)
+        }
+        await healthStore.waitUntilHealthWriteIsBlocked()
+
+        try await HealthRepository(modelContext: ModelContext(container)).updateMeal(id: meal.id)
+        let updateContext = ModelContext(container)
+        let mealID = meal.id
+        let updatedEntries = try updateContext.fetch(
+            FetchDescriptor<HealthSyncOutboxEntry>(predicate: #Predicate { $0.recordID == mealID })
+        )
+        let newOutbox = try XCTUnwrap(updatedEntries.first { $0.syncVersion == 2 })
+        XCTAssertEqual(newOutbox.state, HealthSyncState.pending.rawValue)
+        XCTAssertEqual(newOutbox.receiptID, receiptID)
+        // Keep v2 pending for this run so assertions observe the commit of v1
+        // independently from the subsequent retry of the newest generation.
+        newOutbox.nextAttemptAt = Date(timeIntervalSince1970: 4_000_000_000)
+        try updateContext.save()
+        XCTAssertEqual(try persistedActionReceiptState(id: receiptID), HealthSyncState.pending.rawValue)
+
+        await healthStore.resumeBlockedHealthWrite()
+        await processingTask.value
+
+        let persisted = try persistedOutboxSnapshots()
+        XCTAssertEqual(persisted[oldOutbox.id]?.state, "succeeded")
+        XCTAssertEqual(persisted[oldOutbox.id]?.attemptCount, 1)
+        XCTAssertEqual(persisted[newOutbox.id]?.state, "pending")
+        XCTAssertEqual(try persistedActionReceiptState(id: receiptID), HealthSyncState.pending.rawValue)
+        let attemptedWrites = await healthStore.attemptedWritesSnapshot()
+        XCTAssertEqual(attemptedWrites.count, 1, "The obsolete generation must not be retried")
+        let successfulWrites = await healthStore.successfulWritesSnapshot()
+        XCTAssertEqual(successfulWrites.count, failOldWrite ? 0 : 1)
+    }
+
     func testSupersessionCheckPagesPast64SameRecordRows() async throws {
         HealthKitConnectionPreference.hasRequestedAuthorization = true
         let now = Date(timeIntervalSince1970: 1_700_000_000)

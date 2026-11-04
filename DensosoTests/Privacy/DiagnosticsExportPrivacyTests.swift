@@ -188,18 +188,19 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
             lastGeneratedAt: now.addingTimeInterval(-120),
             nextRefreshEarliestAt: now.addingTimeInterval(3_600)
         )
+        let runtime = DiagnosticsRuntimeInfo(
+            osVersion: "18.0.1",
+            appVersion: "1.2.3",
+            appBuild: "45",
+            schemaVersion: "12.0.0"
+        )
         let document = try DiagnosticsExportService(providerLogs: logs).makeDocument(
             context: context,
             mode: .cloudQwen,
             watch: DiagnosticsWatchStatus(isAvailable: true, isActivated: false, hasError: true),
             dailyLoop: dailyLoopStatus,
             now: now,
-            runtime: DiagnosticsRuntimeInfo(
-                osVersion: "18.0.1",
-                appVersion: "1.2.3",
-                appBuild: "45",
-                schemaVersion: "12.0.0"
-            )
+            runtime: runtime
         )
         let exportService = DiagnosticsExportService(providerLogs: logs)
         let exportedURL = try exportService.exportJSON(
@@ -207,7 +208,8 @@ final class DiagnosticsExportPrivacyTests: XCTestCase {
             mode: .cloudQwen,
             watch: DiagnosticsWatchStatus(isAvailable: true, isActivated: false, hasError: true),
             dailyLoop: dailyLoopStatus,
-            now: now
+            now: now,
+            runtime: runtime
         )
         defer { try? FileManager.default.removeItem(at: exportedURL) }
         let encoder = JSONEncoder()

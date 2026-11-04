@@ -769,7 +769,45 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
         return try modelContext.fetch(descriptor).first != nil
     }
 
-    func reset(conversationID: UUID) throws {
+    func reset(conversationID: UUID) async throws {
+        try await withMutationBarrier {
+            try await withStoreWidePersistenceLock {
+                do {
+                    try resetConversationData(conversationID: conversationID)
+                } catch {
+                    modelContext.rollback()
+                    throw error
+                }
+            }
+        }
+    }
+
+    private func withMutationBarrier<T>(operation: () async throws -> T) async throws -> T {
+        let barrier = await PersistenceOperationBarrier.shared
+        let lease = try await barrier.acquireMutationOperation()
+        do {
+            let result = try await operation()
+            await barrier.release(lease)
+            return result
+        } catch {
+            await barrier.release(lease)
+            throw error
+        }
+    }
+
+    private func withStoreWidePersistenceLock<T>(operation: () async throws -> T) async throws -> T {
+        let lease = try await DailyMetricsProjectionWriteGate.acquire(for: modelContainer)
+        do {
+            let result = try await operation()
+            await DailyMetricsProjectionWriteGate.release(lease)
+            return result
+        } catch {
+            await DailyMetricsProjectionWriteGate.release(lease)
+            throw error
+        }
+    }
+
+    private func resetConversationData(conversationID: UUID) throws {
         let messageSortBy = [
             SortDescriptor(\MessageRecord.ordinal),
             SortDescriptor(\MessageRecord.id),
@@ -820,6 +858,39 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
             guard let lastRequest = requests.last else { break }
             for request in requests { modelContext.delete(request) }
             requestCursor = lastRequest.requestID
+        }
+
+        // Earlier schema containers (for example migration tests using V9) do
+        // not define tool journals. Skip only when the model is absent; once it
+        // is part of the container schema, real fetch failures must propagate.
+        if modelContext.container.schema.entity(for: DensosoSchemaV13.ToolExecutionJournalRecord.self) != nil {
+            // Tool journals can contain staged action payloads and provider-facing
+            // results. Delete them in the same unsaved reset transaction, paging by
+            // their unique invocation ID so large conversations remain bounded.
+            var journalCursor: String?
+            let journalSortBy = [SortDescriptor(\DensosoSchemaV13.ToolExecutionJournalRecord.invocationID)]
+            while true {
+                let journalPredicate: Predicate<DensosoSchemaV13.ToolExecutionJournalRecord>
+                if let journalCursor {
+                    let cursorInvocationID = journalCursor
+                    journalPredicate = #Predicate<DensosoSchemaV13.ToolExecutionJournalRecord> { journal in
+                        journal.conversationID == conversationID && journal.invocationID > cursorInvocationID
+                    }
+                } else {
+                    journalPredicate = #Predicate<DensosoSchemaV13.ToolExecutionJournalRecord> {
+                        $0.conversationID == conversationID
+                    }
+                }
+                var journalDescriptor = FetchDescriptor<DensosoSchemaV13.ToolExecutionJournalRecord>(
+                    predicate: journalPredicate,
+                    sortBy: journalSortBy
+                )
+                journalDescriptor.fetchLimit = Self.conversationResetBatchSize
+                let journals = try modelContext.fetch(journalDescriptor)
+                guard let lastJournal = journals.last else { break }
+                for journal in journals { modelContext.delete(journal) }
+                journalCursor = lastJournal.invocationID
+            }
         }
 
         var costBudgetCursor: UUID?

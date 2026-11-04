@@ -66,7 +66,7 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
 
     private func runWithOperationLease(in modelContext: ModelContext, now: Date) async {
         guard !Task.isCancelled else { return }
-        reconcileActionReceipts(in: modelContext)
+        await reconcileActionReceipts()
         guard HealthKitConnectionPreference.hasRequestedAuthorization else { return }
         let sendingState = "sending"
         let recoverySort = [
@@ -117,7 +117,6 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
 
                 var externalReceipt: HealthWriteReceipt?
                 var externalOperationCompleted = false
-                var shouldUpdateActionReceipt = false
                 do {
                     // The caller's context may have been alive before another
                     // context committed a newer outbox generation. Start the
@@ -147,6 +146,11 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
                     // The external operation may suspend while another local write
                     // supersedes this entry. Re-fetch by ID and validate the attempt
                     // generation in a new context before committing its result.
+                    // Serialize the supersession check and local commit with
+                    // source mutations that may enqueue a newer generation.
+                    // Never hold this lease while awaiting HealthKit above.
+                    let projectionLease = try await DailyMetricsProjectionWriteGate.acquire(for: modelContainer)
+                    defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
                     let commitContext = ModelContext(modelContainer)
                     guard let currentEntry = try activeOperationEntry(
                         id: entry.id,
@@ -154,28 +158,42 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
                         in: commitContext
                     ) else { continue }
                     let supersededAfterExternalOperation = try isSuperseded(currentEntry, in: commitContext)
-                    shouldUpdateActionReceipt = !superseded && !supersededAfterExternalOperation
                     if let externalReceipt {
                         currentEntry.payloadData = try JSONEncoder().encode(externalReceipt)
                     }
                     currentEntry.state = "succeeded"
                     currentEntry.lastError = nil
                     currentEntry.nextAttemptAt = nil
-                    if shouldUpdateActionReceipt {
+                    if !superseded && !supersededAfterExternalOperation {
                         try updateActionReceipt(for: currentEntry, in: commitContext, state: "succeeded")
                     }
                     if externalOperationCompleted { try willCommitExternalSuccess?() }
                     try commitContext.save()
                 } catch {
                     modelContext.rollback()
+                    // Re-read the entry and latest generation under the same
+                    // store-wide projection gate used by local source writes.
+                    // This prevents an older failure from changing the receipt
+                    // after enqueue has reset it to pending for a newer version.
+                    guard let projectionLease = try? await DailyMetricsProjectionWriteGate.acquire(for: modelContainer) else {
+                        return
+                    }
+                    defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
                     let reconciliationContext = ModelContext(modelContainer)
                     guard let currentEntry = try? activeOperationEntry(
                         id: entry.id,
                         generation: operationGeneration,
                         in: reconciliationContext
                     ) else { continue }
+                    let superseded: Bool
+                    do {
+                        superseded = try isSuperseded(currentEntry, in: reconciliationContext)
+                    } catch {
+                        reconciliationContext.rollback()
+                        return
+                    }
                     let terminal = isTerminal(error) || currentEntry.attemptCount >= maximumAttempts
-                    let targetState = externalOperationCompleted
+                    let targetState = superseded || externalOperationCompleted
                         ? "succeeded"
                         : (terminal ? "terminal" : "retryable")
                     if let externalReceipt,
@@ -192,7 +210,7 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
                     let delay = min(pow(2.0, Double(min(currentEntry.attemptCount, 10))) * 30, 21_600)
                     currentEntry.nextAttemptAt = targetState == "retryable" ? now.addingTimeInterval(delay) : nil
                     do {
-                        if shouldUpdateActionReceipt || !externalOperationCompleted {
+                        if !superseded {
                             try updateActionReceipt(for: currentEntry, in: reconciliationContext, state: targetState)
                         }
                         try reconciliationContext.save()
@@ -204,11 +222,24 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
                             generation: operationGeneration,
                             in: recoveryContext
                         ) else { continue }
-                        recoverableEntry.state = Self.receiptReconciliationState(for: targetState)
-                        recoverableEntry.lastError = "\(SharedErrorDescriptor.mapped(from: error, fallback: .healthKitUnavailableFallback).diagnosticSafeDetail) Receipt reconciliation pending."
-                        recoverableEntry.nextAttemptAt = targetState == "retryable"
-                            ? now.addingTimeInterval(delay)
-                            : nil
+                        let stillSuperseded: Bool
+                        do {
+                            stillSuperseded = try isSuperseded(recoverableEntry, in: recoveryContext)
+                        } catch {
+                            recoveryContext.rollback()
+                            return
+                        }
+                        if stillSuperseded {
+                            recoverableEntry.state = "succeeded"
+                            recoverableEntry.lastError = nil
+                            recoverableEntry.nextAttemptAt = nil
+                        } else {
+                            recoverableEntry.state = Self.receiptReconciliationState(for: targetState)
+                            recoverableEntry.lastError = "\(SharedErrorDescriptor.mapped(from: error, fallback: .healthKitUnavailableFallback).diagnosticSafeDetail) Receipt reconciliation pending."
+                            recoverableEntry.nextAttemptAt = targetState == "retryable"
+                                ? now.addingTimeInterval(delay)
+                                : nil
+                        }
                         do { try recoveryContext.save() }
                         catch { recoveryContext.rollback(); return }
                     }
@@ -267,34 +298,53 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
         "receiptReconciliation-\(target)"
     }
 
-    private func reconcileActionReceipts(in modelContext: ModelContext) {
+    private func reconcileActionReceipts() async {
+        for target in Self.receiptReconciliationTargets {
+            while await reconcileActionReceiptPage(target: target) {}
+        }
+    }
+
+    /// Reconcile a bounded page while enqueue operations are excluded. The
+    /// external HealthKit call has already finished before this lease is taken.
+    private func reconcileActionReceiptPage(target: String) async -> Bool {
+        guard let projectionLease = try? await DailyMetricsProjectionWriteGate.acquire(for: modelContainer) else {
+            return false
+        }
+        defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
+
+        let modelContext = ModelContext(modelContainer)
+        let reconciliationState = Self.receiptReconciliationState(for: target)
         let sortBy = [
             SortDescriptor(\HealthSyncOutboxEntry.createdAt),
             SortDescriptor(\HealthSyncOutboxEntry.id),
         ]
-        for target in Self.receiptReconciliationTargets {
-            let reconciliationState = Self.receiptReconciliationState(for: target)
-            while true {
-                var descriptor = FetchDescriptor<HealthSyncOutboxEntry>(
-                    predicate: #Predicate { $0.state == reconciliationState },
-                    sortBy: sortBy
-                )
-                descriptor.fetchLimit = Self.outboxBatchSize
-                guard let entries = try? modelContext.fetch(descriptor) else { return }
-                guard !entries.isEmpty else { break }
-                for entry in entries {
-                    do {
-                        try updateActionReceipt(for: entry, in: modelContext, state: target)
-                        entry.state = target
-                        entry.lastError = nil
-                        try modelContext.save()
-                    } catch {
-                        modelContext.rollback()
-                        return
-                    }
+        var descriptor = FetchDescriptor<HealthSyncOutboxEntry>(
+            predicate: #Predicate { $0.state == reconciliationState },
+            sortBy: sortBy
+        )
+        descriptor.fetchLimit = Self.outboxBatchSize
+        guard let entries = try? modelContext.fetch(descriptor), !entries.isEmpty else { return false }
+
+        for entry in entries {
+            do {
+                if try isSuperseded(entry, in: modelContext) {
+                    // The newer generation owns the shared receipt state.
+                    entry.state = "succeeded"
+                    entry.lastError = nil
+                    entry.nextAttemptAt = nil
+                } else {
+                    try updateActionReceipt(for: entry, in: modelContext, state: target)
+                    entry.state = target
+                    entry.lastError = nil
+                    entry.nextAttemptAt = nil
                 }
+                try modelContext.save()
+            } catch {
+                modelContext.rollback()
+                return false
             }
         }
+        return true
     }
 
     private func writeCommand(for entry: HealthSyncOutboxEntry, in modelContext: ModelContext) throws -> HealthWriteCommand {

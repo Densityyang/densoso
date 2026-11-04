@@ -292,6 +292,98 @@ final class ConversationPersistenceTests: XCTestCase {
         XCTAssertEqual(budgets.first?.requestID, otherRequestID)
     }
 
+    func testResetPagesCurrentSchemaToolJournalsAndClearsOnlyTargetConversation() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000441")!
+        let otherConversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000442")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let context = ModelContext(container)
+        context.insert(ConversationRecord(id: conversationID))
+        context.insert(ConversationRecord(id: otherConversationID))
+
+        for index in 0..<65 {
+            let invocationID = String(format: "reset-current-%03d", index)
+            let payloadMarker = "sensitive-current-\(index)"
+            context.insert(ToolExecutionJournalRecord(ToolExecutionJournalEntry(
+                invocationID: invocationID,
+                requestID: UUID(),
+                conversationID: conversationID,
+                logicalRound: index / 10,
+                callIndex: index % 10,
+                toolCallID: "tool-current-\(index)",
+                toolName: "log_meal",
+                argumentsHash: String(repeating: "a", count: 64),
+                requestTimeAnchor: startedAt,
+                state: index.isMultiple(of: 2) ? .prepared : .completed,
+                preparedPayloadData: Data("\(payloadMarker)-prepared".utf8),
+                pendingActionID: nil,
+                resultData: Data("\(payloadMarker)-result".utf8),
+                createdAt: startedAt.addingTimeInterval(TimeInterval(index)),
+                updatedAt: startedAt.addingTimeInterval(TimeInterval(index)),
+                completedAt: nil
+            )))
+        }
+
+        let otherPreparedPayload = Data("sensitive-other-prepared".utf8)
+        let otherResult = Data("sensitive-other-result".utf8)
+        context.insert(ToolExecutionJournalRecord(ToolExecutionJournalEntry(
+            invocationID: "reset-other-000",
+            requestID: UUID(),
+            conversationID: otherConversationID,
+            logicalRound: 0,
+            callIndex: 0,
+            toolCallID: "tool-other",
+            toolName: "log_weight",
+            argumentsHash: String(repeating: "b", count: 64),
+            requestTimeAnchor: startedAt,
+            state: .completed,
+            preparedPayloadData: otherPreparedPayload,
+            pendingActionID: nil,
+            resultData: otherResult,
+            createdAt: startedAt,
+            updatedAt: startedAt,
+            completedAt: startedAt
+        )))
+        try context.save()
+
+        try await SwiftDataAgentRepository(modelContainer: container).reset(conversationID: conversationID)
+
+        let verificationContext = ModelContext(container)
+        let journals = try verificationContext.fetch(FetchDescriptor<ToolExecutionJournalRecord>())
+        XCTAssertEqual(journals.count, 1)
+        let retainedJournal = try XCTUnwrap(journals.first)
+        XCTAssertEqual(retainedJournal.conversationID, otherConversationID)
+        XCTAssertEqual(retainedJournal.invocationID, "reset-other-000")
+        XCTAssertEqual(retainedJournal.preparedPayloadData, otherPreparedPayload)
+        XCTAssertEqual(retainedJournal.resultData, otherResult)
+
+        let targetConversationID = conversationID
+        let currentConversationPredicate = #Predicate<ToolExecutionJournalRecord> {
+            $0.conversationID == targetConversationID
+        }
+        XCTAssertTrue(try verificationContext.fetch(
+            FetchDescriptor<ToolExecutionJournalRecord>(predicate: currentConversationPredicate)
+        ).isEmpty)
+
+        let preparedPayloadPredicate = #Predicate<ToolExecutionJournalRecord> {
+            $0.conversationID == targetConversationID && $0.preparedPayloadData != nil
+        }
+        XCTAssertTrue(try verificationContext.fetch(
+            FetchDescriptor<ToolExecutionJournalRecord>(predicate: preparedPayloadPredicate)
+        ).isEmpty)
+
+        let resultPayloadPredicate = #Predicate<ToolExecutionJournalRecord> {
+            $0.conversationID == targetConversationID && $0.resultData != nil
+        }
+        XCTAssertTrue(try verificationContext.fetch(
+            FetchDescriptor<ToolExecutionJournalRecord>(predicate: resultPayloadPredicate)
+        ).isEmpty)
+    }
+
     func testAgentRestorePublishesUserVisibleConversationMessages() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(

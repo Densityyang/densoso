@@ -131,7 +131,284 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         let storedAction = try XCTUnwrap(
             context.fetch(FetchDescriptor<PendingActionRecord>(predicate: actionPredicate)).first
         )
-        XCTAssertEqual(storedAction.stateRaw, PendingActionState.committing.rawValue)
+        // The coordinator reconciles interrupted commits before returning the
+        // original transaction error. The injected mismatched receipt and all
+        // business writes are rolled back, so this action is safely retryable.
+        XCTAssertEqual(storedAction.stateRaw, PendingActionState.pending.rawValue)
+
+        await harness.repository.setTransactionReceiptReplayTestFixture(actionTypeRaw: nil)
+        let receipt = try await harness.coordinator.confirm(action: action)
+        XCTAssertEqual(receipt.actionID, action.id)
+        let retryContext = ModelContext(harness.container)
+        XCTAssertEqual(try retryContext.fetchCount(FetchDescriptor<MealRecord>()), 1)
+        XCTAssertEqual(try retryContext.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 1)
+        XCTAssertEqual(try retryContext.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
+    }
+
+    func testCommittedReceiptSurvivesConcurrentJournalCancellationCleanup() async throws {
+        func arbitrate(cleanupFirst: Bool) async throws {
+            let harness = try Harness()
+            let requestID = UUID()
+            let conversationID = UUID()
+            let invocationID = "\(requestID.uuidString.lowercased()):tool:log_meal:invocation:0"
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let entry = ToolExecutionJournalEntry(
+                invocationID: invocationID,
+                requestID: requestID,
+                conversationID: conversationID,
+                logicalRound: 1,
+                callIndex: 0,
+                toolCallID: "meal-call",
+                toolName: "log_meal",
+                argumentsHash: String(repeating: cleanupFirst ? "c" : "e", count: 64),
+                requestTimeAnchor: now,
+                state: .prepared,
+                preparedPayloadData: nil,
+                pendingActionID: nil,
+                resultData: nil,
+                createdAt: now,
+                updatedAt: now,
+                completedAt: nil
+            )
+            _ = try await harness.coordinator.beginToolExecution(entry)
+            let action = try await harness.coordinator.stage(
+                payload: Self.sampleMeal(),
+                clientRequestID: requestID,
+                conversationID: conversationID,
+                invocationID: invocationID
+            )
+            try await harness.coordinator.completeToolExecution(
+                invocationID: invocationID,
+                resultData: Data("staged".utf8)
+            )
+
+            // Hold the store-wide projection lock so both operations become
+            // queued contenders. Release only after their ordering is known.
+            let heldGate = try await DailyMetricsProjectionWriteGate.acquire(for: harness.container)
+            let storeID = ObjectIdentifier(harness.container)
+            let confirmationTask: Task<Result<CommitReceipt, Error>, Never>
+            let cancellationTask: Task<Result<Void, Error>, Never>
+            if cleanupFirst {
+                cancellationTask = Task {
+                    do {
+                        try await harness.coordinator.rejectAndUpdateLinkedToolExecution(
+                            pendingActionID: action.id,
+                            conversationID: conversationID,
+                            failureResultData: Data("{\"error\":\"request_cancelled\"}".utf8)
+                        )
+                        return .success(())
+                    } catch {
+                        return .failure(error)
+                    }
+                }
+                await DailyMetricsProjectionWriteGate.waitUntilWaitingCount(1, storeID: storeID)
+                confirmationTask = Task {
+                    do {
+                        return .success(try await harness.coordinator.confirm(
+                            action: action,
+                            conversationID: conversationID
+                        ))
+                    } catch {
+                        return .failure(error)
+                    }
+                }
+            } else {
+                confirmationTask = Task {
+                    do {
+                        return .success(try await harness.coordinator.confirm(
+                            action: action,
+                            conversationID: conversationID
+                        ))
+                    } catch {
+                        return .failure(error)
+                    }
+                }
+                await DailyMetricsProjectionWriteGate.waitUntilWaitingCount(1, storeID: storeID)
+                cancellationTask = Task {
+                    do {
+                        try await harness.coordinator.rejectAndUpdateLinkedToolExecution(
+                            pendingActionID: action.id,
+                            conversationID: conversationID,
+                            failureResultData: Data("{\"error\":\"request_cancelled\"}".utf8)
+                        )
+                        return .success(())
+                    } catch {
+                        return .failure(error)
+                    }
+                }
+            }
+            await DailyMetricsProjectionWriteGate.waitUntilWaitingCount(2, storeID: storeID)
+            DailyMetricsProjectionWriteGate.release(heldGate)
+
+            let confirmationResult = await confirmationTask.value
+            let cancellationResult = await cancellationTask.value
+            let context = ModelContext(harness.container)
+            let mealCount = try context.fetchCount(FetchDescriptor<MealRecord>())
+            let receiptCount = try context.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>())
+            let outboxCount = try context.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>())
+            let journal = try await harness.coordinator.toolExecutionJournal(
+                requestID: requestID,
+                conversationID: conversationID
+            )
+            XCTAssertEqual(journal.count, 1)
+
+            if cleanupFirst {
+                guard case .success = cancellationResult,
+                      case .failure(let confirmError) = confirmationResult else {
+                    return XCTFail("Reject-first arbitration must reject, then make confirm fail")
+                }
+                XCTAssertEqual(confirmError as? ConfirmationError, .rejected)
+                XCTAssertEqual(mealCount, 0)
+                XCTAssertEqual(receiptCount, 0)
+                XCTAssertEqual(outboxCount, 0)
+                XCTAssertEqual(journal.first?.state, .failed)
+                XCTAssertNil(journal.first?.pendingActionID)
+                XCTAssertTrue(journal.first?.result?.contains("request_cancelled") == true)
+            } else {
+                guard case .success = confirmationResult,
+                      case .failure(let cleanupError) = cancellationResult else {
+                    return XCTFail("Confirm-first arbitration must commit, then protect its receipt")
+                }
+                XCTAssertEqual(
+                    cleanupError as? ConfirmationError,
+                    .invariantViolation("cannot cancel an action with a commit receipt")
+                )
+                XCTAssertEqual(mealCount, 1)
+                XCTAssertEqual(receiptCount, 1)
+                XCTAssertEqual(outboxCount, 1)
+                XCTAssertEqual(journal.first?.state, .completed)
+                XCTAssertEqual(journal.first?.pendingActionID, action.id)
+            }
+        }
+
+        try await arbitrate(cleanupFirst: true)
+        try await arbitrate(cleanupFirst: false)
+    }
+
+    func testRejectedAndExpiredActionsBecomeTerminalJournalResults() async throws {
+        let harness = try Harness(timeToLive: 60)
+        let conversationID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        func stageLinkedAction(invocationID: String) async throws -> (ToolExecutionJournalEntry, PendingAction) {
+            let requestID = UUID()
+            let entry = ToolExecutionJournalEntry(
+                invocationID: invocationID,
+                requestID: requestID,
+                conversationID: conversationID,
+                logicalRound: 1,
+                callIndex: 0,
+                toolCallID: invocationID,
+                toolName: "log_meal",
+                argumentsHash: String(repeating: "d", count: 64),
+                requestTimeAnchor: now,
+                state: .prepared,
+                preparedPayloadData: nil,
+                pendingActionID: nil,
+                resultData: nil,
+                createdAt: now,
+                updatedAt: now,
+                completedAt: nil
+            )
+            _ = try await harness.coordinator.beginToolExecution(entry)
+            let action = try await harness.coordinator.stage(
+                payload: Self.sampleMeal(),
+                clientRequestID: requestID,
+                conversationID: conversationID,
+                invocationID: invocationID
+            )
+            try await harness.coordinator.completeToolExecution(
+                invocationID: invocationID,
+                resultData: Data("staged".utf8)
+            )
+            return (entry, action)
+        }
+
+        let (rejectedEntry, rejectedAction) = try await stageLinkedAction(invocationID: "rejected-invocation")
+        try await harness.coordinator.reject(id: rejectedAction.id, conversationID: conversationID)
+        // Model a legacy store where action rejection committed but its old
+        // Journal cleanup did not, then exercise the idempotent reconciliation.
+        let legacyContext = ModelContext(harness.container)
+        let rejectedInvocationID = rejectedEntry.invocationID
+        let legacyPredicate = #Predicate<DensosoSchemaV13.ToolExecutionJournalRecord> {
+            $0.invocationID == rejectedInvocationID
+        }
+        let legacyJournal = try XCTUnwrap(
+            legacyContext.fetch(FetchDescriptor<DensosoSchemaV13.ToolExecutionJournalRecord>(predicate: legacyPredicate)).first
+        )
+        legacyJournal.stateRaw = ToolExecutionJournalState.completed.rawValue
+        legacyJournal.pendingActionID = rejectedAction.id
+        legacyJournal.resultData = Data("staged".utf8)
+        legacyJournal.completedAt = now
+        try legacyContext.save()
+        try await harness.coordinator.rejectAndUpdateLinkedToolExecution(
+            pendingActionID: rejectedAction.id,
+            conversationID: conversationID,
+            failureResultData: Data("{\"error\":\"request_cancelled\"}".utf8)
+        )
+        let rejectedJournal = try await harness.coordinator.toolExecutionJournal(
+            requestID: rejectedEntry.requestID,
+            conversationID: conversationID
+        )
+        XCTAssertEqual(rejectedJournal.first?.state, .failed)
+        XCTAssertNil(rejectedJournal.first?.pendingActionID)
+        XCTAssertTrue(rejectedJournal.first?.result?.contains("pending_action_rejected") == true)
+        let rejectedReplay = try await harness.coordinator.beginToolExecution(rejectedEntry)
+        XCTAssertEqual(rejectedReplay.state, .failed)
+        await XCTAssertThrowsErrorAsync(
+            try await harness.coordinator.stage(
+                payload: Self.sampleMeal(),
+                clientRequestID: rejectedEntry.requestID,
+                conversationID: conversationID,
+                invocationID: rejectedEntry.invocationID
+            )
+        ) { error in
+            XCTAssertEqual(error as? ToolExecutionJournalError, .invalidStateTransition)
+        }
+
+        let (cancelledEntry, cancelledAction) = try await stageLinkedAction(invocationID: "cancelled-invocation")
+        try await harness.coordinator.rejectAndUpdateLinkedToolExecution(
+            pendingActionID: cancelledAction.id,
+            conversationID: conversationID,
+            failureResultData: Data("{\"error\":\"request_cancelled\"}".utf8)
+        )
+        let cancelledJournal = try await harness.coordinator.toolExecutionJournal(
+            requestID: cancelledEntry.requestID,
+            conversationID: conversationID
+        )
+        XCTAssertEqual(cancelledJournal.first?.state, .failed)
+        XCTAssertNil(cancelledJournal.first?.pendingActionID)
+        XCTAssertTrue(cancelledJournal.first?.result?.contains("request_cancelled") == true)
+        let cancelledReplay = try await harness.coordinator.beginToolExecution(cancelledEntry)
+        XCTAssertEqual(cancelledReplay.state, .failed)
+
+        let (expiredEntry, expiredAction) = try await stageLinkedAction(invocationID: "expired-invocation")
+        let expiredCoordinator = ConfirmationCoordinator(
+            repository: harness.repository,
+            writeGate: PersistenceWriteGate(state: .writable),
+            timeToLive: 60,
+            now: { now.addingTimeInterval(61) }
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await expiredCoordinator.rejectAndUpdateLinkedToolExecution(
+                pendingActionID: expiredAction.id,
+                conversationID: conversationID,
+                failureResultData: Data("{\"error\":\"request_cancelled\"}".utf8)
+            )
+        ) { error in
+            XCTAssertEqual(error as? ConfirmationError, .expired)
+        }
+        let expiredJournal = try await harness.coordinator.toolExecutionJournal(
+            requestID: expiredEntry.requestID,
+            conversationID: conversationID
+        )
+        XCTAssertEqual(expiredJournal.first?.state, .failed)
+        XCTAssertNil(expiredJournal.first?.pendingActionID)
+        XCTAssertTrue(expiredJournal.first?.result?.contains("pending_action_expired") == true)
+        let expiredReplay = try await harness.coordinator.beginToolExecution(expiredEntry)
+        XCTAssertEqual(expiredReplay.state, .failed)
+        let activeActions = try await harness.coordinator.activeActions(conversationID: conversationID)
+        XCTAssertEqual(activeActions.count, 0)
     }
 
     func testReceiptReplayRejectsReceiptIDThatNoLongerMatchesOutboxLink() async throws {
@@ -411,6 +688,144 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(verifiedCorrupt.stateRaw, PendingActionState.failed.rawValue)
         XCTAssertEqual(verifiedCorrupt.failureCode, "corrupt_action_payload")
         XCTAssertEqual(try verificationContext.fetchCount(FetchDescriptor<PendingActionRecord>()), 2)
+    }
+
+    func testActiveActionCorruptionFailsLinkedJournalAndReceiptRemainsFailClosed() async throws {
+        let harness = try Harness()
+        let conversationID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let corruptRequestID = UUID()
+        let corruptInvocationID = "corrupt-linked-action"
+        let corruptActionID = UUID()
+        let corruptIdempotencyKey = "corrupt-linked-action-key"
+        let corruptPayload = try Self.sampleMeal()
+        let corruptContext = ModelContext(harness.container)
+        corruptContext.insert(PendingActionRecord(
+            id: corruptActionID,
+            idempotencyKey: corruptIdempotencyKey,
+            actionTypeRaw: corruptPayload.actionType.rawValue,
+            canonicalPayloadData: try corruptPayload.canonicalData(),
+            payloadData: Data("not-json".utf8),
+            schemaVersion: ActionPayload.currentSchemaVersion,
+            clientRequestID: corruptRequestID,
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(3_600)
+        ))
+        corruptContext.insert(DensosoSchemaV13.ToolExecutionJournalRecord(ToolExecutionJournalEntry(
+            invocationID: corruptInvocationID,
+            requestID: corruptRequestID,
+            conversationID: conversationID,
+            logicalRound: 1,
+            callIndex: 0,
+            toolCallID: corruptInvocationID,
+            toolName: "log_meal",
+            argumentsHash: String(repeating: "a", count: 64),
+            requestTimeAnchor: now,
+            state: .completed,
+            preparedPayloadData: nil,
+            pendingActionID: corruptActionID,
+            resultData: Data("staged".utf8),
+            createdAt: now,
+            updatedAt: now,
+            completedAt: now
+        )))
+        try corruptContext.save()
+        let corruptPredicate = #Predicate<PendingActionRecord> { $0.id == corruptActionID }
+
+        let activeAfterCorruption = try await harness.coordinator.activeActions(conversationID: conversationID)
+        XCTAssertTrue(activeAfterCorruption.isEmpty)
+        let corruptJournal = try await harness.coordinator.toolExecutionJournal(
+            requestID: corruptRequestID,
+            conversationID: conversationID
+        )
+        XCTAssertEqual(corruptJournal.map(\.state), [.failed])
+        XCTAssertNil(corruptJournal.first?.pendingActionID)
+        XCTAssertTrue(corruptJournal.first?.result?.contains("corrupt_action_payload") == true)
+        let verifiedCorruptContext = ModelContext(harness.container)
+        let verifiedCorrupt = try XCTUnwrap(
+            verifiedCorruptContext.fetch(FetchDescriptor<PendingActionRecord>(predicate: corruptPredicate)).first
+        )
+        XCTAssertEqual(verifiedCorrupt.stateRaw, PendingActionState.failed.rawValue)
+        XCTAssertEqual(verifiedCorrupt.failureCode, "corrupt_action_payload")
+
+        let receiptHarness = try Harness()
+        let receiptRequestID = UUID()
+        let receiptInvocationID = "receipt-linked-corrupt-action"
+        let receiptActionID = UUID()
+        let receiptIdempotencyKey = "receipt-corrupt-action"
+        let receiptPayload = try Self.sampleMeal()
+        let receiptContext = ModelContext(receiptHarness.container)
+        let receiptEntry = ToolExecutionJournalEntry(
+            invocationID: receiptInvocationID,
+            requestID: receiptRequestID,
+            conversationID: conversationID,
+            logicalRound: 1,
+            callIndex: 0,
+            toolCallID: receiptInvocationID,
+            toolName: "log_meal",
+            argumentsHash: String(repeating: "b", count: 64),
+            requestTimeAnchor: now,
+            state: .completed,
+            preparedPayloadData: nil,
+            pendingActionID: receiptActionID,
+            resultData: Data("staged".utf8),
+            createdAt: now,
+            updatedAt: now,
+            completedAt: now
+        )
+        let receiptActionRecord = PendingActionRecord(
+            id: receiptActionID,
+            idempotencyKey: receiptIdempotencyKey,
+            actionTypeRaw: receiptPayload.actionType.rawValue,
+            canonicalPayloadData: try receiptPayload.canonicalData(),
+            payloadData: Data("not-json".utf8),
+            schemaVersion: ActionPayload.currentSchemaVersion,
+            clientRequestID: receiptRequestID,
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(3_600)
+        )
+        let receiptRecord = CommittedActionReceiptRecord(
+            actionID: receiptActionID,
+            idempotencyKey: receiptIdempotencyKey,
+            actionTypeRaw: receiptPayload.actionType.rawValue,
+            localRecordID: UUID(),
+            outboxIDsData: try JSONEncoder().encode([UUID]()),
+            committedAt: now
+        )
+        receiptContext.insert(receiptActionRecord)
+        receiptContext.insert(receiptRecord)
+        receiptContext.insert(DensosoSchemaV13.ToolExecutionJournalRecord(receiptEntry))
+        try receiptContext.save()
+
+        let receiptPredicate = #Predicate<PendingActionRecord> { $0.id == receiptActionID }
+        do {
+            _ = try await receiptHarness.coordinator.activeActions(conversationID: conversationID)
+            XCTFail("An invalid active row with a receipt must fail closed")
+        } catch {
+            XCTAssertEqual(
+                error as? ConfirmationError,
+                .invariantViolation("active pending action has a commit receipt during corruption isolation")
+            )
+        }
+        let receiptJournal = try await receiptHarness.coordinator.toolExecutionJournal(
+            requestID: receiptRequestID,
+            conversationID: conversationID
+        )
+        XCTAssertEqual(receiptJournal.map(\.state), [.completed])
+        XCTAssertEqual(receiptJournal.first?.pendingActionID, receiptActionID)
+        let verifiedReceiptContext = ModelContext(receiptHarness.container)
+        let verifiedReceiptAction = try XCTUnwrap(
+            verifiedReceiptContext.fetch(FetchDescriptor<PendingActionRecord>(predicate: receiptPredicate)).first
+        )
+        XCTAssertEqual(verifiedReceiptAction.stateRaw, PendingActionState.pending.rawValue)
+        XCTAssertEqual(
+            try verifiedReceiptContext.fetchCount(
+                FetchDescriptor<CommittedActionReceiptRecord>(
+                    predicate: #Predicate<CommittedActionReceiptRecord> { $0.actionID == receiptActionID }
+                )
+            ),
+            1
+        )
     }
 
     func testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox() async throws {

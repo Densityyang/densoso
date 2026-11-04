@@ -99,6 +99,37 @@ final class HealthNarrativePolicyTests: XCTestCase {
         XCTAssertTrue(prompt.contains("不是 HealthKit 测量"))
     }
 
+    func testPersonalWellbeingStateQuestionsUseHealthContextWithoutMatchingAppState() {
+        for question in ["请分析我今天的状态", "我今天身体状态如何", "我最近恢复得怎么样"] {
+            XCTAssertTrue(
+                HealthContextPromptBuilder.shouldIncludeSummary(for: question),
+                "Expected a personal wellbeing question to include health context: \(question)"
+            )
+            XCTAssertTrue(
+                HealthContextPromptBuilder.requiresNarrative(for: question),
+                "Expected a personal wellbeing question to use the health narrative: \(question)"
+            )
+        }
+
+        for question in ["系统状态怎么样", "应用状态如何", "我的应用状态如何"] {
+            XCTAssertFalse(
+                HealthContextPromptBuilder.shouldIncludeSummary(for: question),
+                "App and system state must not receive personal health context: \(question)"
+            )
+        }
+    }
+
+    func testLoggedHealthCaptureDoesNotBecomePriorNarrativeContext() {
+        let loggedWeight = "记录体重 62.5kg"
+        XCTAssertFalse(HealthContextPromptBuilder.hasPriorHealthContext(in: [loggedWeight]))
+        XCTAssertFalse(
+            HealthContextPromptBuilder.requiresNarrative(
+                for: "继续刚才的话题",
+                priorHealthContext: HealthContextPromptBuilder.hasPriorHealthContext(in: [loggedWeight])
+            )
+        )
+    }
+
     func testDeterministicFallbackCanUseOnlyExplicitSubjectiveContext() {
         let day = Date(timeIntervalSince1970: 1_800_000_000)
         let context = HealthNarrativeContext(

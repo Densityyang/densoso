@@ -7,6 +7,10 @@ enum MealPriorContributionKind: String, Codable {
     case dish
 }
 
+enum MealPortionPriorInjectedFailure: Error, Equatable {
+    case beforeSave
+}
+
 struct MealPortionContributionPayload: Codable {
     let foodID: String?
     let foodName: String
@@ -24,6 +28,12 @@ struct MealDishContributionPayload: Codable {
 
 @ModelActor
 actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
+    private var shouldFailNextSaveForTesting = false
+
+    func failNextSaveForTesting() {
+        shouldFailNextSaveForTesting = true
+    }
+
     func all() async throws -> [PersonalMealPortionPrior] {
         let records = try modelContext.fetch(FetchDescriptor<PersonalMealPortionPriorRecord>(
             sortBy: [
@@ -54,59 +64,65 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
     }
 
     func save(_ edit: PersonalMealPortionPriorEdit) async throws {
-        let values = try Self.validated(edit)
-        let existingByID: PersonalMealPortionPriorRecord?
-        if let id = edit.id {
-            let predicate = #Predicate<PersonalMealPortionPriorRecord> { $0.id == id }
-            var descriptor = FetchDescriptor(predicate: predicate)
-            descriptor.fetchLimit = 1
-            guard let record = try modelContext.fetch(descriptor).first else {
-                throw MealPortionPriorRepositoryError.notFound
+        try await withPriorMutation {
+            let values = try Self.validated(edit)
+            let existingByID: PersonalMealPortionPriorRecord?
+            if let id = edit.id {
+                let predicate = #Predicate<PersonalMealPortionPriorRecord> { $0.id == id }
+                var descriptor = FetchDescriptor(predicate: predicate)
+                descriptor.fetchLimit = 1
+                guard let record = try modelContext.fetch(descriptor).first else {
+                    throw MealPortionPriorRepositoryError.notFound
+                }
+                existingByID = record
+            } else {
+                existingByID = nil
             }
-            existingByID = record
-        } else {
-            existingByID = nil
-        }
 
-        if let existingByKey = try record(priorKey: values.priorKey),
-           existingByKey.id != existingByID?.id {
-            throw MealPortionPriorRepositoryError.duplicateFoodAndUnit
-        }
+            if let existingByKey = try record(priorKey: values.priorKey),
+               existingByKey.id != existingByID?.id {
+                throw MealPortionPriorRepositoryError.duplicateFoodAndUnit
+            }
 
-        let now = Date()
-        let record = existingByID ?? PersonalMealPortionPriorRecord(
-            priorKey: values.priorKey,
-            foodID: values.foodID,
-            foodName: values.foodName,
-            unit: values.unit,
-            p10Grams: values.p10,
-            p50Grams: values.p50,
-            p90Grams: values.p90,
-            sourceActionKey: nil,
-            createdAt: now,
-            updatedAt: now
-        )
-        record.priorKey = values.priorKey
-        record.foodID = values.foodID
-        record.foodName = values.foodName
-        record.unit = values.unit
-        record.p10Grams = values.p10
-        record.p50Grams = values.p50
-        record.p90Grams = values.p90
-        record.sourceActionKey = nil
-        record.updatedAt = now
-        try Self.deleteContributions(kind: .portion, priorKey: values.priorKey, in: modelContext)
-        if case nil = existingByID { modelContext.insert(record) }
-        try modelContext.save()
+            let now = Date()
+            let record = existingByID ?? PersonalMealPortionPriorRecord(
+                priorKey: values.priorKey,
+                foodID: values.foodID,
+                foodName: values.foodName,
+                unit: values.unit,
+                p10Grams: values.p10,
+                p50Grams: values.p50,
+                p90Grams: values.p90,
+                sourceActionKey: nil,
+                createdAt: now,
+                updatedAt: now
+            )
+            let replacedPriorKeys = Set([existingByID?.priorKey, values.priorKey].compactMap { $0 })
+            for priorKey in replacedPriorKeys {
+                try Self.deleteContributions(kind: .portion, priorKey: priorKey, in: modelContext)
+            }
+            record.priorKey = values.priorKey
+            record.foodID = values.foodID
+            record.foodName = values.foodName
+            record.unit = values.unit
+            record.p10Grams = values.p10
+            record.p50Grams = values.p50
+            record.p90Grams = values.p90
+            record.sourceActionKey = nil
+            record.updatedAt = now
+            if existingByID == nil { modelContext.insert(record) }
+        }
     }
 
     func delete(id: UUID) async throws {
-        let predicate = #Predicate<PersonalMealPortionPriorRecord> { $0.id == id }
-        var descriptor = FetchDescriptor(predicate: predicate)
-        descriptor.fetchLimit = 1
-        guard let record = try modelContext.fetch(descriptor).first else { return }
-        modelContext.delete(record)
-        try modelContext.save()
+        try await withPriorMutation {
+            let predicate = #Predicate<PersonalMealPortionPriorRecord> { $0.id == id }
+            var descriptor = FetchDescriptor(predicate: predicate)
+            descriptor.fetchLimit = 1
+            guard let record = try modelContext.fetch(descriptor).first else { return }
+            try Self.deleteContributions(kind: .portion, priorKey: record.priorKey, in: modelContext)
+            modelContext.delete(record)
+        }
     }
 
     func allDishPriors() async throws -> [PersonalMealDishPrior] {
@@ -141,64 +157,70 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
     }
 
     func saveDishPrior(_ edit: PersonalMealDishPriorEdit) async throws {
-        let values = try Self.validatedDishPrior(edit)
-        let existingByID: PersonalMealDishPriorRecord?
-        if let id = edit.id {
-            let predicate = #Predicate<PersonalMealDishPriorRecord> { $0.id == id }
-            var descriptor = FetchDescriptor(predicate: predicate)
-            descriptor.fetchLimit = 1
-            guard let record = try modelContext.fetch(descriptor).first else {
-                throw MealPortionPriorRepositoryError.notFound
+        try await withPriorMutation {
+            let values = try Self.validatedDishPrior(edit)
+            let existingByID: PersonalMealDishPriorRecord?
+            if let id = edit.id {
+                let predicate = #Predicate<PersonalMealDishPriorRecord> { $0.id == id }
+                var descriptor = FetchDescriptor(predicate: predicate)
+                descriptor.fetchLimit = 1
+                guard let record = try modelContext.fetch(descriptor).first else {
+                    throw MealPortionPriorRepositoryError.notFound
+                }
+                existingByID = record
+            } else {
+                existingByID = nil
             }
-            existingByID = record
-        } else {
-            existingByID = nil
-        }
 
-        if let duplicate = try dishRecord(priorKey: values.priorKey), duplicate.id != existingByID?.id {
-            throw MealPortionPriorRepositoryError.duplicateDishAndIngredients
-        }
+            if let duplicate = try dishRecord(priorKey: values.priorKey), duplicate.id != existingByID?.id {
+                throw MealPortionPriorRepositoryError.duplicateDishAndIngredients
+            }
 
-        let now = Date()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let ingredientsData = try encoder.encode(values.ingredients)
-        guard let ingredientsJSON = String(data: ingredientsData, encoding: .utf8) else {
-            throw MealPortionPriorRepositoryError.invalidValue
+            let now = Date()
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let ingredientsData = try encoder.encode(values.ingredients)
+            guard let ingredientsJSON = String(data: ingredientsData, encoding: .utf8) else {
+                throw MealPortionPriorRepositoryError.invalidValue
+            }
+            let record = existingByID ?? PersonalMealDishPriorRecord(
+                priorKey: values.priorKey,
+                dishKey: values.dishKey,
+                dishName: values.dishName,
+                cookingMethodKey: values.cookingMethodKey,
+                cookingMethod: values.cookingMethod,
+                ingredientsJSON: ingredientsJSON,
+                observationCount: 0,
+                isUserManaged: true,
+                sourceActionKey: nil,
+                createdAt: now,
+                updatedAt: now
+            )
+            let replacedPriorKeys = Set([existingByID?.priorKey, values.priorKey].compactMap { $0 })
+            for priorKey in replacedPriorKeys {
+                try Self.deleteContributions(kind: .dish, priorKey: priorKey, in: modelContext)
+            }
+            record.priorKey = values.priorKey
+            record.dishKey = values.dishKey
+            record.dishName = values.dishName
+            record.cookingMethodKey = values.cookingMethodKey
+            record.cookingMethod = values.cookingMethod
+            record.ingredientsJSON = ingredientsJSON
+            record.isUserManaged = true
+            record.updatedAt = now
+            if existingByID == nil { modelContext.insert(record) }
         }
-        let record = existingByID ?? PersonalMealDishPriorRecord(
-            priorKey: values.priorKey,
-            dishKey: values.dishKey,
-            dishName: values.dishName,
-            cookingMethodKey: values.cookingMethodKey,
-            cookingMethod: values.cookingMethod,
-            ingredientsJSON: ingredientsJSON,
-            observationCount: 0,
-            isUserManaged: true,
-            sourceActionKey: nil,
-            createdAt: now,
-            updatedAt: now
-        )
-        record.priorKey = values.priorKey
-        record.dishKey = values.dishKey
-        record.dishName = values.dishName
-        record.cookingMethodKey = values.cookingMethodKey
-        record.cookingMethod = values.cookingMethod
-        record.ingredientsJSON = ingredientsJSON
-        record.isUserManaged = true
-        record.updatedAt = now
-        try Self.deleteContributions(kind: .dish, priorKey: values.priorKey, in: modelContext)
-        if existingByID == nil { modelContext.insert(record) }
-        try modelContext.save()
     }
 
     func deleteDishPrior(id: UUID) async throws {
-        let predicate = #Predicate<PersonalMealDishPriorRecord> { $0.id == id }
-        var descriptor = FetchDescriptor(predicate: predicate)
-        descriptor.fetchLimit = 1
-        guard let record = try modelContext.fetch(descriptor).first else { return }
-        modelContext.delete(record)
-        try modelContext.save()
+        try await withPriorMutation {
+            let predicate = #Predicate<PersonalMealDishPriorRecord> { $0.id == id }
+            var descriptor = FetchDescriptor(predicate: predicate)
+            descriptor.fetchLimit = 1
+            guard let record = try modelContext.fetch(descriptor).first else { return }
+            try Self.deleteContributions(kind: .dish, priorKey: record.priorKey, in: modelContext)
+            modelContext.delete(record)
+        }
     }
 
     /// Called only inside the transaction that commits a user's meal confirmation.
@@ -219,13 +241,16 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
                 guard isUserManaged || hasExplicitUserPortionEvidence(ingredient.evidence) else {
                     return nil
                 }
+                let reportedGrams = PersonalMealDishPriorUserPortionEvidence.reportedGrams(
+                    in: ingredient.evidence
+                )
                 let provenance = sourceBackedProvenance(from: ingredient.evidence)
                 return PersonalMealDishIngredientPrior(
                     foodID: ingredient.foodID,
                     name: ingredient.name,
-                    lowGrams: ingredient.amountGrams.low,
-                    likelyGrams: ingredient.amountGrams.likely,
-                    highGrams: ingredient.amountGrams.high,
+                    lowGrams: reportedGrams ?? ingredient.amountGrams.low,
+                    likelyGrams: reportedGrams ?? ingredient.amountGrams.likely,
+                    highGrams: reportedGrams ?? ingredient.amountGrams.high,
                     preparation: provenance?.preparation,
                     massBasis: provenance?.massBasis,
                     sourceID: provenance?.sourceID,
@@ -641,6 +666,48 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
             min(5_000, edit.gramsPerUnit * 1.1),
             priorKey
         )
+    }
+
+    /// Acquire the lifecycle lease before the store-wide projection lock, matching
+    /// confirmation's lock order while excluding its day-scoped meal writes.
+    private func withPriorMutation<T>(operation: () throws -> T) async throws -> T {
+        let barrier = await PersistenceOperationBarrier.shared
+        let operationLease = try await barrier.acquireMutationOperation()
+        do {
+            let result = try await barrier.withLease(operationLease) {
+                try await withProjectionStoreLock {
+                    do {
+                        let value = try operation()
+                        if shouldFailNextSaveForTesting {
+                            shouldFailNextSaveForTesting = false
+                            throw MealPortionPriorInjectedFailure.beforeSave
+                        }
+                        try modelContext.save()
+                        return value
+                    } catch {
+                        modelContext.rollback()
+                        throw error
+                    }
+                }
+            }
+            await barrier.release(operationLease)
+            return result
+        } catch {
+            await barrier.release(operationLease)
+            throw error
+        }
+    }
+
+    private func withProjectionStoreLock<T>(operation: () throws -> T) async throws -> T {
+        let lease = try await DailyMetricsProjectionWriteGate.acquire(for: modelContainer)
+        do {
+            let value = try operation()
+            await DailyMetricsProjectionWriteGate.release(lease)
+            return value
+        } catch {
+            await DailyMetricsProjectionWriteGate.release(lease)
+            throw error
+        }
     }
 
     private func record(priorKey: String) throws -> PersonalMealPortionPriorRecord? {

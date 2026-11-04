@@ -18,9 +18,14 @@ protocol ConfirmationRepository: Sendable {
         resultData: Data?,
         updatedAt: Date
     ) async throws
-    func failToolExecutions(
+    func interruptToolExecution(
+        invocationID: String,
+        updatedAt: Date
+    ) async throws
+    func rejectAndUpdateLinkedToolExecution(
         pendingActionID: UUID,
-        resultData: Data,
+        conversationID: UUID,
+        failureResultData: Data,
         updatedAt: Date
     ) async throws
     func toolExecutionJournal(
@@ -69,7 +74,15 @@ extension ConfirmationRepository {
     func storePreparedToolPayload(invocationID: String, payloadData: Data, updatedAt: Date) async throws {}
     func completeToolExecution(invocationID: String, resultData: Data, updatedAt: Date) async throws {}
     func failToolExecution(invocationID: String, resultData: Data?, updatedAt: Date) async throws {}
-    func failToolExecutions(pendingActionID: UUID, resultData: Data, updatedAt: Date) async throws {}
+    func interruptToolExecution(invocationID: String, updatedAt: Date) async throws {}
+    func rejectAndUpdateLinkedToolExecution(
+        pendingActionID: UUID,
+        conversationID: UUID,
+        failureResultData: Data,
+        updatedAt: Date
+    ) async throws {
+        try await reject(id: pendingActionID, conversationID: conversationID, now: updatedAt)
+    }
     func toolExecutionJournal(requestID: UUID, conversationID: UUID) async throws -> [ToolExecutionJournalEntry] { [] }
     func stageToolAction(
         payload: ActionPayload,

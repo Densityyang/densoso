@@ -1118,7 +1118,8 @@ final class AgentSession {
         } catch is CancellationError {
             await rejectPendingActionsCreatedDuringRequest(
                 requestID: requestID,
-                baselineIDs: pendingActionIDsBeforeRequest
+                baselineIDs: pendingActionIDsBeforeRequest,
+                errorCode: "request_cancelled"
             )
             if requestRecordStarted { await persist(state: .interrupted, requestID: requestID) }
             emit(.cancelled(requestID: requestID))
@@ -1126,7 +1127,8 @@ final class AgentSession {
         } catch let error as ProviderError where error == .cancelled {
             await rejectPendingActionsCreatedDuringRequest(
                 requestID: requestID,
-                baselineIDs: pendingActionIDsBeforeRequest
+                baselineIDs: pendingActionIDsBeforeRequest,
+                errorCode: "request_cancelled"
             )
             if requestRecordStarted { await persist(state: .interrupted, requestID: requestID) }
             emit(.cancelled(requestID: requestID))
@@ -1219,7 +1221,7 @@ final class AgentSession {
     private func rejectPendingActionsCreatedDuringRequest(
         requestID: UUID,
         baselineIDs: Set<UUID>,
-        errorCode: String = "request_cancelled"
+        errorCode: String
     ) async {
         // Request cancellation must stop provider/tool work, but it must not
         // cancel the cleanup that rejects drafts already staged by this request.
@@ -1229,10 +1231,10 @@ final class AgentSession {
             ) else { return }
             for action in currentActions
             where action.clientRequestID == requestID && !baselineIDs.contains(action.id) {
-                try? await confirmationCoordinator.reject(id: action.id, conversationID: conversationID)
-                await confirmationCoordinator.failToolExecutions(
+                try? await confirmationCoordinator.rejectAndUpdateLinkedToolExecution(
                     pendingActionID: action.id,
-                    resultData: Data(encodedToolError(code: errorCode).utf8)
+                    conversationID: conversationID,
+                    failureResultData: Data(encodedToolError(code: errorCode).utf8)
                 )
             }
             pendingActions = (try? await confirmationCoordinator.activeActions(conversationID: conversationID)) ?? []
@@ -1327,7 +1329,10 @@ final class AgentSession {
             completedAt: nil
         )
         let entry = try await confirmationCoordinator.beginToolExecution(proposedEntry)
-        if (entry.state == .completed || entry.state == .failed), let result = entry.result {
+        if entry.state == .completed || entry.state == .failed {
+            guard let result = entry.result else {
+                throw ToolExecutionJournalError.invalidStateTransition
+            }
             pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
             return result
         }
@@ -1335,7 +1340,7 @@ final class AgentSession {
             let activeActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
             guard let action = activeActions.first(where: { $0.id == pendingActionID }) else {
                 let result = encodedToolError(code: "pending_action_no_longer_active")
-                await confirmationCoordinator.failToolExecution(
+                try? await confirmationCoordinator.failToolExecution(
                     invocationID: invocationID,
                     resultData: Data(result.utf8)
                 )
@@ -1343,7 +1348,7 @@ final class AgentSession {
                 return result
             }
             let output = try AgentToolResult.stagedAction(action)
-            try await confirmationCoordinator.completeToolExecution(
+            try await completeJournaledToolExecution(
                 invocationID: invocationID,
                 resultData: Data(output.utf8)
             )
@@ -1362,20 +1367,20 @@ final class AgentSession {
                     requestDeadline: activeRequestDeadline
                 )
             } catch ConfirmationError.requestDeadlineExceeded {
-                await confirmationCoordinator.failToolExecution(
+                try? await confirmationCoordinator.failToolExecution(
                     invocationID: invocationID,
                     resultData: Data(encodedToolError(code: "request_deadline_exceeded").utf8)
                 )
                 throw ProviderError.timeout
             } catch is CancellationError {
-                await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
+                try? await confirmationCoordinator.interruptToolExecution(invocationID: invocationID)
                 throw CancellationError()
             } catch {
-                await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
+                try? await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
                 throw error
             }
             let output = try AgentToolResult.stagedAction(action)
-            try await confirmationCoordinator.completeToolExecution(
+            try await completeJournaledToolExecution(
                 invocationID: invocationID,
                 resultData: Data(output.utf8)
             )
@@ -1398,19 +1403,45 @@ final class AgentSession {
                 clientRequestID: requestID,
                 mealModelProvenance: mealModelProvenance
             )
-            try await confirmationCoordinator.completeToolExecution(
+            try await completeJournaledToolExecution(
                 invocationID: invocationID,
                 resultData: Data(output.utf8)
             )
             return output
         } catch is CancellationError {
-            await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
+            try? await confirmationCoordinator.interruptToolExecution(invocationID: invocationID)
             throw CancellationError()
         } catch let error as ProviderError where error == .cancelled {
-            await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
+            try? await confirmationCoordinator.interruptToolExecution(invocationID: invocationID)
             throw error
         } catch {
-            await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
+            try? await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
+            throw error
+        }
+    }
+
+    private func completeJournaledToolExecution(
+        invocationID: String,
+        resultData: Data
+    ) async throws {
+        do {
+            // The tool may suspend for local lookups or persistence work. Check the
+            // request budget again after it returns so late results are never
+            // recorded as completed.
+            try requireActiveRequestTime()
+            try Task.checkCancellation()
+            try await confirmationCoordinator.completeToolExecution(
+                invocationID: invocationID,
+                resultData: resultData
+            )
+        } catch is CancellationError {
+            try? await confirmationCoordinator.interruptToolExecution(invocationID: invocationID)
+            throw CancellationError()
+        } catch let error as ProviderError where error == .cancelled {
+            try? await confirmationCoordinator.interruptToolExecution(invocationID: invocationID)
+            throw error
+        } catch {
+            try? await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
             throw error
         }
     }
@@ -1888,9 +1919,20 @@ final class AgentSession {
     }
 
     func reset() async throws {
+        if let requestID = activeRequestID, let activeAgentTask {
+            activeAgentTask.cancel()
+            activeProviderTask?.cancel()
+            _ = try? await activeAgentTask.value
+            finishRequest(requestID: requestID)
+        }
+
+        // The repository serializes reset against persistence mutations. The
+        // active request above is awaited first so it cannot append conversation
+        // rows after the repository transaction commits.
+        try await conversationRepository.reset(conversationID: conversationID)
         conversationHistory.removeAll()
         restoredVisibleMessages.removeAll()
-        try await conversationRepository.reset(conversationID: conversationID)
+        pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
     }
 
     func stageAction(_ payload: ActionPayload, clientRequestID: UUID) async throws -> PendingAction {

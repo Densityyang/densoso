@@ -55,7 +55,101 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                   existing.requestTimeAnchor == entry.requestTimeAnchor else {
                 throw ToolExecutionJournalError.invocationIdentityMismatch
             }
-            return existing
+            guard let record = try toolExecutionJournalRecord(invocationID: entry.invocationID) else {
+                return existing
+            }
+
+            if existing.state == .completed, let pendingActionID = existing.pendingActionID {
+                // Older stores may contain a completed staged result even though
+                // the linked action was later rejected/expired by a path that did
+                // not reconcile Journals. Do not replay that stale result.
+                guard try receipt(actionID: pendingActionID) == nil else { return existing }
+                let linkedAction = try pendingAction(id: pendingActionID)
+                let failureCode: String?
+                if let linkedAction,
+                   let linkedState = PendingActionState(rawValue: linkedAction.stateRaw) {
+                    switch linkedState {
+                    case .pending, .committing, .committed:
+                        return existing
+                    case .rejected:
+                        failureCode = "pending_action_rejected"
+                    case .expired:
+                        failureCode = "pending_action_expired"
+                    case .failed:
+                        failureCode = "pending_action_failed"
+                    }
+                } else {
+                    failureCode = "pending_action_no_longer_active"
+                }
+                guard let failureCode else { return existing }
+                try updateLinkedToolExecutionOutcome(
+                    pendingActionID: pendingActionID,
+                    state: .failed,
+                    updatedAt: entry.updatedAt,
+                    resultData: encodedToolFailureResult(code: failureCode)
+                )
+                do {
+                    try modelContext.save()
+                } catch {
+                    modelContext.rollback()
+                    throw error
+                }
+                return try record.entry()
+            }
+            guard existing.state == .interrupted else { return existing }
+
+            if let pendingActionID = existing.pendingActionID {
+                // If cancellation interrupted between staging and its atomic
+                // cleanup, reuse the exact action only while it is still pending.
+                // A receipt/commit is immutable; rejected or expired actions are
+                // terminal and must not replay their old staged result.
+                guard try receipt(actionID: pendingActionID) == nil else { return existing }
+                let linkedAction = try pendingAction(id: pendingActionID)
+                let failureCode: String?
+                if let linkedAction {
+                    guard let linkedState = PendingActionState(rawValue: linkedAction.stateRaw) else {
+                        return existing
+                    }
+                    switch linkedState {
+                    case .pending:
+                        record.stateRaw = ToolExecutionJournalState.staged.rawValue
+                        failureCode = nil
+                    case .rejected:
+                        failureCode = "pending_action_rejected"
+                    case .expired:
+                        failureCode = "pending_action_expired"
+                    case .failed:
+                        failureCode = "pending_action_failed"
+                    case .committing, .committed:
+                        return existing
+                    }
+                } else {
+                    failureCode = "pending_action_no_longer_active"
+                }
+                if let failureCode {
+                    try updateLinkedToolExecutionOutcome(
+                        pendingActionID: pendingActionID,
+                        state: .failed,
+                        updatedAt: entry.updatedAt,
+                        resultData: encodedToolFailureResult(code: failureCode)
+                    )
+                }
+            } else {
+                // Cancellation and interruption are retryable. Reuse the same
+                // invocation identity and prepared payload, but clear any stale
+                // result before allowing the tool to execute again.
+                record.stateRaw = ToolExecutionJournalState.prepared.rawValue
+                record.resultData = nil
+                record.completedAt = nil
+            }
+            record.updatedAt = entry.updatedAt
+            do {
+                try modelContext.save()
+            } catch {
+                modelContext.rollback()
+                throw error
+            }
+            return try record.entry()
         }
         modelContext.insert(DensosoSchemaV13.ToolExecutionJournalRecord(entry))
         do {
@@ -74,6 +168,9 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     ) throws {
         guard let record = try toolExecutionJournalRecord(invocationID: invocationID) else {
             throw ToolExecutionJournalError.invocationIdentityMismatch
+        }
+        guard record.stateRaw == ToolExecutionJournalState.prepared.rawValue else {
+            throw ToolExecutionJournalError.invalidStateTransition
         }
         if let existingData = record.preparedPayloadData, existingData != payloadData {
             throw ToolExecutionJournalError.invocationIdentityMismatch
@@ -96,6 +193,10 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         guard let record = try toolExecutionJournalRecord(invocationID: invocationID) else {
             throw ToolExecutionJournalError.invocationIdentityMismatch
         }
+        guard record.stateRaw == ToolExecutionJournalState.prepared.rawValue
+                || record.stateRaw == ToolExecutionJournalState.staged.rawValue else {
+            throw ToolExecutionJournalError.invalidStateTransition
+        }
         record.resultData = resultData
         record.stateRaw = ToolExecutionJournalState.completed.rawValue
         record.completedAt = updatedAt
@@ -116,6 +217,18 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         guard let record = try toolExecutionJournalRecord(invocationID: invocationID) else {
             throw ToolExecutionJournalError.invocationIdentityMismatch
         }
+        guard record.stateRaw == ToolExecutionJournalState.prepared.rawValue
+                || record.stateRaw == ToolExecutionJournalState.staged.rawValue else {
+            throw ToolExecutionJournalError.invalidStateTransition
+        }
+        try ensureToolExecutionHasNoCommittedAction(record)
+        if let pendingActionID = record.pendingActionID,
+           let action = try pendingAction(id: pendingActionID),
+           action.stateRaw == PendingActionState.pending.rawValue {
+            // A linked pending action can only be cleared together with its
+            // successful rejection in rejectAndUpdateLinkedToolExecution.
+            throw ToolExecutionJournalError.invalidStateTransition
+        }
         record.resultData = resultData
         record.stateRaw = ToolExecutionJournalState.failed.rawValue
         record.completedAt = nil
@@ -128,30 +241,140 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         }
     }
 
-    func failToolExecutions(
-        pendingActionID: UUID,
-        resultData: Data,
+    func interruptToolExecution(
+        invocationID: String,
         updatedAt: Date
     ) throws {
-        let targetID = pendingActionID
-        let predicate = #Predicate<DensosoSchemaV13.ToolExecutionJournalRecord> {
-            $0.pendingActionID == targetID
+        guard let record = try toolExecutionJournalRecord(invocationID: invocationID) else {
+            throw ToolExecutionJournalError.invocationIdentityMismatch
         }
-        let records = try modelContext.fetch(
-            FetchDescriptor<DensosoSchemaV13.ToolExecutionJournalRecord>(predicate: predicate)
-        )
-        guard !records.isEmpty else { return }
-        for record in records {
-            record.resultData = resultData
-            record.stateRaw = ToolExecutionJournalState.failed.rawValue
-            record.completedAt = nil
-            record.updatedAt = updatedAt
+        if record.stateRaw == ToolExecutionJournalState.interrupted.rawValue { return }
+        guard record.stateRaw == ToolExecutionJournalState.prepared.rawValue
+                || record.stateRaw == ToolExecutionJournalState.staged.rawValue else {
+            throw ToolExecutionJournalError.invalidStateTransition
         }
+        try ensureToolExecutionHasNoCommittedAction(record)
+        record.stateRaw = ToolExecutionJournalState.interrupted.rawValue
+        record.resultData = nil
+        record.completedAt = nil
+        record.updatedAt = updatedAt
         do {
             try modelContext.save()
         } catch {
             modelContext.rollback()
             throw error
+        }
+    }
+
+    func rejectAndUpdateLinkedToolExecution(
+        pendingActionID: UUID,
+        conversationID: UUID,
+        failureResultData: Data,
+        updatedAt: Date
+    ) async throws {
+        try await withMutationBarrier {
+            try await withProjectionStoreLock {
+                guard let action = try pendingAction(id: pendingActionID) else {
+                    throw ConfirmationError.notFound
+                }
+                guard try map(action).conversationID == conversationID else {
+                    throw ConfirmationError.notFound
+                }
+                if try receipt(actionID: pendingActionID) != nil {
+                    throw ConfirmationError.invariantViolation("cannot cancel an action with a commit receipt")
+                }
+                guard let state = PendingActionState(rawValue: action.stateRaw) else {
+                    throw ConfirmationError.invariantViolation("unknown pending action state \(action.stateRaw)")
+                }
+                if state == .pending && action.expiresAt <= updatedAt {
+                    do {
+                        try modelContext.transaction {
+                            guard let currentAction = try pendingAction(id: pendingActionID),
+                                  currentAction.conversationID == conversationID,
+                                  currentAction.stateRaw == PendingActionState.pending.rawValue,
+                                  try receipt(actionID: pendingActionID) == nil else {
+                                throw ConfirmationError.invariantViolation("action changed before cancellation expiration")
+                            }
+                            currentAction.stateRaw = PendingActionState.expired.rawValue
+                            currentAction.updatedAt = updatedAt
+                            try updateLinkedToolExecutionOutcome(
+                                pendingActionID: pendingActionID,
+                                state: .failed,
+                                updatedAt: updatedAt,
+                                resultData: encodedToolFailureResult(code: "pending_action_expired")
+                            )
+                            try injectFailure(.beforeExpirationSave)
+                        }
+                    } catch {
+                        modelContext.rollback()
+                        throw error
+                    }
+                    throw ConfirmationError.expired
+                }
+                switch state {
+                case .pending:
+                    try modelContext.transaction {
+                        // Recheck durable state and receipt within the same
+                        // transaction as both the rejection and Journal update.
+                        guard let currentAction = try pendingAction(id: pendingActionID),
+                              currentAction.conversationID == conversationID,
+                              currentAction.stateRaw == PendingActionState.pending.rawValue,
+                              try receipt(actionID: pendingActionID) == nil else {
+                            throw ConfirmationError.invariantViolation("action changed before cancellation cleanup")
+                        }
+                        currentAction.stateRaw = PendingActionState.rejected.rawValue
+                        currentAction.updatedAt = updatedAt
+                        try injectFailure(.beforeRejectSave)
+
+                        try updateLinkedToolExecutionOutcome(
+                            pendingActionID: pendingActionID,
+                            state: .failed,
+                            updatedAt: updatedAt,
+                            resultData: failureResultData
+                        )
+                    }
+                case .expired:
+                    try modelContext.transaction {
+                        guard try receipt(actionID: pendingActionID) == nil,
+                              let currentAction = try pendingAction(id: pendingActionID),
+                              currentAction.conversationID == conversationID,
+                              currentAction.stateRaw == PendingActionState.expired.rawValue else {
+                            throw ConfirmationError.invariantViolation("action changed before expired Journal reconciliation")
+                        }
+                        try updateLinkedToolExecutionOutcome(
+                            pendingActionID: pendingActionID,
+                            state: .failed,
+                            updatedAt: updatedAt,
+                            resultData: encodedToolFailureResult(code: "pending_action_expired")
+                        )
+                    }
+                    throw ConfirmationError.expired
+                case .rejected:
+                    // A prior user rejection is terminal for this action. An
+                    // idempotent cleanup reconciles any legacy linked Journal
+                    // in the same save, preventing a stale staged result from
+                    // being replayed as though the action were still pending.
+                    try modelContext.transaction {
+                        guard try receipt(actionID: pendingActionID) == nil,
+                              let currentAction = try pendingAction(id: pendingActionID),
+                              currentAction.conversationID == conversationID,
+                              currentAction.stateRaw == PendingActionState.rejected.rawValue else {
+                            throw ConfirmationError.invariantViolation("action changed before rejected Journal reconciliation")
+                        }
+                        try updateLinkedToolExecutionOutcome(
+                            pendingActionID: pendingActionID,
+                            state: .failed,
+                            updatedAt: updatedAt,
+                            resultData: encodedToolFailureResult(code: "pending_action_rejected")
+                        )
+                    }
+                    return
+                case .committing:
+                    throw ConfirmationError.alreadyCommitting
+                case .committed, .failed:
+                    throw ConfirmationError.invariantViolation("cannot cancel \(state.rawValue) action")
+                }
+            }
         }
     }
 
@@ -365,15 +588,27 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             expiredDescriptor.fetchLimit = Self.expiredActionBatchSize
             let expiredRecords = try modelContext.fetch(expiredDescriptor)
             guard !expiredRecords.isEmpty else { break }
-            for record in expiredRecords {
-                record.stateRaw = expiredState
-                record.updatedAt = now
-            }
-            do {
-                try modelContext.save()
-            } catch {
-                modelContext.rollback()
-                throw error
+            try await withProjectionStoreLock {
+                do {
+                    for record in expiredRecords {
+                        guard record.stateRaw == pendingState, record.expiresAt <= now else { continue }
+                        guard try receipt(actionID: record.id) == nil else {
+                            throw ConfirmationError.invariantViolation("pending action has a commit receipt during expiration")
+                        }
+                        record.stateRaw = expiredState
+                        record.updatedAt = now
+                        try updateLinkedToolExecutionOutcome(
+                            pendingActionID: record.id,
+                            state: .failed,
+                            updatedAt: now,
+                            resultData: encodedToolFailureResult(code: "pending_action_expired")
+                        )
+                    }
+                    try modelContext.save()
+                } catch {
+                    modelContext.rollback()
+                    throw error
+                }
             }
         }
         let activePredicate = #Predicate<PendingActionRecord> {
@@ -412,39 +647,81 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             guard !page.isEmpty else { break }
             let pageLastCreatedAt = page.last?.createdAt
             let pageLastIdempotencyKey = page.last?.idempotencyKey
-            var didIsolateInvalidActions = false
+            var pageActions: [PendingAction] = []
+            var invalidActionIDs: [UUID] = []
             for record in page {
                 do {
                     let action = try map(record)
                     if action.conversationID == conversationID {
-                        actions.append(action)
+                        pageActions.append(action)
                     }
                 } catch let error as ConfirmationError {
                     switch error {
                     case .notFound, .payloadCorrupt, .unsupportedAction, .invariantViolation:
-                        let wasActive = record.stateRaw == pendingState || record.stateRaw == committingState
-                        record.stateRaw = failedState
-                        record.failureCode = Self.failureCode(for: error)
-                        record.failureDetail = nil
-                        record.updatedAt = now
-                        if wasActive,
-                           try receipt(actionID: record.id) == nil {
-                            record.idempotencyKey = "invalid-action-\(record.id.uuidString.lowercased())"
-                        }
-                        didIsolateInvalidActions = true
+                        invalidActionIDs.append(record.id)
                     default:
                         throw error
                     }
                 }
             }
-            if didIsolateInvalidActions {
-                do {
-                    try modelContext.save()
-                } catch {
-                    modelContext.rollback()
-                    throw error
+
+            if !invalidActionIDs.isEmpty {
+                // Confirmation, cancellation, and corruption isolation all
+                // serialize through the store-wide gate. Update the action and
+                // its linked Journal in one SwiftData transaction so recovery
+                // cannot replay a stale completed staged result.
+                try await withProjectionStoreLock {
+                    do {
+                        try modelContext.transaction {
+                            for actionID in invalidActionIDs {
+                                guard let current = try pendingAction(id: actionID) else { continue }
+                                let wasActive = current.stateRaw == pendingState
+                                    || current.stateRaw == committingState
+                                guard wasActive else { continue }
+                                guard try receipt(actionID: actionID) == nil else {
+                                    throw ConfirmationError.invariantViolation(
+                                        "active pending action has a commit receipt during corruption isolation"
+                                    )
+                                }
+
+                                // Recheck the payload after acquiring the lock;
+                                // a concurrent state transition may have won
+                                // while this method was waiting for the gate.
+                                let isolationError: ConfirmationError
+                                do {
+                                    _ = try map(current)
+                                    continue
+                                } catch let error as ConfirmationError {
+                                    switch error {
+                                    case .notFound, .payloadCorrupt, .unsupportedAction, .invariantViolation:
+                                        isolationError = error
+                                    default:
+                                        throw error
+                                    }
+                                }
+
+                                current.stateRaw = failedState
+                                current.failureCode = Self.failureCode(for: isolationError)
+                                current.failureDetail = nil
+                                current.updatedAt = now
+                                current.idempotencyKey = "invalid-action-\(current.id.uuidString.lowercased())"
+                                try updateLinkedToolExecutionOutcome(
+                                    pendingActionID: current.id,
+                                    state: .failed,
+                                    updatedAt: now,
+                                    resultData: encodedToolFailureResult(
+                                        code: Self.failureCode(for: isolationError)
+                                    )
+                                )
+                            }
+                        }
+                    } catch {
+                        modelContext.rollback()
+                        throw error
+                    }
                 }
             }
+            actions.append(contentsOf: pageActions)
             guard let pageLastCreatedAt, let pageLastIdempotencyKey else { break }
             cursorCreatedAt = pageLastCreatedAt
             cursorIdempotencyKey = pageLastIdempotencyKey
@@ -463,27 +740,70 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         guard let state = PendingActionState(rawValue: action.stateRaw) else {
             throw ConfirmationError.invariantViolation("unknown pending action state \(action.stateRaw)")
         }
+        if try receipt(actionID: id) != nil {
+            throw ConfirmationError.invariantViolation("cannot reject an action with a commit receipt")
+        }
         if state == .pending && action.expiresAt <= now {
-            action.stateRaw = PendingActionState.expired.rawValue
-            action.updatedAt = now
             do {
-                try injectFailure(.beforeExpirationSave)
-                try modelContext.save()
+                try modelContext.transaction {
+                    guard let currentAction = try pendingAction(id: id),
+                          currentAction.conversationID == conversationID,
+                          currentAction.stateRaw == PendingActionState.pending.rawValue,
+                          try receipt(actionID: id) == nil else {
+                        throw ConfirmationError.invariantViolation("action changed before expiration")
+                    }
+                    currentAction.stateRaw = PendingActionState.expired.rawValue
+                    currentAction.updatedAt = now
+                    try updateLinkedToolExecutionOutcome(
+                        pendingActionID: id,
+                        state: .failed,
+                        updatedAt: now,
+                        resultData: encodedToolFailureResult(code: "pending_action_expired")
+                    )
+                    try injectFailure(.beforeExpirationSave)
+                }
             }
             catch { modelContext.rollback(); throw error }
             throw ConfirmationError.expired
         }
         switch state {
         case .pending:
-            action.stateRaw = PendingActionState.rejected.rawValue
-            action.updatedAt = now
             do {
-                try injectFailure(.beforeRejectSave)
-                try modelContext.save()
+                try modelContext.transaction {
+                    guard let currentAction = try pendingAction(id: id),
+                          currentAction.conversationID == conversationID,
+                          currentAction.stateRaw == PendingActionState.pending.rawValue,
+                          try receipt(actionID: id) == nil else {
+                        throw ConfirmationError.invariantViolation("action changed before rejection")
+                    }
+                    currentAction.stateRaw = PendingActionState.rejected.rawValue
+                    currentAction.updatedAt = now
+                    try updateLinkedToolExecutionOutcome(
+                        pendingActionID: id,
+                        state: .failed,
+                        updatedAt: now,
+                        resultData: encodedToolFailureResult(code: "pending_action_rejected")
+                    )
+                    try injectFailure(.beforeRejectSave)
+                }
             }
             catch { modelContext.rollback(); throw error }
         case .expired: throw ConfirmationError.expired
-        case .rejected: return
+        case .rejected:
+            try modelContext.transaction {
+                guard try receipt(actionID: id) == nil,
+                      let currentAction = try pendingAction(id: id),
+                      currentAction.conversationID == conversationID,
+                      currentAction.stateRaw == PendingActionState.rejected.rawValue else {
+                    throw ConfirmationError.invariantViolation("action changed before rejected Journal reconciliation")
+                }
+                try updateLinkedToolExecutionOutcome(
+                    pendingActionID: id,
+                    state: .failed,
+                    updatedAt: now,
+                    resultData: encodedToolFailureResult(code: "pending_action_rejected")
+                )
+            }
         case .committing: throw ConfirmationError.alreadyCommitting
         case .committed, .failed: throw ConfirmationError.invariantViolation("cannot reject \(state.rawValue)")
         }
@@ -539,11 +859,24 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         case .pending: break
         }
         guard action.expiresAt > now else {
-            action.stateRaw = PendingActionState.expired.rawValue
-            action.updatedAt = now
             do {
-                try injectFailure(.beforeExpirationSave)
-                try modelContext.save()
+                try modelContext.transaction {
+                    guard let currentAction = try pendingAction(id: id),
+                          currentAction.conversationID == conversationID,
+                          currentAction.stateRaw == PendingActionState.pending.rawValue,
+                          try receipt(actionID: id) == nil else {
+                        throw ConfirmationError.invariantViolation("action changed before confirmation expiration")
+                    }
+                    currentAction.stateRaw = PendingActionState.expired.rawValue
+                    currentAction.updatedAt = now
+                    try updateLinkedToolExecutionOutcome(
+                        pendingActionID: id,
+                        state: .failed,
+                        updatedAt: now,
+                        resultData: encodedToolFailureResult(code: "pending_action_expired")
+                    )
+                    try injectFailure(.beforeExpirationSave)
+                }
             }
             catch { modelContext.rollback(); throw error }
             throw ConfirmationError.expired
@@ -823,6 +1156,12 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                     action.failureDetail = "A source record exists without its committed receipt."
                 } else if action.expiresAt <= now {
                     action.stateRaw = PendingActionState.expired.rawValue
+                    try updateLinkedToolExecutionOutcome(
+                        pendingActionID: action.id,
+                        state: .failed,
+                        updatedAt: now,
+                        resultData: encodedToolFailureResult(code: "pending_action_expired")
+                    )
                 } else {
                     action.stateRaw = PendingActionState.pending.rawValue
                 }
@@ -1349,6 +1688,59 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         var descriptor = FetchDescriptor<DensosoSchemaV13.ToolExecutionJournalRecord>(predicate: predicate)
         descriptor.fetchLimit = 1
         return try modelContext.fetch(descriptor).first
+    }
+
+    private func ensureToolExecutionHasNoCommittedAction(
+        _ record: DensosoSchemaV13.ToolExecutionJournalRecord
+    ) throws {
+        guard let pendingActionID = record.pendingActionID else { return }
+        guard try receipt(actionID: pendingActionID) == nil else {
+            throw ToolExecutionJournalError.invalidStateTransition
+        }
+        if let action = try pendingAction(id: pendingActionID),
+           (action.stateRaw == PendingActionState.committing.rawValue
+                || action.stateRaw == PendingActionState.committed.rawValue) {
+            throw ToolExecutionJournalError.invalidStateTransition
+        }
+    }
+
+    private func updateLinkedToolExecutionOutcome(
+        pendingActionID: UUID,
+        state: ToolExecutionJournalState,
+        updatedAt: Date,
+        resultData: Data?
+    ) throws {
+        guard state == .failed || state == .interrupted else {
+            throw ToolExecutionJournalError.invalidStateTransition
+        }
+        guard try receipt(actionID: pendingActionID) == nil else {
+            throw ToolExecutionJournalError.invalidStateTransition
+        }
+        let targetActionID = pendingActionID
+        let predicate = #Predicate<DensosoSchemaV13.ToolExecutionJournalRecord> {
+            $0.pendingActionID == targetActionID
+        }
+        let records = try modelContext.fetch(
+            FetchDescriptor<DensosoSchemaV13.ToolExecutionJournalRecord>(predicate: predicate)
+        )
+        for record in records {
+            guard record.stateRaw == ToolExecutionJournalState.prepared.rawValue
+                    || record.stateRaw == ToolExecutionJournalState.staged.rawValue
+                    || record.stateRaw == ToolExecutionJournalState.completed.rawValue
+                    || record.stateRaw == ToolExecutionJournalState.interrupted.rawValue else {
+                continue
+            }
+            record.stateRaw = state.rawValue
+            record.pendingActionID = nil
+            record.resultData = resultData
+            record.completedAt = nil
+            record.updatedAt = updatedAt
+        }
+    }
+
+    private func encodedToolFailureResult(code: String) -> Data {
+        if let data = try? JSONEncoder().encode(["error": code]) { return data }
+        return Data("{\"error\":\"tool_execution_failed\"}".utf8)
     }
 
     private func linkToolExecution(
