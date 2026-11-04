@@ -222,7 +222,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         await fake.triggerObserver(.workout)
         await fake.waitForObserverCompletion(after: 0)
 
-        XCTAssertFalse(context.fetch(FetchDescriptor<WorkoutRecord>()).contains { $0.healthKitUUID == workoutID })
+        XCTAssertFalse(try context.fetch(FetchDescriptor<WorkoutRecord>()).contains { $0.healthKitUUID == workoutID })
         XCTAssertTrue(try healthSnapshot(on: day).healthKitSampleSummary?.workoutEffort.isEmpty ?? false)
         XCTAssertTrue(try repository.pendingHealthSampleDays(stream: HealthMetricID.workoutEffort.rawValue).isEmpty)
     }
@@ -708,7 +708,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         )
 
         XCTAssertTrue(result.completedStreams.contains(.workout))
-        XCTAssertNotNil(context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+        XCTAssertNotNil(try context.fetch(FetchDescriptor<WorkoutRecord>()).first {
             $0.healthKitUUID == workout.healthKitUUID
         })
         let snapshotRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
@@ -747,7 +747,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
 
         XCTAssertFalse(result.completedStreams.contains(.workout))
         XCTAssertNotNil(result.failedStreams[.workout])
-        XCTAssertNil(context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+        XCTAssertNil(try context.fetch(FetchDescriptor<WorkoutRecord>()).first {
             $0.healthKitUUID == workout.healthKitUUID
         }, "No page rows commit until the terminal page and final anchor are validated")
         let snapshotRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
@@ -833,7 +833,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let failed = try await coordinator.syncAvailableData(using: repository, now: now)
 
         XCTAssertNotNil(failed.failedStreams[.workout])
-        XCTAssertNil(context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+        XCTAssertNil(try context.fetch(FetchDescriptor<WorkoutRecord>()).first {
             $0.healthKitUUID == workout.healthKitUUID
         })
         XCTAssertNil(try repository.cursor(for: "workouts")?.anchorData)
@@ -848,7 +848,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let retried = try await coordinator.syncAvailableData(using: repository, now: now)
 
         XCTAssertTrue(retried.completedStreams.contains(.workout))
-        XCTAssertNotNil(context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+        XCTAssertNotNil(try context.fetch(FetchDescriptor<WorkoutRecord>()).first {
             $0.healthKitUUID == workout.healthKitUUID
         })
         XCTAssertEqual(try repository.cursor(for: "workouts")?.anchorData, Data([90]))
@@ -897,7 +897,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         )
 
         XCTAssertTrue(result.completedStreams.contains(.workout))
-        XCTAssertNil(context.fetch(FetchDescriptor<WorkoutRecord>()).first { $0.healthKitUUID == healthKitUUID })
+        XCTAssertNil(try context.fetch(FetchDescriptor<WorkoutRecord>()).first { $0.healthKitUUID == healthKitUUID })
         XCTAssertEqual(
             try healthSnapshot(on: day).healthReadStates?[HealthMetricID.workout.rawValue],
             .dataUnavailableOrReadScopeUnknown
@@ -995,10 +995,10 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         )
 
         XCTAssertTrue(result.completedStreams.contains(.workout))
-        XCTAssertNil(context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+        XCTAssertNil(try context.fetch(FetchDescriptor<WorkoutRecord>()).first {
             $0.healthKitUUID == rejectedPageWorkout.healthKitUUID
         })
-        XCTAssertNotNil(context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+        XCTAssertNotNil(try context.fetch(FetchDescriptor<WorkoutRecord>()).first {
             $0.healthKitUUID == rebuiltWorkout.healthKitUUID
         })
         XCTAssertEqual(result.readRecordCount, 2)
@@ -1294,7 +1294,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
 
         XCTAssertNotNil(result.failedStreams[.workout])
         XCTAssertTrue(gate.isOpen, "The gate reopens only after the targeted purge commits")
-        XCTAssertNil(context.fetch(FetchDescriptor<WorkoutRecord>()).first { $0.healthKitUUID == staleUUID })
+        XCTAssertNil(try context.fetch(FetchDescriptor<WorkoutRecord>()).first { $0.healthKitUUID == staleUUID })
         XCTAssertEqual(try HealthRepository(modelContext: context).cursor(for: "workouts")?.anchorData, nil)
         XCTAssertEqual(
             try healthSnapshot(on: day).healthReadStates?[HealthMetricID.workout.rawValue],
@@ -1361,7 +1361,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             now: now
         )
         XCTAssertTrue(retried.completedStreams.contains(.workout))
-        XCTAssertTrue(context.fetch(FetchDescriptor<WorkoutRecord>()).contains {
+        XCTAssertTrue(try context.fetch(FetchDescriptor<WorkoutRecord>()).contains {
             $0.healthKitUUID == recoveredWorkout.healthKitUUID
         })
         XCTAssertEqual(try HealthRepository(modelContext: context).cursor(for: "workouts")?.anchorData, Data([0xF2]))
@@ -1404,7 +1404,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(observerRefreshCount, 2)
         XCTAssertEqual(try repository.cursor(for: "workouts")?.anchorData, Data([100]))
-        XCTAssertTrue(context.fetch(FetchDescriptor<WorkoutRecord>()).contains {
+        XCTAssertTrue(try context.fetch(FetchDescriptor<WorkoutRecord>()).contains {
             $0.healthKitUUID == workout.healthKitUUID
         })
         let requestAnchors = await fake.workoutRequestAnchors()

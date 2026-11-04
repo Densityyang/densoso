@@ -367,12 +367,12 @@ final class ToolExecutionJournalTests: XCTestCase {
         let resultData = Data("completed result".utf8)
         try await coordinator.completeToolExecution(invocationID: completedID, resultData: resultData)
 
-        await XCTAssertThrowsErrorAsync(
+        await assertJournalThrowsErrorAsync(
             try await coordinator.completeToolExecution(invocationID: completedID, resultData: Data("replacement".utf8))
         ) { error in
             XCTAssertEqual(error as? ToolExecutionJournalError, .invalidStateTransition)
         }
-        await XCTAssertThrowsErrorAsync(
+        await assertJournalThrowsErrorAsync(
             try await coordinator.failToolExecution(invocationID: completedID, resultData: nil)
         ) { error in
             XCTAssertEqual(error as? ToolExecutionJournalError, .invalidStateTransition)
@@ -399,7 +399,7 @@ final class ToolExecutionJournalTests: XCTestCase {
         )
         _ = try await coordinator.beginToolExecution(failedEntry)
         try await coordinator.failToolExecution(invocationID: failedID, resultData: Data("failed".utf8))
-        await XCTAssertThrowsErrorAsync(
+        await assertJournalThrowsErrorAsync(
             try await coordinator.completeToolExecution(invocationID: failedID, resultData: Data("replacement".utf8))
         ) { error in
             XCTAssertEqual(error as? ToolExecutionJournalError, .invalidStateTransition)
@@ -914,6 +914,19 @@ final class ToolExecutionJournalTests: XCTestCase {
       {"id":2,"name":"米饭(熟)","alias":"米饭|熟米饭|白米饭","preparation":"cooked","category":"谷类及制品","edible":100,"energyKcal":116,"proteinG":2.6,"fatG":0.3,"carbohydrateG":25.9,"fiberG":0.3}
     ]
     """#
+}
+
+@MainActor
+private func assertJournalThrowsErrorAsync<T>(
+    _ expression: @autoclosure () async throws -> T,
+    _ errorHandler: (Error) -> Void
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("Expected an error")
+    } catch {
+        errorHandler(error)
+    }
 }
 
 private actor SlowMealPortionPriorRepository: MealPortionPriorRepository {

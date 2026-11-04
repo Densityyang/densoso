@@ -143,7 +143,9 @@ final class DailyHealthSampleSummaryTests: XCTestCase {
     }
 
     func testMetricSpecificDailyRepresentativesResistSamplingFrequencyBias() throws {
-        let day = Date(timeIntervalSince1970: 1_700_000_000)
+        // Align with the metric's absolute 15-minute buckets so the four
+        // dense samples represent one window and the later sample a second.
+        let day = Date(timeIntervalSince1970: 1_700_000_100)
         let samples = [
             sample(801, metric: .heartRate, at: day.addingTimeInterval(60), value: 60),
             sample(802, metric: .heartRate, at: day.addingTimeInterval(120), value: 60),
