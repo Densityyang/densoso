@@ -11,6 +11,7 @@ final class PersistenceCrossContextVisibilityTests: XCTestCase {
         let container = try makeContainer()
         let repository = SwiftDataConfirmationRepository(modelContainer: container)
         let action = try await stagePreference(using: repository)
+        let conversationID = try XCTUnwrap(action.conversationID)
         let mainContext = ModelContext(container)
         let actionID = action.id
         let record = try XCTUnwrap(mainContext.fetch(
@@ -19,7 +20,7 @@ final class PersistenceCrossContextVisibilityTests: XCTestCase {
         record.stateRaw = PendingActionState.rejected.rawValue
         try mainContext.save()
 
-        let actorRead = try await repository.activeActions(conversationID: action.conversationID, now: now)
+        let actorRead = try await repository.activeActions(conversationID: conversationID, now: now)
 
         XCTAssertFalse(actorRead.contains { $0.id == action.id })
         let persistedContext = ModelContext(container)
@@ -34,9 +35,10 @@ final class PersistenceCrossContextVisibilityTests: XCTestCase {
         let firstRepository = SwiftDataConfirmationRepository(modelContainer: container)
         let secondRepository = SwiftDataConfirmationRepository(modelContainer: container)
         let action = try await stagePreference(using: firstRepository)
+        let conversationID = try XCTUnwrap(action.conversationID)
 
         let actorRead = try await secondRepository.activeActions(
-            conversationID: action.conversationID,
+            conversationID: conversationID,
             now: now
         )
         let mainContext = ModelContext(container)
@@ -52,19 +54,21 @@ final class PersistenceCrossContextVisibilityTests: XCTestCase {
     func testLongLivedContextObservesModelActorStateUpdate() async throws {
         let container = try makeContainer()
         let repository = SwiftDataConfirmationRepository(modelContainer: container)
+        let fixedNow = now
         let coordinator = ConfirmationCoordinator(
             repository: repository,
             writeGate: PersistenceWriteGate(state: .writable),
-            now: { now }
+            now: { fixedNow }
         )
         let action = try await stagePreference(using: repository)
+        let conversationID = try XCTUnwrap(action.conversationID)
         let longLivedContext = ModelContext(container)
         let actionID = action.id
         let heldRecord = try XCTUnwrap(longLivedContext.fetch(
             FetchDescriptor<PendingActionRecord>(predicate: #Predicate { $0.id == actionID })
         ).first)
 
-        try await coordinator.reject(id: action.id, conversationID: action.conversationID)
+        try await coordinator.reject(id: action.id, conversationID: conversationID)
         let refreshedRecord = try XCTUnwrap(longLivedContext.fetch(
             FetchDescriptor<PendingActionRecord>(predicate: #Predicate { $0.id == actionID })
         ).first)
@@ -75,16 +79,17 @@ final class PersistenceCrossContextVisibilityTests: XCTestCase {
     }
 
     private func stagePreference(using repository: SwiftDataConfirmationRepository) async throws -> PendingAction {
+        let fixedNow = now
         let coordinator = ConfirmationCoordinator(
             repository: repository,
             writeGate: PersistenceWriteGate(state: .writable),
-            now: { now }
+            now: { fixedNow }
         )
         return try await coordinator.stage(
             payload: .userPreference(UserPreference(
                 category: .exercise,
                 statement: "prefers outdoor walks",
-                createdAt: now
+                createdAt: fixedNow
             )),
             clientRequestID: UUID()
         )
