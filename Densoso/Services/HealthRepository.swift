@@ -1678,7 +1678,7 @@ enum HealthRepositoryError: Equatable, SharedErrorDescribing {
             SharedErrorDescriptor(
                 code: .actionConflict,
                 userMessage: "这条记录已不存在，请刷新后重试。",
-                subsystem: .persistence,
+                subsystem: .confirmation,
                 reason: .actionNotFound
             )
         case .refuseHealthKitWorkoutDelete:

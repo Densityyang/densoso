@@ -220,9 +220,10 @@ final class HealthIntelligenceService {
         observerRefreshGeneration &+= 1
         let generation = observerRefreshGeneration
         observerRefreshTask?.cancel()
-        observerRefreshTask = Task { @MainActor [weak self] in
+        let delay = observerRefreshDelay
+        observerRefreshTask = Task { @MainActor [weak self, delay] in
             do {
-                try await observerRefreshDelay(.milliseconds(300))
+                try await delay(.milliseconds(300))
             } catch {
                 return
             }

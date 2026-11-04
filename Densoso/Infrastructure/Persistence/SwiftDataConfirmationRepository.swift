@@ -236,8 +236,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         invocationID: String?,
         requestDeadline: Date? = nil
     ) async throws -> PendingAction {
-        let operationBarrier = await PersistenceOperationBarrier.shared
-        return try await operationBarrier.withMutationOperation {
+        return try await withMutationBarrier {
         guard ActionPayload.supportedSchemaVersions.contains(ActionPayload.currentSchemaVersion),
               Self.sha256(canonicalPayloadData) == canonicalPayloadHash,
               try payload.canonicalData(schemaVersion: ActionPayload.currentSchemaVersion) == canonicalPayloadData,
@@ -346,8 +345,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     }
 
     func activeActions(conversationID: UUID, now: Date) async throws -> [PendingAction] {
-        let operationBarrier = await PersistenceOperationBarrier.shared
-        return try await operationBarrier.withMutationOperation {
+        return try await withMutationBarrier {
         let pendingState = PendingActionState.pending.rawValue
         let committingState = PendingActionState.committing.rawValue
         let expiredState = PendingActionState.expired.rawValue
@@ -457,11 +455,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     }
 
     func reject(id: UUID, conversationID: UUID, now: Date) async throws {
-        let operationBarrier = await PersistenceOperationBarrier.shared
-        try await operationBarrier.withMutationOperation {
-            try await DailyMetricsProjectionWriteGate.withStoreLock(
-                storeID: ObjectIdentifier(modelContainer)
-            ) {
+        try await withMutationBarrier {
+            try await withProjectionStoreLock {
         guard let action = try pendingAction(id: id) else { throw ConfirmationError.notFound }
         let presentedAction = try map(action)
         guard presentedAction.conversationID == conversationID else { throw ConfirmationError.notFound }
@@ -502,8 +497,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         expectedPayloadHash: String,
         now: Date
     ) async throws -> CommitReceipt {
-        let operationBarrier = await PersistenceOperationBarrier.shared
-        return try await operationBarrier.withMutationOperation {
+        return try await withMutationBarrier {
         guard let action = try pendingAction(id: id) else { throw ConfirmationError.notFound }
         guard ActionPayload.supportedSchemaVersions.contains(action.schemaVersion) else {
             throw ConfirmationError.unsupportedAction
@@ -521,10 +515,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
               try payload.canonicalPayloadHash(schemaVersion: action.schemaVersion) == storedPayloadHash else {
             throw ConfirmationError.payloadCorrupt
         }
-        return try await DailyMetricsProjectionWriteGate.withStoreLock(
-            storeID: ObjectIdentifier(modelContainer),
-            dayKeys: projectionDayKeys(for: payload)
-        ) {
+        return try await withProjectionStoreLock(dayKeys: projectionDayKeys(for: payload)) {
         if let receipt = try receipt(actionID: id) {
             let mappedReceipt = try map(receipt)
             try validate(
@@ -763,11 +754,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     }
 
     func recoverInterruptedCommits(now: Date) async throws {
-        let operationBarrier = await PersistenceOperationBarrier.shared
-        try await operationBarrier.withMutationOperation {
-            try await DailyMetricsProjectionWriteGate.withStoreLock(
-                storeID: ObjectIdentifier(modelContainer)
-            ) {
+        try await withMutationBarrier {
+            try await withProjectionStoreLock {
         let committingState = PendingActionState.committing.rawValue
         var changed = false
         let committingSort = [
@@ -1548,6 +1536,39 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             return [DailyMetricsProjectionWriteGate.dayKey(for: draft.measuredAt)]
         case .workoutPlan, .trainingPlan, .dailyCheckIn, .userPreference:
             return nil
+        }
+    }
+
+    private func withMutationBarrier<T>(
+        operation: () async throws -> T
+    ) async throws -> T {
+        let barrier = await PersistenceOperationBarrier.shared
+        let lease = try await barrier.acquireMutationOperation()
+        do {
+            let result = try await operation()
+            await barrier.release(lease)
+            return result
+        } catch {
+            await barrier.release(lease)
+            throw error
+        }
+    }
+
+    private func withProjectionStoreLock<T>(
+        dayKeys: Set<String>? = nil,
+        operation: () async throws -> T
+    ) async throws -> T {
+        let lease = try await DailyMetricsProjectionWriteGate.acquire(
+            storeID: ObjectIdentifier(modelContainer),
+            dayKeys: dayKeys
+        )
+        do {
+            let result = try await operation()
+            await DailyMetricsProjectionWriteGate.release(lease)
+            return result
+        } catch {
+            await DailyMetricsProjectionWriteGate.release(lease)
+            throw error
         }
     }
 

@@ -61,22 +61,6 @@ enum DailyMetricsProjectionWriteGate {
         return try await operation(lease)
     }
 
-    static func withStoreLock<T: Sendable>(
-        storeID: ObjectIdentifier,
-        dayKeys: Set<String>? = nil,
-        operation: @isolated(any) @Sendable () async throws -> T
-    ) async throws -> T {
-        let lease = try await acquire(storeID: storeID, dayKeys: dayKeys)
-        do {
-            let result = try await operation()
-            release(lease)
-            return result
-        } catch {
-            release(lease)
-            throw error
-        }
-    }
-
     /// A nil day-key set requests a store-wide lease. Day-scoped leases let
     /// independent daily projections proceed concurrently.
     static func acquire(storeID key: ObjectIdentifier, dayKeys: Set<String>? = nil) async throws -> Lease {
