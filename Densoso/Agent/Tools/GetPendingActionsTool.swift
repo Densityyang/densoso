@@ -27,7 +27,7 @@ struct GetPendingActionsTool: AgentTool {
             throw GetPendingActionsToolError.invalidArguments
         }
         let offset = arguments["offset"] as? Int ?? 0
-        try response(actions: context.pendingActions, asOf: Date(), offset: offset)
+        return try response(actions: context.pendingActions, asOf: Date(), offset: offset)
     }
 
     func response(actions: [PendingAction], asOf date: Date, offset: Int = 0) throws -> String {

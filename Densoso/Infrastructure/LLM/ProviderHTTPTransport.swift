@@ -361,6 +361,8 @@ struct ProviderRequestExecutor: Sendable {
                 try await Task.sleep(for: .milliseconds(1))
             case .terminated:
                 throw CancellationError()
+            @unknown default:
+                throw ProviderError.incompleteResponse
             }
         }
     }
