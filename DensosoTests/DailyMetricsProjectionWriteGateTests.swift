@@ -26,6 +26,17 @@ final class DailyMetricsProjectionWriteGateTests: XCTestCase {
         DailyMetricsProjectionWriteGate.release(lease)
     }
 
+    func testStoreWideLeaseValidatesDynamicallyAffectedDayKeys() async throws {
+        let lease = try await DailyMetricsProjectionWriteGate.acquire(for: container)
+        defer { DailyMetricsProjectionWriteGate.release(lease) }
+
+        try DailyMetricsProjectionWriteGate.validate(
+            lease,
+            storeID: ObjectIdentifier(container),
+            dayKeys: ["2026-11-04"]
+        )
+    }
+
     func testChildTaskCannotInheritParentGateOwnership() async throws {
         let parentReady = GateTestSignal()
         let releaseParent = GateTestSignal()

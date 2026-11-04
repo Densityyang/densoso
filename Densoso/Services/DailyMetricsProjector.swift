@@ -125,6 +125,7 @@ enum DailyMetricsProjectionWriteGate {
               lease.lockKeys.allSatisfy({ held[$0] == lease.ownerID }) else {
             throw DailyMetricsProjectionGateError.invalidLease
         }
+        if lease.lockKeys.contains(storeWideKey) { return }
         if let dayKeys, !dayKeys.isSubset(of: lease.lockKeys) {
             throw DailyMetricsProjectionGateError.invalidLease
         }

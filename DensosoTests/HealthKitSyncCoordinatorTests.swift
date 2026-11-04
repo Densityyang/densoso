@@ -1083,7 +1083,11 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
 
         let result = try await coordinator.syncAvailableData(using: repository, now: now)
 
-        XCTAssertTrue(result.completedStreams.contains(.bodyMass))
+        guard result.completedStreams.contains(.bodyMass) else {
+            let detail = result.failedStreams[.bodyMass]?.diagnosticSafeDetail ?? "no bodyMass failure detail recorded"
+            XCTFail("Authorization-boundary rebaseline did not complete for bodyMass: \(detail)")
+            return
+        }
         let requests = await fake.sampleRequests(for: .bodyMass)
         XCTAssertEqual(try XCTUnwrap(requests.first).startDate, authorizationStart)
         XCTAssertNil(requests.first?.anchorData)
