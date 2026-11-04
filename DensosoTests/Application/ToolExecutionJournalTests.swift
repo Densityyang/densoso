@@ -567,7 +567,7 @@ final class ToolExecutionJournalTests: XCTestCase {
         let requestID = UUID()
         let conversationID = UUID()
         let calls = [mealCall(id: "lunch", mealType: "lunch"), mealCall(id: "dinner", mealType: "dinner")]
-        let userText = "我午餐和晚餐各吃了一碗米饭"
+        let userText = "我午餐和晚餐分别各有一碗米饭，分别计量"
         let container = try makeDiskContainer(at: location.storeURL)
         let repository = SwiftDataAgentRepository(modelContainer: container)
         let provider = ScriptedTextProvider(scripts: [
