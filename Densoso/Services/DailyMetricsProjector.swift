@@ -74,7 +74,7 @@ enum DailyMetricsProjectionWriteGate {
 
         let waiterID = UUID()
         let lease = await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
+            await withCheckedContinuation { (continuation: CheckedContinuation<Lease?, Never>) in
                 if Task.isCancelled {
                     continuation.resume(returning: nil)
                     return
