@@ -153,6 +153,12 @@ final class MigrationBackupManagerTests: XCTestCase {
         ]
         for (url, data) in originalFiles { try data.write(to: url) }
         let backup = try XCTUnwrap(MigrationBackupManager.createBackupIfPresent(storeURL: storeURL))
+        // Make the live store differ from its verified backup so restore has
+        // to replace and then roll back the primary store as well as sidecars.
+        var expectedOriginalFiles = originalFiles
+        let currentStoreData = Data("current-store".utf8)
+        expectedOriginalFiles[storeURL] = currentStoreData
+        try currentStoreData.write(to: storeURL)
         var installMoveCount = 0
         var rollbackMoveNames: [String] = []
 
@@ -196,7 +202,7 @@ final class MigrationBackupManagerTests: XCTestCase {
         )
 
         try MigrationBackupManager.recoverInterruptedRestores(storeURL: storeURL)
-        for (url, expected) in originalFiles {
+        for (url, expected) in expectedOriginalFiles {
             XCTAssertEqual(try Data(contentsOf: url), expected)
         }
     }

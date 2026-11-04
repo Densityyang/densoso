@@ -291,7 +291,9 @@ final class HealthRepositoryTests: XCTestCase {
             through: day,
             in: context
         )
-        XCTAssertEqual(try XCTUnwrap(projectedDays.first).heartRateSamples, [72])
+        let projectedDay = try XCTUnwrap(projectedDays.first { $0.dayStart == day })
+        XCTAssertEqual(projectedDay.healthReadStates?[HealthMetricID.heartRate.rawValue], .available)
+        XCTAssertEqual(projectedDay.heartRateSamples, [72])
     }
 
     func testOldSnapshotAlgorithmTriggersAllStreamRebuildAndCacheInvalidation() async throws {
