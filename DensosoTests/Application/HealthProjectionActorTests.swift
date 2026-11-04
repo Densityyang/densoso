@@ -797,6 +797,78 @@ final class HealthProjectionActorTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<WorkoutRecord>()).count, originalRecords.count)
     }
 
+    func testLegacyImportedWorkoutModerateDefaultIsNotUsedAsEffortEstimate() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let day = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 4)))
+        let start = day.addingTimeInterval(9 * 60 * 60)
+        let imported = WorkoutRecord(
+            date: start,
+            type: "running",
+            durationMinutes: 45,
+            intensity: "moderate",
+            healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000822")!,
+            workoutOrigin: WorkoutOrigin.externalHealthKit.rawValue
+        )
+        let manual = WorkoutRecord(
+            date: start.addingTimeInterval(2 * 60 * 60),
+            type: "running",
+            durationMinutes: 30,
+            intensity: "moderate"
+        )
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            healthKitSampleSummary: DailyHealthSampleSummary(metrics: [], sleep: nil, workoutEffort: []),
+            healthReadStates: [
+                HealthMetricID.workout.rawValue: .available,
+                HealthMetricID.workoutEffort.rawValue: .available,
+            ],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey(day, calendar: calendar),
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "legacy-imported-workout-intensity",
+            algorithmVersion: snapshot.algorithmVersion
+        ))
+        context.insert(imported)
+        context.insert(manual)
+        try context.save()
+
+        let projectedDay = try XCTUnwrap(
+            HealthIntelligenceReadModel(calendar: calendar).loadDays(through: day, in: context).first
+        )
+        XCTAssertTrue(projectedDay.workouts.contains(TrainingWorkoutInput(
+            startedAt: start,
+            durationMinutes: 45,
+            effortScore: nil,
+            intensity: "unknown"
+        )))
+        XCTAssertTrue(projectedDay.workouts.contains(TrainingWorkoutInput(
+            startedAt: manual.date,
+            durationMinutes: 30,
+            effortScore: nil,
+            intensity: "moderate"
+        )))
+
+        let trainingLoad = HealthIntelligenceEngine(calendar: calendar).trainingLoad(
+            workouts: projectedDay.workouts,
+            asOf: day
+        )
+        XCTAssertEqual(trainingLoad.unavailableEffortCount, 1)
+        XCTAssertEqual(trainingLoad.estimatedWorkoutCount, 1)
+    }
+
     func testLoadDaysIncludesAllWorkoutsAcrossStableFetchPages() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current

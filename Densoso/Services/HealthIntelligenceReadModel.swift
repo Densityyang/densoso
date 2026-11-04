@@ -546,7 +546,11 @@ struct HealthIntelligenceReadModel: Sendable {
                 startedAt: record.date,
                 durationMinutes: Double(record.durationMinutes),
                 effortScore: effortScoresByWorkoutID[record.id],
-                intensity: record.intensity
+                // Older imported rows may still carry the schema's historical
+                // `moderate` default. HealthKit does not measure subjective
+                // effort, so only user-entered workouts may use stored manual
+                // intensity as an estimate.
+                intensity: record.healthKitUUID == nil ? record.intensity : "unknown"
             )
         }
     }
