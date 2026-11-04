@@ -94,7 +94,7 @@ final class DeepSeekProviderContractTests: XCTestCase {
                 && usage.outputTokens == 32
                 && usage.reasoningTokens == 12
         })
-        XCTAssertTrue(events.contains(.completed(.completed)))
+        XCTAssertTrue(events.contains(.completed(.toolUse)))
 
         let requests = await transport.recordedRequests()
         let sent = try XCTUnwrap(requests.first)
@@ -118,6 +118,85 @@ final class DeepSeekProviderContractTests: XCTestCase {
         XCTAssertEqual(schema["additionalProperties"] as? Bool, false)
         XCTAssertEqual(logSink.recordedMetadata().count, 1)
         XCTAssertEqual(logSink.recordedMetadata().first?.provider, .deepSeek)
+    }
+
+    func testCompletedTextAndIncompleteReasonsAreFailClosed() async throws {
+        let textResponse = Data(
+            """
+            event: response.completed
+            data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}}
+
+            """.utf8
+        )
+        let textEvents = try await collect(
+            makeProvider(data: textResponse).stream(request(deadline: Date().addingTimeInterval(45)))
+        )
+        XCTAssertEqual(textEvents, [.textDelta("done"), .completed(.completed)])
+
+        let maxTokensResponse = Data(
+            """
+            event: response.incomplete
+            data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"function_call","call_id":"partial-tool","name":"log_weight","arguments":"not-json"}]}}
+
+            """.utf8
+        )
+        let maxTokensEvents = try await collect(
+            makeProvider(data: maxTokensResponse).stream(request(deadline: Date().addingTimeInterval(45)))
+        )
+        XCTAssertFalse(maxTokensEvents.contains { if case .toolCall = $0 { true } else { false } })
+        XCTAssertTrue(maxTokensEvents.contains(.completed(.maxTokens)))
+
+        let filteredResponse = Data(
+            """
+            event: response.incomplete
+            data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"},"output":[{"type":"function_call","call_id":"filtered-tool","name":"log_weight","arguments":"{}"}]}}
+
+            """.utf8
+        )
+        var filteredEvents: [ProviderEvent] = []
+        do {
+            for try await event in makeProvider(data: filteredResponse).stream(
+                request(deadline: Date().addingTimeInterval(45))
+            ) {
+                filteredEvents.append(event)
+            }
+            XCTFail("Content-filtered responses must be rejected")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .contentRejected)
+        }
+        XCTAssertFalse(filteredEvents.contains { if case .toolCall = $0 { true } else { false } })
+
+        let unknownReasonResponse = Data(
+            """
+            event: response.incomplete
+            data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"provider_changed_the_contract"},"output":[]}}
+
+            """.utf8
+        )
+        do {
+            _ = try await collect(
+                makeProvider(data: unknownReasonResponse).stream(request(deadline: Date().addingTimeInterval(45)))
+            )
+            XCTFail("Unknown incomplete reasons must fail closed")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .malformedResponse)
+        }
+
+        let unknownStatusResponse = Data(
+            """
+            event: response.completed
+            data: {"type":"response.completed","response":{"status":"future_status","output":[]}}
+
+            """.utf8
+        )
+        do {
+            _ = try await collect(
+                makeProvider(data: unknownStatusResponse).stream(request(deadline: Date().addingTimeInterval(45)))
+            )
+            XCTFail("A response.completed event with an unknown payload status must fail closed")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .malformedResponse)
+        }
     }
 
     func testImageStructuredOutputAndStatelessToolHistoryEncoding() async throws {
@@ -282,6 +361,14 @@ final class DeepSeekProviderContractTests: XCTestCase {
             maxOutputTokens: 256,
             thinking: thinking,
             deadline: deadline
+        )
+    }
+
+    private func makeProvider(data: Data) -> DeepSeekProvider {
+        DeepSeekProvider(
+            credentialSource: TestCredentialSource(values: [.deepSeek: "fixture"]),
+            transport: ScriptedProviderHTTPTransport(steps: [.response(status: 200, data: data)]),
+            jitter: { _ in 0 }
         )
     }
 }

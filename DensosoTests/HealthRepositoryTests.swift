@@ -9,12 +9,10 @@ final class HealthRepositoryTests: XCTestCase {
     private var context: ModelContext!
 
     override func setUpWithError() throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         container = try ModelContainer(
-            for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self,
-                DailyHealthSnapshotRecord.self, WeightRecord.self, ProfileRevisionRecord.self,
-                HealthSyncOutboxEntry.self, HealthKitImportCursor.self, HealthKitSampleIndexRecord.self,
-                WeeklyReport.self, DailyBriefRecord.self, WeeklyBriefRecord.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
         )
         context = ModelContext(container)
         context.insert(UserProfile())
@@ -36,6 +34,103 @@ final class HealthRepositoryTests: XCTestCase {
             HealthRepository.affectedProjectionDays(from: affectedDates, calendar: calendar),
             [firstDay, secondDay]
         )
+    }
+
+    func testIDBasedRepositoryOperationsReFetchFromTheirOwnContext() async throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let target = MealRecord(date: date, totalCaloriesKcal: 410)
+        let unrelated = MealRecord(date: date, totalCaloriesKcal: 690)
+        context.insert(target)
+        context.insert(unrelated)
+        try context.save()
+
+        let repositoryContext = ModelContext(container)
+        let repository = HealthRepository(modelContext: repositoryContext)
+        try await repository.updateMeal(id: target.id)
+
+        let verificationContext = ModelContext(container)
+        let targetID = target.id
+        let unrelatedID = unrelated.id
+        let outbox = try verificationContext.fetch(FetchDescriptor<HealthSyncOutboxEntry>())
+        XCTAssertEqual(outbox.filter { $0.recordID == targetID }.map(\.syncVersion), [1])
+        XCTAssertFalse(outbox.contains { $0.recordID == unrelatedID })
+
+        try await repository.deleteMeal(id: targetID)
+        let finalContext = ModelContext(container)
+        XCTAssertNil(try finalContext.fetch(FetchDescriptor<MealRecord>()).first { $0.id == targetID })
+        XCTAssertNotNil(try finalContext.fetch(FetchDescriptor<MealRecord>()).first { $0.id == unrelatedID })
+    }
+
+    func testIDBasedRepositoryOperationsReportMissingRecords() async throws {
+        do {
+            try await HealthRepository(modelContext: context).updateMeal(id: UUID())
+            XCTFail("Missing records must be explicit")
+        } catch {
+            XCTAssertEqual(error as? HealthRepositoryError, .mealNotFound)
+        }
+
+        do {
+            try await HealthRepository(modelContext: context).deleteWeight(id: UUID())
+            XCTFail("Missing records must be explicit")
+        } catch {
+            XCTAssertEqual(error as? HealthRepositoryError, .weightNotFound)
+        }
+    }
+
+    func testDeletingHealthKitWorkoutIsRejectedButLocalWorkoutCanBeDeleted() async throws {
+        let imported = WorkoutRecord(
+            date: Date(timeIntervalSince1970: 1_800_000_000),
+            type: "running",
+            durationMinutes: 30,
+            estimatedCaloriesBurned: 220,
+            healthKitUUID: UUID(),
+            workoutOrigin: WorkoutOrigin.externalHealthKit.rawValue
+        )
+        let local = WorkoutRecord(
+            date: Date(timeIntervalSince1970: 1_800_000_000),
+            type: "walking",
+            durationMinutes: 20,
+            estimatedCaloriesBurned: 80
+        )
+        context.insert(imported)
+        context.insert(local)
+        try context.save()
+        let repository = HealthRepository(modelContext: context)
+
+        do {
+            try await repository.deleteWorkout(id: imported.id)
+            XCTFail("HealthKit-owned workouts must be removed from Apple Health")
+        } catch {
+            XCTAssertEqual(error as? HealthRepositoryError, .refuseHealthKitWorkoutDelete)
+        }
+        try await repository.deleteWorkout(id: local.id)
+
+        let persistedContext = ModelContext(container)
+        let workouts = try persistedContext.fetch(FetchDescriptor<WorkoutRecord>())
+        XCTAssertEqual(workouts.map(\.id), [imported.id])
+        XCTAssertEqual(workouts.first?.healthKitUUID, imported.healthKitUUID)
+        XCTAssertTrue(try persistedContext.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).isEmpty)
+    }
+
+    func testMealDeletionCascadesToDishEntriesInPersistedStore() async throws {
+        let meal = MealRecord(date: Date(timeIntervalSince1970: 1_800_000_000), totalCaloriesKcal: 600)
+        let firstDish = DishEntry(dishName: "燕麦")
+        let secondDish = DishEntry(dishName: "酸奶")
+        firstDish.mealRecord = meal
+        secondDish.mealRecord = meal
+        meal.dishes = [firstDish, secondDish]
+        context.insert(meal)
+        context.insert(firstDish)
+        context.insert(secondDish)
+        try context.save()
+
+        try await HealthRepository(modelContext: context).deleteMeal(id: meal.id)
+
+        let persistedContext = ModelContext(container)
+        XCTAssertNil(try persistedContext.fetch(FetchDescriptor<MealRecord>()).first { $0.id == meal.id })
+        XCTAssertFalse(try persistedContext.fetch(FetchDescriptor<DishEntry>()).contains {
+            $0.id == firstDish.id || $0.id == secondDish.id
+        })
     }
 
     func testHealthKitSnapshotRebuildInvalidatesOverlappingWeeklyReportsAndPreservesManualSources() async throws {
@@ -116,7 +211,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(metrics[0].activeCaloriesKcal, activeEnergyWithoutWorkout)
         XCTAssertEqual(try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).count, 1)
 
-        try await repository.delete(meal)
+        try await repository.deleteMeal(id: meal.id)
         metrics = try context.fetch(FetchDescriptor<DailyMetrics>())
         XCTAssertEqual(metrics.count, 1)
         XCTAssertEqual(metrics[0].mealCount, 0)
@@ -295,8 +390,8 @@ final class HealthRepositoryTests: XCTestCase {
         try context.save()
 
         let repository = HealthRepository(modelContext: context)
-        try await repository.update(meal)
-        try await repository.update(weight)
+        try await repository.updateMeal(id: meal.id)
+        try await repository.updateWeight(id: weight.id)
 
         let targetPredicate = #Predicate<HealthSyncOutboxEntry> { $0.recordID == recordID }
         let targetEntries = try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>(predicate: targetPredicate))
@@ -411,13 +506,13 @@ final class HealthRepositoryTests: XCTestCase {
             return try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData).weightKilograms
         }
 
-        try await repository.delete(tiedHigherIDWeight)
+        try await repository.deleteWeight(id: tiedHigherIDWeight.id)
         XCTAssertEqual(try savedWeight(), 72)
 
-        try await repository.delete(tiedLowerIDWeight)
+        try await repository.deleteWeight(id: tiedLowerIDWeight.id)
         XCTAssertEqual(try savedWeight(), 70)
 
-        try await repository.delete(morningWeight)
+        try await repository.deleteWeight(id: morningWeight.id)
         XCTAssertEqual(try savedWeight(), 68)
     }
 
@@ -836,6 +931,44 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.cursor(for: "workouts")?.anchorData, Data([2]))
         let metrics = try context.fetch(FetchDescriptor<DailyMetrics>())
         XCTAssertEqual(metrics.first(where: { Calendar.current.isDate($0.date, inSameDayAs: date) })?.workoutCount, 0)
+    }
+
+    func testImportedWorkoutDayMoveCoordinatesBothOldAndNewProjectionDays() async throws {
+        let repository = HealthRepository(modelContext: context)
+        let healthKitUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000025")!
+        let oldDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let newDate = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 4, to: oldDate))
+        let existing = WorkoutRecord(
+            date: oldDate,
+            type: "running",
+            durationMinutes: 30,
+            estimatedCaloriesBurned: 240,
+            healthKitUUID: healthKitUUID,
+            workoutOrigin: WorkoutOrigin.externalHealthKit.rawValue
+        )
+        context.insert(existing)
+        try context.save()
+
+        let updated = try WorkoutSnapshot(
+            healthKitUUID: healthKitUUID,
+            startedAt: newDate,
+            duration: 1_800,
+            activityType: "running",
+            energyInput: .init(measuredKilocalories: 260),
+            origin: .watchHealthKit,
+            dataQuality: .complete
+        )
+        try await repository.applyImportedWorkouts(
+            [updated],
+            deletedHealthKitUUIDs: [],
+            nextAnchorData: Data([3])
+        )
+
+        XCTAssertEqual(existing.date, newDate)
+        XCTAssertEqual(try repository.cursor(for: "workouts")?.anchorData, Data([3]))
+        let persistedMetrics = try context.fetch(FetchDescriptor<DailyMetrics>())
+        XCTAssertTrue(persistedMetrics.contains { Calendar.current.isDate($0.date, inSameDayAs: oldDate) })
+        XCTAssertTrue(persistedMetrics.contains { Calendar.current.isDate($0.date, inSameDayAs: newDate) })
     }
 
     func testImportedWorkoutDedupProcessesUUIDGroupsAcrossFetchBatchBoundary() async throws {
@@ -1537,7 +1670,8 @@ final class HealthRepositoryTests: XCTestCase {
             )],
             metric: .activeEnergy,
             stream: "activeEnergy",
-            lookbackStart: day
+            lookbackStart: day,
+            through: day
         )
 
         let decoder = JSONDecoder()
@@ -1546,7 +1680,7 @@ final class HealthRepositoryTests: XCTestCase {
             DailyHealthSnapshot.self,
             from: XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first).payloadData
         )
-        XCTAssertEqual(savedSnapshot.activeEnergyKcal, 640)
+        XCTAssertNil(savedSnapshot.activeEnergyKcal)
         XCTAssertEqual(savedSnapshot.healthReadStates?[HealthMetricID.activeEnergy.rawValue], .dataUnavailableOrReadScopeUnknown)
         let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(metric.activeCaloriesKcal, 0)
@@ -1570,7 +1704,8 @@ final class HealthRepositoryTests: XCTestCase {
             ],
             metric: .activeEnergy,
             stream: HealthMetricID.activeEnergy.rawValue,
-            lookbackStart: day
+            lookbackStart: day,
+            through: day
         )
 
         let decoder = JSONDecoder()
@@ -1620,7 +1755,8 @@ final class HealthRepositoryTests: XCTestCase {
             )],
             metric: .activeEnergy,
             stream: "activeEnergy",
-            lookbackStart: targetDay
+            lookbackStart: targetDay,
+            through: targetDay
         )
 
         let decoder = JSONDecoder()

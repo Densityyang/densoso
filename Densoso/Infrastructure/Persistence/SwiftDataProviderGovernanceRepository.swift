@@ -38,7 +38,12 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
         )
         descriptor.fetchLimit = 1
         do {
-            if let record = try modelContext.fetch(descriptor).first {
+            let existingRecord = try modelContext.fetch(descriptor).first
+            let previousGranted = existingRecord?.granted ?? false
+            let changesHealthPolicy = (dataClass.isHealthContextClass || dataClass.isConversationHistoryClass)
+                && (previousGranted != granted
+                    || (granted && existingRecord?.policyVersion != policyVersion))
+            if let record = existingRecord {
                 record.granted = granted
                 record.policyVersion = policyVersion
                 record.decidedAt = now
@@ -55,27 +60,25 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
                     )
                 )
             }
-            var allowed = try currentGrantedHealthContextClasses(for: provider)
-            if try isConsentGranted(provider: provider, dataClass: .conversationHistory) {
-                allowed.insert(.conversationHistory)
-            }
-            let changesHealthPolicy = dataClass.isHealthContextClass || dataClass.isConversationHistoryClass
-            let state: CloudHealthPolicyState = changesHealthPolicy
-                ? (allowed.isEmpty ? .revoked : .active)
-                : previousPolicy.state
-            let snapshot = CloudHealthContextPolicySnapshot.make(
-                provider: provider,
-                policyID: previousPolicy.policyID,
-                revision: previousPolicy.revision + 1,
-                state: state,
-                allowedClasses: allowed,
-                createdAt: previousPolicy.createdAt == .distantPast ? now : previousPolicy.createdAt,
-                updatedAt: now,
-                confirmedAt: changesHealthPolicy && granted ? now : previousPolicy.confirmedAt,
-                changeSource: .settings
-            )
-            guard upsertPolicySnapshot(snapshot) else {
-                throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+            if changesHealthPolicy {
+                var allowed = try currentGrantedHealthContextClasses(for: provider)
+                if try isConsentGranted(provider: provider, dataClass: .conversationHistory) {
+                    allowed.insert(.conversationHistory)
+                }
+                let snapshot = CloudHealthContextPolicySnapshot.make(
+                    provider: provider,
+                    policyID: previousPolicy.policyID,
+                    revision: previousPolicy.revision + 1,
+                    state: allowed.isEmpty ? .revoked : .active,
+                    allowedClasses: allowed,
+                    createdAt: previousPolicy.createdAt == .distantPast ? now : previousPolicy.createdAt,
+                    updatedAt: now,
+                    confirmedAt: granted ? now : previousPolicy.confirmedAt,
+                    changeSource: .settings
+                )
+                guard upsertPolicySnapshot(snapshot) else {
+                    throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+                }
             }
             try modelContext.save()
         } catch {

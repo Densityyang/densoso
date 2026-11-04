@@ -8,9 +8,14 @@ final class HistoricalMetricsRecomputeService: HistoricalMetricsRecomputing {
     static let maximumBatchSize = 10
 
     private let modelContainer: ModelContainer
+    private let persistenceOperationBarrier: PersistenceOperationBarrier
 
-    init(modelContainer: ModelContainer) {
+    init(
+        modelContainer: ModelContainer,
+        persistenceOperationBarrier: PersistenceOperationBarrier = .shared
+    ) {
         self.modelContainer = modelContainer
+        self.persistenceOperationBarrier = persistenceOperationBarrier
     }
 
     func recomputePendingMetrics(
@@ -18,7 +23,23 @@ final class HistoricalMetricsRecomputeService: HistoricalMetricsRecomputing {
         batchSize: Int,
         shouldStop: @MainActor () -> Bool
     ) async throws -> HistoricalMetricsRecomputeResult {
-        let calendar = Calendar.current
+        let operationLease = try await persistenceOperationBarrier.acquireMutationOperation()
+        defer { persistenceOperationBarrier.release(operationLease) }
+        return try await persistenceOperationBarrier.withLease(operationLease) {
+            try await recomputePendingMetricsWhileLeased(
+                now: now,
+                batchSize: batchSize,
+                shouldStop: shouldStop
+            )
+        }
+    }
+
+    private func recomputePendingMetricsWhileLeased(
+        now: Date,
+        batchSize: Int,
+        shouldStop: @MainActor () -> Bool
+    ) async throws -> HistoricalMetricsRecomputeResult {
+        let calendar = Calendar.autoupdatingCurrent
         let today = calendar.startOfDay(for: now)
         guard let firstDay = calendar.date(byAdding: .day, value: -(Self.lookbackDayCount - 1), to: today),
               let dayAfterToday = calendar.date(byAdding: .day, value: 1, to: today) else {

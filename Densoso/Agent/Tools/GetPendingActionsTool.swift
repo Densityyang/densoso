@@ -4,14 +4,15 @@ import Foundation
 @MainActor
 struct GetPendingActionsTool: AgentTool {
     private static let maximumReturnedActions = 20
-    private static let maximumSummaryLength = 240
-    private static let maximumOutputCharacters = 7_500
+    private static let maximumOutputUTF8Bytes = 60_000
 
     var definition: ToolSchema {
         .strictObject(
             name: "get_pending_actions",
-            description: "读取尚待用户确认的操作摘要。此工具只查看状态，不确认、不拒绝，也不提交操作。",
-            properties: [:],
+            description: "读取完整的待确认操作内容、来源和状态。结果过多时按 nextOffset 继续读取；此工具只查看状态，不确认、不拒绝，也不提交操作。",
+            properties: [
+                "offset": .integer(minimum: 0, maximum: 10_000, description: "继续读取时使用上次返回的 nextOffset；默认 0"),
+            ],
             required: []
         )
     }
@@ -21,10 +22,16 @@ struct GetPendingActionsTool: AgentTool {
         context: AgentSession,
         clientRequestID: UUID
     ) async throws -> String {
-        try response(actions: context.pendingActions, asOf: Date())
+        guard let data = argumentsJSON.data(using: .utf8),
+              let arguments = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw GetPendingActionsToolError.invalidArguments
+        }
+        let offset = arguments["offset"] as? Int ?? 0
+        try response(actions: context.pendingActions, asOf: Date(), offset: offset)
     }
 
-    func response(actions: [PendingAction], asOf date: Date) throws -> String {
+    func response(actions: [PendingAction], asOf date: Date, offset: Int = 0) throws -> String {
+        guard (0...10_000).contains(offset) else { throw GetPendingActionsToolError.invalidOffset }
         let candidates = actions
             .filter { !$0.state.isTerminal && $0.expiresAt > date }
             .sorted { lhs, rhs in
@@ -35,34 +42,54 @@ struct GetPendingActionsTool: AgentTool {
                 if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
                 return lhs.id.uuidString < rhs.id.uuidString
             }
-        var summaries = Array(candidates.prefix(Self.maximumReturnedActions)).map { action in
+        var summaries = Array(candidates.dropFirst(offset).prefix(Self.maximumReturnedActions)).map { action in
             PendingActionSummary(
                 actionID: action.id.uuidString.lowercased(),
                 type: action.payload.actionType.rawValue,
                 title: action.payload.title,
-                summary: String(action.payload.summary.prefix(Self.maximumSummaryLength)),
+                summary: action.payload.summary,
                 state: action.state.rawValue,
                 createdAt: action.createdAt,
-                expiresAt: action.expiresAt
+                expiresAt: action.expiresAt,
+                confidence: action.payload.confidence,
+                payload: action.payload
             )
         }
-        var hasMore = candidates.count > summaries.count
+        var oversizedActions: [OversizedPendingActionReference] = []
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         while true {
+            let consumedCount = summaries.count + oversizedActions.count
+            let hasMore = offset + consumedCount < candidates.count
             let output = PendingActionsToolOutput(
-                status: summaries.isEmpty ? "noActions" : "available",
+                status: summaries.isEmpty
+                    ? (oversizedActions.isEmpty ? "noActions" : "requiresLocalReview")
+                    : "available",
                 count: summaries.count,
                 hasMore: hasMore,
-                actions: summaries
+                nextOffset: hasMore ? offset + consumedCount : nil,
+                actions: summaries,
+                oversizedActions: oversizedActions
             )
             let serialized = String(decoding: try encoder.encode(output), as: UTF8.self)
-            if serialized.count <= Self.maximumOutputCharacters || summaries.isEmpty {
+            if serialized.utf8.count <= Self.maximumOutputUTF8Bytes || summaries.isEmpty {
                 return serialized
             }
-            summaries.removeLast()
-            hasMore = true
+            let removed = summaries.removeLast()
+            if summaries.isEmpty {
+                oversizedActions.append(
+                    OversizedPendingActionReference(
+                        actionID: removed.actionID,
+                        type: removed.type,
+                        title: String(removed.title.prefix(80)),
+                        summary: String(removed.summary.prefix(160)),
+                        state: removed.state,
+                        payloadUTF8Bytes: try encoder.encode(removed.payload).count,
+                        requiresLocalReview: true
+                    )
+                )
+            }
         }
     }
 }
@@ -71,7 +98,19 @@ private struct PendingActionsToolOutput: Encodable {
     let status: String
     let count: Int
     let hasMore: Bool
+    let nextOffset: Int?
     let actions: [PendingActionSummary]
+    let oversizedActions: [OversizedPendingActionReference]
+}
+
+private struct OversizedPendingActionReference: Encodable {
+    let actionID: String
+    let type: String
+    let title: String
+    let summary: String
+    let state: String
+    let payloadUTF8Bytes: Int
+    let requiresLocalReview: Bool
 }
 
 private struct PendingActionSummary: Encodable {
@@ -82,4 +121,11 @@ private struct PendingActionSummary: Encodable {
     let state: String
     let createdAt: Date
     let expiresAt: Date
+    let confidence: Double
+    let payload: ActionPayload
+}
+
+private enum GetPendingActionsToolError: Error {
+    case invalidArguments
+    case invalidOffset
 }

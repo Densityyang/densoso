@@ -9,7 +9,7 @@ import SwiftData
 actor HealthProjectionActor {
     private static let confirmedPlanFetchBatchSize = 64
     private static let watchPlanSummaryLimit = 10
-    private var calendar: Calendar = .current
+    private var calendar: Calendar = .autoupdatingCurrent
     private var briefCacheGenerationFence = HealthBriefCacheGenerationFence()
 
     private enum WatchPlanCandidate {
@@ -19,7 +19,7 @@ actor HealthProjectionActor {
 
     init(
         modelContainer: ModelContainer,
-        calendar: Calendar = .current,
+        calendar: Calendar = .autoupdatingCurrent,
         briefCacheGenerationFence: HealthBriefCacheGenerationFence = HealthBriefCacheGenerationFence()
     ) {
         self.modelContainer = modelContainer
@@ -88,6 +88,26 @@ actor HealthProjectionActor {
             dailyBriefValidatedAt: date,
             weeklyBrief: cachedWeekly,
             updatesWeeklyBrief: true
+        )
+    }
+
+    func dailyBriefSourceFingerprint(asOf date: Date = Date()) throws -> String? {
+        let reader = HealthIntelligenceReadModel(calendar: calendar)
+        let days = try reader.loadDays(through: date, in: modelContext)
+        let goal = try reader.goalProfile(asOf: date, in: modelContext)
+        let plannedWorkout = try reader.plannedWorkoutTomorrow(asOf: date, in: modelContext)
+        guard let result = HealthIntelligenceEngine(calendar: calendar).makeDailyBrief(
+            days: days,
+            goals: goal,
+            plannedWorkoutTomorrow: plannedWorkout
+        ) else {
+            return nil
+        }
+        return try hash(
+            days: days,
+            goal: goal,
+            algorithmVersion: result.dailyBrief.algorithmVersion,
+            plannedWorkoutTomorrow: plannedWorkout
         )
     }
 

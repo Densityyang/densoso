@@ -189,6 +189,29 @@ public struct WatchHealthDomainStatus: Codable, Equatable, Sendable {
 
 /// A deliberately small, current-state-only snapshot for the Watch companion.
 /// It never carries sample arrays, conversation history, or provider prompts.
+public enum WatchSnapshotRefreshState: String, Codable, CaseIterable, Sendable {
+    case fresh
+    case stale
+    case refreshing
+    case failed
+}
+
+public struct WatchHealthSyncSummary: Codable, Equatable, Identifiable, Sendable {
+    public let actionID: UUID
+    public let actionType: String
+    public let state: HealthSyncState
+    public let updatedAt: Date
+
+    public var id: UUID { actionID }
+
+    public init(actionID: UUID, actionType: String, state: HealthSyncState, updatedAt: Date) {
+        self.actionID = actionID
+        self.actionType = String(actionType.prefix(40))
+        self.state = state
+        self.updatedAt = updatedAt
+    }
+}
+
 public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
     public let generatedAt: Date
     public let summary: String
@@ -204,6 +227,11 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
     /// Every causal sequence from 1 through this value has only terminal receipts.
     /// Optional to preserve decoding for schemaVersion 1 snapshots from older phones.
     public let terminalCausalSequenceWatermark: Int?
+    public let sourceValidatedAt: Date?
+    public let sourceFingerprint: String?
+    public let refreshState: WatchSnapshotRefreshState
+    public let snapshotRevision: UInt64
+    public let healthSyncSummaries: [WatchHealthSyncSummary]
 
     public init(
         generatedAt: Date = Date(),
@@ -214,7 +242,12 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
         acknowledgedMessageIDs: [UUID],
         terminalCausalSequenceWatermark: Int? = nil,
         tomorrowGuidance: WatchTomorrowGuidanceSummary? = nil,
-        recoverySummary: WatchRecoverySummary? = nil
+        recoverySummary: WatchRecoverySummary? = nil,
+        sourceValidatedAt: Date? = nil,
+        sourceFingerprint: String? = nil,
+        refreshState: WatchSnapshotRefreshState = .stale,
+        snapshotRevision: UInt64 = 0,
+        healthSyncSummaries: [WatchHealthSyncSummary] = []
     ) {
         self.generatedAt = generatedAt
         self.summary = String(summary.prefix(500))
@@ -225,6 +258,35 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
         self.workoutPlans = Array(workoutPlans.prefix(10))
         self.acknowledgedMessageIDs = Array(acknowledgedMessageIDs.suffix(100))
         self.terminalCausalSequenceWatermark = terminalCausalSequenceWatermark
+        self.sourceValidatedAt = sourceValidatedAt
+        self.sourceFingerprint = sourceFingerprint.map { String($0.prefix(128)) }
+        self.refreshState = refreshState
+        self.snapshotRevision = snapshotRevision
+        self.healthSyncSummaries = Array(healthSyncSummaries.prefix(10))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case generatedAt, summary, recoverySummary, tomorrowGuidance, domains, pendingActions
+        case workoutPlans, acknowledgedMessageIDs, terminalCausalSequenceWatermark
+        case sourceValidatedAt, sourceFingerprint, refreshState, snapshotRevision, healthSyncSummaries
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        generatedAt = try values.decodeIfPresent(Date.self, forKey: .generatedAt) ?? .distantPast
+        summary = String((try values.decodeIfPresent(String.self, forKey: .summary) ?? "").prefix(500))
+        recoverySummary = try values.decodeIfPresent(WatchRecoverySummary.self, forKey: .recoverySummary)
+        tomorrowGuidance = try values.decodeIfPresent(WatchTomorrowGuidanceSummary.self, forKey: .tomorrowGuidance)
+        domains = try values.decodeIfPresent([WatchHealthDomainStatus].self, forKey: .domains) ?? []
+        pendingActions = Array((try values.decodeIfPresent([WatchPendingActionSummary].self, forKey: .pendingActions) ?? []).prefix(10))
+        workoutPlans = Array((try values.decodeIfPresent([WatchWorkoutPlanSummary].self, forKey: .workoutPlans) ?? []).prefix(10))
+        acknowledgedMessageIDs = Array((try values.decodeIfPresent([UUID].self, forKey: .acknowledgedMessageIDs) ?? []).suffix(100))
+        terminalCausalSequenceWatermark = try values.decodeIfPresent(Int.self, forKey: .terminalCausalSequenceWatermark)
+        sourceValidatedAt = try values.decodeIfPresent(Date.self, forKey: .sourceValidatedAt)
+        sourceFingerprint = try values.decodeIfPresent(String.self, forKey: .sourceFingerprint).map { String($0.prefix(128)) }
+        refreshState = try values.decodeIfPresent(WatchSnapshotRefreshState.self, forKey: .refreshState) ?? .stale
+        snapshotRevision = try values.decodeIfPresent(UInt64.self, forKey: .snapshotRevision) ?? 0
+        healthSyncSummaries = Array((try values.decodeIfPresent([WatchHealthSyncSummary].self, forKey: .healthSyncSummaries) ?? []).prefix(10))
     }
 
     public func isCurrentLocalDay(asOf date: Date, calendar: Calendar) -> Bool {
@@ -233,6 +295,13 @@ public struct WatchTodaySnapshot: Codable, Equatable, Sendable {
 
     public func activePendingActions(asOf date: Date) -> [WatchPendingActionSummary] {
         pendingActions.filter { $0.expiresAt > date }
+    }
+}
+
+public enum WatchSnapshotRevisionPolicy {
+    public static func shouldApply(_ incoming: WatchTodaySnapshot, over current: WatchTodaySnapshot?) -> Bool {
+        guard let current else { return true }
+        return incoming.snapshotRevision > current.snapshotRevision
     }
 }
 
@@ -246,6 +315,7 @@ public enum WatchMessageError: Equatable, Sendable, SharedErrorDescribing {
     case causalSequenceExhausted
     case outboxCapacityExceeded
     case invalidExpiry
+    case phoneConfirmationRequired
 
     public var sharedErrorDescriptor: SharedErrorDescriptor {
         let reason: SharedErrorReason
@@ -277,6 +347,9 @@ public enum WatchMessageError: Equatable, Sendable, SharedErrorDescribing {
             numericCode = nil
         case .invalidExpiry:
             reason = .watchInvalidExpiry
+            numericCode = nil
+        case .phoneConfirmationRequired:
+            reason = .watchProtocolViolation
             numericCode = nil
         }
         return SharedErrorDescriptor(
@@ -468,6 +541,43 @@ public struct WatchMessageOutbox: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(pendingByID, forKey: .pendingByID)
         try container.encodeIfPresent(lastCausalSequence, forKey: .lastCausalSequence)
+    }
+}
+
+public struct WatchMessageOutboxCommit: Equatable, Sendable {
+    public let outbox: WatchMessageOutbox
+    public let envelope: WatchMessageEnvelope
+
+    public init(outbox: WatchMessageOutbox, envelope: WatchMessageEnvelope) {
+        self.outbox = outbox
+        self.envelope = envelope
+    }
+}
+
+/// Persists a candidate queue before returning it to the caller for publication.
+/// If persistence throws, the caller still owns its unchanged value-type outbox.
+public enum WatchMessageOutboxPersistenceTransaction {
+    public static func enqueue(
+        _ payload: WatchPayload,
+        in current: WatchMessageOutbox,
+        persist: (WatchMessageOutbox) throws -> Void
+    ) throws -> WatchMessageOutboxCommit {
+        var candidate = current
+        let envelope: WatchMessageEnvelope
+        switch payload {
+        case .transcript:
+            envelope = try candidate.enqueueCausalCommand(
+                payload,
+                dependsOn: candidate.latestPendingCausalSequence
+            )
+        case .requestTodaySnapshot, .acknowledgement, .todaySnapshot:
+            envelope = WatchMessageEnvelope(payload: payload)
+            _ = try candidate.enqueue(envelope)
+        case .confirm, .reject:
+            throw WatchMessageError.phoneConfirmationRequired
+        }
+        try persist(candidate)
+        return WatchMessageOutboxCommit(outbox: candidate, envelope: envelope)
     }
 }
 

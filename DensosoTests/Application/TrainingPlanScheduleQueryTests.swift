@@ -79,6 +79,18 @@ final class TrainingPlanScheduleQueryTests: XCTestCase {
             draft: singlePlanDraft,
             state: .scheduled
         )
+        let terminalPlanDate = at(0, hour: 12)
+        let terminalSinglePlan = ConfirmedWorkoutPlanEntry(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000215")!,
+            idempotencyKey: "terminal-single-plan",
+            draft: WorkoutPlanDraft(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000216")!,
+                name: "已终止单次计划",
+                activity: .running,
+                scheduledAt: terminalPlanDate
+            ),
+            state: .terminal
+        )
         let schema = Schema(versionedSchema: DensosoSchemaV5.self)
         let container = try ModelContainer(
             for: schema,
@@ -93,12 +105,26 @@ final class TrainingPlanScheduleQueryTests: XCTestCase {
                 startTime: at(-1, hour: 9)
             )
         )
+        var terminatedEntry = entry
+        terminatedEntry.state = .terminal
+        context.insert(ScheduleEvent(
+            date: at(0, hour: 8),
+            title: "已终止计划",
+            notes: try terminatedEntry.encodedNotes(),
+            startTime: at(0, hour: 8)
+        ))
         context.insert(ScheduleEvent(
             date: singlePlanDate,
             title: singlePlanDraft.name,
             notes: try singlePlan.encodedNotes(),
             startTime: singlePlanDate,
             endTime: at(0, hour: 16)
+        ))
+        context.insert(ScheduleEvent(
+            date: terminalPlanDate,
+            title: terminalSinglePlan.draft.name,
+            notes: try terminalSinglePlan.encodedNotes(),
+            startTime: terminalPlanDate
         ))
         context.insert(ScheduleEvent(
             date: at(0, hour: 14),
@@ -127,8 +153,13 @@ final class TrainingPlanScheduleQueryTests: XCTestCase {
             nil,
             "休息日",
         ])
+        XCTAssertEqual(schedule.map(\.source), [
+            .confirmedTrainingPlan, .scheduleEvent, .confirmedWorkoutPlan, .confirmedTrainingPlan,
+        ])
         XCTAssertTrue(schedule.allSatisfy { $0.startTime >= today })
         XCTAssertFalse(schedule.contains { $0.title == "更早的普通日程" })
+        XCTAssertFalse(schedule.contains { $0.title.contains("已终止计划") })
+        XCTAssertFalse(schedule.contains { $0.title == "已终止单次计划" })
         XCTAssertFalse(schedule.contains { $0.title.contains("骑行") || $0.title.contains("跑步") })
         XCTAssertFalse(schedule.contains { $0.notes?.contains(ConfirmedTrainingPlanEntry.notesPrefix) == true })
         XCTAssertTrue(schedule.allSatisfy { ($0.notes?.count ?? 0) <= 600 })

@@ -5,6 +5,30 @@ import XCTest
 
 @MainActor
 final class ConfirmationCoordinatorTests: XCTestCase {
+    func testLocalConfirmationReturnsBeforeHealthOutboxProcessing() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let repository = SwiftDataConfirmationRepository(modelContainer: container)
+        let worker = CountingHealthSyncOutbox()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let coordinator = ConfirmationCoordinator(
+            repository: repository,
+            writeGate: PersistenceWriteGate(state: .writable),
+            now: { now },
+            healthSyncOutbox: worker
+        )
+        let pending = try await coordinator.stage(payload: Self.sampleMeal(), clientRequestID: UUID())
+
+        let receipt = try await coordinator.confirm(action: pending)
+
+        XCTAssertEqual(receipt.healthSyncState, .pending)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<MealRecord>()), 1)
+        XCTAssertEqual(worker.processCount, 0)
+        await coordinator.processHealthSyncOutbox()
+        XCTAssertEqual(worker.processCount, 1)
+    }
+
     func testConfirmationErrorsDistinguishRetryableWatchReplayFromTerminalFailures() {
         let expiredError = ConfirmationError.expired
         XCTAssertEqual(expiredError.sharedErrorDescriptor.code, .confirmationExpired)
@@ -896,6 +920,18 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         )
         XCTAssertEqual(confirmationMetric.weightKg, standaloneMetric.weightKg)
         XCTAssertEqual(confirmationMetric.weightKg, 85)
+        let confirmedFingerprint = confirmationMetric.sourceFingerprint
+        let confirmedProjectionVersion = confirmationMetric.projectionVersion
+        let confirmedPendingState = confirmationMetric.requiresRecompute
+        let confirmedEnergyBalance = confirmationMetric.energyBalanceLikelyKcal
+        try await DailyMetricsProjector.reproject(on: day, in: confirmationContext)
+        let independentlyProjected = try XCTUnwrap(
+            ModelContext(harness.container).fetch(FetchDescriptor<DailyMetrics>()).first
+        )
+        XCTAssertEqual(confirmedFingerprint, independentlyProjected.sourceFingerprint)
+        XCTAssertEqual(confirmedProjectionVersion, independentlyProjected.projectionVersion)
+        XCTAssertEqual(confirmedPendingState, independentlyProjected.requiresRecompute)
+        XCTAssertEqual(confirmedEnergyBalance, independentlyProjected.energyBalanceLikelyKcal)
     }
 
     func testConfirmedWeightCreatesAndUpdatesPrimaryWhenOnlySecondaryProfileExists() async throws {
@@ -1317,11 +1353,124 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(try failedContext.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 0)
 
         await harness.repository.setFaultPoint(nil)
-        try await harness.coordinator.recoverInterruptedCommits()
         let recovered = try await harness.coordinator.activeActions()
         XCTAssertEqual(recovered.first?.state, .pending)
         _ = try await harness.coordinator.confirm(action: action)
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 1)
+    }
+
+    func testRecoverySaveFailureRollsBackAndCanRetryInSameProcess() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        let actionID = action.id
+        let context = ModelContext(harness.container)
+        let actionRecord = try XCTUnwrap(context.fetch(
+            FetchDescriptor<PendingActionRecord>(predicate: #Predicate { $0.id == actionID })
+        ).first)
+        actionRecord.stateRaw = PendingActionState.committing.rawValue
+        try context.save()
+
+        await harness.repository.setFaultPoint(.beforeRecoverySave)
+        await XCTAssertThrowsErrorAsync(
+            try await harness.repository.recoverInterruptedCommits(
+                now: Date(timeIntervalSince1970: 1_700_000_100)
+            )
+        ) { error in
+            XCTAssertEqual(error as? ConfirmationInjectedFailure, .fault(.beforeRecoverySave))
+        }
+
+        let afterFailureContext = ModelContext(harness.container)
+        let afterFailure = try XCTUnwrap(afterFailureContext.fetch(
+            FetchDescriptor<PendingActionRecord>(predicate: #Predicate { $0.id == actionID })
+        ).first)
+        XCTAssertEqual(afterFailure.stateRaw, PendingActionState.committing.rawValue)
+
+        await harness.repository.setFaultPoint(nil)
+        try await harness.coordinator.recoverInterruptedCommits()
+        let afterRetryContext = ModelContext(harness.container)
+        let afterRetry = try XCTUnwrap(afterRetryContext.fetch(
+            FetchDescriptor<PendingActionRecord>(predicate: #Predicate { $0.id == actionID })
+        ).first)
+        XCTAssertEqual(afterRetry.stateRaw, PendingActionState.pending.rawValue)
+        XCTAssertEqual(try afterRetryContext.fetchCount(FetchDescriptor<MealRecord>()), 0)
+    }
+
+    func testFailedConfirmationStateSavesRollBackActorContextAndPersistedStore() async throws {
+        let harness = try Harness()
+        let rejectedAction = try await harness.coordinator.stage(
+            payload: try Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        await harness.repository.setFaultPoint(.beforeRejectSave)
+        await XCTAssertThrowsErrorAsync(
+            try await harness.coordinator.reject(id: rejectedAction.id)
+        ) { error in
+            XCTAssertEqual(error as? ConfirmationInjectedFailure, .fault(.beforeRejectSave))
+        }
+        await harness.repository.setFaultPoint(nil)
+        let activeAfterRejectFailure = try await harness.coordinator.activeActions()
+        XCTAssertEqual(activeAfterRejectFailure.first?.state, .pending)
+        let rejectedActionID = rejectedAction.id
+        let rejectedPersistedContext = ModelContext(harness.container)
+        let rejectedPersisted = try XCTUnwrap(
+            rejectedPersistedContext.fetch(
+                FetchDescriptor<PendingActionRecord>(predicate: #Predicate { $0.id == rejectedActionID })
+            ).first
+        )
+        XCTAssertEqual(rejectedPersisted.stateRaw, PendingActionState.pending.rawValue)
+
+        let committingAction = try await harness.coordinator.stage(
+            payload: try Self.sampleMeal(),
+            clientRequestID: UUID()
+        )
+        await harness.repository.setFaultPoint(.beforeCommittingSave)
+        await XCTAssertThrowsErrorAsync(
+            try await harness.coordinator.confirm(action: committingAction)
+        ) { error in
+            XCTAssertEqual(error as? ConfirmationInjectedFailure, .fault(.beforeCommittingSave))
+        }
+        await harness.repository.setFaultPoint(nil)
+        let committingActionID = committingAction.id
+        let committingPersistedContext = ModelContext(harness.container)
+        let committingPersisted = try XCTUnwrap(
+            committingPersistedContext.fetch(
+                FetchDescriptor<PendingActionRecord>(predicate: #Predicate { $0.id == committingActionID })
+            ).first
+        )
+        XCTAssertEqual(committingPersisted.stateRaw, PendingActionState.pending.rawValue)
+        let activeAfterCommittingFailure = try await harness.coordinator.activeActions()
+        XCTAssertEqual(activeAfterCommittingFailure.last?.state, .pending)
+    }
+
+    func testPostCommitFailureRecoversAndRetryReturnsExistingReceiptWithoutDuplicate() async throws {
+        let harness = try Harness()
+        let action = try await harness.coordinator.stage(
+            payload: Self.sampleWeight(),
+            clientRequestID: UUID()
+        )
+        await harness.repository.setFaultPoint(.afterTransactionCommitted)
+
+        await XCTAssertThrowsErrorAsync(try await harness.coordinator.confirm(action: action)) { error in
+            XCTAssertEqual(error as? ConfirmationInjectedFailure, .fault(.afterTransactionCommitted))
+        }
+
+        await harness.repository.setFaultPoint(nil)
+        let persistedContext = ModelContext(harness.container)
+        XCTAssertEqual(try persistedContext.fetchCount(FetchDescriptor<WeightRecord>()), 1)
+        XCTAssertEqual(try persistedContext.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 1)
+        let firstReceipt = try XCTUnwrap(
+            persistedContext.fetch(FetchDescriptor<CommittedActionReceiptRecord>()).first
+        )
+
+        let replayedReceipt = try await harness.coordinator.confirm(action: action)
+        XCTAssertEqual(replayedReceipt.id, firstReceipt.id)
+        let replayContext = ModelContext(harness.container)
+        XCTAssertEqual(try replayContext.fetchCount(FetchDescriptor<WeightRecord>()), 1)
+        XCTAssertEqual(try replayContext.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 1)
+        XCTAssertEqual(try replayContext.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 1)
     }
 
     func testCrashAfterCommitReturnsExistingReceiptWithoutDuplicate() async throws {
@@ -1481,13 +1630,22 @@ final class ConfirmationCoordinatorTests: XCTestCase {
     }
 }
 
+@MainActor
+private final class CountingHealthSyncOutbox: HealthSyncOutboxProcessing {
+    private(set) var processCount = 0
+
+    func processPending() async {
+        processCount += 1
+    }
+}
+
 private struct Harness {
     let container: ModelContainer
     let repository: SwiftDataConfirmationRepository
     let coordinator: ConfirmationCoordinator
 
     init(timeToLive: TimeInterval = 24 * 60 * 60) throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         container = try ModelContainer(for: schema, configurations: [configuration])
         repository = SwiftDataConfirmationRepository(modelContainer: container)

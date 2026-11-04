@@ -44,7 +44,8 @@ struct GetTodayPlanTool: AgentTool {
                     title: String(event.title.prefix(60)),
                     startTime: ISO8601DateFormatter().string(from: event.startTime),
                     endTime: event.endTime.map { ISO8601DateFormatter().string(from: $0) },
-                    summary: event.notes.map { String($0.prefix(80)) }
+                    summary: event.notes.map { String($0.prefix(80)) },
+                    source: event.source.rawValue
                 )
             }
         )
@@ -76,4 +77,5 @@ private struct TodayPlanItemOutput: Encodable {
     let startTime: String
     let endTime: String?
     let summary: String?
+    let source: String
 }

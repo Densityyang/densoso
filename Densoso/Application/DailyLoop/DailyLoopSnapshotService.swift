@@ -8,7 +8,7 @@ struct DailyLoopSnapshotComposer {
     private let maximumWorkoutPlans = 10
     private let refreshStaleAfter: TimeInterval = 6 * 60 * 60
 
-    init(calendar: Calendar = .current) {
+    init(calendar: Calendar = .autoupdatingCurrent) {
         self.calendar = calendar
     }
 
@@ -36,7 +36,10 @@ struct DailyLoopSnapshotComposer {
             )
         }
         let pendingSummaries = pendingActions
-            .filter { $0.state == .pending && $0.expiresAt > date }
+            .filter {
+                $0.state == .pending
+                    && PendingActionExpirationPolicy.isActive(expiresAt: $0.expiresAt, asOf: date)
+            }
             .sorted {
                 if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
                 return $0.id.uuidString < $1.id.uuidString

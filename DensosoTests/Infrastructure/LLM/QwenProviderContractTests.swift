@@ -78,6 +78,44 @@ final class QwenProviderContractTests: XCTestCase {
         XCTAssertEqual(parameters["additionalProperties"] as? Bool, false)
     }
 
+    func testMissingOrUnknownFinishReasonFailsClosedBeforeToolCallsAreEmitted() async throws {
+        let toolCall: [String: Any] = [
+            "id": "qwen-tool",
+            "type": "function",
+            "function": ["name": "log_weight", "arguments": "{\"kilograms\":62.5}"],
+        ]
+        let message: [String: Any] = [
+            "role": "assistant",
+            "tool_calls": [toolCall],
+        ]
+        let payloads: [[String: Any]] = [
+            ["choices": [["message": message]]],
+            ["choices": [["message": message, "finish_reason": "future_finish_state"]]],
+        ]
+
+        for payload in payloads {
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let clock = TestProviderRetryClock()
+            let provider = QwenProvider(
+                endpoint: URL(string: "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions")!,
+                credentialSource: TestCredentialSource(values: [.qwen: "fixture"]),
+                transport: ScriptedProviderHTTPTransport(steps: [.response(status: 200, data: data)]),
+                clock: clock,
+                jitter: { _ in 0 }
+            )
+            var emittedEvents: [ProviderEvent] = []
+            do {
+                for try await event in provider.stream(request(deadline: clock.now().addingTimeInterval(45))) {
+                    emittedEvents.append(event)
+                }
+                XCTFail("Missing or unknown finish reasons must fail closed")
+            } catch {
+                XCTAssertEqual(error as? ProviderError, .malformedResponse)
+            }
+            XCTAssertFalse(emittedEvents.contains { if case .toolCall = $0 { true } else { false } })
+        }
+    }
+
     func testMalformedResponseIsRedactedAsTypedError() async throws {
         let transport = ScriptedProviderHTTPTransport(
             steps: [.response(status: 200, data: try Gate03FixtureLoader.data("malformed"))]

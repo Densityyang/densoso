@@ -42,6 +42,51 @@ final class MealPortionPriorTests: XCTestCase {
         XCTAssertEqual(replayedPriors.count, 1)
     }
 
+    func testDeletingMealRemovesOnlyItsLearnedPortionContribution() async throws {
+        let harness = try Harness()
+        let repository = SwiftDataMealPortionPriorRepository(modelContainer: harness.container)
+        let correction = try XCTUnwrap(MealPortionPriorCorrection(unit: "碗", unitCount: 1, totalGrams: 180))
+        let action = try await harness.coordinator.stage(
+            payload: .meal(try Self.mealDraft(evidence: [correction.evidenceSnapshot])),
+            clientRequestID: UUID()
+        )
+        _ = try await harness.coordinator.confirm(action: action)
+
+        let storedMeal = try XCTUnwrap(ModelContext(harness.container)
+            .fetch(FetchDescriptor<MealRecord>()).first { $0.sourceActionKey == action.idempotencyKey })
+        XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealPriorContributionRecord>()), 1)
+        try await HealthRepository(modelContext: ModelContext(harness.container)).deleteMeal(id: storedMeal.id)
+
+        let remainingPriors = try await repository.all()
+        XCTAssertTrue(remainingPriors.isEmpty)
+        XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealPriorContributionRecord>()), 0)
+    }
+
+    func testDeletingOriginMealPreservesUserManagedDishPrior() async throws {
+        let harness = try Harness()
+        let repository = SwiftDataMealPortionPriorRepository(modelContainer: harness.container)
+        let optIn = try XCTUnwrap(PersonalMealDishPriorTemplateOptIn.evidenceSnapshot(dishName: "家常豆腐"))
+        let userPortion = try XCTUnwrap(PersonalMealDishPriorUserPortionEvidence.evidenceSnapshot(grams: 120))
+        let action = try await harness.coordinator.stage(
+            payload: .meal(try Self.dishMealDraft(
+                dishName: "家常豆腐",
+                ingredientName: "豆腐",
+                ingredientID: "tofu-id",
+                ingredientEvidence: [userPortion],
+                dishEvidence: [optIn]
+            )),
+            clientRequestID: UUID()
+        )
+        _ = try await harness.coordinator.confirm(action: action)
+        let meal = try XCTUnwrap(ModelContext(harness.container)
+            .fetch(FetchDescriptor<MealRecord>()).first { $0.sourceActionKey == action.idempotencyKey })
+        try await HealthRepository(modelContext: ModelContext(harness.container)).deleteMeal(id: meal.id)
+
+        let preserved = try await repository.dishPrior(named: "家常豆腐", cookingMethod: "stirFry")
+        XCTAssertTrue(try XCTUnwrap(preserved).isUserManaged)
+        XCTAssertEqual(try XCTUnwrap(preserved?.ingredients.first).likelyGrams, 120, accuracy: 0.001)
+    }
+
     func testModelPhotoAndRecipeOnlyMealGuessesNeverCreatePersonalPriors() async throws {
         let harness = try Harness()
         let priorRepository = SwiftDataMealPortionPriorRepository(modelContainer: harness.container)
@@ -416,7 +461,7 @@ private struct Harness {
     let coordinator: ConfirmationCoordinator
 
     init() throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV12.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

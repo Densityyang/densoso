@@ -44,6 +44,17 @@ enum AgentProviderContextPolicy {
         let value: HistoricalPreferenceValue
     }
 
+    private enum HistoricalPreferenceState {
+        case set(HistoricalPreferenceValue)
+        case clear
+        case unchanged
+    }
+
+    private struct HistoricalPreferenceUpdate {
+        let category: HistoricalPreferenceCategory
+        let state: HistoricalPreferenceState
+    }
+
     /// This is intentionally a bounded preference summary, not a summary of
     /// arbitrary historical facts or user-authored prose.
     private struct HistoricalSummary: Encodable {
@@ -57,7 +68,7 @@ enum AgentProviderContextPolicy {
         "not ", "avoid ", "never ", "without ", "no ",
         "不要", "不想", "不需要", "不用", "不必", "别", "避免", "并非", "不希望", "无需",
     ]
-    private static let preferenceClauseTerminators = CharacterSet(charactersIn: ".!?;:\n。！？；：")
+    private static let preferenceClauseTerminators = CharacterSet(charactersIn: ",，、.!?;:\n。！？；：")
 
     static func boundedMessages(
         _ messages: [ModelMessage],
@@ -181,8 +192,11 @@ enum AgentProviderContextPolicy {
         for message in messages where message.role == .user {
             guard let messageProvenance = message.healthContextPolicyProvenance,
                   let text = userText(in: message) else { continue }
-            let detectedPreferences = historicalPreferences(in: text)
-            guard !detectedPreferences.isEmpty else { continue }
+            let updates = historicalPreferenceUpdates(in: text)
+            guard updates.contains(where: { update in
+                if case .unchanged = update.state { return false }
+                return true
+            }) else { continue }
             if let existingProvenance = provenance {
                 guard existingProvenance.provider == messageProvenance.provider,
                       existingProvenance.policyRevision == messageProvenance.policyRevision else {
@@ -191,8 +205,15 @@ enum AgentProviderContextPolicy {
             } else {
                 provenance = messageProvenance
             }
-            for preference in detectedPreferences {
-                latestValues[preference.category] = preference.value
+            for update in updates {
+                switch update.state {
+                case .set(let value):
+                    latestValues[update.category] = value
+                case .clear:
+                    latestValues.removeValue(forKey: update.category)
+                case .unchanged:
+                    break
+                }
             }
         }
 
@@ -233,10 +254,10 @@ enum AgentProviderContextPolicy {
     /// Returns only fixed enum values. Historical user text is never copied into
     /// a synthetic assistant message, so matching a cue cannot carry arbitrary
     /// prompt instructions or health/nutrition facts through compaction.
-    private static func historicalPreferences(in text: String) -> [HistoricalPreference] {
+    private static func historicalPreferenceUpdates(in text: String) -> [HistoricalPreferenceUpdate] {
         let normalized = text.lowercased()
-        var preferences: [HistoricalPreference] = []
-        if let value = latestMatchedValue(in: normalized, groups: [
+        var updates: [HistoricalPreferenceUpdate] = []
+        updates.append(update(category: .responseLanguage, match: latestMatchedValue(in: normalized, groups: [
             (value: HistoricalPreferenceValue.chinese, cues: [
                 "请用中文", "用中文回答", "用中文回复", "中文回答", "中文回复", "回答用中文",
                 "answer in chinese", "respond in chinese", "reply in chinese", "use chinese in your response",
@@ -247,10 +268,8 @@ enum AgentProviderContextPolicy {
                 "answer in english", "respond in english", "reply in english", "use english in your response",
                 "english responses",
             ]),
-        ]) {
-            preferences.append(HistoricalPreference(category: .responseLanguage, value: value))
-        }
-        if let value = latestMatchedValue(in: normalized, groups: [
+        ])))
+        updates.append(update(category: .responseLength, match: latestMatchedValue(in: normalized, groups: [
             (value: HistoricalPreferenceValue.concise, cues: [
                 "简洁", "简短", "简明", "concise", "be brief", "brief answers", "short answers",
             ]),
@@ -258,10 +277,8 @@ enum AgentProviderContextPolicy {
                 "详细", "展开说明", "展开解释", "detailed answers", "answer in detail", "explain in detail",
                 "be detailed", "thorough explanations",
             ]),
-        ]) {
-            preferences.append(HistoricalPreference(category: .responseLength, value: value))
-        }
-        if let value = latestMatchedValue(in: normalized, groups: [
+        ])))
+        updates.append(update(category: .responseFormat, match: latestMatchedValue(in: normalized, groups: [
             (value: HistoricalPreferenceValue.bulletPoints, cues: [
                 "用要点", "要点列出", "项目符号", "bullet points", "bullet point list", "bullet list", "use bullets",
             ]),
@@ -271,10 +288,8 @@ enum AgentProviderContextPolicy {
             (value: HistoricalPreferenceValue.table, cues: [
                 "用表格", "以表格", "表格呈现", "as a table", "in a table", "table format", "tabular",
             ]),
-        ]) {
-            preferences.append(HistoricalPreference(category: .responseFormat, value: value))
-        }
-        if let value = latestMatchedValue(in: normalized, groups: [
+        ])))
+        updates.append(update(category: .responseTone, match: latestMatchedValue(in: normalized, groups: [
             (value: HistoricalPreferenceValue.formal, cues: [
                 "i prefer a formal tone", "i prefer formal tone",
                 "i prefer a formal tone and metric units", "i prefer formal tone and metric units",
@@ -287,10 +302,8 @@ enum AgentProviderContextPolicy {
                 "i prefer a friendly tone and imperial units", "i prefer friendly tone and imperial units",
                 "我偏好友好语气", "我更喜欢友好语气",
             ]),
-        ]) {
-            preferences.append(HistoricalPreference(category: .responseTone, value: value))
-        }
-        if let value = latestMatchedValue(in: normalized, groups: [
+        ])))
+        updates.append(update(category: .measurementUnits, match: latestMatchedValue(in: normalized, groups: [
             (value: HistoricalPreferenceValue.metric, cues: [
                 "i prefer metric units", "i prefer the metric system",
                 "i prefer a friendly tone and metric units", "i prefer friendly tone and metric units",
@@ -303,16 +316,27 @@ enum AgentProviderContextPolicy {
                 "i prefer a formal tone and imperial units", "i prefer formal tone and imperial units",
                 "我偏好英制单位", "我更喜欢英制单位",
             ]),
-        ]) {
-            preferences.append(HistoricalPreference(category: .measurementUnits, value: value))
+        ])))
+        return updates
+    }
+
+    private static func update(
+        category: HistoricalPreferenceCategory,
+        match: (value: HistoricalPreferenceValue, isNegated: Bool)?
+    ) -> HistoricalPreferenceUpdate {
+        guard let match else {
+            return HistoricalPreferenceUpdate(category: category, state: .unchanged)
         }
-        return preferences
+        return HistoricalPreferenceUpdate(
+            category: category,
+            state: match.isNegated ? .clear : .set(match.value)
+        )
     }
 
     private static func latestMatchedValue<Value>(
         in text: String,
         groups: [(value: Value, cues: [String])]
-    ) -> Value? {
+    ) -> (value: Value, isNegated: Bool)? {
         var latestMatch: (value: Value, index: String.Index, isNegated: Bool)?
         for group in groups {
             for cue in group.cues {
@@ -328,8 +352,8 @@ enum AgentProviderContextPolicy {
                 )
             }
         }
-        guard let latestMatch, !latestMatch.isNegated else { return nil }
-        return latestMatch.value
+        guard let latestMatch else { return nil }
+        return (latestMatch.value, latestMatch.isNegated)
     }
 
     private static func latestCueMatch(in text: String, cue: String) -> (index: String.Index, isNegated: Bool)? {

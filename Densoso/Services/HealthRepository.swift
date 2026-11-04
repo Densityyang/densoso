@@ -32,17 +32,20 @@ final class HealthRepository: HealthSyncRepository {
     private static let workoutEffortFetchBatchSize = 64
 
     private let modelContext: ModelContext
+    private let persistenceOperationBarrier: PersistenceOperationBarrier
     private let willSave: (() throws -> Void)?
     private let willSaveProjection: (() throws -> Void)?
 
     init(
         modelContext: ModelContext,
         willSave: (() throws -> Void)? = nil,
-        willSaveProjection: (() throws -> Void)? = nil
+        willSaveProjection: (() throws -> Void)? = nil,
+        persistenceOperationBarrier: PersistenceOperationBarrier = .shared
     ) {
         self.modelContext = modelContext
         self.willSave = willSave
         self.willSaveProjection = willSaveProjection
+        self.persistenceOperationBarrier = persistenceOperationBarrier
     }
 
     func insert(_ meal: MealRecord) async throws {
@@ -52,17 +55,22 @@ final class HealthRepository: HealthSyncRepository {
         }
     }
 
-    /// Persists an edited local meal and creates a newer HealthKit sync version.
-    func update(_ meal: MealRecord) async throws {
-        try await write(affecting: [meal.date]) { _ in
+    /// Re-fetches the edited meal from this repository's own ModelContext.
+    func updateMeal(id: UUID) async throws {
+        let initialMeal = try requireMeal(id: id)
+        try await write(affecting: [initialMeal.date]) { affectedDates in
+            let meal = try requireMeal(id: id)
+            affectedDates.insert(meal.date)
             try enqueue(operation: "upsertMeal", recordID: meal.id, syncType: "meal")
         }
     }
 
-    func update(_ weight: WeightRecord, previouslyAt previousDate: Date? = nil) async throws {
-        guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
-        let affectedDates = [weight.measuredAt] + (previousDate.map { [$0] } ?? [])
-        try await write(affecting: affectedDates) { _ in
+    func updateWeight(id: UUID, previouslyAt previousDate: Date? = nil) async throws {
+        let initialWeight = try requireWeight(id: id)
+        try await write(affecting: [initialWeight.measuredAt] + (previousDate.map { [$0] } ?? [])) { affectedDates in
+            let weight = try requireWeight(id: id)
+            guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
+            affectedDates.insert(weight.measuredAt)
             try enqueue(operation: "upsertWeight", recordID: weight.id, syncType: "weight")
             try refreshDailyWeightSnapshot(on: weight.measuredAt)
             if let previousDate, !Calendar.current.isDate(previousDate, inSameDayAs: weight.measuredAt) {
@@ -80,9 +88,37 @@ final class HealthRepository: HealthSyncRepository {
         }
     }
 
-    func delete(_ weight: WeightRecord) async throws {
+    func insert(_ weight: WeightRecord, whileHoldingStoreGate lease: DailyMetricsProjectionWriteGate.Lease) async throws {
+        let operationLease = try await persistenceOperationBarrier.acquireMutationOperation()
+        defer { persistenceOperationBarrier.release(operationLease) }
+        try await persistenceOperationBarrier.withLease(operationLease) {
+            try await insertWeightWhileHoldingStoreGate(weight, lease: lease)
+        }
+    }
+
+    private func insertWeightWhileHoldingStoreGate(
+        _ weight: WeightRecord,
+        lease: DailyMetricsProjectionWriteGate.Lease
+    ) async throws {
+        try DailyMetricsProjectionWriteGate.validate(
+            lease,
+            storeID: ObjectIdentifier(modelContext.container),
+            dayKeys: [DailyMetricsProjectionWriteGate.dayKey(for: weight.measuredAt)]
+        )
         guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
-        try await write(affecting: [weight.measuredAt]) { _ in
+        try await writeWhileStoreGateHeld(affecting: [weight.measuredAt], lease: lease) { _ in
+            modelContext.insert(weight)
+            try enqueue(operation: "upsertWeight", recordID: weight.id, syncType: "weight")
+            try refreshDailyWeightSnapshot(on: weight.measuredAt)
+        }
+    }
+
+    func deleteWeight(id: UUID) async throws {
+        let initialWeight = try requireWeight(id: id)
+        try await write(affecting: [initialWeight.measuredAt]) { affectedDates in
+            let weight = try requireWeight(id: id)
+            guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
+            affectedDates.insert(weight.measuredAt)
             try enqueue(operation: "deleteWeight", recordID: weight.id, syncType: "weight")
             modelContext.delete(weight)
             try refreshDailyWeightSnapshot(on: weight.measuredAt, excluding: weight.id)
@@ -95,16 +131,51 @@ final class HealthRepository: HealthSyncRepository {
         }
     }
 
-    func delete(_ meal: MealRecord) async throws {
-        try await write(affecting: [meal.date]) { _ in
+    func deleteMeal(id: UUID) async throws {
+        let initialMeal = try requireMeal(id: id)
+        try await write(affecting: [initialMeal.date]) { affectedDates in
+            let meal = try requireMeal(id: id)
+            affectedDates.insert(meal.date)
+            try SwiftDataMealPortionPriorRepository.removeMealContributions(
+                sourceActionKey: meal.sourceActionKey,
+                in: modelContext
+            )
             try enqueue(operation: "deleteMeal", recordID: meal.id, syncType: "meal")
             modelContext.delete(meal)
         }
     }
 
-    func delete(_ workout: WorkoutRecord) async throws {
-        try await write(affecting: [workout.date]) { _ in
+    func deleteWorkout(id: UUID) async throws {
+        let initialWorkout = try requireWorkout(id: id)
+        try await write(affecting: [initialWorkout.date]) { affectedDates in
+            let workout = try requireWorkout(id: id)
+            guard workout.healthKitUUID == nil,
+                  workout.workoutOrigin == WorkoutOrigin.userEntered.rawValue
+                    || workout.workoutOrigin == WorkoutOrigin.metEstimated.rawValue else {
+                throw HealthRepositoryError.refuseHealthKitWorkoutDelete
+            }
+            affectedDates.insert(workout.date)
             modelContext.delete(workout)
+        }
+    }
+
+    /// Called by a caller that owns the store gate while mutating related dish rows.
+    func updateMealWhileStoreGateHeld(
+        id: UUID,
+        lease: DailyMetricsProjectionWriteGate.Lease
+    ) async throws {
+        let operationLease = try await persistenceOperationBarrier.acquireMutationOperation()
+        defer { persistenceOperationBarrier.release(operationLease) }
+        try await persistenceOperationBarrier.withLease(operationLease) {
+            let meal = try requireMeal(id: id)
+            try DailyMetricsProjectionWriteGate.validate(
+                lease,
+                storeID: ObjectIdentifier(modelContext.container),
+                dayKeys: [DailyMetricsProjectionWriteGate.dayKey(for: meal.date)]
+            )
+            try await writeWhileStoreGateHeld(affecting: [meal.date], lease: lease) { _ in
+                try enqueue(operation: "upsertMeal", recordID: meal.id, syncType: "meal")
+            }
         }
     }
 
@@ -117,7 +188,12 @@ final class HealthRepository: HealthSyncRepository {
         lookbackStart: Date? = nil,
         stream: String = "workouts"
     ) async throws {
-        try await write(affecting: snapshots.map(\.startedAt)) { affectedDates in
+        let changedUUIDs = Set(snapshots.map(\.healthKitUUID)).union(deletedHealthKitUUIDs)
+        let operationLease = try await persistenceOperationBarrier.acquireMutationOperation()
+        defer { persistenceOperationBarrier.release(operationLease) }
+        try await persistenceOperationBarrier.withLease(operationLease) {
+            let existingCoordinationDates = try importedWorkoutCoordinationDates(for: changedUUIDs)
+            try await write(affecting: snapshots.map(\.startedAt) + existingCoordinationDates) { affectedDates in
             let importedPredicate = #Predicate<WorkoutRecord> { $0.healthKitUUID != nil }
             var importedDescriptor = FetchDescriptor<WorkoutRecord>(
                 predicate: importedPredicate,
@@ -129,7 +205,6 @@ final class HealthRepository: HealthSyncRepository {
             )
             importedDescriptor.fetchLimit = Self.importedWorkoutBatchSize
 
-            let changedUUIDs = Set(snapshots.map(\.healthKitUUID)).union(deletedHealthKitUUIDs)
             var workoutsByHealthKitUUID: [UUID: WorkoutRecord] = [:]
             var duplicateWorkoutIDs = Set<UUID>()
             var currentHealthKitUUID: UUID?
@@ -207,6 +282,7 @@ final class HealthRepository: HealthSyncRepository {
                     lookbackStart: lookbackStart
                 ))
             }
+            }
         }
     }
 
@@ -230,6 +306,56 @@ final class HealthRepository: HealthSyncRepository {
         }
     }
 
+    /// Finds the days touched by an incoming workout update and by existing
+    /// duplicate UUID groups before the day leases are acquired.
+    private func importedWorkoutCoordinationDates(for changedUUIDs: Set<UUID>) throws -> [Date] {
+        let importedPredicate = #Predicate<WorkoutRecord> { $0.healthKitUUID != nil }
+        var descriptor = FetchDescriptor<WorkoutRecord>(
+            predicate: importedPredicate,
+            sortBy: [
+                SortDescriptor(\WorkoutRecord.healthKitUUID),
+                SortDescriptor(\WorkoutRecord.createdAt),
+                SortDescriptor(\WorkoutRecord.id),
+            ]
+        )
+        descriptor.fetchLimit = Self.importedWorkoutBatchSize
+        var affectedDates = Set<Date>()
+        var currentUUID: UUID?
+        var currentPreferredWorkout: WorkoutRecord?
+        var offset = 0
+        while true {
+            descriptor.fetchOffset = offset
+            let page = try modelContext.fetch(descriptor)
+            guard !page.isEmpty else { break }
+            for workout in page {
+                guard let healthKitUUID = workout.healthKitUUID else { continue }
+                if currentUUID != healthKitUUID {
+                    if let finishedUUID = currentUUID,
+                       changedUUIDs.contains(finishedUUID),
+                       let winner = currentPreferredWorkout {
+                        affectedDates.insert(winner.date)
+                    }
+                    currentUUID = healthKitUUID
+                    currentPreferredWorkout = workout
+                } else if let existingWinner = currentPreferredWorkout {
+                    affectedDates.insert(existingWinner.date)
+                    affectedDates.insert(workout.date)
+                    if Self.preferredImportedWorkout(workout, existingWinner) {
+                        currentPreferredWorkout = workout
+                    }
+                }
+            }
+            offset += page.count
+            if page.count < Self.importedWorkoutBatchSize { break }
+        }
+        if let finishedUUID = currentUUID,
+           changedUUIDs.contains(finishedUUID),
+           let winner = currentPreferredWorkout {
+            affectedDates.insert(winner.date)
+        }
+        return affectedDates.sorted()
+    }
+
     func cursor(for stream: String) throws -> HealthKitImportCursor? {
         try cursorRecord(stream: stream)
     }
@@ -239,7 +365,8 @@ final class HealthRepository: HealthSyncRepository {
         return HealthKitCursorSnapshot(
             anchorData: cursor.anchorData,
             lastSuccessfulAt: cursor.lastSuccessfulAt,
-            lookbackStart: cursor.lookbackStart
+            lookbackStart: cursor.lookbackStart,
+            updatedAt: cursor.updatedAt
         )
     }
 
@@ -730,7 +857,15 @@ final class HealthRepository: HealthSyncRepository {
             replacements.map { (calendar.startOfDay(for: $0.dayStart), $0) },
             uniquingKeysWith: { _, latest in latest }
         )
-        let affectedDays = Array(replacementsByDay.keys)
+        var affectedDays = Array(replacementsByDay.keys)
+        if stream == HealthMetricID.bodyMass.rawValue,
+           let firstAffectedDay = replacementsByDay.keys.min() {
+            affectedDays.append(contentsOf: HealthDataWindowPolicy.days(
+                from: firstAffectedDay,
+                through: calendar.startOfDay(for: lastSuccessfulAt),
+                calendar: calendar
+            ))
+        }
         try await write(affecting: affectedDays) { affectedProjectionDates in
             for (day, replacement) in replacementsByDay {
                 let existing = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
@@ -890,41 +1025,47 @@ final class HealthRepository: HealthSyncRepository {
         metric: HealthMetricID,
         stream: String,
         lookbackStart: Date,
+        through: Date,
         lastSuccessfulAt: Date = Date()
     ) async throws {
-        let calendar = Calendar.current
+        let calendar = Calendar.autoupdatingCurrent
         let bucketsByDay = Dictionary(
             buckets.map { (calendar.startOfDay(for: $0.startDate), $0) },
             uniquingKeysWith: { _, newest in newest }
         )
-        let days = Array(bucketsByDay.keys)
-        let containsMeasuredValues = buckets.contains { $0.readState == .available && $0.value != nil }
+        let firstDay = calendar.startOfDay(for: lookbackStart)
+        let lastDay = calendar.startOfDay(for: through)
+        guard firstDay <= lastDay else { throw HealthStoreClientError.invalidAnchor }
+        let days = HealthDataWindowPolicy.days(from: firstDay, through: lastDay, calendar: calendar)
         try await write(affecting: days) { _ in
-            for (day, bucket) in bucketsByDay {
-                let value = bucket.value
+            for day in days {
+                let bucket = bucketsByDay[day]
+                let readState = bucket?.readState ?? .dataUnavailableOrReadScopeUnknown
+                let value = readState == .available ? bucket?.value : nil
                 var snapshot = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
                 var readStates = snapshot.healthReadStates ?? [:]
-                readStates[metric.rawValue] = bucket.readState
+                readStates[metric.rawValue] = readState
                 snapshot = Self.replacing(
                     snapshot,
-                    activeEnergyKcal: metric == .activeEnergy && bucket.readState == .available && value != nil ? value : snapshot.activeEnergyKcal,
-                    restingEnergyKcal: metric == .restingEnergy && bucket.readState == .available && value != nil ? value : snapshot.restingEnergyKcal,
-                    stepCount: metric == .stepCount && bucket.readState == .available && value != nil ? value : snapshot.stepCount,
-                    exerciseMinutes: metric == .exerciseMinutes && bucket.readState == .available && value != nil ? value : snapshot.exerciseMinutes,
+                    activeEnergyKcal: metric == .activeEnergy ? .some(value) : nil,
+                    restingEnergyKcal: metric == .restingEnergy ? .some(value) : nil,
+                    stepCount: metric == .stepCount ? .some(value) : nil,
+                    exerciseMinutes: metric == .exerciseMinutes ? .some(value) : nil,
                     healthReadStates: readStates
                 )
                 try upsertHealthSnapshot(snapshot, for: day)
             }
             if let cursor = try cursorRecord(stream: stream) {
                 // Aggregate reads are bounded non-anchored queries, so their
-                // cursor records the current policy/authorization lower bound.
+                // cursor records the current query window and last validation,
+                // including successful reads with no measured values.
                 cursor.lookbackStart = lookbackStart
-                if containsMeasuredValues { cursor.lastSuccessfulAt = lastSuccessfulAt }
+                cursor.lastSuccessfulAt = lastSuccessfulAt
                 cursor.updatedAt = lastSuccessfulAt
             } else {
                 modelContext.insert(HealthKitImportCursor(
                     stream: stream,
-                    lastSuccessfulAt: containsMeasuredValues ? lastSuccessfulAt : nil,
+                    lastSuccessfulAt: lastSuccessfulAt,
                     lookbackStart: lookbackStart
                 ))
             }
@@ -952,44 +1093,94 @@ final class HealthRepository: HealthSyncRepository {
     }
 
     private func write(affecting dates: [Date], _ change: (inout Set<Date>) throws -> Void) async throws {
-        try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
-            var projectedDays: [Date] = []
-            do {
-                try Task.checkCancellation()
-                var affectedDates = Set(dates)
-                try change(&affectedDates)
-                projectedDays = Self.affectedProjectionDays(from: affectedDates)
-                for date in projectedDays {
-                    try DailyMetricsProjector.markPendingForReprojection(on: date, in: modelContext)
-                }
-                try willSave?()
-                try modelContext.save()
-            } catch {
-                modelContext.rollback()
-                throw error
+        let operationLease = try await persistenceOperationBarrier.acquireMutationOperation()
+        defer { persistenceOperationBarrier.release(operationLease) }
+        try await persistenceOperationBarrier.withLease(operationLease) {
+            let dayKeys = Set(dates.map { DailyMetricsProjectionWriteGate.dayKey(for: $0) })
+            try await DailyMetricsProjectionWriteGate.withLockAndLease(
+                for: modelContext,
+                dayKeys: dayKeys.isEmpty ? nil : dayKeys
+            ) { lease in
+                try await writeWhileStoreGateHeld(affecting: dates, lease: lease, change)
+            }
+        }
+    }
+
+    private func requireMeal(id: UUID) throws -> MealRecord {
+        var descriptor = FetchDescriptor<MealRecord>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        guard let meal = try modelContext.fetch(descriptor).first else {
+            throw HealthRepositoryError.mealNotFound
+        }
+        return meal
+    }
+
+    private func requireWeight(id: UUID) throws -> WeightRecord {
+        var descriptor = FetchDescriptor<WeightRecord>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        guard let weight = try modelContext.fetch(descriptor).first else {
+            throw HealthRepositoryError.weightNotFound
+        }
+        return weight
+    }
+
+    private func requireWorkout(id: UUID) throws -> WorkoutRecord {
+        var descriptor = FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        guard let workout = try modelContext.fetch(descriptor).first else {
+            throw HealthRepositoryError.workoutNotFound
+        }
+        return workout
+    }
+
+    private func writeWhileStoreGateHeld(
+        affecting dates: [Date],
+        lease: DailyMetricsProjectionWriteGate.Lease? = nil,
+        _ change: (inout Set<Date>) throws -> Void
+    ) async throws {
+        var projectedDays: [Date] = []
+        do {
+            try Task.checkCancellation()
+            var affectedDates = Set(dates)
+            try change(&affectedDates)
+            projectedDays = Self.affectedProjectionDays(from: affectedDates)
+            if let lease {
+                try DailyMetricsProjectionWriteGate.validate(
+                    lease,
+                    storeID: ObjectIdentifier(modelContext.container),
+                    dayKeys: Set(projectedDays.map { DailyMetricsProjectionWriteGate.dayKey(for: $0) })
+                )
             }
             for date in projectedDays {
+                try DailyMetricsProjector.markPendingForReprojectionWhileGateHeld(on: date, in: modelContext)
+            }
+            try willSave?()
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+        for date in projectedDays {
+            do {
+                try Task.checkCancellation()
+                try await DailyMetricsProjector.reprojectAndCommitWhileGateHeld(
+                    on: date,
+                    in: modelContext,
+                    willSaveProjection: willSaveProjection
+                )
+            } catch {
+                // The source change and retry marker are already durable.
+                // Discard any uncommitted projection edits, preserve the
+                // marker, and report the source operation as committed so
+                // callers cannot duplicate a mutation or replay an anchor.
+                modelContext.rollback()
                 do {
-                    try Task.checkCancellation()
-                    try await DailyMetricsProjector.reprojectAndCommitWhileGateHeld(
-                        on: date,
-                        in: modelContext,
-                        willSaveProjection: willSaveProjection
-                    )
+                    try DailyMetricsProjector.markPendingForReprojectionWhileGateHeld(on: date, in: modelContext)
+                    try modelContext.save()
                 } catch {
-                    // The source change and retry marker are already durable.
-                    // Discard any uncommitted projection edits, preserve the
-                    // marker, and report the source operation as committed so
-                    // callers cannot duplicate a mutation or replay an anchor.
                     modelContext.rollback()
-                    do {
-                        try DailyMetricsProjector.markPendingForReprojection(on: date, in: modelContext)
-                        try modelContext.save()
-                    } catch {
-                        modelContext.rollback()
-                    }
-                    if error is CancellationError { return }
                 }
+                if error is CancellationError { return }
             }
         }
     }
@@ -1462,6 +1653,10 @@ final class HealthRepository: HealthSyncRepository {
 enum HealthRepositoryError: Equatable, SharedErrorDescribing {
     case missingHealthKitAnchor
     case refuseHealthKitEcho
+    case mealNotFound
+    case weightNotFound
+    case workoutNotFound
+    case refuseHealthKitWorkoutDelete
 
     var sharedErrorDescriptor: SharedErrorDescriptor {
         switch self {
@@ -1479,6 +1674,20 @@ enum HealthRepositoryError: Equatable, SharedErrorDescribing {
                 subsystem: .healthKit,
                 reason: .refusedHealthKitEcho
             )
+        case .mealNotFound, .weightNotFound, .workoutNotFound:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "这条记录已不存在，请刷新后重试。",
+                subsystem: .persistence,
+                reason: .actionNotFound
+            )
+        case .refuseHealthKitWorkoutDelete:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "此运动来自 Apple 健康，请先在健康 App 中删除原始记录。",
+                subsystem: .healthKit,
+                reason: .refusedHealthKitEcho
+            )
         }
     }
 }
@@ -1487,4 +1696,5 @@ struct HealthKitCursorSnapshot: Sendable {
     let anchorData: Data?
     let lastSuccessfulAt: Date?
     let lookbackStart: Date?
+    let updatedAt: Date
 }

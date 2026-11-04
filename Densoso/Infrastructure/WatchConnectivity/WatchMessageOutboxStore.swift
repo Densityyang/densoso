@@ -15,15 +15,18 @@ final class WatchMessageOutboxStore {
 
     private let defaults: UserDefaults
     private let fileManager: FileManager
+    private let writeData: (Data, URL) throws -> Void
     let storageURL: URL
 
     init(
         defaults: UserDefaults = .standard,
         fileManager: FileManager = .default,
-        directoryURL: URL? = nil
+        directoryURL: URL? = nil,
+        writeData: ((Data, URL) throws -> Void)? = nil
     ) throws {
         self.defaults = defaults
         self.fileManager = fileManager
+        self.writeData = writeData ?? { data, url in try data.write(to: url, options: .atomic) }
         guard let directoryURL = directoryURL
             ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
                 .appendingPathComponent("Densoso", isDirectory: true)
@@ -61,7 +64,7 @@ final class WatchMessageOutboxStore {
             at: storageURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try data.write(to: storageURL, options: .atomic)
+        try writeData(data, storageURL)
     }
 
     private func decodePersistedData(_ data: Data) throws -> WatchMessageOutbox {

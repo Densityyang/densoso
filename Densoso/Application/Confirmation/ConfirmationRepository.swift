@@ -2,6 +2,32 @@ import DensosoDomain
 import Foundation
 
 protocol ConfirmationRepository: Sendable {
+    func beginToolExecution(_ entry: ToolExecutionJournalEntry) async throws -> ToolExecutionJournalEntry
+    func storePreparedToolPayload(
+        invocationID: String,
+        payloadData: Data,
+        updatedAt: Date
+    ) async throws
+    func completeToolExecution(
+        invocationID: String,
+        resultData: Data,
+        updatedAt: Date
+    ) async throws
+    func failToolExecution(
+        invocationID: String,
+        resultData: Data?,
+        updatedAt: Date
+    ) async throws
+    func failToolExecutions(
+        pendingActionID: UUID,
+        resultData: Data,
+        updatedAt: Date
+    ) async throws
+    func toolExecutionJournal(
+        requestID: UUID,
+        conversationID: UUID
+    ) async throws -> [ToolExecutionJournalEntry]
+
     func stage(
         payload: ActionPayload,
         canonicalPayloadData: Data,
@@ -11,6 +37,18 @@ protocol ConfirmationRepository: Sendable {
         conversationID: UUID,
         createdAt: Date,
         expiresAt: Date
+    ) async throws -> PendingAction
+    func stageToolAction(
+        payload: ActionPayload,
+        canonicalPayloadData: Data,
+        canonicalPayloadHash: String,
+        idempotencyKey: String,
+        clientRequestID: UUID,
+        conversationID: UUID,
+        createdAt: Date,
+        expiresAt: Date,
+        invocationID: String,
+        requestDeadline: Date?
     ) async throws -> PendingAction
 
     func activeActions(conversationID: UUID, now: Date) async throws -> [PendingAction]
@@ -24,6 +62,40 @@ protocol ConfirmationRepository: Sendable {
     func recoverInterruptedCommits(now: Date) async throws
 }
 
+extension ConfirmationRepository {
+    // Lightweight repositories used by read-only/unit tests do not need a durable
+    // journal. The SwiftData implementation overrides these methods.
+    func beginToolExecution(_ entry: ToolExecutionJournalEntry) async throws -> ToolExecutionJournalEntry { entry }
+    func storePreparedToolPayload(invocationID: String, payloadData: Data, updatedAt: Date) async throws {}
+    func completeToolExecution(invocationID: String, resultData: Data, updatedAt: Date) async throws {}
+    func failToolExecution(invocationID: String, resultData: Data?, updatedAt: Date) async throws {}
+    func failToolExecutions(pendingActionID: UUID, resultData: Data, updatedAt: Date) async throws {}
+    func toolExecutionJournal(requestID: UUID, conversationID: UUID) async throws -> [ToolExecutionJournalEntry] { [] }
+    func stageToolAction(
+        payload: ActionPayload,
+        canonicalPayloadData: Data,
+        canonicalPayloadHash: String,
+        idempotencyKey: String,
+        clientRequestID: UUID,
+        conversationID: UUID,
+        createdAt: Date,
+        expiresAt: Date,
+        invocationID: String,
+        requestDeadline: Date? = nil
+    ) async throws -> PendingAction {
+        try await stage(
+            payload: payload,
+            canonicalPayloadData: canonicalPayloadData,
+            canonicalPayloadHash: canonicalPayloadHash,
+            idempotencyKey: idempotencyKey,
+            clientRequestID: clientRequestID,
+            conversationID: conversationID,
+            createdAt: createdAt,
+            expiresAt: expiresAt
+        )
+    }
+}
+
 enum ConfirmationError: Equatable, Sendable, SharedErrorDescribing {
     case notFound
     case expired
@@ -35,6 +107,7 @@ enum ConfirmationError: Equatable, Sendable, SharedErrorDescribing {
     case unsupportedAction
     case invariantViolation(String)
     case commitFailed(retryable: Bool)
+    case requestDeadlineExceeded
 
     var sharedErrorDescriptor: SharedErrorDescriptor {
         switch self {
@@ -108,6 +181,13 @@ enum ConfirmationError: Equatable, Sendable, SharedErrorDescribing {
                 subsystem: .confirmation,
                 reason: .confirmationCommitFailed
             )
+        case .requestDeadlineExceeded:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "请求处理时间已到，请重新发起。",
+                subsystem: .confirmation,
+                reason: .confirmationCommitFailed
+            )
         }
     }
 
@@ -117,7 +197,8 @@ enum ConfirmationError: Equatable, Sendable, SharedErrorDescribing {
             return true
         case .commitFailed(let retryable):
             return retryable
-        case .notFound, .expired, .rejected, .payloadCorrupt, .payloadHashMismatch, .unsupportedAction, .invariantViolation:
+        case .notFound, .expired, .rejected, .payloadCorrupt, .payloadHashMismatch, .unsupportedAction,
+             .invariantViolation, .requestDeadlineExceeded:
             return false
         }
     }

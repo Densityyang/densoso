@@ -947,6 +947,7 @@ jobs:
           perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Test cumulative iOS unit suite
+        id: xcode_tests
         run: |
           set -o pipefail
           rm -rf "$GATE06_RESULT_BUNDLE"
@@ -962,11 +963,34 @@ jobs:
             test 2>&1 | tee gate06-healthkit-tests.log
 
       - name: Export Gate 6 test summary
+        id: export_summary
+        if: ${{ always() && steps.xcode_tests.outcome != 'skipped' }}
+        env:
+          XCODE_TESTS_OUTCOME: ${{ steps.xcode_tests.outcome }}
         run: |
           set -euo pipefail
-          xcrun xcresulttool get test-results summary \
-            --path "$GATE06_RESULT_BUNDLE" > gate06-test-summary.json
-          grep -q '"result" : "Passed"' gate06-test-summary.json
+          if [ -d "$GATE06_RESULT_BUNDLE" ] \
+            && xcrun xcresulttool get test-results summary \
+              --path "$GATE06_RESULT_BUNDLE" > gate06-test-summary.json; then
+            echo "Exported Gate 6 XCTest summary."
+          else
+            python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = {
+              "result": "Unavailable",
+              "message": "XCTest result summary could not be exported; inspect the Gate 6 job log and result bundle.",
+              "xcodeTestStepOutcome": os.environ.get("XCODE_TESTS_OUTCOME", "unknown"),
+          }
+          Path("gate06-test-summary.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+            exit 1
+          fi
 
       - name: Upload Gate 6 evidence
         if: always()

@@ -651,7 +651,7 @@ final class MultimodalAgentImageTests: XCTestCase {
         if let existingContainer {
             container = existingContainer
         } else {
-            let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+            let schema = Schema(versionedSchema: DensosoSchemaV14.self)
             container = try ModelContainer(
                 for: schema,
                 configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

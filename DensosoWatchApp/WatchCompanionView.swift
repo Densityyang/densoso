@@ -52,6 +52,14 @@ struct WatchCompanionView: View {
             VStack(alignment: .leading, spacing: 6) {
                 if isCurrent {
                     Text("今天").font(.subheadline.weight(.semibold))
+                    Label(refreshStateLabel(snapshot.refreshState), systemImage: refreshStateSymbol(snapshot.refreshState))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(snapshot.refreshState == .fresh ? Color.green : Color.orange)
+                    if let validatedAt = snapshot.sourceValidatedAt {
+                        Text("健康数据验证于 \(syncDateLabel(validatedAt))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                     Text(snapshot.summary)
                         .font(.caption2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -78,6 +86,22 @@ struct WatchCompanionView: View {
                             .font(.caption2)
                         LabeledContent("建议动作", value: recommendedActionName(recovery.recommendedAction))
                             .font(.caption2)
+                    }
+                    if !snapshot.healthSyncSummaries.isEmpty {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("最近健康同步")
+                                .font(.caption.weight(.semibold))
+                            ForEach(snapshot.healthSyncSummaries) { item in
+                                HStack {
+                                    Text(item.actionType == "weight" ? "体重" : "餐食")
+                                    Spacer(minLength: 6)
+                                    Text(syncStateLabel(item.state))
+                                        .foregroundStyle(syncStateColor(item.state))
+                                }
+                                .font(.caption2)
+                            }
+                        }
                     }
                 } else {
                     Text("最近同步")
@@ -123,11 +147,7 @@ struct WatchCompanionView: View {
                 .lineLimit(2...4)
                 .accessibilityLabel("口述或输入记录")
             Button("发送到 iPhone") {
-                let pendingCount = connectivity.pendingMessageCount
-                connectivity.sendTranscript(transcript)
-                // Keep the draft if the durable Watch outbox rejected it (for
-                // example, validation failed); only clear after enqueue succeeds.
-                if connectivity.pendingMessageCount > pendingCount {
+                if case .persisted = connectivity.sendTranscript(transcript) {
                     transcript = ""
                 }
             }
@@ -218,6 +238,42 @@ struct WatchCompanionView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter.string(from: date)
+    }
+
+    private func refreshStateLabel(_ state: WatchSnapshotRefreshState) -> String {
+        switch state {
+        case .fresh: "健康数据已验证"
+        case .stale: "健康数据可能过期"
+        case .refreshing: "正在刷新健康数据"
+        case .failed: "刷新失败，保留上次数据"
+        }
+    }
+
+    private func refreshStateSymbol(_ state: WatchSnapshotRefreshState) -> String {
+        switch state {
+        case .fresh: "checkmark.circle.fill"
+        case .stale: "clock"
+        case .refreshing: "arrow.triangle.2.circlepath"
+        case .failed: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func syncStateLabel(_ state: HealthSyncState) -> String {
+        switch state {
+        case .pending, .sending: "同步待处理"
+        case .succeeded: "已同步"
+        case .retryable: "同步失败，可重试"
+        case .terminal: "无法同步"
+        case .notApplicable: "无需同步"
+        }
+    }
+
+    private func syncStateColor(_ state: HealthSyncState) -> Color {
+        switch state {
+        case .succeeded, .notApplicable: .green
+        case .pending, .sending: .orange
+        case .retryable, .terminal: .red
+        }
     }
 
     private func planState(_ state: String) -> String {

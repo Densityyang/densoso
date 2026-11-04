@@ -20,6 +20,8 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
             DensosoSchemaV10.self,
             DensosoSchemaV11.self,
             DensosoSchemaV12.self,
+            DensosoSchemaV13.self,
+            DensosoSchemaV14.self,
         ]
     }
 
@@ -253,41 +255,53 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                     let workouts = try context.fetch(FetchDescriptor<DensosoSchemaV4.WorkoutRecord>())
                     var locationsBySampleID: [UUID: (stream: String, dayKey: String, startDate: Date, endDate: Date)] = [:]
                     let decodedSnapshots = try records.map { record in
-                        (record, try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData))
+                        let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+                        return (record, snapshot, Self.historicalCalendar(for: snapshot.timezoneIdentifier))
                     }
                     var existingDayKeys = Set(records.map(\.dayKey))
-                    let calendar = Calendar.current
-                    let workoutsByDay = Dictionary(grouping: workouts) {
-                        calendar.startOfDay(for: $0.date)
-                    }
-                    var samplesByStartDay: [Date: [UUID: HealthSampleSnapshot]] = [:]
-                    let legacySamples = HealthSampleSnapshot.deduplicated(
-                        decodedSnapshots.flatMap { $0.1.healthKitSamples ?? [] }
-                    )
-                    for sample in legacySamples {
-                        let sampleDay = calendar.startOfDay(for: sample.startDate)
-                        samplesByStartDay[sampleDay, default: [:]][sample.id] = sample
-                    }
-                    for samples in samplesByStartDay.values {
-                        for sample in samples.values {
-                            locationsBySampleID[sample.id] = (
-                                sample.metric.rawValue,
-                                Self.dayKey(for: sample.startDate),
-                                sample.startDate,
-                                sample.endDate
-                            )
-                        }
-                    }
-                    for (record, snapshot) in decodedSnapshots {
-                        let day = calendar.startOfDay(for: snapshot.dayStart)
-                        let samples = (samplesByStartDay[day] ?? [:]).values.sorted(
+                    var uniqueSamples: [UUID: (sample: HealthSampleSnapshot, calendar: Calendar)] = [:]
+                    for (_, snapshot, calendar) in decodedSnapshots {
+                        let orderedSamples = (snapshot.healthKitSamples ?? []).sorted(
                             by: HealthSampleSnapshot.stableDeduplicationOrder
                         )
-                        let dayWorkouts = workoutsByDay[day] ?? []
+                        for sample in orderedSamples {
+                            if let existing = uniqueSamples[sample.id] {
+                                if HealthSampleSnapshot.preferredForDeduplication(sample, over: existing.sample) {
+                                    uniqueSamples[sample.id] = (sample, calendar)
+                                }
+                            } else {
+                                uniqueSamples[sample.id] = (sample, calendar)
+                            }
+                        }
+                    }
+                    var samplesByDayKey: [String: [UUID: HealthSampleSnapshot]] = [:]
+                    for (sampleID, located) in uniqueSamples {
+                        let sampleDay = located.calendar.startOfDay(for: located.sample.startDate)
+                        let sampleDayKey = Self.dayKey(for: sampleDay, calendar: located.calendar)
+                        let sampleBucketKey = Self.snapshotBucketKey(dayKey: sampleDayKey, calendar: located.calendar)
+                        samplesByDayKey[sampleBucketKey, default: [:]][sampleID] = located.sample
+                        locationsBySampleID[sampleID] = (
+                            located.sample.metric.rawValue,
+                            sampleDayKey,
+                            located.sample.startDate,
+                            located.sample.endDate
+                        )
+                    }
+                    for (record, snapshot, calendar) in decodedSnapshots {
+                        let day = calendar.startOfDay(for: snapshot.dayStart)
+                        let snapshotBucketKey = Self.snapshotBucketKey(dayKey: record.dayKey, calendar: calendar)
+                        let samples = (samplesByDayKey[snapshotBucketKey] ?? [:]).values.sorted(
+                            by: HealthSampleSnapshot.stableDeduplicationOrder
+                        )
+                        let dayWorkouts = workouts.filter {
+                            calendar.startOfDay(for: $0.date) == day
+                        }
                         let previousDay = calendar.date(byAdding: .day, value: -1, to: day)
-                        let previousSleepSamples = previousDay.flatMap { previous in
-                            samplesByStartDay[previous].map { Array($0.values) }
-                        } ?? []
+                        let previousDayKey = previousDay.map {
+                            Self.snapshotBucketKey(dayKey: Self.dayKey(for: $0, calendar: calendar), calendar: calendar)
+                        }
+                        let previousSleepSamples = previousDayKey.flatMap { samplesByDayKey[$0] }
+                            .map { Array($0.values) } ?? []
                         let wakeDaySleepSamples = previousSleepSamples + samples
                         let summary = DailyHealthSampleSummaryBuilder.build(
                             samples: samples,
@@ -312,17 +326,28 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                             .joined()
                     }
 
-                    let allUniqueSamples = samplesByStartDay.values.flatMap { $0.values }
-                    var sleepSamplesByWakeDay: [Date: [HealthSampleSnapshot]] = [:]
-                    for sample in allUniqueSamples where sample.metric == .sleepAnalysis {
-                        for wakeDay in Self.sleepWakeDays(startDate: sample.startDate, endDate: sample.endDate) {
-                            sleepSamplesByWakeDay[wakeDay, default: []].append(sample)
+                    var sleepSamplesByWakeDay: [String: (date: Date, dayKey: String, calendar: Calendar, samples: [HealthSampleSnapshot])] = [:]
+                    for sampleID in uniqueSamples.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+                        guard let located = uniqueSamples[sampleID],
+                              located.sample.metric == .sleepAnalysis else { continue }
+                        for wakeDay in Self.sleepWakeDays(
+                            startDate: located.sample.startDate,
+                            endDate: located.sample.endDate,
+                            calendar: located.calendar
+                        ) {
+                            let wakeDayKey = Self.dayKey(for: wakeDay, calendar: located.calendar)
+                            let bucketKey = Self.snapshotBucketKey(dayKey: wakeDayKey, calendar: located.calendar)
+                            if sleepSamplesByWakeDay[bucketKey] == nil {
+                                sleepSamplesByWakeDay[bucketKey] = (wakeDay, wakeDayKey, located.calendar, [])
+                            }
+                            sleepSamplesByWakeDay[bucketKey]?.samples.append(located.sample)
                         }
                     }
-                    for wakeDay in sleepSamplesByWakeDay.keys.sorted() {
-                        let wakeDayKey = Self.dayKey(for: wakeDay)
-                        guard existingDayKeys.insert(wakeDayKey).inserted else { continue }
-                        let wakeSamples = (sleepSamplesByWakeDay[wakeDay] ?? []).sorted(
+                    for bucketKey in sleepSamplesByWakeDay.keys.sorted() {
+                        guard let wakeDayEntry = sleepSamplesByWakeDay[bucketKey],
+                              existingDayKeys.insert(wakeDayEntry.dayKey).inserted else { continue }
+                        let wakeDay = wakeDayEntry.date
+                        let wakeSamples = wakeDayEntry.samples.sorted(
                             by: HealthSampleSnapshot.stableDeduplicationOrder
                         )
                         let summary = DailyHealthSampleSummary(
@@ -332,14 +357,14 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
                         )
                         let cacheOnlySnapshot = DailyHealthSnapshot(
                             dayStart: wakeDay,
-                            timezoneIdentifier: calendar.timeZone.identifier,
+                            timezoneIdentifier: wakeDayEntry.calendar.timeZone.identifier,
                             healthKitSampleSummary: summary,
                             healthReadStates: [HealthMetricID.sleepAnalysis.rawValue: .available],
                             algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
                         )
                         let payloadData = try encoder.encode(cacheOnlySnapshot)
                         context.insert(DensosoSchemaV4.DailyHealthSnapshotRecord(
-                            dayKey: wakeDayKey,
+                            dayKey: wakeDayEntry.dayKey,
                             timezoneID: cacheOnlySnapshot.timezoneIdentifier,
                             payloadData: payloadData,
                             snapshotHash: SHA256.hash(data: payloadData)
@@ -369,6 +394,8 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
             .lightweight(fromVersion: DensosoSchemaV9.self, toVersion: DensosoSchemaV10.self),
             .lightweight(fromVersion: DensosoSchemaV10.self, toVersion: DensosoSchemaV11.self),
             .lightweight(fromVersion: DensosoSchemaV11.self, toVersion: DensosoSchemaV12.self),
+            .lightweight(fromVersion: DensosoSchemaV12.self, toVersion: DensosoSchemaV13.self),
+            .lightweight(fromVersion: DensosoSchemaV13.self, toVersion: DensosoSchemaV14.self),
         ]
     }
 
@@ -392,16 +419,29 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
         )
     }
 
-    private static func dayKey(for date: Date) -> String {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+    private static func historicalCalendar(for timezoneIdentifier: String) -> Calendar {
+        var calendar = Calendar.current
+        guard let timeZone = TimeZone(identifier: timezoneIdentifier) else {
+            NSLog("Densoso migration V5->V6: invalid historical timezone '%@'; falling back to current timezone.", timezoneIdentifier)
+            return calendar
+        }
+        calendar.timeZone = timeZone
+        return calendar
+    }
+
+    private static func dayKey(for date: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
-    private static func sleepWakeDays(startDate: Date, endDate: Date) -> Set<Date> {
+    private static func snapshotBucketKey(dayKey: String, calendar: Calendar) -> String {
+        "\(calendar.timeZone.identifier)|\(dayKey)"
+    }
+
+    private static func sleepWakeDays(startDate: Date, endDate: Date, calendar: Calendar) -> Set<Date> {
         guard startDate.timeIntervalSince1970.isFinite,
               endDate.timeIntervalSince1970.isFinite,
               endDate > startDate else { return [] }
-        let calendar = Calendar.current
         let firstDay = calendar.startOfDay(for: startDate)
         let lastDay = calendar.startOfDay(for: endDate)
         guard let dayCount = calendar.dateComponents([.day], from: firstDay, to: lastDay).day,

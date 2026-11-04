@@ -109,9 +109,7 @@ struct QwenProvider: TextModelProvider {
                     guard let choice = response.choices.first else {
                         throw ProviderError.malformedResponse
                     }
-                    if choice.finishReason == "content_filter" {
-                        throw ProviderError.contentRejected
-                    }
+                    let stopReason = try Self.stopReason(choice.finishReason)
                     if let text = choice.message.content, !text.isEmpty {
                         continuation.yield(.textDelta(text))
                     }
@@ -144,7 +142,7 @@ struct QwenProvider: TextModelProvider {
                             )
                         )
                     }
-                    continuation.yield(.completed(Self.stopReason(choice.finishReason)))
+                    continuation.yield(.completed(stopReason))
                     continuation.finish()
                 } catch is CancellationError {
                     logSink.record(
@@ -191,11 +189,13 @@ struct QwenProvider: TextModelProvider {
         }
     }
 
-    private static func stopReason(_ raw: String?) -> ProviderStopReason {
+    private static func stopReason(_ raw: String?) throws -> ProviderStopReason {
         switch raw {
         case "tool_calls": .toolUse
         case "length": .maxTokens
-        default: .completed
+        case "stop": .completed
+        case "content_filter": throw ProviderError.contentRejected
+        default: throw ProviderError.malformedResponse
         }
     }
 

@@ -156,7 +156,8 @@ final class ToolSchemaTests: XCTestCase {
                 title: "Plan \(index)",
                 startTime: Date(timeIntervalSince1970: Double(index * 60)),
                 endTime: nil,
-                notes: String(repeating: "routine ", count: 60)
+                notes: String(repeating: "routine ", count: 60),
+                source: .confirmedTrainingPlan
             )
         }
 
@@ -169,13 +170,14 @@ final class ToolSchemaTests: XCTestCase {
         XCTAssertEqual(object["count"] as? Int, GetTodayPlanTool.maximumEvents)
         XCTAssertEqual(object["hasMore"] as? Bool, true)
         XCTAssertEqual(plans.first?["title"] as? String, "Plan 0")
+        XCTAssertEqual(plans.first?["source"] as? String, AgentScheduleItemSource.confirmedTrainingPlan.rawValue)
         XCTAssertLessThanOrEqual((plans.first?["summary"] as? String)?.count ?? 0, 80)
         XCTAssertLessThanOrEqual(response.utf8.count, 8_192)
         XCTAssertFalse(response.contains("storageID"))
         XCTAssertFalse(response.contains("notesPrefix"))
     }
 
-    func testPendingActionsToolOnlyReturnsUnexpiredUncommittedSummaries() throws {
+    func testPendingActionsToolOnlyReturnsUnexpiredUncommittedActionsAndFullPayload() throws {
         let tool = GetPendingActionsTool()
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let pending = makePendingAction(
@@ -224,6 +226,29 @@ final class ToolSchemaTests: XCTestCase {
         XCTAssertFalse(response.contains("clientRequestID"))
     }
 
+    func testPendingActionsToolPreservesPayloadTypeValuesAndSource() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let action = PendingAction(
+            id: UUID(),
+            idempotencyKey: "private-key",
+            clientRequestID: UUID(),
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(3_600),
+            payload: .weight(WeightDraft(measuredAt: now, kilograms: 67.25, source: "healthKit")),
+            state: .pending
+        )
+
+        let response = try GetPendingActionsTool().response(actions: [action], asOf: now)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let item = try XCTUnwrap((object["actions"] as? [[String: Any]])?.first)
+
+        XCTAssertEqual(item["type"] as? String, "weight")
+        XCTAssertNotNil(item["payload"] as? [String: Any])
+        XCTAssertEqual(item["confidence"] as? Double, 1)
+        XCTAssertTrue(response.contains("67.25"))
+        XCTAssertTrue(response.contains("healthKit"))
+    }
+
     func testPendingActionsToolBoundsResultsAndReportsRemainingActions() throws {
         let tool = GetPendingActionsTool()
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -243,9 +268,67 @@ final class ToolSchemaTests: XCTestCase {
         XCTAssertLessThan(response.count, 8_192)
         XCTAssertEqual(object["count"] as? Int, 20)
         XCTAssertEqual(object["hasMore"] as? Bool, true)
+        XCTAssertEqual(object["nextOffset"] as? Int, 20)
+
+        let nextPage = try tool.response(actions: actions, asOf: now, offset: 20)
+        let nextObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(nextPage.utf8)) as? [String: Any])
+        XCTAssertEqual(nextObject["count"] as? Int, 5)
+        XCTAssertEqual(nextObject["hasMore"] as? Bool, false)
     }
 
-    func testPendingActionsToolAcceptsOnlyAnEmptyReadOnlyRequest() throws {
+    func testPendingActionsToolPagesPastSingleOversizedAction() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let largeMeal = MealDraft(
+            occurredAt: now,
+            mealType: "lunch",
+            dishes: [
+                MealDishDraft(
+                    name: "米饭",
+                    nutrients: NutrientEstimate(energyKcal: try EstimateRange.point(100)),
+                    algorithmVersion: "test"
+                ),
+            ],
+            note: String(repeating: "x", count: 65_000)
+        )
+        let oversized = PendingAction(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000911")!,
+            idempotencyKey: "oversized-private-key",
+            clientRequestID: UUID(),
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(3_600),
+            payload: .meal(largeMeal),
+            state: .pending
+        )
+        let next = makePendingAction(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000912")!,
+            key: "next-private-key",
+            createdAt: now.addingTimeInterval(-1),
+            expiresAt: now.addingTimeInterval(3_600),
+            state: .pending
+        )
+        let tool = GetPendingActionsTool()
+
+        let response = try tool.response(actions: [next, oversized], asOf: now)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let reviewItems = try XCTUnwrap(object["oversizedActions"] as? [[String: Any]])
+
+        XCTAssertEqual(object["status"] as? String, "requiresLocalReview")
+        XCTAssertEqual(object["count"] as? Int, 0)
+        XCTAssertEqual(object["hasMore"] as? Bool, true)
+        XCTAssertEqual(object["nextOffset"] as? Int, 1)
+        XCTAssertEqual(reviewItems.first?["actionID"] as? String, oversized.id.uuidString.lowercased())
+        XCTAssertEqual(reviewItems.first?["requiresLocalReview"] as? Bool, true)
+        XCTAssertLessThan(response.utf8.count, 8_192)
+
+        let nextPage = try tool.response(actions: [next, oversized], asOf: now, offset: 1)
+        let nextObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(nextPage.utf8)) as? [String: Any])
+        let actions = try XCTUnwrap(nextObject["actions"] as? [[String: Any]])
+        XCTAssertEqual(nextObject["count"] as? Int, 1)
+        XCTAssertEqual(nextObject["hasMore"] as? Bool, false)
+        XCTAssertEqual(actions.first?["actionID"] as? String, next.id.uuidString.lowercased())
+    }
+
+    func testPendingActionsToolAcceptsReadOnlyOffsetAndRejectsMutationRequests() throws {
         let definition = GetPendingActionsTool().definition
         XCTAssertEqual(definition.effect, .readOnly)
         guard case .object(_, let required, let additionalProperties, _) = definition.parameters else {
@@ -254,6 +337,10 @@ final class ToolSchemaTests: XCTestCase {
         XCTAssertTrue(required.isEmpty)
         XCTAssertFalse(additionalProperties)
         XCTAssertNoThrow(try ToolSchemaValidator.validate(.object([:]), against: definition.parameters))
+        XCTAssertNoThrow(try ToolSchemaValidator.validate(
+            .object(["offset": .integer(20)]),
+            against: definition.parameters
+        ))
         XCTAssertThrowsError(try ToolSchemaValidator.validate(
             .object(["confirm": .boolean(true)]),
             against: definition.parameters

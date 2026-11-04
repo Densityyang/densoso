@@ -614,7 +614,7 @@ final class DailyCheckInConfirmationTests: XCTestCase {
     }
 
     private func makeCurrentContainer() throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         return try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

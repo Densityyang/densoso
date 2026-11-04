@@ -20,7 +20,7 @@ struct DiagnosticsRuntimeInfo: Codable, Equatable, Sendable {
 
     private static var currentSchemaVersion: String {
         // Keep diagnostics aligned with the app's active persistence schema.
-        let version = DensosoSchemaV12.versionIdentifier
+        let version = DensosoSchemaV14.versionIdentifier
         return "\(version.major).\(version.minor).\(version.patch)"
     }
 

@@ -51,6 +51,42 @@ struct WeeklyAnalyticsService {
         profile: UserProfile?,
         goal: GoalProfile? = nil,
         in modelContext: ModelContext
+    ) async throws -> WeeklyAnalyticsSnapshot {
+        let calendar = self.calendar
+        let today = calendar.startOfDay(for: referenceDate)
+        let fallbackProfileTarget = profile?.dailyDeficitTarget
+        let fallbackGoalTarget = goal?.dailyDeficitKcal
+        let rollingStart = calendar.date(byAdding: .day, value: -6, to: today) ?? today
+        let weekInterval = calendar.dateInterval(of: .weekOfYear, for: today)
+            ?? DateInterval(start: rollingStart, end: calendar.date(byAdding: .day, value: 1, to: today) ?? today)
+        let fetchStart = min(rollingStart, weekInterval.start)
+        let projectionDays = HealthDataWindowPolicy.days(from: fetchStart, through: today, calendar: calendar)
+        let projectionDayKeys = Set(projectionDays.map {
+            DailyMetricsProjectionWriteGate.dayKey(for: $0, calendar: calendar)
+        })
+        let barrier = PersistenceOperationBarrier.shared
+        let operationLease = try await barrier.acquireMutationOperation()
+        defer { barrier.release(operationLease) }
+        return try await barrier.withLease(operationLease) {
+            try await DailyMetricsProjectionWriteGate.withLock(
+                for: modelContext,
+                dayKeys: projectionDayKeys
+            ) {
+                try self.loadWhileProjectionGateHeld(
+                    referenceDate: referenceDate,
+                    fallbackProfileTarget: fallbackProfileTarget,
+                    fallbackGoalTarget: fallbackGoalTarget,
+                    in: modelContext
+                )
+            }
+        }
+    }
+
+    private func loadWhileProjectionGateHeld(
+        referenceDate: Date,
+        fallbackProfileTarget: Int?,
+        fallbackGoalTarget: Int?,
+        in modelContext: ModelContext
     ) throws -> WeeklyAnalyticsSnapshot {
         let today = calendar.startOfDay(for: referenceDate)
         let rollingStart = calendar.date(byAdding: .day, value: -6, to: today) ?? today
@@ -65,7 +101,16 @@ struct WeeklyAnalyticsService {
         var descriptor = FetchDescriptor<DailyMetrics>(predicate: predicate)
         descriptor.sortBy = [SortDescriptor(\DailyMetrics.date)]
         let metrics = try modelContext.fetch(descriptor)
-        let target = max(goal?.dailyDeficitKcal ?? profile?.dailyDeficitTarget ?? 500, 0)
+        let persistedProfileTarget = try UserProfileSingletonPolicy.primary(in: modelContext)?.dailyDeficitTarget
+        let goalProfileKey = "primary"
+        let goalPredicate = #Predicate<GoalProfileRecord> { $0.profileKey == goalProfileKey }
+        var goalDescriptor = FetchDescriptor<GoalProfileRecord>(predicate: goalPredicate)
+        goalDescriptor.fetchLimit = 1
+        let persistedGoalTarget = (try? modelContext.fetch(goalDescriptor).first)?.dailyDeficitKcal
+        let target = max(
+            persistedGoalTarget ?? fallbackGoalTarget ?? persistedProfileTarget ?? fallbackProfileTarget ?? 500,
+            0
+        )
 
         var metricsByDay: [Date: DailyMetricsReadResult] = [:]
         for metric in metrics {

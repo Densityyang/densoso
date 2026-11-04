@@ -20,49 +20,195 @@ enum DailyMetricsProjectionError: Equatable, Sendable, SharedErrorDescribing {
 
 @MainActor
 enum DailyMetricsProjectionWriteGate {
-    private static var heldContexts = Set<ObjectIdentifier>()
-    private static var waiters: [ObjectIdentifier: [CheckedContinuation<Void, Never>]] = [:]
-    @TaskLocal private static var heldContextKeys = Set<ObjectIdentifier>()
+    struct Lease: Equatable {
+        fileprivate let storeKey: ObjectIdentifier
+        fileprivate let ownerID: UUID
+        fileprivate let lockKeys: Set<String>
+    }
+
+    private struct Waiter {
+        let id: UUID
+        let lockKeys: Set<String>
+        let continuation: CheckedContinuation<Lease?, Never>
+    }
+
+    private struct WaiterCountObserver {
+        let expectedCount: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
+    private static let storeWideKey = "*"
+    private static var heldContexts: [ObjectIdentifier: [String: UUID]] = [:]
+    private static var waiters: [ObjectIdentifier: [Waiter]] = [:]
+    private static var waiterCountObservers: [ObjectIdentifier: [WaiterCountObserver]] = [:]
 
     static func withLock<T>(
         for modelContext: ModelContext,
+        dayKeys: Set<String>? = nil,
         operation: @MainActor () async throws -> T
-    ) async rethrows -> T {
-        let key = ObjectIdentifier(modelContext)
-        if heldContextKeys.contains(key) {
-            return try await operation()
+    ) async throws -> T {
+        try await withLockAndLease(for: modelContext, dayKeys: dayKeys) { _ in try await operation() }
+    }
+
+    static func withLockAndLease<T>(
+        for modelContext: ModelContext,
+        dayKeys: Set<String>? = nil,
+        operation: @MainActor (Lease) async throws -> T
+    ) async throws -> T {
+        let lease = try await acquire(storeID: ObjectIdentifier(modelContext.container), dayKeys: dayKeys)
+        defer { release(lease) }
+        try Task.checkCancellation()
+        return try await operation(lease)
+    }
+
+    /// A nil day-key set requests a store-wide lease. Day-scoped leases let
+    /// independent daily projections proceed concurrently.
+    static func acquire(storeID key: ObjectIdentifier, dayKeys: Set<String>? = nil) async throws -> Lease {
+        try Task.checkCancellation()
+        let requestedKeys = normalizedLockKeys(dayKeys)
+        if canGrant(requestedKeys, storeID: key), !hasEarlierConflictingWaiter(requestedKeys, storeID: key) {
+            let lease = Lease(storeKey: key, ownerID: UUID(), lockKeys: requestedKeys)
+            hold(lease)
+            return lease
         }
 
-        await acquire(for: modelContext)
-        defer { release(for: modelContext) }
-        return try await $heldContextKeys.withValue(heldContextKeys.union([key])) {
-            try await operation()
+        let waiterID = UUID()
+        let lease = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                waiters[key, default: []].append(Waiter(id: waiterID, lockKeys: requestedKeys, continuation: continuation))
+                notifyWaiterCountObservers(for: key)
+            }
+        } onCancel: {
+            Task { @MainActor in
+                cancelWaiter(waiterID, for: key)
+            }
+        }
+        guard let lease else { throw CancellationError() }
+        if Task.isCancelled {
+            release(lease)
+            throw CancellationError()
+        }
+        return lease
+    }
+
+    static func release(_ lease: Lease) {
+        guard let held = heldContexts[lease.storeKey],
+              lease.lockKeys.allSatisfy({ held[$0] == lease.ownerID }) else { return }
+        var updated = held
+        for lockKey in lease.lockKeys { updated[lockKey] = nil }
+        heldContexts[lease.storeKey] = updated.isEmpty ? nil : updated
+        grantNextWaiter(for: lease.storeKey)
+    }
+
+    static func validate(_ lease: Lease, storeID: ObjectIdentifier, dayKeys: Set<String>? = nil) throws {
+        guard lease.storeKey == storeID,
+              let held = heldContexts[storeID],
+              lease.lockKeys.allSatisfy({ held[$0] == lease.ownerID }) else {
+            throw DailyMetricsProjectionGateError.invalidLease
+        }
+        if let dayKeys, !dayKeys.isSubset(of: lease.lockKeys) {
+            throw DailyMetricsProjectionGateError.invalidLease
         }
     }
 
-    static func acquire(for modelContext: ModelContext) async {
-        let key = ObjectIdentifier(modelContext)
-        guard heldContexts.contains(key) else {
-            heldContexts.insert(key)
-            return
-        }
+    static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return "\(calendar.timeZone.identifier)|\(String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0))"
+    }
 
+    static func waitUntilWaitingCount(_ count: Int, storeID key: ObjectIdentifier) async {
+        guard (waiters[key]?.count ?? 0) != count else { return }
         await withCheckedContinuation { continuation in
-            waiters[key, default: []].append(continuation)
+            if (waiters[key]?.count ?? 0) == count {
+                continuation.resume()
+            } else {
+                waiterCountObservers[key, default: []].append(
+                    WaiterCountObserver(expectedCount: count, continuation: continuation)
+                )
+            }
         }
     }
 
-    static func release(for modelContext: ModelContext) {
-        let key = ObjectIdentifier(modelContext)
-        if var contextWaiters = waiters[key], !contextWaiters.isEmpty {
-            let next = contextWaiters.removeFirst()
-            waiters[key] = contextWaiters.isEmpty ? nil : contextWaiters
-            next.resume()
-        } else {
-            heldContexts.remove(key)
-            waiters[key] = nil
+    private static func cancelWaiter(_ id: UUID, for key: ObjectIdentifier) {
+        guard var contextWaiters = waiters[key],
+              let index = contextWaiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = contextWaiters.remove(at: index)
+        waiters[key] = contextWaiters.isEmpty ? nil : contextWaiters
+        notifyWaiterCountObservers(for: key)
+        waiter.continuation.resume(returning: nil)
+        if heldContexts[key]?.isEmpty != false {
+            grantNextWaiter(for: key)
         }
     }
+
+    private static func grantNextWaiter(for key: ObjectIdentifier) {
+        guard var contextWaiters = waiters[key], !contextWaiters.isEmpty else { return }
+        var grantedAny = true
+        while grantedAny {
+            grantedAny = false
+            for index in contextWaiters.indices {
+                let waiter = contextWaiters[index]
+                guard canGrant(waiter.lockKeys, storeID: key),
+                      !contextWaiters[..<index].contains(where: { keysConflict($0.lockKeys, waiter.lockKeys) }) else {
+                    continue
+                }
+                contextWaiters.remove(at: index)
+                waiters[key] = contextWaiters.isEmpty ? nil : contextWaiters
+                let lease = Lease(storeKey: key, ownerID: UUID(), lockKeys: waiter.lockKeys)
+                hold(lease)
+                waiter.continuation.resume(returning: lease)
+                contextWaiters = waiters[key] ?? []
+                notifyWaiterCountObservers(for: key)
+                grantedAny = true
+                break
+            }
+        }
+    }
+
+    private static func normalizedLockKeys(_ dayKeys: Set<String>?) -> Set<String> {
+        guard let dayKeys, !dayKeys.isEmpty else { return [storeWideKey] }
+        return dayKeys
+    }
+
+    private static func hold(_ lease: Lease) {
+        var held = heldContexts[lease.storeKey, default: [:]]
+        for key in lease.lockKeys { held[key] = lease.ownerID }
+        heldContexts[lease.storeKey] = held
+    }
+
+    private static func canGrant(_ keys: Set<String>, storeID: ObjectIdentifier) -> Bool {
+        !keysConflict(keys, Set(heldContexts[storeID, default: [:]].keys))
+    }
+
+    private static func hasEarlierConflictingWaiter(_ keys: Set<String>, storeID: ObjectIdentifier) -> Bool {
+        waiters[storeID, default: []].contains { keysConflict($0.lockKeys, keys) }
+    }
+
+    private static func keysConflict(_ lhs: Set<String>, _ rhs: Set<String>) -> Bool {
+        lhs.contains(storeWideKey) || rhs.contains(storeWideKey) || !lhs.isDisjoint(with: rhs)
+    }
+
+    private static func notifyWaiterCountObservers(for key: ObjectIdentifier) {
+        let count = waiters[key]?.count ?? 0
+        guard let observers = waiterCountObservers[key], !observers.isEmpty else { return }
+        var pending: [WaiterCountObserver] = []
+        for observer in observers {
+            if observer.expectedCount == count {
+                observer.continuation.resume()
+            } else {
+                pending.append(observer)
+            }
+        }
+        waiterCountObservers[key] = pending.isEmpty ? nil : pending
+    }
+}
+
+enum DailyMetricsProjectionGateError: Error {
+    case invalidLease
 }
 
 private struct ExistingMetricProjectionSnapshot: Sendable {
@@ -147,11 +293,14 @@ enum DailyMetricsProjector {
         return try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: metricPredicate)).first
     }
 
-    /// Serializes mutations and projections that share one ModelContext. The
-    /// lock is held while detached pure calculation runs, but the context itself
-    /// stays on MainActor and is never captured by the detached task.
+/// Serializes DailyMetrics source mutations and projections across every
+/// ModelContext backed by the same ModelContainer. The lock remains held while
+/// detached pure calculation runs, but no ModelContext enters that calculation.
     static func reproject(on date: Date, now: Date = Date(), in modelContext: ModelContext) async throws {
-        try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
+        try await DailyMetricsProjectionWriteGate.withLock(
+            for: modelContext,
+            dayKeys: [DailyMetricsProjectionWriteGate.dayKey(for: date)]
+        ) {
             try Task.checkCancellation()
             try await reprojectWhileGateHeld(on: date, now: now, in: modelContext)
         }
@@ -176,7 +325,7 @@ enum DailyMetricsProjector {
             for _ in 0..<3 {
                 let snapshot = try projectionSnapshot(on: day, now: now, calendar: calendar, in: modelContext)
                 let expectedFingerprint = await Task.detached(priority: .utility) {
-                    CaloricEngine.projectionFingerprint(for: snapshot.calculationInput)
+                    DailyMetricsProjectionCalculator.fingerprint(for: snapshot.calculationInput)
                 }.value
 
                 if let existing = snapshot.existing,
@@ -204,15 +353,15 @@ enum DailyMetricsProjector {
                 }
 
                 let calculationResult = await Task.detached(priority: .utility) {
-                    CaloricEngine.computeDailyMetricsResult(
-                        for: snapshot.calculationInput,
+                    DailyMetricsProjectionCalculator.calculate(
+                        snapshot.calculationInput,
                         sourceFingerprint: expectedFingerprint
                     )
                 }.value
 
                 let currentSnapshot = try projectionSnapshot(on: day, now: now, calendar: calendar, in: modelContext)
                 let currentFingerprint = await Task.detached(priority: .utility) {
-                    CaloricEngine.projectionFingerprint(for: currentSnapshot.calculationInput)
+                    DailyMetricsProjectionCalculator.fingerprint(for: currentSnapshot.calculationInput)
                 }.value
                 guard currentFingerprint == expectedFingerprint else { continue }
 
@@ -238,7 +387,7 @@ enum DailyMetricsProjector {
         }
     }
 
-    static func markPendingForReprojection(on date: Date, in modelContext: ModelContext) throws {
+    static func markPendingForReprojectionWhileGateHeld(on date: Date, in modelContext: ModelContext) throws {
         let day = Calendar.current.startOfDay(for: date)
         if let metric = try existingMetric(on: day, in: modelContext) {
             metric.requiresRecompute = true
@@ -266,7 +415,7 @@ enum DailyMetricsProjector {
             let day = calendar.startOfDay(for: date)
             let snapshot = try projectionSnapshot(on: day, now: now, calendar: calendar, in: modelContext)
             let currentFingerprint = await Task.detached(priority: .utility) {
-                CaloricEngine.projectionFingerprint(for: snapshot.calculationInput)
+                DailyMetricsProjectionCalculator.fingerprint(for: snapshot.calculationInput)
             }.value
             guard let metric = try existingMetric(on: day, in: modelContext) else { return }
             guard !DailyMetricsProjectionFingerprint.sourceMatches(
@@ -298,7 +447,7 @@ enum DailyMetricsProjector {
         do {
             try await validateSavedProjectionWhileGateHeld(on: date, now: now, in: modelContext)
         } catch {
-            try? markPendingForReprojection(on: date, in: modelContext)
+            try? markPendingForReprojectionWhileGateHeld(on: date, in: modelContext)
             try? modelContext.save()
             throw error
         }
@@ -330,37 +479,41 @@ enum DailyMetricsProjector {
         now: Date = Date(),
         in modelContext: ModelContext
     ) async throws -> Bool {
-        try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
+        try await DailyMetricsProjectionWriteGate.withLock(
+            for: modelContext,
+            dayKeys: [DailyMetricsProjectionWriteGate.dayKey(for: date)]
+        ) {
             try Task.checkCancellation()
             return try await withProjectionErrorMapping {
                 let calendar = Calendar.current
                 let day = calendar.startOfDay(for: date)
-                guard let existingSnapshot = try existingMetric(on: day, in: modelContext).map({ metric in
-                    ExistingMetricProjectionSnapshot(
-                        sourceFingerprint: metric.sourceFingerprint,
-                        projectionVersion: metric.projectionVersion,
-                        requiresRecompute: metric.requiresRecompute
-                    )
-                }), isHistoricalRecomputeCandidate(existingSnapshot) else {
-                    return false
-                }
+                for _ in 0..<3 {
+                    guard let existingSnapshot = try existingMetric(on: day, in: modelContext).map({ metric in
+                        ExistingMetricProjectionSnapshot(
+                            sourceFingerprint: metric.sourceFingerprint,
+                            projectionVersion: metric.projectionVersion,
+                            requiresRecompute: metric.requiresRecompute
+                        )
+                    }), isHistoricalRecomputeCandidate(existingSnapshot) else {
+                        return false
+                    }
 
-                let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
-                let effectiveInputs = try resolveEffectiveInputs(on: day, asOf: asOf, in: modelContext)
-                guard HistoricalMetricsEligibilityPolicy.hasValidInputs(
-                    profile: effectiveInputs.profile,
-                    weight: effectiveInputs.weight,
-                    asOf: asOf,
-                    calendar: calendar
-                ) else { return false }
+                    let asOf = HistoricalMetricsEligibilityPolicy.referenceDate(for: day, now: now, calendar: calendar)
+                    let effectiveInputs = try resolveEffectiveInputs(on: day, asOf: asOf, in: modelContext)
+                    guard HistoricalMetricsEligibilityPolicy.hasValidInputs(
+                        profile: effectiveInputs.profile,
+                        weight: effectiveInputs.weight,
+                        asOf: asOf,
+                        calendar: calendar
+                    ) else { return false }
 
-                let projectionInputs = try DailyMetricsProjectionInputReader.read(
+                    let projectionInputs = try DailyMetricsProjectionInputReader.read(
                     on: day,
                     calendar: calendar,
                     in: modelContext
                 )
-                let healthSnapshot = try healthSnapshot(for: day, calendar: calendar, in: modelContext)
-                let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
+                    let healthSnapshot = try healthSnapshot(for: day, calendar: calendar, in: modelContext)
+                    let fingerprintContext = try DailyMetricsProjectionFingerprint.context(
                     on: day,
                     calendar: calendar,
                     asOf: asOf,
@@ -371,7 +524,7 @@ enum DailyMetricsProjector {
                 )
                 // Copy all SwiftData-backed input into Sendable values before leaving
                 // this context. Only pure fingerprinting/accounting work runs detached.
-                let calculationInput = CaloricEngine.calculationInput(
+                    let calculationInput = CaloricEngine.calculationInput(
                     date: day,
                     calendar: calendar,
                     meals: projectionInputs.meals,
@@ -384,38 +537,40 @@ enum DailyMetricsProjector {
                     healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
                     fingerprintContext: fingerprintContext
                 )
-                let expectedFingerprint = await Task.detached(priority: .utility) {
-                    CaloricEngine.projectionFingerprint(for: calculationInput)
+                    let expectedFingerprint = await Task.detached(priority: .utility) {
+                    DailyMetricsProjectionCalculator.fingerprint(for: calculationInput)
                 }.value
-                if DailyMetricsProjectionFingerprint.sourceMatches(
+                    if DailyMetricsProjectionFingerprint.sourceMatches(
                     storedFingerprint: existingSnapshot.sourceFingerprint,
                     storedAlgorithmVersion: existingSnapshot.projectionVersion,
                     expectedFingerprint: expectedFingerprint,
                     expectedAlgorithmVersion: fingerprintContext.algorithmVersion
                 ), !existingSnapshot.requiresRecompute {
-                    return false
-                }
+                        return false
+                    }
 
-                let calculationResult = await Task.detached(priority: .utility) {
-                    CaloricEngine.computeDailyMetricsResult(
-                        for: calculationInput,
+                    let calculationResult = await Task.detached(priority: .utility) {
+                    DailyMetricsProjectionCalculator.calculate(
+                        calculationInput,
                         sourceFingerprint: expectedFingerprint
                     )
                 }.value
 
-                let currentSnapshot = try projectionSnapshot(on: day, now: now, calendar: calendar, in: modelContext)
-                let currentFingerprint = await Task.detached(priority: .utility) {
-                    CaloricEngine.projectionFingerprint(for: currentSnapshot.calculationInput)
-                }.value
-                guard currentFingerprint == expectedFingerprint,
-                      let currentExisting = try existingMetric(on: day, in: modelContext),
-                      isHistoricalRecomputeCandidate(currentExisting) else { return false }
+                    let currentSnapshot = try projectionSnapshot(on: day, now: now, calendar: calendar, in: modelContext)
+                    let currentFingerprint = await Task.detached(priority: .utility) {
+                        DailyMetricsProjectionCalculator.fingerprint(for: currentSnapshot.calculationInput)
+                    }.value
+                    guard currentFingerprint == expectedFingerprint else { continue }
+                    guard let currentExisting = try existingMetric(on: day, in: modelContext),
+                          isHistoricalRecomputeCandidate(currentExisting) else { return false }
 
-                let projected = calculationResult.makeDailyMetrics()
-                copy(projected, to: currentExisting)
-                try modelContext.save()
-                try await validateSavedProjectionWhileGateHeld(on: day, now: now, in: modelContext)
-                return true
+                    let projected = calculationResult.makeDailyMetrics()
+                    copy(projected, to: currentExisting)
+                    try modelContext.save()
+                    try await validateSavedProjectionWhileGateHeld(on: day, now: now, in: modelContext)
+                    return true
+                }
+                return false
             }
         }
     }
@@ -476,7 +631,14 @@ enum DailyMetricsProjector {
     ) throws -> EffectiveProjectionInputs {
         let primaryProfileKey = "primary"
         let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
-        var profileDescriptor = FetchDescriptor<UserProfile>(predicate: profilePredicate)
+        var profileDescriptor = FetchDescriptor<UserProfile>(
+            predicate: profilePredicate,
+            sortBy: [
+                SortDescriptor(\.updatedAt, order: .reverse),
+                SortDescriptor(\.createdAt),
+                SortDescriptor(\.name),
+            ]
+        )
         profileDescriptor.fetchLimit = 1
         let profileKey = try modelContext.fetch(profileDescriptor).first?.profileKey ?? primaryProfileKey
         let effectiveRevision = try EffectiveProfileRevisionReader.latest(

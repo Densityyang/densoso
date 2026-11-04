@@ -398,6 +398,43 @@ final class AgentProviderContextPolicyTests: XCTestCase {
         XCTAssertFalse(summaryText.contains("table"))
     }
 
+    func testExplicitNegativePreferenceClearsHistoricalPreference() throws {
+        let summary = try summarizedPreferences([
+            "请用中文回答。",
+            "不要用中文回答。",
+        ])
+
+        XCTAssertFalse(summary.contains("Chinese"))
+    }
+
+    func testLatestPreferenceOverridesEarlierPreference() throws {
+        let summary = try summarizedPreferences([
+            "请用中文回答。",
+            "Please answer in English.",
+        ])
+
+        XCTAssertTrue(summary.contains("English"))
+        XCTAssertFalse(summary.contains("Chinese"))
+    }
+
+    func testCommaSeparatesPreferenceClauses() throws {
+        let summary = try summarizedPreferences([
+            "不要用中文回答，请用英文回答。",
+        ])
+
+        XCTAssertTrue(summary.contains("English"))
+        XCTAssertFalse(summary.contains("Chinese"))
+    }
+
+    func testUnmentionedPreferenceRemainsUnchanged() throws {
+        let summary = try summarizedPreferences([
+            "请用中文回答。",
+            "帮我解释一下这个概念。",
+        ])
+
+        XCTAssertTrue(summary.contains("Chinese"))
+    }
+
     func testHistoricalSummaryMapsHostilePreferenceTextToClosedVocabularyOnly() throws {
         let provenance = Self.historyProvenance()
         var messages: [ModelMessage] = [
@@ -762,5 +799,43 @@ final class AgentProviderContextPolicyTests: XCTestCase {
             policyRevision: policy.revision,
             allowedClasses: policy.allowedClasses
         )
+    }
+
+    private func summarizedPreferences(_ turns: [String]) throws -> String {
+        let provenance = Self.historyProvenance()
+        var messages: [ModelMessage] = []
+        for (index, text) in turns.enumerated() {
+            messages.append(ModelMessage(role: .user, text: text, healthContextPolicyProvenance: provenance))
+            messages.append(ModelMessage(
+                role: .assistant,
+                text: "Acknowledged \(index).",
+                healthContextPolicyProvenance: provenance
+            ))
+        }
+        for index in 0..<9 {
+            messages.append(ModelMessage(
+                role: .user,
+                text: "Neutral historical turn \(index).",
+                healthContextPolicyProvenance: provenance
+            ))
+            messages.append(ModelMessage(
+                role: .assistant,
+                text: "Neutral reply \(index).",
+                healthContextPolicyProvenance: provenance
+            ))
+        }
+        let currentTurnStartIndex = messages.count
+        messages.append(ModelMessage(role: .user, text: "Current request."))
+        let context = try AgentProviderContextPolicy.boundedContext(
+            messages,
+            currentTurnStartIndex: currentTurnStartIndex
+        )
+        return context.messages.flatMap { message in
+            message.content.compactMap { content -> String? in
+                guard case .text(let text) = content,
+                      text.contains(AgentProviderContextPolicy.historicalSummaryMarker) else { return nil }
+                return text
+            }
+        }.joined(separator: "\n")
     }
 }

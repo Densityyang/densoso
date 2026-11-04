@@ -258,6 +258,42 @@ final class ProviderRetryPolicyTests: XCTestCase {
         XCTAssertLessThanOrEqual(try XCTUnwrap(requests.first).timeoutInterval, 0.1)
     }
 
+    func testStreamBodyThatStallsAfterHeadersTimesOutAndCancelsTransport() async throws {
+        let transport = DeadlineStreamTransport(body: .stalled)
+        let executor = ProviderRequestExecutor(transport: transport)
+        let continuousClock = ContinuousClock()
+        let started = continuousClock.now
+        let result = try await executor.executeStream(
+            request(),
+            deadline: Date().addingTimeInterval(0.15)
+        )
+
+        XCTAssertEqual(result.response.statusCode, 200)
+        let chunkCount = try await collectUntilStreamTimeout(result)
+
+        XCTAssertEqual(chunkCount, 0)
+        XCTAssertLessThan(started.duration(to: continuousClock.now), .seconds(1))
+        try await assertTransportWasCancelled(transport)
+    }
+
+    func testContinuousStreamCannotExtendTheAbsoluteDeadline() async throws {
+        let transport = DeadlineStreamTransport(body: .continuous)
+        let executor = ProviderRequestExecutor(transport: transport)
+        let continuousClock = ContinuousClock()
+        let started = continuousClock.now
+        let result = try await executor.executeStream(
+            request(),
+            deadline: Date().addingTimeInterval(0.15)
+        )
+
+        XCTAssertEqual(result.response.statusCode, 200)
+        let chunkCount = try await collectUntilStreamTimeout(result)
+
+        XCTAssertGreaterThan(chunkCount, 0)
+        XCTAssertLessThan(started.duration(to: continuousClock.now), .seconds(1))
+        try await assertTransportWasCancelled(transport)
+    }
+
     func testClientProtocolFailureDoesNotMasqueradeAsServerOutage() async throws {
         for status in [400, 422] {
             let transport = ScriptedProviderHTTPTransport(
@@ -333,6 +369,95 @@ final class ProviderRetryPolicyTests: XCTestCase {
         var request = URLRequest(url: URL(string: "https://provider.example.test/v1/messages")!)
         request.httpMethod = "POST"
         return request
+    }
+
+    private func collectUntilStreamTimeout(
+        _ result: ProviderHTTPStreamResult
+    ) async throws -> Int {
+        var chunkCount = 0
+        do {
+            for try await _ in result.chunks {
+                chunkCount += 1
+            }
+            XCTFail("Expected the absolute stream deadline to expire")
+        } catch let error as ProviderError {
+            XCTAssertEqual(error, .timeout)
+        }
+        return chunkCount
+    }
+
+    private func assertTransportWasCancelled(
+        _ transport: DeadlineStreamTransport
+    ) async throws {
+        let clock = ContinuousClock()
+        let timeout = clock.now.advanced(by: .seconds(1))
+        while true {
+            if await transport.terminationCount() == 1 { return }
+            guard clock.now < timeout else {
+                XCTFail("The deadline did not cancel the upstream stream")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+}
+
+private actor DeadlineStreamTransport: ProviderHTTPTransport {
+    enum Body: Sendable {
+        case stalled
+        case continuous
+    }
+
+    private let body: Body
+    private var continuations: [UUID: AsyncThrowingStream<Data, Error>.Continuation] = [:]
+    private var producers: [UUID: Task<Void, Never>] = [:]
+    private var terminations = 0
+
+    init(body: Body) {
+        self.body = body
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        throw ProviderError.malformedResponse
+    }
+
+    func stream(for request: URLRequest) async throws -> ProviderHTTPStreamResponse {
+        let id = UUID()
+        let (chunks, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+        continuations[id] = continuation
+        continuation.onTermination = { @Sendable [weak self] _ in
+            Task { await self?.recordTermination(for: id) }
+        }
+
+        if case .continuous = body {
+            producers[id] = Task {
+                while !Task.isCancelled {
+                    continuation.yield(Data("data: pulse\n\n".utf8))
+                    do {
+                        try await Task.sleep(for: .milliseconds(10))
+                    } catch {
+                        return
+                    }
+                }
+            }
+        }
+
+        guard let url = request.url else { throw ProviderError.malformedResponse }
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: nil
+        )!
+        return ProviderHTTPStreamResponse(chunks: chunks, response: response)
+    }
+
+    func terminationCount() -> Int { terminations }
+
+    private func recordTermination(for id: UUID) {
+        continuations[id] = nil
+        producers.removeValue(forKey: id)?.cancel()
+        terminations += 1
     }
 }
 

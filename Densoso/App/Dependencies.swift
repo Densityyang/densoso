@@ -57,6 +57,7 @@ final class Dependencies {
     let providerLogBuffer: ProviderLogBuffer
     let healthKitService: HealthKitService
     let healthKitSyncCoordinator: HealthKitSyncCoordinator
+    let foregroundHealthRebaselineCoordinator: ForegroundHealthRebaselineCoordinator
     let healthContextExportGate: HealthContextExportGate
     let healthIntelligenceService: HealthIntelligenceService
     let healthProjectionActor: HealthProjectionActor
@@ -91,6 +92,10 @@ final class Dependencies {
     ) {
         let modelContainer = modelContainer ?? PersistenceBootstrap.make(inMemory: true).container
         self.modelContainer = modelContainer
+        let persistenceOperationBarrier = PersistenceOperationBarrier.shared
+        if !persistenceState.allowsWrites {
+            persistenceOperationBarrier.requireRecovery()
+        }
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: modelContainer)
         let mealPortionPriorRepository = SwiftDataMealPortionPriorRepository(modelContainer: modelContainer)
         let agentRepository = SwiftDataAgentRepository(modelContainer: modelContainer)
@@ -115,7 +120,8 @@ final class Dependencies {
         self.healthProjectionActor = healthProjectionActor
         let healthIntelligenceService = HealthIntelligenceService(
             projectionActor: healthProjectionActor,
-            briefCacheGenerationFence: briefCacheGenerationFence
+            briefCacheGenerationFence: briefCacheGenerationFence,
+            persistenceOperationBarrier: persistenceOperationBarrier
         )
         self.healthIntelligenceService = healthIntelligenceService
         healthKitSyncCoordinator.onHealthCachePurgeWillBegin = {
@@ -129,6 +135,28 @@ final class Dependencies {
                 healthIntelligenceService.allowBriefRefreshAfterSuccessfulHealthSnapshotPurge()
             }
         }
+        self.foregroundHealthRebaselineCoordinator = ForegroundHealthRebaselineCoordinator(
+            operation: { requiresFullRebaseline, didBeginSync in
+                let repository = HealthRepository(modelContext: modelContainer.mainContext)
+                if requiresFullRebaseline {
+                    let rebuild = try await healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(
+                        using: repository
+                    )
+                    didBeginSync()
+                    return try await healthKitSyncCoordinator.syncAvailableData(
+                        using: repository,
+                        now: rebuild.through,
+                        forceRebaseline: true,
+                        preparedSnapshotRebuild: rebuild
+                    )
+                }
+                didBeginSync()
+                return try await healthKitSyncCoordinator.syncAvailableData(
+                    using: repository,
+                    forceRebaseline: false
+                )
+            }
+        )
         self.briefNotificationScheduler = BriefNotificationScheduler()
         let workoutPlanSchedulingService = WorkoutPlanSchedulingService(modelContainer: modelContainer)
         self.workoutPlanSchedulingService = workoutPlanSchedulingService
@@ -239,9 +267,10 @@ final class Dependencies {
         self.watchConnectivityCoordinator = watchConnectivityCoordinator
         healthKitSyncCoordinator.onObserverSyncCompleted = { metric, scanGeneration in
             guard healthKitSyncCoordinator.isCurrentScanGeneration(scanGeneration, for: metric) else { return }
-            _ = try? await healthIntelligenceService.refresh()
-            guard healthKitSyncCoordinator.isCurrentScanGeneration(scanGeneration, for: metric) else { return }
-            watchConnectivityCoordinator.refreshApplicationContext()
+            healthIntelligenceService.scheduleRefreshAfterHealthObserverEvent {
+                guard healthKitSyncCoordinator.isCurrentScanGeneration(scanGeneration, for: metric) else { return }
+                watchConnectivityCoordinator.refreshApplicationContext()
+            }
         }
         self.dailyLoopBackgroundScheduler = DailyLoopBackgroundScheduler(
             modelContainer: modelContainer,
@@ -251,7 +280,11 @@ final class Dependencies {
             dailyLoopSnapshotService: dailyLoopSnapshotService,
             notificationScheduler: briefNotificationScheduler,
             watchConnectivityCoordinator: watchConnectivityCoordinator,
-            isHealthAuthorized: { healthKitService.hasRequestedAuthorization }
+            isHealthAuthorized: { healthKitService.hasRequestedAuthorization },
+            prepareLocalHealthCacheIfNeeded: { repository in
+                guard !healthContextExportGate.isOpen else { return }
+                _ = try await healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(using: repository)
+            }
         )
 
         // 尝试加载食材库
@@ -296,6 +329,11 @@ final class Dependencies {
 
     func restorePersistenceState() async {
         if persistenceWriteGate.state.allowsWrites {
+            do {
+                _ = try UserProfileSingletonPolicy.normalize(in: modelContainer.mainContext)
+            } catch {
+                AppState.shared.startupWarning = "本机资料暂未完成整理，部分摘要可能暂时使用最近更新的资料。"
+            }
             try? await confirmationCoordinator.recoverInterruptedCommits()
         }
         try? await agentSession.restore()

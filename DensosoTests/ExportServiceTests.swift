@@ -5,6 +5,207 @@ import XCTest
 
 @MainActor
 final class ExportServiceTests: XCTestCase {
+    func testLifecycleCoordinatorDrainsNestedMutationAndEntersRecoveryReadOnly() async throws {
+        let barrier = PersistenceOperationBarrier()
+        let activeMutation = try await barrier.acquireMutationOperation()
+        let restoreTask = Task { @MainActor in
+            try await barrier.acquireRestoreOperation()
+        }
+
+        await barrier.waitUntilRestoreIsQueued()
+        XCTAssertEqual(barrier.state, .quiescing)
+
+        // Existing work can finish nested persistence calls after restore has
+        // stopped admitting new top-level operations.
+        let nestedMutation = try await barrier.withLease(activeMutation) {
+            let firstNestedMutation = try await barrier.acquireMutationOperation()
+            let deeplyNestedMutation = try await barrier.withLease(firstNestedMutation) {
+                try await barrier.acquireMutationOperation()
+            }
+            barrier.release(deeplyNestedMutation)
+            return firstNestedMutation
+        }
+        barrier.release(nestedMutation)
+        barrier.release(activeMutation)
+
+        let restoreLease = try await restoreTask.value
+        XCTAssertEqual(barrier.state, .exclusiveRestore)
+        do {
+            _ = try await barrier.acquireAgentExecutionOperation()
+            XCTFail("New Agent execution must be rejected while Restore owns the store")
+        } catch {
+            XCTAssertEqual(error as? PersistenceLifecycleError, .restoreInProgress)
+        }
+        do {
+            _ = try await barrier.acquireOutboxOperation()
+            XCTFail("New Outbox sends must be rejected while Restore owns the store")
+        } catch {
+            XCTAssertEqual(error as? PersistenceLifecycleError, .restoreInProgress)
+        }
+        barrier.requireRecovery()
+        barrier.release(restoreLease)
+        XCTAssertEqual(barrier.state, .recoveryRequired)
+
+        do {
+            _ = try await barrier.acquireMutationOperation()
+            XCTFail("Recovery-required lifecycle must reject new writes")
+        } catch {
+            XCTAssertEqual(error as? PersistenceLifecycleError, .recoveryRequired)
+        }
+    }
+
+    func testCancelledRestoreWaiterReopensOperationAdmission() async throws {
+        let barrier = PersistenceOperationBarrier()
+        let activeMutation = try await barrier.acquireMutationOperation()
+        let restoreTask = Task { @MainActor in
+            try await barrier.acquireRestoreOperation()
+        }
+
+        await barrier.waitUntilRestoreIsQueued()
+        restoreTask.cancel()
+        do {
+            _ = try await restoreTask.value
+            XCTFail("Cancelled restore request must not acquire the store")
+        } catch is CancellationError {
+            // Expected.
+        }
+
+        XCTAssertEqual(barrier.state, .normal)
+        barrier.release(activeMutation)
+    }
+
+    func testOutboxBlockedDuringRestoreWaitsForExternalHealthWrite() async throws {
+        let previousConnectionPreference = HealthKitConnectionPreference.hasRequestedAuthorization
+        HealthKitConnectionPreference.hasRequestedAuthorization = true
+        defer { HealthKitConnectionPreference.hasRequestedAuthorization = previousConnectionPreference }
+
+        let (container, context) = try makeContext()
+        let barrier = PersistenceOperationBarrier()
+        let service = ExportService(persistenceOperationBarrier: barrier)
+        let backupURL = try await service.exportJSON(context: context)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let meal = MealRecord(
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            totalCaloriesKcal: 520,
+            energyLikelyKcal: 520
+        )
+        context.insert(meal)
+        context.insert(HealthSyncOutboxEntry(operation: "upsertMeal", recordID: meal.id))
+        try context.save()
+
+        let healthStore = FakeHealthStoreClient()
+        await healthStore.blockNextHealthWrite()
+        let worker = HealthSyncOutboxWorker(
+            healthStore: healthStore,
+            modelContainer: container,
+            persistenceOperationBarrier: barrier
+        )
+        var workerReturned = false
+        let workerTask = Task {
+            await worker.processPending(in: context)
+            workerReturned = true
+        }
+        await healthStore.waitUntilHealthWriteIsBlocked()
+
+        var restoreReturned = false
+        let restoreTask = Task {
+            let summary = try await service.restoreJSON(url: backupURL, context: context)
+            restoreReturned = true
+            return summary
+        }
+        await barrier.waitUntilRestoreIsQueued()
+        XCTAssertFalse(restoreReturned)
+
+        await healthStore.resumeBlockedHealthWrite()
+        await workerTask.value
+        _ = try await restoreTask.value
+        XCTAssertTrue(workerReturned)
+
+        let persistedContext = ModelContext(container)
+        XCTAssertTrue(try persistedContext.fetch(FetchDescriptor<MealRecord>()).isEmpty)
+        XCTAssertTrue(try persistedContext.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).isEmpty)
+        let successfulWrites = await healthStore.successfulWritesSnapshot()
+        XCTAssertEqual(successfulWrites.count, 1)
+    }
+
+    func testFullV14RestoreClearsToolJournalAndHealthKitSampleIndexes() async throws {
+        let (sourceContainer, source) = try makeFullV14Context()
+        _ = sourceContainer
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        source.insert(MealRecord(date: date, totalCaloriesKcal: 510))
+        try source.save()
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let (targetContainer, target) = try makeFullV14Context()
+        let oldRequestID = UUID()
+        let oldConversationID = UUID()
+        let oldActionID = UUID()
+        let journalEntry = ToolExecutionJournalEntry(
+            invocationID: "old-restore-invocation",
+            requestID: oldRequestID,
+            conversationID: oldConversationID,
+            logicalRound: 0,
+            callIndex: 0,
+            toolCallID: "old-tool-call",
+            toolName: "log_meal",
+            argumentsHash: "old-hash",
+            requestTimeAnchor: date,
+            state: .prepared,
+            preparedPayloadData: Data("old-prepared-payload".utf8),
+            pendingActionID: oldActionID,
+            resultData: nil,
+            createdAt: date,
+            updatedAt: date,
+            completedAt: nil
+        )
+        target.insert(ToolExecutionJournalRecord(journalEntry))
+        target.insert(HealthKitSampleIndexRecord(
+            sampleID: UUID(),
+            stream: HealthMetricID.stepCount.rawValue,
+            dayKey: "2026-11-01",
+            startDate: date,
+            endDate: date,
+            needsRequery: true,
+            pendingDayKeys: ["2026-11-01", "2026-11-02"],
+            isTombstoned: true
+        ))
+        target.insert(HealthKitImportCursor(stream: "stepCount", anchorData: Data([1, 2, 3])))
+        let oldSnapshotEncoder = JSONEncoder()
+        oldSnapshotEncoder.dateEncodingStrategy = .millisecondsSince1970
+        let oldSnapshot = DailyHealthSnapshot(
+            dayStart: date,
+            timezoneIdentifier: "UTC",
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        target.insert(DailyHealthSnapshotRecord(
+            dayKey: "2026-11-01",
+            timezoneID: "UTC",
+            payloadData: try oldSnapshotEncoder.encode(oldSnapshot),
+            snapshotHash: "old-snapshot",
+            algorithmVersion: oldSnapshot.algorithmVersion
+        ))
+        target.insert(MealRecord(date: date, totalCaloriesKcal: 999))
+        try target.save()
+
+        _ = try await service.restoreJSON(url: backupURL, context: target)
+
+        let persisted = ModelContext(targetContainer)
+        XCTAssertEqual(try persisted.fetchCount(FetchDescriptor<ToolExecutionJournalRecord>()), 0)
+        XCTAssertEqual(try persisted.fetchCount(FetchDescriptor<HealthKitSampleIndexRecord>()), 0)
+        XCTAssertEqual(try persisted.fetchCount(FetchDescriptor<HealthKitImportCursor>()), 0)
+        XCTAssertEqual(try persisted.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 0)
+        XCTAssertEqual(try persisted.fetch(FetchDescriptor<MealRecord>()).map(\.totalCaloriesKcal), [510])
+        let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: targetContainer)
+        let restoredJournal = try await confirmationRepository.toolExecutionJournal(
+            requestID: oldRequestID,
+            conversationID: oldConversationID
+        )
+        XCTAssertTrue(restoredJournal.isEmpty)
+    }
+
     func testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied() async throws {
         let (sourceContainer, source) = try makeContext()
         let sourceGovernance = SwiftDataProviderGovernanceRepository(modelContainer: sourceContainer)
@@ -102,6 +303,47 @@ final class ExportServiceTests: XCTestCase {
                 )
             }
         }
+    }
+
+    func testRestoreDeduplicatesWorkoutRecordsByHealthKitUUID() async throws {
+        let (sourceContainer, source) = try makeContext()
+        let healthKitUUID = UUID()
+        let preferred = WorkoutRecord(
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            type: "running",
+            durationMinutes: 30,
+            healthKitUUID: healthKitUUID,
+            workoutOrigin: "healthKit"
+        )
+        preferred.id = UUID(uuidString: "00000000-0000-0000-0000-000000000a11")!
+        preferred.createdAt = Date(timeIntervalSince1970: 1_600_000_000)
+        let duplicate = WorkoutRecord(
+            date: Date(timeIntervalSince1970: 1_700_000_100),
+            type: "running",
+            durationMinutes: 31,
+            healthKitUUID: healthKitUUID,
+            workoutOrigin: "healthKit"
+        )
+        duplicate.id = UUID(uuidString: "00000000-0000-0000-0000-000000000a12")!
+        duplicate.createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        source.insert(preferred)
+        source.insert(duplicate)
+        try source.save()
+
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let (targetContainer, target) = try makeContext()
+
+        let summary = try await service.restoreJSON(url: backupURL, context: target)
+
+        let persistedContext = ModelContext(targetContainer)
+        let restored = try persistedContext.fetch(FetchDescriptor<WorkoutRecord>())
+        XCTAssertEqual(restored.count, 1)
+        XCTAssertEqual(restored.first?.id, preferred.id)
+        XCTAssertEqual(restored.first?.healthKitUUID, healthKitUUID)
+        XCTAssertEqual(summary.workouts, 1)
+        _ = sourceContainer
     }
 
     func testRestoreDiscardsActionsAndReceiptsFromReplacedDataset() async throws {
@@ -651,7 +893,7 @@ final class ExportServiceTests: XCTestCase {
             ExportService.BackupDocument.self,
             from: Data(contentsOf: url)
         )
-        XCTAssertEqual(exportedDocument.formatVersion, 7)
+        XCTAssertEqual(exportedDocument.formatVersion, 8)
 
         let (targetContainer, target) = try makeContext()
         _ = targetContainer
@@ -994,6 +1236,11 @@ final class ExportServiceTests: XCTestCase {
             sourceRaw: UserPreferenceSource.userReported.rawValue,
             createdAt: date
         ))
+        source.insert(MealRecord(
+            date: date,
+            totalCaloriesKcal: 440,
+            sourceActionKey: "confirmed-meal-action"
+        ))
         let priorKey = try XCTUnwrap(MealPortionPriorStorageKey.make(
             foodID: "rice-id",
             foodName: "米饭",
@@ -1008,6 +1255,24 @@ final class ExportServiceTests: XCTestCase {
             p50Grams: 180,
             p90Grams: 210,
             sourceActionKey: "confirmed-meal-action",
+            createdAt: date,
+            updatedAt: date
+        ))
+        let portionContributionPayload = MealPortionContributionPayload(
+            foodID: "rice-id",
+            foodName: "米饭",
+            unit: "碗",
+            p10Grams: 150,
+            p50Grams: 180,
+            p90Grams: 210
+        )
+        source.insert(MealPriorContributionRecord(
+            contributionKey: "portion:\(priorKey):confirmed-meal-action",
+            sourceActionKey: "confirmed-meal-action",
+            priorKey: priorKey,
+            kindRaw: MealPriorContributionKind.portion.rawValue,
+            payloadData: try JSONEncoder().encode(portionContributionPayload),
+            observationWeight: 1,
             createdAt: date,
             updatedAt: date
         ))
@@ -1115,7 +1380,7 @@ final class ExportServiceTests: XCTestCase {
             ExportService.BackupDocument.self,
             from: Data(contentsOf: url)
         )
-        XCTAssertEqual(exported.formatVersion, 7)
+        XCTAssertEqual(exported.formatVersion, 8)
         XCTAssertEqual(exported.payload.weightRecords?.count, 1)
         XCTAssertEqual(exported.payload.profileRevisions?.count, 1)
         XCTAssertEqual(exported.payload.dailyMetricsProjection?.first?.sourceFingerprint, "fixture-fingerprint")
@@ -1125,6 +1390,7 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(exported.payload.userPreferences?.count, 1)
         XCTAssertEqual(exported.payload.mealPortionPriors?.count, 1)
         XCTAssertEqual(exported.payload.mealDishPriors?.count, 1)
+        XCTAssertEqual(exported.payload.mealPriorContributions?.count, 1)
         XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("未确认的偏好"))
         XCTAssertEqual(exported.payload.dailyBriefs?.count, 1)
         XCTAssertEqual(exported.payload.weeklyBriefs?.count, 1)
@@ -1162,6 +1428,9 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(summary.dailyCheckIns, 1)
         XCTAssertEqual(summary.mealPortionPriors, 1)
         XCTAssertEqual(summary.mealDishPriors, 1)
+        let restoredContribution = try XCTUnwrap(target.fetch(FetchDescriptor<MealPriorContributionRecord>()).first)
+        XCTAssertEqual(restoredContribution.sourceActionKey, "confirmed-meal-action")
+        XCTAssertEqual(restoredContribution.priorKey, priorKey)
         let restoredPrior = try XCTUnwrap(target.fetch(FetchDescriptor<PersonalMealPortionPriorRecord>()).first)
         XCTAssertEqual(restoredPrior.foodName, "米饭")
         XCTAssertEqual(restoredPrior.p50Grams, 180, accuracy: 0.001)
@@ -1304,19 +1573,18 @@ final class ExportServiceTests: XCTestCase {
     }
 
     private func makeContext() throws -> (ModelContainer, ModelContext) {
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         let container = try ModelContainer(
-            for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, WeeklyReport.self,
-            ScheduleEvent.self, WeightRecord.self, ProfileRevisionRecord.self, GoalProfileRecord.self, DailyHealthSnapshotRecord.self,
-            DailyBriefRecord.self, WeeklyBriefRecord.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
-            AgentRequestRecord.self, AgentRequestCostBudgetRecord.self,
-            DailyCheckInRecord.self, UserPreferenceRecord.self,
-            PersonalMealPortionPriorRecord.self,
-            PersonalMealDishPriorRecord.self,
-            ConsentRecord.self,
-            CloudHealthContextPolicyRecord.self,
-            PendingActionRecord.self, CommittedActionReceiptRecord.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
         )
+        return (container, ModelContext(container))
+    }
+
+    private func makeFullV14Context() throws -> (ModelContainer, ModelContext) {
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
         return (container, ModelContext(container))
     }
 }

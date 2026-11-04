@@ -286,7 +286,13 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "Densoso/Application/Health/HealthContextPromptBuilder.swift",
-            ("requiresNarrative(for userText: String)", "健康解读结构（强制）", "记录", "训练计划"),
+            (
+                "requiresNarrative(for userText: String, priorHealthContext: Bool = false)",
+                "hasPriorHealthContext(in priorUserMessages: [String])",
+                "健康解读结构（强制）",
+                "记录",
+                "训练计划",
+            ),
             errors,
         )
         require(
@@ -331,6 +337,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Services/HealthProjectionActor.swift",
             (
                 "@ModelActor",
+                "private var calendar: Calendar = .autoupdatingCurrent",
                 "func refresh(",
                 "cacheGeneration: UInt64",
                 "briefCacheGenerationFence.withCurrentGeneration(cacheGeneration)",
@@ -349,11 +356,22 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "Densoso/Application/DailyLoop/DailyLoopSnapshotService.swift",
+            (
+                "init(calendar: Calendar = .autoupdatingCurrent)",
+                "let timezoneIdentifier = calendar.timeZone.identifier",
+            ),
+            errors,
+        )
+        require(
             "Densoso/Services/HealthIntelligenceService.swift",
             (
                 "func refresh(asOf date: Date = Date()) async throws -> DailyHealthBrief?",
-                "cacheGeneration: expectedGeneration",
-                "briefCacheGenerationFence.currentGeneration == expectedGeneration",
+                "refreshOperation(date, expectedCacheGeneration)",
+                "briefCacheGenerationFence.currentGeneration == expectedCacheGeneration",
+                "queuedRefreshDate = date",
+                "requestGeneration == refreshGeneration",
+                "resumeRefreshWaiters(returning: snapshot.dailyBrief)",
                 "PerformanceSignposts.measureAsync(\"Health.StateRefresh\")",
                 "if snapshot.updatesWeeklyBrief",
                 "fallback: .projectionFailedFallback",
@@ -365,15 +383,26 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Densoso/Application/DailyLoop/DailyLoopBackgroundScheduler.swift",
             (
                 "guard let backgroundTask = taskBox.task else {",
-                "backgroundTask.expirationHandler = { [taskBox, refreshOperation] in",
+                "backgroundTask.expirationHandler = { [weak self, taskBox, refreshOperation] in",
                 "taskBox.expire {",
+                "let didExpire = taskBox.expire {",
+                "scheduleNextRefresh(reason: .projectionRecovery)",
                 "guard taskBox.canCancelActiveRefresh else { return }",
                 "refreshOperation.cancel()",
                 "activeRefreshTask = refreshOperation",
                 "HistoricalMetricsRecomputing",
                 "historicalMetricsRecomputer.recomputePendingMetrics(",
                 "if recomputeResult.hasMoreEligibleWork",
-                "earliestBeginInterval: Self.historicalRecomputeRetryInterval",
+                "reason: .historicalRecompute",
+                "DailyLoopBackgroundSchedulePolicy.shouldReplace(",
+                "scheduleDefaults.set(requestedEarliestAt",
+                "private static let nextRefreshReasonDefaultsKey = \"dailyLoop.nextRefreshReason\"",
+                "nextRefreshReason = scheduleDefaults.string(forKey: Self.nextRefreshReasonDefaultsKey)",
+                "scheduleDefaults.set(reason.rawValue, forKey: Self.nextRefreshReasonDefaultsKey)",
+                "scheduleDefaults.removeObject(forKey: Self.nextRefreshReasonDefaultsKey)",
+                "prepareLocalHealthCacheIfNeeded(repository)",
+                "forceRebaseline: false",
+                "aggregateIncrementalLookbackDays: 3",
                 "private static let projectionFailureFallback = SharedErrorDescriptor(",
                 "self.lastError = SharedErrorDescriptor.mapped(",
                 "fallback: Self.projectionFailureFallback",
@@ -389,8 +418,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "let finalSuccess = success && !expired",
                 "func markExpired() -> Bool",
                 "return expired && !completed",
-                "func expire(scheduleCancellation: () -> Void)",
-                "guard markExpired() else { return }",
+                "func expire(scheduleCancellation: () -> Void) -> Bool",
+                "guard markExpired() else { return false }",
                 "init(completion: @escaping (Bool) -> Void)",
             ),
             errors,
@@ -407,7 +436,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         ):
             step_start = background_scheduler.find(await_step)
             check_start = background_scheduler.find(cancellation_guard, step_start + len(await_step))
-            maximum_cancellation_gap = 700 if "recomputePendingMetrics" in await_step else 320
+            maximum_cancellation_gap = (
+                700 if "recomputePendingMetrics" in await_step
+                else 450 if "syncAvailableData" in await_step
+                else 240
+            )
             if step_start < 0 or check_start < 0 or check_start - step_start > maximum_cancellation_gap:
                 errors.append(f"Background refresh must check cancellation after {await_step}")
         expiration_handler = background_scheduler.split("backgroundTask.expirationHandler = {", 1)[-1]
@@ -429,6 +462,9 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "DensosoTests/Application/DailyLoopBackgroundSchedulerTests.swift",
             (
                 "testExpirationAndCompletionAreIdempotentAndLateExpirationDoesNotCancelNextWork",
+                "XCTAssertTrue(taskBox.expire",
+                "XCTAssertFalse(completedFirstBox.expire",
+                "DailyLoopBackgroundRefreshReason(rawValue: DailyLoopBackgroundRefreshReason.healthSyncRecovery.rawValue)",
                 "taskBox.expire",
                 "taskBox.complete(success: true)",
                 "XCTAssertEqual(reportedResults, [false])",
@@ -516,7 +552,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "(@Sendable () async throws -> HealthNarrativeContext?)?",
                 "unfilteredNarrativeContext = try await healthNarrativeContextProvider?()",
                 "CloudRequestPolicyGuard.filtered(",
-                "let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(for: promptUserText)",
+                "let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(",
+                "for: effectiveUserText",
+                "priorHealthContext: priorHealthContext",
+                "HealthContextPromptBuilder.hasPriorHealthContext(",
                 "if wantsHealthNarrative",
                 "catch is CancellationError",
                 "读取本机健康状态失败，请重试",
@@ -599,9 +638,13 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "static func shouldRefreshAfterActivation(",
                 "initialRefreshCompleted: Bool",
-                "lastSuccessfulRefreshDay: Date?",
                 "calendar.isDate(cachedBriefDayStart, inSameDayAs: date)",
-                "calendar.isDate(lastSuccessfulRefreshDay, inSameDayAs: date)",
+                "validatedAt: Date?",
+                "lastFailedAt: Date?",
+                "sourceFingerprintChanged: Bool",
+                "calendar.isDate(lastSuccessfulAt, inSameDayAs: date)",
+                "validationInterval: TimeInterval",
+                "retryBackoffInterval(failureCount: consecutiveFailures)",
             ),
             errors,
         )
@@ -610,15 +653,29 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "hasCompletedInitialDailyBriefRefresh = true",
                 "await refreshStaleDailyBriefAfterActivation()",
-                "lastSuccessfulRefreshDay: lastSuccessfulHealthRefreshDay",
-                "lastSuccessfulHealthRefreshDay = Calendar.autoupdatingCurrent.startOfDay(for: now)",
+                "validatedAt: healthIntelligenceService.dailyBriefValidatedAt",
+                "lastFailedAt: healthIntelligenceService.lastRefreshFailedAt",
+                "hasDailyBriefSourceChanged(asOf: now)",
                 "dependencies.watchConnectivityCoordinator.refreshApplicationContext()",
             ),
             errors,
         )
         require(
             "DensosoTests/Application/DailyBriefRefreshPolicyTests.swift",
-            ("testActivationRefreshWaitsForInitialRefreshAndOnlyRefreshesStaleLocalDay",),
+            (
+                "testActivationRefreshWaitsForInitialRefreshAndUsesValidationFreshness",
+                "testFailedRefreshCanRetryAfterBackoffAndSourceChangesInvalidateFreshCache",
+                "lastSuccessfulAt: justBeforeMidnight",
+            ),
+            errors,
+        )
+        require(
+            "DensosoTests/Application/HealthIntelligenceRefreshConcurrencyTests.swift",
+            (
+                "testLatestRefreshRequestRunsAfterOlderRequestAndOwnsPublishedFingerprint",
+                "testObserverRefreshRequestsAreDebounced",
+                "XCTAssertEqual(service.dailyBriefSourceFingerprint, \"new-source\")",
+            ),
             errors,
         )
         require(
@@ -732,7 +789,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "$0.dayKey == targetDayKey",
                 "descriptor.fetchLimit = 1",
                 "DailyMetricsProjectionFingerprint.context(",
-                "CaloricEngine.projectionFingerprint(",
+                "DailyMetricsProjectionCalculator.fingerprint(",
+                "DailyMetricsProjectionCalculator.calculate(",
                 "DailyMetricsProjectionFingerprint.sourceMatches(",
             ),
             errors,
@@ -765,7 +823,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "day < calendar.startOfDay(for: now)",
                 "Task.detached(priority: .utility)",
                 "CaloricEngine.calculationInput(",
-                "CaloricEngine.computeDailyMetricsResult(",
+                "DailyMetricsProjectionCalculator.calculate(",
                 "try modelContext.save()",
             ),
             errors,
@@ -804,7 +862,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "day < calendar.startOfDay(for: now)",
                 "HistoricalMetricsEligibilityPolicy.hasValidInputs(",
                 "DailyMetricsProjectionFingerprint.context(",
-                "CaloricEngine.projectionFingerprint(",
+                "DailyMetricsProjectionCalculator.fingerprint(",
+                "DailyMetricsProjectionCalculator.calculate(",
                 "DailyMetricsProjectionFingerprint.sourceMatches(",
                 "fingerprintContext: fingerprintContext",
             ),
@@ -1085,7 +1144,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "case .awaitingConfirmation:\n            .awaitingConfirmation",
                 "case .committing(_):\n            .committing",
                 "hasDraftInCurrentTurn: Bool = false",
-                "current == .draftReady || hasDraftInCurrentTurn ? .awaitingConfirmation : .idle",
+                "hasPendingActions: Bool = false",
+                "hasPendingActions || hasDraftInCurrentTurn\n                ? .awaitingConfirmation\n                : .idle",
             ),
             errors,
         )
@@ -1577,6 +1637,28 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "Densoso/Persistence/Schemas/DensosoSchemaV13.swift",
+            (
+                "enum DensosoSchemaV13: VersionedSchema",
+                "DensosoSchemaV12.models + [ToolExecutionJournalRecord.self]",
+                "@Attribute(.unique) var invocationID: String",
+                "var preparedPayloadData: Data?",
+                "var resultData: Data?",
+            ),
+            errors,
+        )
+        require(
+            "Densoso/Persistence/Schemas/DensosoSchemaV14.swift",
+            (
+                "enum DensosoSchemaV14: VersionedSchema",
+                "DensosoSchemaV13.models + [MealPriorContributionRecord.self]",
+                "@Attribute(.unique) var contributionKey: String",
+                "var sourceActionKey: String?",
+                "var isLegacyAggregate: Bool",
+            ),
+            errors,
+        )
+        require(
             "Densoso/Persistence/DensosoMigrationPlan.swift",
             (
                 "DensosoSchemaV7.self",
@@ -1591,12 +1673,16 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 ".lightweight(fromVersion: DensosoSchemaV10.self, toVersion: DensosoSchemaV11.self)",
                 "DensosoSchemaV12.self",
                 ".lightweight(fromVersion: DensosoSchemaV11.self, toVersion: DensosoSchemaV12.self)",
+                "DensosoSchemaV13.self",
+                ".lightweight(fromVersion: DensosoSchemaV12.self, toVersion: DensosoSchemaV13.self)",
+                "DensosoSchemaV14.self",
+                ".lightweight(fromVersion: DensosoSchemaV13.self, toVersion: DensosoSchemaV14.self)",
             ),
             errors,
         )
         require(
             "Densoso/Infrastructure/Persistence/PersistenceBootstrap.swift",
-            ("Schema(versionedSchema: DensosoSchemaV12.self)",),
+            ("Schema(versionedSchema: DensosoSchemaV14.self)",),
             errors,
         )
         require(
@@ -1606,7 +1692,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         )
         require(
             "DensosoTests/DensosoMigrationTests.swift",
-            ("testV11DiskStoreMigratesToV12WithDishPriorTableAndPreservedPolicy",),
+            (
+                "testV11DiskStoreMigratesToV14WithDishPriorTableAndPreservedPolicy",
+                "testV12DiskStoreMigratesToV14WithEmptyToolExecutionJournalAndContributionLedger",
+                "testV13DiskStoreAddsEmptyMealPriorContributionLedger",
+            ),
             errors,
         )
         require(
@@ -2259,7 +2349,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "地点：",
             "建议强度：",
             "details.joined(separator: \"；\").prefix(600)",
-            "ConfirmedWorkoutPlanEntry.decode(notes: event.notes) == nil",
+            "if let workoutPlan = ConfirmedWorkoutPlanEntry.decode(notes: event.notes)",
+            "workoutPlan.state != .terminal",
+            "source: .confirmedWorkoutPlan",
+            "source: .scheduleEvent",
+            "notes: nil",
             "event.notes?.contains(trainingPlanPrefix) == true",
         ),
         errors,

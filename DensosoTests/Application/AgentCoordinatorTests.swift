@@ -25,6 +25,7 @@ final class AgentCoordinatorTests: XCTestCase {
         XCTAssertEqual(harness.session.pendingActions.count, 1)
         let context = ModelContext(harness.container)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeightRecord>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<PendingActionRecord>()), 0)
         XCTAssertEqual(
             try context.fetch(FetchDescriptor<MessageRecord>())
                 .filter { $0.toolSummaryData != nil }
@@ -320,7 +321,7 @@ final class AgentCoordinatorTests: XCTestCase {
 
     func testNinthToolCallStopsRequest() async throws {
         let calls = (0..<9).map { index in
-            ProviderEvent.toolCall(weightCall(id: "weight-\(index)"))
+            ProviderEvent.toolCall(weightCall(id: "weight-\(index)", kilograms: 60 + Double(index)))
         } + [.completed(.toolUse)]
         let harness = try await Harness(provider: ScriptedTextProvider(scripts: [calls]))
 
@@ -330,7 +331,127 @@ final class AgentCoordinatorTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? ProviderError, .budgetExceeded)
         }
-        XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<WeightRecord>()), 0)
+        let context = ModelContext(harness.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeightRecord>()), 0)
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<PendingActionRecord>())
+                .filter { $0.stateRaw == PendingActionState.pending.rawValue }
+                .count,
+            0
+        )
+        let persistedMessages = try context.fetch(FetchDescriptor<MessageRecord>()).compactMap {
+            try? JSONDecoder().decode(ModelMessage.self, from: $0.contentData)
+        }
+        XCTAssertFalse(persistedMessages.contains { message in
+            message.content.contains { if case .toolCall = $0 { true } else { false } }
+        }, "An over-budget batch must be rejected before tool-call history is persisted")
+    }
+
+    func testIncompleteOrUnterminatedToolCallsNeverExecute() async throws {
+        let scenarios: [([ProviderEvent], ProviderError)] = [
+            ([.toolCall(weightCall(id: "max-token-tool")), .completed(.maxTokens)], .incompleteResponse),
+            ([.toolCall(weightCall(id: "missing-terminal-tool"))], .malformedResponse),
+            ([.toolCall(weightCall(id: "wrong-terminal-tool")), .completed(.completed)], .malformedResponse),
+            ([.completed(.toolUse)], .malformedResponse),
+        ]
+
+        for (script, expectedError) in scenarios {
+            let harness = try await Harness(provider: ScriptedTextProvider(scripts: [script]))
+            do {
+                _ = try await harness.session.send(userText: "do not execute an invalid response")
+                XCTFail("An incomplete or inconsistent provider response must fail closed")
+            } catch {
+                XCTAssertEqual(error as? ProviderError, expectedError)
+            }
+            let context = ModelContext(harness.container)
+            XCTAssertEqual(
+                try context.fetch(FetchDescriptor<PendingActionRecord>())
+                    .filter { $0.stateRaw == PendingActionState.pending.rawValue }
+                    .count,
+                0
+            )
+            let persistedMessages = try context.fetch(FetchDescriptor<MessageRecord>()).compactMap {
+                try? JSONDecoder().decode(ModelMessage.self, from: $0.contentData)
+            }
+            XCTAssertFalse(persistedMessages.contains { message in
+                message.content.contains { if case .toolCall = $0 { true } else { false } }
+            })
+        }
+    }
+
+    func testCancellationDuringToolExecutionDoesNotExecuteLaterCallsOrKeepDrafts() async throws {
+        let started = AsyncStartSignal()
+        let dateFormatter = ISO8601DateFormatter()
+        let endDate = Date()
+        let startDate = endDate.addingTimeInterval(-24 * 60 * 60)
+        let provider = ScriptedTextProvider(scripts: [[
+            .toolCall(weightCall(id: "staged-before-cancel", kilograms: 62.5)),
+            .toolCall(ToolCall(
+                id: "blocking-history",
+                name: "get_health_history",
+                arguments: .object([
+                    "startDate": .string(dateFormatter.string(from: startDate)),
+                    "endDate": .string(dateFormatter.string(from: endDate)),
+                ])
+            )),
+            .toolCall(weightCall(id: "must-not-run", kilograms: 63.5)),
+            .completed(.toolUse),
+        ]])
+        let toolRegistry = ToolRegistry(healthHistoryProvider: { _, _ in
+            await started.signal()
+            try await Task.sleep(nanoseconds: 60_000_000_000)
+            return []
+        })
+        let harness = try await Harness(provider: provider, toolRegistry: toolRegistry)
+        let collector = Task { @MainActor () -> [AgentEvent] in
+            var events: [AgentEvent] = []
+            do {
+                for try await event in harness.session.sendEvents(userText: "cancel while a tool is running") {
+                    events.append(event)
+                }
+            } catch {
+                XCTAssertEqual(error as? ProviderError, .cancelled)
+            }
+            return events
+        }
+
+        await started.waitUntilStarted()
+        harness.session.cancelActiveRequest()
+        let events = await collector.value
+
+        XCTAssertFalse(events.contains {
+            if case .toolCallStarted(name: "log_weight", index: 3) = $0 { true } else { false }
+        })
+        XCTAssertEqual(harness.session.pendingActions.count, 0)
+        let context = ModelContext(harness.container)
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<PendingActionRecord>())
+                .filter { $0.stateRaw == PendingActionState.pending.rawValue }
+                .count,
+            0,
+            "A draft created earlier in the cancelled request must be rejected"
+        )
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<PendingActionRecord>())
+                .filter { $0.stateRaw == PendingActionState.rejected.rawValue }
+                .count,
+            1
+        )
+
+        let persistedMessages = try context.fetch(FetchDescriptor<MessageRecord>()).compactMap {
+            try? JSONDecoder().decode(ModelMessage.self, from: $0.contentData)
+        }
+        let toolCallIDs = Set(persistedMessages.flatMap { message in
+            message.content.compactMap { content -> String? in
+                if case .toolCall(let call) = content { call.id } else { nil }
+            }
+        })
+        let toolResultIDs = Set(persistedMessages.flatMap { message in
+            message.content.compactMap { content -> String? in
+                if case .toolResult(let id, _) = content { id } else { nil }
+            }
+        })
+        XCTAssertEqual(toolResultIDs, toolCallIDs, "Cancellation must close every persisted tool call")
     }
 
     func testExpiredDeadlineStopsBeforeProviderRound() async throws {
@@ -371,7 +492,7 @@ final class AgentCoordinatorTests: XCTestCase {
     }
 
     func testCloudProviderRequiresExplicitConsent() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -545,12 +666,12 @@ final class AgentCoordinatorTests: XCTestCase {
         }
     }
 
-    private func weightCall(id: String) -> ToolCall {
+    private func weightCall(id: String, kilograms: Double = 62.5) -> ToolCall {
         ToolCall(
             id: id,
             name: "log_weight",
             arguments: .object([
-                "kilograms": .number(62.5),
+                "kilograms": .number(kilograms),
                 "measuredAt": .null,
             ])
         )
@@ -579,9 +700,10 @@ private struct Harness {
         provider: any TextModelProvider,
         conversationRepository: (any ConversationRepository)? = nil,
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
-        healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil
+        healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil,
+        toolRegistry: ToolRegistry? = nil
     ) async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: modelContainer)
@@ -598,7 +720,7 @@ private struct Harness {
             providerConfiguration: ProviderConfigurationPreferences(),
             governanceRepository: governance,
             usageLedger: ProviderUsageLedger(repository: governance, pricingDescriptorSource: TestPricingDescriptorCatalog.source),
-            registry: ToolRegistry(),
+            registry: toolRegistry ?? ToolRegistry(),
             confirmationCoordinator: ConfirmationCoordinator(
                 repository: confirmationRepository,
                 writeGate: PersistenceWriteGate(state: .writable)
@@ -626,4 +748,22 @@ private actor HealthContextReadCounter {
 
 private enum HealthContextReadTestFailure: Error, Sendable {
     case injected
+}
+
+private actor AsyncStartSignal {
+    private var hasStarted = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func signal() {
+        guard !hasStarted else { return }
+        hasStarted = true
+        let ready = waiters
+        waiters.removeAll()
+        for waiter in ready { waiter.resume() }
+    }
+
+    func waitUntilStarted() async {
+        if hasStarted { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
 }

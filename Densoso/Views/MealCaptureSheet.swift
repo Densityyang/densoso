@@ -27,6 +27,8 @@ struct MealCaptureSheet: View {
     @State private var errorMessage: String?
     @State private var preparationTask: Task<Void, Never>?
     @State private var consentTask: Task<Void, Never>?
+    @State private var stagingTask: Task<Void, Never>?
+    @State private var activeStagingID: UUID?
     @State private var imageCaptureState: MealImageCaptureState = .idle
     @State private var imageConsentGranted = false
     @State private var isSavingImageConsent = false
@@ -79,7 +81,9 @@ struct MealCaptureSheet: View {
                                 .font(.footnote)
                         }
                         TextField(portionAnswerPrompt, text: $portionAnswerText)
+                            .disabled(isStagingLocal)
                         TextField("校准关系的单位数量（可选，例如 1 碗）", text: $personalPortionUnitText)
+                            .disabled(isStagingLocal)
                         Text("上方本次克重 ÷ 这里的单位数量 = 每单位克重。例如本次 180g、这里填 1 碗，就保存“1 碗≈180g”。只有确认这餐后才会写入。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -87,7 +91,11 @@ struct MealCaptureSheet: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         Button("生成本机待确认草稿", systemImage: "checkmark.circle") {
-                            Task { await stageLocalReview(localReview) }
+                            guard !isStagingLocal else { return }
+                            let operationID = UUID()
+                            activeStagingID = operationID
+                            isStagingLocal = true
+                            stagingTask = Task { await stageLocalReview(localReview, operationID: operationID) }
                         }
                         .disabled(isPreparing || isStagingLocal || !canStageLocalReview(localReview))
                     }
@@ -195,8 +203,10 @@ struct MealCaptureSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("关闭") { dismiss() }
+                        .disabled(isStagingLocal)
                 }
             }
+            .interactiveDismissDisabled(isStagingLocal)
             .onChange(of: selectedPhoto) { _, item in
                 guard let item else { return }
                 preparationTask?.cancel()
@@ -231,6 +241,7 @@ struct MealCaptureSheet: View {
                 }
             }
             .onDisappear {
+                guard !isStagingLocal else { return }
                 let sentToAgent = imageCaptureState == .uploading || imageCaptureState == .vision
                 activePreparationID = nil
                 preparationTask?.cancel()
@@ -474,10 +485,24 @@ struct MealCaptureSheet: View {
         )
     }
 
-    private func stageLocalReview(_ review: MealCaptureReview) async {
-        guard canStageLocalReview(review), let resolution = review.resolution else { return }
-        isStagingLocal = true
-        defer { isStagingLocal = false }
+    private func stageLocalReview(_ review: MealCaptureReview, operationID: UUID) async {
+        guard activeStagingID == operationID,
+              canStageLocalReview(review),
+              let resolution = review.resolution else {
+            if activeStagingID == operationID {
+                activeStagingID = nil
+                isStagingLocal = false
+                stagingTask = nil
+            }
+            return
+        }
+        defer {
+            if activeStagingID == operationID {
+                isStagingLocal = false
+                activeStagingID = nil
+                stagingTask = nil
+            }
+        }
         do {
             let selectedCandidate = resolution.candidates.first {
                 $0.id == selectedLocalFoodID
@@ -509,6 +534,8 @@ struct MealCaptureSheet: View {
             let explicitSelection = selectedLocalFoodID == resolution.autoPreselect?.id
                 ? nil
                 : selectedLocalFoodID
+            try Task.checkCancellation()
+            guard activeStagingID == operationID else { return }
             let action = try await dependencies.makeMealCaptureService().stageMeal(
                 review: review,
                 selectedFoodID: explicitSelection,
@@ -516,14 +543,20 @@ struct MealCaptureSheet: View {
                 personalPortionUnitText: personalPortionUnitText,
                 userNote: supplementalText
             )
-            transitionImageState(.resolved)
+            // Once stageMeal returns, its repository transaction is committed;
+            // cancellation cannot roll it back, so always publish the action.
             onLocalPendingAction(action)
-            dismiss()
+            if activeStagingID == operationID {
+                transitionImageState(.resolved)
+                dismiss()
+            }
         } catch {
-            errorMessage = SharedErrorDescriptor.mapped(
-                from: error,
-                fallback: .actionConflictFallback
-            ).userMessage
+            if activeStagingID == operationID {
+                errorMessage = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .actionConflictFallback
+                ).userMessage
+            }
         }
     }
 

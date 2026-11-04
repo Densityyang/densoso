@@ -83,4 +83,33 @@ final class WatchMessageOutboxStoreTests: XCTestCase {
 
         XCTAssertThrowsError(try store.save(outbox))
     }
+
+    func testCandidateWriteFailureLeavesLastDurableQueueUnchanged() throws {
+        enum WriteFailure: Error { case blocked }
+        let suiteName = "WatchMessageOutboxCandidateWriteTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: directoryURL)
+        }
+
+        let durableStore = try WatchMessageOutboxStore(defaults: defaults, directoryURL: directoryURL)
+        var original = WatchMessageOutbox()
+        let first = try original.enqueueCausalCommand(.transcript("已持久化"))
+        try durableStore.save(original)
+
+        let failingStore = try WatchMessageOutboxStore(
+            defaults: defaults,
+            directoryURL: directoryURL,
+            writeData: { _, _ in throw WriteFailure.blocked }
+        )
+        var candidate = original
+        _ = try candidate.enqueueCausalCommand(.transcript("不可丢失"))
+        XCTAssertThrowsError(try failingStore.save(candidate))
+
+        XCTAssertEqual(try durableStore.load().pending, [first])
+        XCTAssertEqual(original.pending, [first])
+    }
 }

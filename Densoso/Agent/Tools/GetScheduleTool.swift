@@ -28,6 +28,7 @@ struct GetScheduleTool: AgentTool {
                 "startTime": ISO8601DateFormatter().string(from: e.startTime),
                 "endTime": e.endTime.map { ISO8601DateFormatter().string(from: $0) } ?? "",
                 "notes": e.notes ?? "",
+                "source": e.source.rawValue,
             ]
         }
 

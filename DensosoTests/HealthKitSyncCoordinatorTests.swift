@@ -140,6 +140,136 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(workoutStarts.first), expectedStart)
     }
 
+    func testPreparedRebaselineFromAnotherTimeZoneIsRejectedBeforeSync() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let calendar = Calendar.autoupdatingCurrent
+        let start = try XCTUnwrap(HealthDataWindowPolicy.initialBackfillStart(through: now, calendar: calendar))
+        let preparation = HealthKitSnapshotRebuildPreparation(
+            windowStart: start,
+            through: now,
+            timeZoneIdentifier: "\(calendar.timeZone.identifier).previous"
+        )
+        let fake = FakeHealthStoreClient()
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+
+        do {
+            _ = try await coordinator.syncAvailableData(
+                using: HealthRepository(modelContext: context),
+                now: now,
+                forceRebaseline: true,
+                preparedSnapshotRebuild: preparation
+            )
+            XCTFail("A preparation from an old time zone must be retried before syncing")
+        } catch {
+            XCTAssertEqual(error as? HealthStoreClientError, .invalidAnchor)
+        }
+
+        let aggregateRequests = await fake.aggregateRequests(for: .stepCount)
+        let sampleRequests = await fake.sampleRequests(for: .bodyMass)
+        XCTAssertTrue(aggregateRequests.isEmpty)
+        XCTAssertTrue(sampleRequests.isEmpty)
+    }
+
+    func testBackgroundAggregateSyncUsesRollingWindowWithoutPurgingBriefCache() async throws {
+        let now = Date()
+        let calendar = Calendar.autoupdatingCurrent
+        let today = calendar.startOfDay(for: now)
+        let targetStart = try XCTUnwrap(HealthDataWindowPolicy.initialBackfillStart(through: now, calendar: calendar))
+        let oldDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -10, to: today))
+        let missingRecentDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -2, to: today))
+        let recentDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        let nextOldDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: oldDay))
+        let nextMissingRecentDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: missingRecentDay))
+        let nextRecentDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: recentDay))
+        let lastSync = now.addingTimeInterval(-60 * 60)
+        let repository = HealthRepository(modelContext: context)
+
+        try await repository.applyHealthAggregates(
+            [
+                HealthAggregateBucket(startDate: oldDay, endDate: nextOldDay, value: 300),
+                HealthAggregateBucket(startDate: missingRecentDay, endDate: nextMissingRecentDay, value: 400),
+                HealthAggregateBucket(startDate: recentDay, endDate: nextRecentDay, value: 500),
+            ],
+            metric: .activeEnergy,
+            stream: HealthMetricID.activeEnergy.rawValue,
+            lookbackStart: targetStart,
+            through: now,
+            lastSuccessfulAt: lastSync
+        )
+        for metric in HealthKitSyncCoordinator.aggregateStreams where metric != .activeEnergy {
+            try await repository.applyHealthAggregates(
+                [HealthAggregateBucket(startDate: recentDay, endDate: nextRecentDay, value: 10)],
+                metric: metric,
+                stream: metric.rawValue,
+                lookbackStart: targetStart,
+                through: now,
+                lastSuccessfulAt: lastSync
+            )
+        }
+        for metric in HealthKitSyncCoordinator.sampleStreams {
+            let cursorStart: Date
+            if metric == .sleepAnalysis {
+                let previousDay = calendar.date(byAdding: .day, value: -1, to: targetStart) ?? targetStart
+                cursorStart = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: previousDay) ?? previousDay
+            } else {
+                cursorStart = targetStart
+            }
+            try await repository.applyImportedHealthSamples(
+                HealthSamplePage(samples: [], nextAnchorData: Data([1]), readState: .available),
+                stream: metric.rawValue,
+                lastSuccessfulAt: lastSync,
+                lookbackStart: cursorStart,
+                replacements: []
+            )
+        }
+        try await repository.applyImportedWorkouts(
+            [],
+            deletedHealthKitUUIDs: [],
+            nextAnchorData: Data([1]),
+            lookbackStart: targetStart
+        )
+        context.insert(DailyBriefRecord(
+            cacheKey: "daily:incremental-aggregate-fixture",
+            dayKey: Self.dayKey(today, calendar: calendar),
+            snapshotHash: "still-valid-until-projection-refresh",
+            algorithmVersion: "test-v1",
+            payloadData: Data([1])
+        ))
+        try context.save()
+
+        let fake = FakeHealthStoreClient()
+        await fake.setAggregateResponse([
+            HealthAggregateBucket(startDate: recentDay, endDate: nextRecentDay, value: 650)
+        ], for: .activeEnergy)
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+        let result = try await coordinator.syncAvailableData(
+            using: repository,
+            now: now,
+            forceRebaseline: false,
+            aggregateIncrementalLookbackDays: 3
+        )
+
+        XCTAssertTrue(result.failedStreams.isEmpty)
+        let activeEnergyRequests = await fake.aggregateRequests(for: .activeEnergy)
+        XCTAssertGreaterThan(try XCTUnwrap(activeEnergyRequests.first).startDate, targetStart)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyBriefRecord>()), 1)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshots = try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+        let decoded = try snapshots.map { try decoder.decode(DailyHealthSnapshot.self, from: $0.payloadData) }
+        XCTAssertEqual(decoded.first(where: { calendar.isDate($0.dayStart, inSameDayAs: oldDay) })?.activeEnergyKcal, 300)
+        XCTAssertEqual(decoded.first(where: { calendar.isDate($0.dayStart, inSameDayAs: recentDay) })?.activeEnergyKcal, 650)
+        let missingRecent = try XCTUnwrap(decoded.first(where: {
+            calendar.isDate($0.dayStart, inSameDayAs: missingRecentDay)
+        }))
+        XCTAssertNil(missingRecent.activeEnergyKcal)
+        XCTAssertEqual(
+            missingRecent.healthReadStates?[HealthMetricID.activeEnergy.rawValue],
+            .dataUnavailableOrReadScopeUnknown
+        )
+    }
+
     func testLimitedHealthKitHistoryStartsAtAuthorizationBoundaryAndRecordsUnknownDays() async throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let calendar = Calendar.current
@@ -580,6 +710,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             metric: .activeEnergy,
             stream: HealthMetricID.activeEnergy.rawValue,
             lookbackStart: targetStart,
+            through: now,
             lastSuccessfulAt: now
         )
         let fake = FakeHealthStoreClient()
@@ -854,7 +985,8 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
                 [HealthAggregateBucket(startDate: day, endDate: nextDay, value: value)],
                 metric: metric,
                 stream: metric.rawValue,
-                lookbackStart: day
+                lookbackStart: day,
+                through: now
             )
         }
         let fake = FakeHealthStoreClient()

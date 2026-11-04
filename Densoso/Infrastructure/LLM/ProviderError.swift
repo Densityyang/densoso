@@ -15,6 +15,7 @@ enum ProviderError: Equatable, Sendable, SharedErrorDescribing {
     case network(code: Int?)
     case timeout
     case malformedResponse
+    case incompleteResponse
     case schemaViolation(path: String)
     case contentRejected
     case unsupportedCapability(ProviderCapability)
@@ -119,6 +120,13 @@ enum ProviderError: Equatable, Sendable, SharedErrorDescribing {
                 userMessage: "暂时无法处理服务响应，请重试。",
                 subsystem: .provider,
                 reason: .malformedResponse
+            )
+        case .incompleteResponse:
+            SharedErrorDescriptor(
+                code: .providerUnavailable,
+                userMessage: "AI 回复未完整生成，请缩短请求后重试。",
+                subsystem: .provider,
+                reason: .incompleteResponse
             )
         case .schemaViolation:
             SharedErrorDescriptor(

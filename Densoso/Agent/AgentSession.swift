@@ -1,6 +1,17 @@
 import Foundation
+import CryptoKit
 import DensosoDomain
 import Observation
+
+struct AgentConfirmationStatus: Equatable, Sendable {
+    let actionID: UUID
+    let localCommitted: Bool
+    let externalSyncState: HealthSyncState
+}
+
+enum AgentSessionActionError: Error {
+    case actionAlreadyInFlight
+}
 
 /// Agent 系统提示词
 struct AgentSystemPrompt {
@@ -89,9 +100,11 @@ final class AgentSession {
     private let healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)?
     private let confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)?
     private let conversationID: UUID
+    private let persistenceOperationBarrier = PersistenceOperationBarrier.shared
     var confirmationConversationID: UUID { conversationID }
     var hasActiveRequest: Bool { activeAgentTask != nil }
     private let budgetFactory: @Sendable () -> AgentBudget
+    private let pendingActionNow: @Sendable () -> Date
 
     weak var foodDatabase: FoodDatabase?
     private var conversationHistory: [ModelMessage] = []
@@ -99,11 +112,20 @@ final class AgentSession {
     private var activeAgentTask: Task<AgentResponse, Error>?
     private var activeProviderTask: Task<ProviderRoundResult, Error>?
     private var activeRequestID: UUID?
+    @ObservationIgnored private var activeRequestTimeAnchor: Date?
+    @ObservationIgnored private var activeRequestDeadline: Date?
+    @ObservationIgnored private var activeToolExecution: ToolExecutionJournalEntry?
+    @ObservationIgnored private var pendingActionExpiryTask: Task<Void, Never>?
+    private var inFlightActionIDs = Set<UUID>()
     private var activeEventObserver: (
         requestID: UUID,
         continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation
     )?
-    private(set) var pendingActions: [PendingAction] = []
+    private(set) var pendingActions: [PendingAction] = [] {
+        didSet { schedulePendingActionExpiry() }
+    }
+    private(set) var lastConfirmationStatus: AgentConfirmationStatus?
+    private(set) var pendingActionsReadError: String?
     private(set) var restoredVisibleMessages: [PersistedChatMessage] = []
     private(set) var latestEvent: AgentEvent?
     private(set) var streamedText = ""
@@ -129,7 +151,8 @@ final class AgentSession {
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
         confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)? = nil,
         healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil,
-        confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)? = nil
+        confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)? = nil,
+        pendingActionNow: @escaping @Sendable () -> Date = Date.init
     ) {
         self.providerSelector = providerSelector
         self.intelligencePreferences = intelligencePreferences
@@ -145,6 +168,7 @@ final class AgentSession {
         self.confirmedWorkoutPlanHandler = confirmedWorkoutPlanHandler
         self.conversationID = conversationID
         self.budgetFactory = budgetFactory
+        self.pendingActionNow = pendingActionNow
         self.systemPrompt = AgentSystemPrompt()
     }
 
@@ -153,10 +177,42 @@ final class AgentSession {
         conversationHistory = try persisted.map(Self.decodePersistedMessage)
         restoredVisibleMessages = conversationHistory.compactMap(Self.visibleMessage)
         pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
+        pendingActionsReadError = nil
     }
 
     func reloadPendingActions() async throws {
-        pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
+        do {
+            pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
+            pendingActionsReadError = nil
+        } catch {
+            pendingActionsReadError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
+            throw error
+        }
+    }
+
+    func isActionInFlight(_ actionID: UUID) -> Bool {
+        inFlightActionIDs.contains(actionID)
+    }
+
+    private func schedulePendingActionExpiry() {
+        pendingActionExpiryTask?.cancel()
+        guard let expiry = PendingActionExpirationPolicy.nextExpiry(in: pendingActions) else {
+            pendingActionExpiryTask = nil
+            return
+        }
+        let delay = max(0, expiry.timeIntervalSince(pendingActionNow()))
+        pendingActionExpiryTask = Task { @MainActor [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay))
+            } else {
+                await Task.yield()
+            }
+            guard !Task.isCancelled, let self else { return }
+            try? await self.reloadPendingActions()
+        }
     }
 
     func confirmedFoodIDs(matching label: String) async -> Set<String> {
@@ -283,7 +339,11 @@ final class AgentSession {
         }
         let requestID = requestedID ?? UUID()
         let task = Task<AgentResponse, Error> {
-            try await run(multimodalRequest: multimodalRequest, requestID: requestID)
+            let operationLease = try await persistenceOperationBarrier.acquireAgentExecutionOperation()
+            defer { persistenceOperationBarrier.release(operationLease) }
+            return try await persistenceOperationBarrier.withLease(operationLease) {
+                try await run(multimodalRequest: multimodalRequest, requestID: requestID)
+            }
         }
         activeRequestID = requestID
         activeAgentTask = task
@@ -352,6 +412,9 @@ final class AgentSession {
             transientMealClarificationWasAnswered = false
             transientMealPriorClarificationField = nil
             activeCloudHealthPolicy = nil
+            activeRequestTimeAnchor = nil
+            activeRequestDeadline = nil
+            activeToolExecution = nil
             conversationHistory = conversationHistory.map(Self.withoutSensitiveTransientContent)
         }
         streamedText = ""
@@ -420,6 +483,8 @@ final class AgentSession {
                 // also covers evidence-only turns so text alone cannot resume them.
                 containsTransientImage: multimodalRequest.image != nil || !multimodalRequest.mealEvidence.isEmpty
             )
+            activeRequestTimeAnchor = requestSnapshot.startedAt
+            activeRequestDeadline = requestSnapshot.budget.deadline
             requestRecordStarted = true
             switch requestSnapshot.state {
             case .running, .interrupted:
@@ -463,13 +528,14 @@ final class AgentSession {
                 )
                 conversationHistory = try persisted.map(Self.decodePersistedMessage)
                 restoredVisibleMessages = conversationHistory.compactMap(Self.visibleMessage)
-                transientMealUserText = conversationHistory.last(where: { $0.role == .user })
+                let restoredUserText = conversationHistory.last(where: { $0.role == .user })
                     .flatMap { Self.visibleMessage($0)?.text }
                     ?? userText
+                transientMealUserText = restoredUserText
                 didIssueMealClarification = Self.containsMealClarification(in: conversationHistory)
                 let priorClarification = priorMealClarification(
                     in: conversationHistory,
-                    currentUserText: userText
+                    currentUserText: restoredUserText
                 )
                 transientMealClarificationWasAnswered = priorClarification.answered
                 transientMealPriorClarificationField = priorClarification.field
@@ -499,11 +565,21 @@ final class AgentSession {
                 )
             }
 
-            let promptUserText = conversationHistory.last(where: { $0.role == .user })
+            let effectiveUserText = conversationHistory.last(where: { $0.role == .user })
                 .flatMap { Self.visibleMessage($0)?.text }
                 ?? userText
-            let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(for: promptUserText)
-            let policyAlignmentIntent = CloudHealthContextPolicyAlignmentIntent.parse(promptUserText)
+            transientMealUserText = effectiveUserText
+            let previousUserTexts = conversationHistory.dropLast()
+                .filter { $0.role == .user }
+                .compactMap { Self.visibleMessage($0)?.text }
+            let priorHealthContext = HealthContextPromptBuilder.hasPriorHealthContext(
+                in: previousUserTexts
+            )
+            let wantsHealthNarrative = HealthContextPromptBuilder.requiresNarrative(
+                for: effectiveUserText,
+                priorHealthContext: priorHealthContext
+            )
+            let policyAlignmentIntent = CloudHealthContextPolicyAlignmentIntent.parse(effectiveUserText)
             var policyAlignmentAcknowledgement: String?
             func responseIncludingPolicyAcknowledgement(_ text: String) -> String {
                 guard let policyAlignmentAcknowledgement else { return text }
@@ -511,7 +587,7 @@ final class AgentSession {
             }
             if !containsImage || policyAlignmentIntent != nil {
                 if let policyAlignmentResponse = try await handleCloudHealthPolicyAlignment(
-                    promptUserText,
+                    effectiveUserText,
                     provider: provider.descriptor.id
                 ) {
                     if containsImage, case .some(.revoke) = policyAlignmentIntent {
@@ -628,6 +704,8 @@ final class AgentSession {
             var currentAllowedEvidenceKeys = allowedEvidenceKeys
             var currentRoundUsesStructuredNarrative = useStructuredHealthNarrative
             var retryingUnsentProviderRound = false
+            var logicalProviderRound = 0
+            var stageToolInvocationOrdinals: [String: Int] = [:]
 
             while true {
                 guard retryingUnsentProviderRound || tracker.remainingProviderRounds > 0 else {
@@ -660,11 +738,12 @@ final class AgentSession {
                 let roundSummary = roundContext?.aggregateSummary
                 let providerSystemPrompt = HealthContextPromptBuilder.prompt(
                     basePrompt: systemPrompt.text,
-                    userText: promptUserText,
+                    userText: effectiveUserText,
                     summary: roundSummary,
                     narrativeContext: roundContext,
                     structuredNarrative: currentRoundUsesStructuredNarrative,
-                    cloudHealthPolicy: roundPolicy
+                    cloudHealthPolicy: roundPolicy,
+                    priorHealthContext: priorHealthContext
                 )
                 let responseFormat = currentRoundUsesStructuredNarrative
                     ? HealthNarrativePolicy.responseFormat(
@@ -678,7 +757,10 @@ final class AgentSession {
                     cloudHealthPolicy: roundPolicy
                 )
                 let includesSummary = roundSummary != nil
-                    && HealthContextPromptBuilder.shouldIncludeSummary(for: promptUserText)
+                    && HealthContextPromptBuilder.shouldIncludeSummary(
+                        for: effectiveUserText,
+                        priorHealthContext: priorHealthContext
+                    )
                 let requestDataClasses = Self.outboundConsentDependencies(
                     messages: preparedMessages.messages,
                     includesImage: containsImage,
@@ -695,7 +777,7 @@ final class AgentSession {
                     tools: registry.toolDefinitions,
                     maxOutputTokens: 2_048,
                     thinking: provider.descriptor.capabilities.contains(.reasoning)
-                        ? AgentReasoningPolicy.forUserMessage(userText)
+                        ? AgentReasoningPolicy.forUserMessage(effectiveUserText)
                         : .none,
                     responseFormat: responseFormat,
                     deadline: tracker.budget.deadline,
@@ -753,6 +835,7 @@ final class AgentSession {
                     }
                 }
                 if !retryingUnsentProviderRound {
+                    logicalProviderRound += 1
                     try tracker.consumeProviderRound()
                     try await persist(consumption: tracker.consumption, requestID: requestID)
                     emit(
@@ -803,6 +886,26 @@ final class AgentSession {
                     throw error
                 }
                 retryingUnsentProviderRound = false
+                switch result.stopReason {
+                case .completed:
+                    guard result.toolCalls.isEmpty else {
+                        // A completion/tool-call mismatch must not cross the execution boundary.
+                        throw ProviderError.malformedResponse
+                    }
+                case .toolUse:
+                    guard !result.toolCalls.isEmpty else {
+                        throw ProviderError.malformedResponse
+                    }
+                case .maxTokens:
+                    // A partial response or a mismatch between the terminal status
+                    // and its payload must never cross the tool execution boundary.
+                    throw ProviderError.incompleteResponse
+                }
+                guard result.toolCalls.count <= tracker.remainingToolCalls else {
+                    // Reject the entire batch before persisting the assistant's tool
+                    // calls or allowing any tool to create persistent state.
+                    throw ProviderError.budgetExceeded
+                }
                 for usage in result.usages {
                     tracker.record(AgentTokenUsage(
                         inputTokens: usage.inputTokens,
@@ -811,6 +914,7 @@ final class AgentSession {
                         reasoningTokens: usage.reasoningTokens
                     ))
                 }
+                let firstToolCallIndex = tracker.toolCalls
                 try await persist(consumption: tracker.consumption, requestID: requestID)
                 try tracker.requireTime()
 
@@ -845,18 +949,114 @@ final class AgentSession {
                         requestID: requestID
                     )
 
-                    for call in result.toolCalls {
-                        try tracker.consumeToolCall()
-                        try await persist(consumption: tracker.consumption, requestID: requestID)
-                        emit(.toolCallStarted(name: call.name, index: tracker.toolCalls))
+                    for (offset, call) in result.toolCalls.enumerated() {
+                        do {
+                            try Task.checkCancellation()
+                        } catch {
+                            await appendToolResults(
+                                for: result.toolCalls[offset...],
+                                output: encodedToolError(code: "request_cancelled"),
+                                requestID: requestID
+                            )
+                            throw error
+                        }
+                        do {
+                            try tracker.consumeToolCall()
+                            try await persist(consumption: tracker.consumption, requestID: requestID)
+                            try Task.checkCancellation()
+                        } catch is CancellationError {
+                            await appendToolResults(
+                                for: result.toolCalls[offset...],
+                                output: encodedToolError(code: "request_cancelled"),
+                                requestID: requestID
+                            )
+                            throw CancellationError()
+                        } catch let error as ProviderError where error == .cancelled {
+                            await appendToolResults(
+                                for: result.toolCalls[offset...],
+                                output: encodedToolError(code: "request_cancelled"),
+                                requestID: requestID
+                            )
+                            throw error
+                        } catch let error as ProviderError where error == .timeout {
+                            await appendToolResults(
+                                for: result.toolCalls[offset...],
+                                output: encodedToolError(code: "request_deadline_exceeded"),
+                                requestID: requestID
+                            )
+                            throw error
+                        } catch {
+                            await appendToolResults(
+                                for: result.toolCalls[offset...],
+                                output: encodedToolError(code: "tool_batch_aborted"),
+                                requestID: requestID
+                            )
+                            throw error
+                        }
+                        emit(.toolCallStarted(name: call.name, index: firstToolCallIndex + offset + 1))
                         if registry.effect(for: call.name) == .stagesAction {
                             useStructuredHealthNarrative = false
                         }
-                        let output = await executeTool(
-                            call,
-                            clientRequestID: requestID,
-                            mealModelProvenance: mealModelProvenance
-                        )
+                        let output: String
+                        do {
+                            if registry.effect(for: call.name) == .stagesAction {
+                                let invocationOrdinal = stageToolInvocationOrdinals[call.name, default: 0]
+                                stageToolInvocationOrdinals[call.name] = invocationOrdinal + 1
+                                output = try await executeJournaledTool(
+                                    call,
+                                    requestID: requestID,
+                                    logicalRound: logicalProviderRound,
+                                    callIndex: offset,
+                                    invocationOrdinal: invocationOrdinal,
+                                    mealModelProvenance: mealModelProvenance
+                                )
+                            } else {
+                                output = try await executeTool(
+                                    call,
+                                    clientRequestID: requestID,
+                                    mealModelProvenance: mealModelProvenance
+                                )
+                            }
+                        } catch is CancellationError {
+                            await appendToolResults(
+                                for: result.toolCalls[offset...],
+                                output: encodedToolError(code: "request_cancelled"),
+                                requestID: requestID
+                            )
+                            throw CancellationError()
+                        } catch let error as ProviderError where error == .cancelled {
+                            await appendToolResults(
+                                for: result.toolCalls[offset...],
+                                output: encodedToolError(code: "request_cancelled"),
+                                requestID: requestID
+                            )
+                            throw error
+                        } catch let error as ProviderError where error == .timeout {
+                            await appendToolResults(
+                                for: result.toolCalls[offset...],
+                                output: encodedToolError(code: "request_deadline_exceeded"),
+                                requestID: requestID
+                            )
+                            throw error
+                        }
+                        do {
+                            try tracker.requireTime()
+                            try Task.checkCancellation()
+                        } catch let error as ProviderError where error == .timeout {
+                            await appendToolResults(
+                                for: result.toolCalls[offset...],
+                                output: encodedToolError(code: "request_deadline_exceeded"),
+                                requestID: requestID
+                            )
+                            throw error
+                        } catch {
+                            await appendToolResults(
+                                for: result.toolCalls[offset...],
+                                output: encodedToolError(code: "request_cancelled"),
+                                requestID: requestID
+                            )
+                            throw error
+                        }
                         let toolProvenance = CloudRequestPolicyGuard.isHealthTool(name: call.name)
                             ? healthContextPolicyProvenance(for: roundPolicy, includeIf: true)
                             : nil
@@ -916,12 +1116,32 @@ final class AgentSession {
                 return response
             }
         } catch is CancellationError {
+            await rejectPendingActionsCreatedDuringRequest(
+                requestID: requestID,
+                baselineIDs: pendingActionIDsBeforeRequest
+            )
             if requestRecordStarted { await persist(state: .interrupted, requestID: requestID) }
             emit(.cancelled(requestID: requestID))
             throw ProviderError.cancelled
         } catch let error as ProviderError where error == .cancelled {
+            await rejectPendingActionsCreatedDuringRequest(
+                requestID: requestID,
+                baselineIDs: pendingActionIDsBeforeRequest
+            )
             if requestRecordStarted { await persist(state: .interrupted, requestID: requestID) }
             emit(.cancelled(requestID: requestID))
+            throw error
+        } catch let error as ProviderError where error == .timeout {
+            await rejectPendingActionsCreatedDuringRequest(
+                requestID: requestID,
+                baselineIDs: pendingActionIDsBeforeRequest,
+                errorCode: "request_deadline_exceeded"
+            )
+            if requestRecordStarted { await persist(state: .expired, requestID: requestID) }
+            emit(.failed(SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .providerUnavailableFallback
+            )))
             throw error
         } catch let error as ProviderError {
             if requestRecordStarted {
@@ -980,11 +1200,46 @@ final class AgentSession {
         activeProviderTask?.cancel()
     }
 
+    private func appendToolResults(
+        for calls: ArraySlice<ToolCall>,
+        output: String,
+        requestID: UUID
+    ) async {
+        for call in calls {
+            try? await append(
+                ModelMessage(
+                    role: .tool,
+                    content: [.toolResult(toolCallID: call.id, content: output)]
+                ),
+                requestID: requestID
+            )
+        }
+    }
+
+    private func rejectPendingActionsCreatedDuringRequest(
+        requestID: UUID,
+        baselineIDs: Set<UUID>,
+        errorCode: String = "request_cancelled"
+    ) async {
+        guard let currentActions = try? await confirmationCoordinator.activeActions(
+            conversationID: conversationID
+        ) else { return }
+        for action in currentActions
+        where action.clientRequestID == requestID && !baselineIDs.contains(action.id) {
+            try? await confirmationCoordinator.reject(id: action.id, conversationID: conversationID)
+            await confirmationCoordinator.failToolExecutions(
+                pendingActionID: action.id,
+                resultData: Data(encodedToolError(code: errorCode).utf8)
+            )
+        }
+        pendingActions = (try? await confirmationCoordinator.activeActions(conversationID: conversationID)) ?? []
+    }
+
     private func executeTool(
         _ call: ToolCall,
         clientRequestID: UUID,
         mealModelProvenance: AgentMealModelProvenance
-    ) async -> String {
+    ) async throws -> String {
         do {
             if call.name == "log_meal" {
                 let previousMealModelProvenance = transientMealModelProvenance
@@ -1018,9 +1273,140 @@ final class AgentSession {
             return mealClarificationResult(field: field, question: question, subject: subject)
         } catch DraftError.clarificationLimitReached {
             return encodedToolError(code: "clarification_limit_reached")
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as ProviderError where error == .cancelled {
+            throw error
+        } catch let error as ProviderError where error == .timeout {
+            throw error
+        } catch ConfirmationError.requestDeadlineExceeded {
+            throw ProviderError.timeout
         } catch {
             let descriptor = SharedErrorDescriptor.mapped(from: error, fallback: .actionConflictFallback)
             return encodedToolError(descriptor: descriptor)
+        }
+    }
+
+    private func executeJournaledTool(
+        _ call: ToolCall,
+        requestID: UUID,
+        logicalRound: Int,
+        callIndex: Int,
+        invocationOrdinal: Int,
+        mealModelProvenance: AgentMealModelProvenance
+    ) async throws -> String {
+        let argumentsData = try call.arguments.encodedData()
+        // A per-tool ordinal survives a replay that changes provider-round boundaries,
+        // while still assigning separate identities to repeated legal operations.
+        let invocationID = "\(requestID.uuidString.lowercased()):tool:\(call.name):invocation:\(invocationOrdinal)"
+        let argumentsHash = SHA256.hash(data: argumentsData)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let timestamp = Date()
+        let proposedEntry = ToolExecutionJournalEntry(
+            invocationID: invocationID,
+            requestID: requestID,
+            conversationID: conversationID,
+            logicalRound: logicalRound,
+            callIndex: callIndex,
+            toolCallID: call.id,
+            toolName: call.name,
+            argumentsHash: argumentsHash,
+            requestTimeAnchor: activeRequestTimeAnchor ?? timestamp,
+            state: .prepared,
+            preparedPayloadData: nil,
+            pendingActionID: nil,
+            resultData: nil,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            completedAt: nil
+        )
+        let entry = try await confirmationCoordinator.beginToolExecution(proposedEntry)
+        if (entry.state == .completed || entry.state == .failed), let result = entry.result {
+            pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
+            return result
+        }
+        if let pendingActionID = entry.pendingActionID {
+            let activeActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
+            guard let action = activeActions.first(where: { $0.id == pendingActionID }) else {
+                let result = encodedToolError(code: "pending_action_no_longer_active")
+                await confirmationCoordinator.failToolExecution(
+                    invocationID: invocationID,
+                    resultData: Data(result.utf8)
+                )
+                pendingActions = activeActions
+                return result
+            }
+            let output = try AgentToolResult.stagedAction(action)
+            try await confirmationCoordinator.completeToolExecution(
+                invocationID: invocationID,
+                resultData: Data(output.utf8)
+            )
+            pendingActions = activeActions
+            return output
+        }
+        if let preparedPayloadData = entry.preparedPayloadData {
+            let payload = try ToolExecutionPayloadCodec.decode(preparedPayloadData)
+            let action: PendingAction
+            do {
+                action = try await confirmationCoordinator.stage(
+                    payload: payload,
+                    clientRequestID: requestID,
+                    conversationID: conversationID,
+                    invocationID: invocationID,
+                    requestDeadline: activeRequestDeadline
+                )
+            } catch ConfirmationError.requestDeadlineExceeded {
+                await confirmationCoordinator.failToolExecution(
+                    invocationID: invocationID,
+                    resultData: Data(encodedToolError(code: "request_deadline_exceeded").utf8)
+                )
+                throw ProviderError.timeout
+            } catch is CancellationError {
+                await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
+                throw CancellationError()
+            } catch {
+                await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
+                throw error
+            }
+            let output = try AgentToolResult.stagedAction(action)
+            try await confirmationCoordinator.completeToolExecution(
+                invocationID: invocationID,
+                resultData: Data(output.utf8)
+            )
+            pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
+            emit(.pendingAction(action))
+            return output
+        }
+
+        let previousExecution = activeToolExecution
+        activeToolExecution = entry
+        defer {
+            activeToolExecution = previousExecution
+        }
+
+        do {
+            try requireActiveRequestTime()
+            try Task.checkCancellation()
+            let output = try await executeTool(
+                call,
+                clientRequestID: requestID,
+                mealModelProvenance: mealModelProvenance
+            )
+            try await confirmationCoordinator.completeToolExecution(
+                invocationID: invocationID,
+                resultData: Data(output.utf8)
+            )
+            return output
+        } catch is CancellationError {
+            await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
+            throw CancellationError()
+        } catch let error as ProviderError where error == .cancelled {
+            await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
+            throw error
+        } catch {
+            await confirmationCoordinator.failToolExecution(invocationID: invocationID, resultData: nil)
+            throw error
         }
     }
 
@@ -1472,6 +1858,12 @@ final class AgentSession {
         transientMealUserText ?? ""
     }
 
+    var currentToolTimeAnchor: Date {
+        activeToolExecution?.requestTimeAnchor
+            ?? activeRequestTimeAnchor
+            ?? Date()
+    }
+
     func hasIssuedMealClarification() -> Bool {
         didIssueMealClarification
     }
@@ -1491,29 +1883,67 @@ final class AgentSession {
     }
 
     func stageAction(_ payload: ActionPayload, clientRequestID: UUID) async throws -> PendingAction {
+        try requireActiveRequestTime()
         let action = try await confirmationCoordinator.stage(
             payload: payload,
             clientRequestID: clientRequestID,
-            conversationID: conversationID
+            conversationID: conversationID,
+            invocationID: activeToolExecution?.invocationID,
+            requestDeadline: activeRequestDeadline
         )
         pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
         emit(.pendingAction(action))
         return action
     }
 
+    private func requireActiveRequestTime() throws {
+        try Task.checkCancellation()
+        if let activeRequestDeadline, Date() >= activeRequestDeadline {
+            throw ProviderError.timeout
+        }
+    }
+
     func confirmPendingAction(_ action: PendingAction) async throws -> String {
+        guard inFlightActionIDs.insert(action.id).inserted else {
+            throw AgentSessionActionError.actionAlreadyInFlight
+        }
+        defer { inFlightActionIDs.remove(action.id) }
         let pendingPlan = pendingActions.first(where: { $0.id == action.id })
         emit(.committing(actionID: action.id))
         let receipt = try await confirmationCoordinator.confirm(
             action: action,
             conversationID: conversationID
         )
-        pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
+        pendingActions.removeAll { $0.id == action.id }
+        lastConfirmationStatus = AgentConfirmationStatus(
+            actionID: action.id,
+            localCommitted: true,
+            externalSyncState: receipt.healthSyncState
+        )
+        if receipt.actionType == .meal || receipt.actionType == .weight {
+            Task { await confirmationCoordinator.processHealthSyncOutbox() }
+        }
+        do {
+            pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
+            pendingActionsReadError = nil
+        } catch {
+            pendingActionsReadError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
+        }
+        let syncMessage: String = switch receipt.healthSyncState {
+        case .pending, .sending: "Apple 健康同步待处理。"
+        case .succeeded: "Apple 健康已同步。"
+        case .retryable: "Apple 健康同步失败，可重试。"
+        case .terminal: "本地记录已保存，但无法写入 Apple 健康。"
+        case .notApplicable: ""
+        }
         switch receipt.actionType {
         case .meal:
-            return "已保存到 Densoso，Apple 健康同步待处理。"
+            return "已保存到 Densoso。\(syncMessage)"
         case .weight:
-            return "体重已保存到 Densoso，Apple 健康同步待处理。"
+            return "体重已保存到 Densoso。\(syncMessage)"
         case .workoutPlan, .trainingPlan:
             guard let pendingPlan else {
                 return "训练计划已在本机确认；同步状态可在计划页查看。"
@@ -1568,6 +1998,7 @@ final class AgentSession {
             var toolCalls: [ToolCall] = []
             var reasoning: [JSONValue] = []
             var usages: [ProviderUsage] = []
+            var stopReason: ProviderStopReason?
             let providerEvents = try await CloudHealthContextPolicy.withCurrentSendConsent(
                 from: governanceRepository,
                 provider: provider.descriptor.id,
@@ -1581,6 +2012,7 @@ final class AgentSession {
             await sendAttempt.markProviderStreamStarted()
             for try await event in providerEvents {
                 try Task.checkCancellation()
+                guard stopReason == nil else { throw ProviderError.malformedResponse }
                 switch event {
                 case .textDelta(let delta):
                     text += delta
@@ -1642,15 +2074,22 @@ final class AgentSession {
                     ) {
                         await MainActor.run { emit(.budgetWarning(provider: usage.provider)) }
                     }
-                case .completed:
-                    break
+                case .completed(let reason):
+                    stopReason = reason
                 }
             }
             // AsyncThrowingStream may end normally when its consumer task is
             // cancelled. Re-check here so cancellation cannot become an empty
             // successful Provider round.
             try Task.checkCancellation()
-            return ProviderRoundResult(text: text, toolCalls: toolCalls, reasoning: reasoning, usages: usages)
+            guard let stopReason else { throw ProviderError.malformedResponse }
+            return ProviderRoundResult(
+                text: text,
+                toolCalls: toolCalls,
+                reasoning: reasoning,
+                usages: usages,
+                stopReason: stopReason
+            )
         }
         let policyChangeTask = Task {
             for await change in policyChanges {
@@ -1681,8 +2120,21 @@ final class AgentSession {
     }
 
     func rejectPendingAction(id: UUID) async throws {
+        guard inFlightActionIDs.insert(id).inserted else {
+            throw AgentSessionActionError.actionAlreadyInFlight
+        }
+        defer { inFlightActionIDs.remove(id) }
         try await confirmationCoordinator.reject(id: id, conversationID: conversationID)
-        pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
+        pendingActions.removeAll { $0.id == id }
+        do {
+            pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
+            pendingActionsReadError = nil
+        } catch {
+            pendingActionsReadError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
+        }
     }
 
     func dailyMetrics(from startDate: Date, through endDate: Date) async throws -> [AgentDailyMetric] {
@@ -2001,6 +2453,7 @@ private struct ProviderRoundResult: Sendable {
     let toolCalls: [ToolCall]
     let reasoning: [JSONValue]
     let usages: [ProviderUsage]
+    let stopReason: ProviderStopReason
 }
 
 struct PersistedChatMessage: Identifiable, Equatable {

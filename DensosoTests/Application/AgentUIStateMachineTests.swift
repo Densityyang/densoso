@@ -104,9 +104,20 @@ final class AgentUIStateMachineTests: XCTestCase {
             AgentUIStateMachine.transition(
                 from: cancelledAfterDraft,
                 event: .cancelled(requestID: UUID()),
-                hasDraftInCurrentTurn: false
+                hasDraftInCurrentTurn: false,
+                hasPendingActions: true
             ),
             .awaitingConfirmation
+        )
+        XCTAssertEqual(
+            AgentUIStateMachine.transition(
+                from: .draftReady,
+                event: .cancelled(requestID: UUID()),
+                hasDraftInCurrentTurn: false,
+                hasPendingActions: false
+            ),
+            .idle,
+            "Rejected drafts from a cancelled request must not leave the UI awaiting confirmation"
         )
     }
 

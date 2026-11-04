@@ -51,7 +51,7 @@ struct PersistenceBootstrap {
             try MigrationBackupManager.createBackupIfPresent(storeURL: $0)
         }
     ) -> PersistenceBootstrap {
-        let schema = Schema(versionedSchema: DensosoSchemaV12.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         if inMemory {
             let configuration = ModelConfiguration(
                 "DensosoUITests",
@@ -69,6 +69,19 @@ struct PersistenceBootstrap {
                 let diagnostic = Self.diagnosticSafeDetail(for: error)
                 fatalError("Unable to create the UI test model container (\(diagnostic)).")
             }
+        }
+
+        do {
+            try MigrationBackupManager.recoverInterruptedRestores(storeURL: storeURL)
+        } catch {
+            // Resolve or quarantine an interrupted file replacement before
+            // SwiftData sees the store URL. In particular, never create a new
+            // empty database over a missing primary while rollback files exist.
+            return makeRecoveryBootstrap(
+                migrationError: error,
+                schema: schema,
+                backupManifest: nil
+            )
         }
 
         let configuration = ModelConfiguration("Densoso", schema: schema, url: storeURL)
@@ -169,7 +182,11 @@ struct PersistenceBootstrap {
             let container = try ModelContainer(for: schema, configurations: [diagnosticConfiguration])
             let restoreStatus: String
             if let restoreError {
-                restoreStatus = "原 store 自动恢复未完成（\(Self.diagnosticSafeDetail(for: restoreError))）；迁移前备份仍保留。"
+                if let failure = restoreError as? MigrationBackupRestoreFailure {
+                    restoreStatus = "原 store 自动恢复未完成（\(Self.diagnosticSafeDetail(for: failure))）；回滚文件与交易清单已保留。"
+                } else {
+                    restoreStatus = "原 store 自动恢复未完成（\(Self.diagnosticSafeDetail(for: restoreError))）；迁移前备份仍保留。"
+                }
             } else if backupManifest != nil {
                 restoreStatus = "原 store 已从迁移前备份恢复。"
             } else {

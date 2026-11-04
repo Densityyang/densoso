@@ -169,6 +169,7 @@ final class WorkoutPlanSchedulingService {
     private let modelContainer: ModelContainer
     private let client: any WorkoutPlanSchedulingClient
     private let multiDayService: TrainingPlanSchedulingService
+    private let persistenceOperationBarrier: PersistenceOperationBarrier
     private var schedulingActionIDs = Set<UUID>()
     private var schedulingWaiters: [UUID: [CheckedContinuation<Void, Error>]] = [:]
     private(set) var lastError: String?
@@ -176,17 +177,28 @@ final class WorkoutPlanSchedulingService {
     init(
         modelContainer: ModelContainer,
         client: any WorkoutPlanSchedulingClient = WorkoutKitPlanSchedulingClient(),
-        multiDayClient: any MultiDayWorkoutSchedulingClient = WorkoutKitMultiDaySchedulingClient()
+        multiDayClient: any MultiDayWorkoutSchedulingClient = WorkoutKitMultiDaySchedulingClient(),
+        persistenceOperationBarrier: PersistenceOperationBarrier = .shared
     ) {
         self.modelContainer = modelContainer
         self.client = client
+        self.persistenceOperationBarrier = persistenceOperationBarrier
         self.multiDayService = TrainingPlanSchedulingService(
             modelContainer: modelContainer,
-            client: multiDayClient
+            client: multiDayClient,
+            persistenceOperationBarrier: persistenceOperationBarrier
         )
     }
 
     func scheduleConfirmedPlan(actionID: UUID) async throws {
+        let operationLease = try await persistenceOperationBarrier.acquireMutationOperation()
+        defer { persistenceOperationBarrier.release(operationLease) }
+        try await persistenceOperationBarrier.withLease(operationLease) {
+            try await scheduleConfirmedPlanWhileLeased(actionID: actionID)
+        }
+    }
+
+    private func scheduleConfirmedPlanWhileLeased(actionID: UUID) async throws {
         if schedulingActionIDs.contains(actionID) {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 schedulingWaiters[actionID, default: []].append(continuation)

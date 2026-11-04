@@ -8,6 +8,13 @@ struct AgentScheduleItem: Codable, Equatable, Sendable {
     let startTime: Date
     let endTime: Date?
     let notes: String?
+    let source: AgentScheduleItemSource
+}
+
+enum AgentScheduleItemSource: String, Codable, Equatable, Sendable {
+    case scheduleEvent
+    case confirmedWorkoutPlan
+    case confirmedTrainingPlan
 }
 
 struct AgentMealEnergyEstimate: Equatable, Sendable {

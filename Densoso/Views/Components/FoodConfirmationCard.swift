@@ -140,6 +140,7 @@ struct FoodConfirmationCard: View {
 /// 所有健康数据写入共用的显式确认边界。
 struct PendingActionConfirmationCard: View {
     let action: PendingAction
+    var isProcessing = false
     let onConfirm: () -> Void
     let onReject: () -> Void
 
@@ -153,6 +154,11 @@ struct PendingActionConfirmationCard: View {
             Text(action.payload.summary)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            if isProcessing {
+                Label("正在提交本地记录…", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if case .meal(let meal) = action.payload {
                 if let consumedFraction = meal.consumedFractionEvidence {
                     Text("按你本轮明确报告的约 \(Int((consumedFraction.fraction * 100).rounded()))% 摄入比例计算")
@@ -258,9 +264,11 @@ struct PendingActionConfirmationCard: View {
                 Button("拒绝", role: .cancel, action: onReject)
                     .buttonStyle(.bordered)
                     .frame(maxWidth: .infinity)
+                    .disabled(isProcessing)
                 Button("确认并保存", action: onConfirm)
                     .buttonStyle(.borderedProminent)
                     .frame(maxWidth: .infinity)
+                    .disabled(isProcessing)
             }
         }
         .orbitCard(emphasized: true)

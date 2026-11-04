@@ -25,7 +25,7 @@ struct StageDailyCheckInTool: ConfirmationRequiredTool {
     }
 
     func prepare(argumentsJSON: String, context: AgentSession) async throws -> ActionPayload {
-        let asOf = Date()
+        let asOf = context.currentToolTimeAnchor
         let checkIn = try draft(argumentsJSON: argumentsJSON, asOf: asOf)
         try DailyCheckInSelfReportResolver().validate(
             checkIn,

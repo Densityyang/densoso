@@ -266,7 +266,7 @@ final class LogMealRecipePriorTests: XCTestCase {
     }
 
     private func makeHarness(provider: ScriptedTextProvider) throws -> RecipePriorHarness {
-        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]

@@ -53,11 +53,12 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         let worker = HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
         await worker.processPending(in: context)
 
-        XCTAssertEqual(entry.state, "succeeded")
-        XCTAssertEqual(entry.attemptCount, 1)
+        let persistedEntry = try XCTUnwrap(persistedOutboxSnapshots()[entry.id])
+        XCTAssertEqual(persistedEntry.state, "succeeded")
+        XCTAssertEqual(persistedEntry.attemptCount, 1)
         let successfulWrites = await fake.successfulWritesSnapshot()
         let command = try XCTUnwrap(successfulWrites.first)
-        XCTAssertEqual(command.syncIdentifier, entry.syncIdentifier)
+        XCTAssertEqual(command.syncIdentifier, persistedEntry.syncIdentifier)
         XCTAssertEqual(command.syncVersion, 1)
         guard case .nutrition(let nutrition) = command.payload else {
             return XCTFail("Expected a meal nutrition write")
@@ -66,7 +67,7 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         XCTAssertEqual(nutrition.proteinGrams, 32)
         XCTAssertNil(nutrition.fatGrams)
         XCTAssertEqual(nutrition.carbohydrateGrams, 61)
-        let savedReceipt = try JSONDecoder().decode(HealthWriteReceipt.self, from: entry.payloadData)
+        let savedReceipt = try JSONDecoder().decode(HealthWriteReceipt.self, from: persistedEntry.payloadData)
         XCTAssertEqual(savedReceipt.recordID, meal.id)
         XCTAssertEqual(savedReceipt.metrics, [.dietaryEnergy, .dietaryProtein, .dietaryCarbohydrates])
     }
@@ -106,7 +107,8 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
             .processPending(in: context)
 
-        XCTAssertEqual(entries.map(\.state), ["terminal", "terminal"])
+        let persisted = try persistedOutboxSnapshots()
+        XCTAssertEqual(entries.compactMap { persisted[$0.id]?.state }, ["terminal", "terminal"])
         let attemptedWrites = await fake.attemptedWritesSnapshot()
         XCTAssertTrue(attemptedWrites.isEmpty)
     }
@@ -132,7 +134,7 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
             .processPending(in: context)
 
-        XCTAssertEqual(entry.state, "succeeded")
+        XCTAssertEqual(try XCTUnwrap(persistedOutboxSnapshots()[entry.id]).state, "succeeded")
         let writes = await fake.successfulWritesSnapshot()
         let command = try XCTUnwrap(writes.first)
         guard case .nutrition(let nutrition) = command.payload else {
@@ -163,12 +165,13 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         let worker = HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
         let firstAttempt = Date(timeIntervalSince1970: 1_700_000_000)
         await worker.processPending(in: context, now: firstAttempt)
-        XCTAssertEqual(entry.state, "retryable")
-        XCTAssertEqual(entry.lastError, SharedErrorDescriptor.healthKitUnavailableFallback.diagnosticSafeDetail)
-        XCTAssertFalse(entry.lastError?.contains("FakeHealthStoreError") ?? true)
+        let firstPersistedEntry = try XCTUnwrap(persistedOutboxSnapshots()[entry.id])
+        XCTAssertEqual(firstPersistedEntry.state, "retryable")
+        XCTAssertEqual(firstPersistedEntry.lastError, SharedErrorDescriptor.healthKitUnavailableFallback.diagnosticSafeDetail)
+        XCTAssertFalse(firstPersistedEntry.lastError?.contains("FakeHealthStoreError") ?? true)
 
         await worker.processPending(in: context, now: firstAttempt.addingTimeInterval(86_400))
-        XCTAssertEqual(entry.state, "succeeded")
+        XCTAssertEqual(try XCTUnwrap(persistedOutboxSnapshots()[entry.id]).state, "succeeded")
         let attempts = await fake.attemptedWritesSnapshot()
         XCTAssertEqual(attempts.count, 2)
         XCTAssertEqual(attempts[0].syncIdentifier, attempts[1].syncIdentifier)
@@ -192,7 +195,7 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         meal.totalCaloriesKcal = 580
         meal.energyLikelyKcal = 580
         meal.proteinLikelyG = 31
-        try await repository.update(meal)
+        try await repository.updateMeal(id: meal.id)
 
         let entries = try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>())
             .sorted { $0.syncVersion < $1.syncVersion }
@@ -203,8 +206,9 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
             .processPending(in: context)
 
-        XCTAssertEqual(entries[0].state, "succeeded")
-        XCTAssertEqual(entries[1].state, "succeeded")
+        let persisted = try persistedOutboxSnapshots()
+        XCTAssertEqual(persisted[entries[0].id]?.state, "succeeded")
+        XCTAssertEqual(persisted[entries[1].id]?.state, "succeeded")
         let successfulWrites = await fake.successfulWritesSnapshot()
         XCTAssertEqual(successfulWrites.count, 1)
         let write = try XCTUnwrap(successfulWrites.first)
@@ -264,9 +268,10 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
             .processPending(in: context, now: now)
 
-        XCTAssertEqual(older.state, "succeeded")
-        XCTAssertEqual(older.attemptCount, 1)
-        XCTAssertEqual(newer.state, "retryable")
+        let persisted = try persistedOutboxSnapshots()
+        XCTAssertEqual(persisted[older.id]?.state, "succeeded")
+        XCTAssertEqual(persisted[older.id]?.attemptCount, 1)
+        XCTAssertEqual(persisted[newer.id]?.state, "retryable")
         let successfulWrites = await fake.successfulWritesSnapshot()
         XCTAssertTrue(successfulWrites.isEmpty)
     }
@@ -283,7 +288,7 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
             .processPending(in: context)
 
-        XCTAssertEqual(entry.state, "pending")
+        XCTAssertEqual(try XCTUnwrap(persistedOutboxSnapshots()[entry.id]).state, "pending")
         let attemptedWrites = await fake.attemptedWritesSnapshot()
         XCTAssertTrue(attemptedWrites.isEmpty)
     }
@@ -306,8 +311,9 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
             .processPending(in: context)
 
-        XCTAssertEqual(entry.state, "succeeded")
-        XCTAssertEqual(entry.attemptCount, 2)
+        let persistedEntry = try XCTUnwrap(persistedOutboxSnapshots()[entry.id])
+        XCTAssertEqual(persistedEntry.state, "succeeded")
+        XCTAssertEqual(persistedEntry.attemptCount, 2)
         let attemptedWrites = await fake.attemptedWritesSnapshot()
         XCTAssertEqual(attemptedWrites.count, 1)
     }
@@ -342,11 +348,12 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
             .processPending(in: context, now: now)
 
-        XCTAssertEqual(dueEntry.state, "succeeded")
-        XCTAssertEqual(dueEntry.attemptCount, 1)
-        XCTAssertEqual(futureEntry.state, "retryable")
-        XCTAssertEqual(futureEntry.attemptCount, 3)
-        XCTAssertEqual(terminalEntry.state, "terminal")
+        let persisted = try persistedOutboxSnapshots()
+        XCTAssertEqual(persisted[dueEntry.id]?.state, "succeeded")
+        XCTAssertEqual(persisted[dueEntry.id]?.attemptCount, 1)
+        XCTAssertEqual(persisted[futureEntry.id]?.state, "retryable")
+        XCTAssertEqual(persisted[futureEntry.id]?.attemptCount, 3)
+        XCTAssertEqual(persisted[terminalEntry.id]?.state, "terminal")
         let successfulWrites = await fake.successfulWritesSnapshot()
         XCTAssertEqual(successfulWrites.count, 1)
         XCTAssertEqual(successfulWrites.first?.recordID, dueMeal.id)
@@ -372,7 +379,10 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
             .processPending(in: context, now: now)
 
-        XCTAssertTrue(entries.allSatisfy { $0.state == "succeeded" && $0.attemptCount == 1 })
+        let persisted = try persistedOutboxSnapshots()
+        XCTAssertTrue(entries.allSatisfy {
+            persisted[$0.id]?.state == "succeeded" && persisted[$0.id]?.attemptCount == 1
+        })
         let deletedReceipts = await fake.deletedReceiptsSnapshot()
         XCTAssertEqual(deletedReceipts.count, entryCount)
     }
@@ -393,7 +403,7 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         let worker = HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
         await worker.processPending(in: context)
 
-        XCTAssertEqual(entry.state, "succeeded")
+        XCTAssertEqual(try XCTUnwrap(persistedOutboxSnapshots()[entry.id]).state, "succeeded")
         let deletedReceipts = await fake.deletedReceiptsSnapshot()
         let receipt = try XCTUnwrap(deletedReceipts.first)
         XCTAssertEqual(receipt.syncIdentifier, syncIdentifier)
@@ -411,10 +421,10 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         )
         context.insert(weight)
         try context.save()
-        try await repository.update(weight)
+        try await repository.updateWeight(id: weight.id)
         weight.kilograms = 67.8
-        try await repository.update(weight)
-        try await repository.delete(weight)
+        try await repository.updateWeight(id: weight.id)
+        try await repository.deleteWeight(id: weight.id)
 
         let entries = try context.fetch(FetchDescriptor<HealthSyncOutboxEntry>())
             .sorted { $0.syncVersion < $1.syncVersion }
@@ -425,7 +435,8 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         await HealthSyncOutboxWorker(healthStore: fake, modelContainer: container)
             .processPending(in: context)
 
-        XCTAssertTrue(entries.allSatisfy { $0.state == "succeeded" })
+        let persisted = try persistedOutboxSnapshots()
+        XCTAssertTrue(entries.allSatisfy { persisted[$0.id]?.state == "succeeded" })
         let writes = await fake.successfulWritesSnapshot()
         let deletes = await fake.deletedReceiptsSnapshot()
         XCTAssertTrue(writes.isEmpty)
@@ -433,10 +444,162 @@ final class HealthSyncOutboxWorkerTests: XCTestCase {
         XCTAssertEqual(deletes.first?.syncVersion, 3)
         XCTAssertEqual(deletes.first?.metrics, [.bodyMass])
     }
+
+    func testConcurrentContextsAllocateDistinctSyncVersionsForSameRecord() async throws {
+        let meal = MealRecord(
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            totalCaloriesKcal: 430,
+            energyLikelyKcal: 430
+        )
+        context.insert(meal)
+        try context.save()
+
+        let firstRepository = HealthRepository(modelContext: ModelContext(container))
+        let secondRepository = HealthRepository(modelContext: ModelContext(container))
+        let firstUpdate = Task { try await firstRepository.updateMeal(id: meal.id) }
+        let secondUpdate = Task { try await secondRepository.updateMeal(id: meal.id) }
+        try await firstUpdate.value
+        try await secondUpdate.value
+
+        let verificationContext = ModelContext(container)
+        let mealID = meal.id
+        let entries = try verificationContext.fetch(
+            FetchDescriptor<HealthSyncOutboxEntry>(predicate: #Predicate { $0.recordID == mealID })
+        )
+        let versions = entries.map(\.syncVersion).sorted()
+        XCTAssertEqual(versions, [1, 2])
+        XCTAssertEqual(Set(versions).count, versions.count)
+    }
+
+    func testReceiptLookupFailureLeavesRecoverableReconciliationState() async throws {
+        HealthKitConnectionPreference.hasRequestedAuthorization = true
+        let meal = MealRecord(
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            totalCaloriesKcal: 430,
+            energyLikelyKcal: 430
+        )
+        let receiptID = UUID()
+        let outbox = HealthSyncOutboxEntry(
+            operation: "upsertMeal",
+            recordID: meal.id,
+            receiptID: receiptID
+        )
+        let actionReceipt = CommittedActionReceiptRecord(
+            id: receiptID,
+            actionID: UUID(),
+            idempotencyKey: "receipt-reconciliation-test",
+            actionTypeRaw: ActionType.meal.rawValue,
+            localRecordID: meal.id,
+            outboxIDsData: try JSONEncoder().encode([outbox.id]),
+            healthSyncStateRaw: "sending"
+        )
+        context.insert(meal)
+        context.insert(outbox)
+        context.insert(actionReceipt)
+        try context.save()
+
+        let healthStore = FakeHealthStoreClient()
+        let failingWorker = HealthSyncOutboxWorker(
+            healthStore: healthStore,
+            modelContainer: container,
+            willFetchActionReceipt: { throw OutboxReceiptLookupError.injected }
+        )
+        await failingWorker.processPending(in: context)
+        let afterFirstRun = try XCTUnwrap(persistedOutboxSnapshots()[outbox.id])
+        XCTAssertEqual(afterFirstRun.state, "receiptReconciliation-succeeded")
+        XCTAssertNotNil(afterFirstRun.lastError)
+        XCTAssertEqual(try persistedActionReceiptState(id: receiptID), "sending")
+
+        await HealthSyncOutboxWorker(healthStore: healthStore, modelContainer: container)
+            .processPending(in: context)
+        XCTAssertEqual(try XCTUnwrap(persistedOutboxSnapshots()[outbox.id]).state, "succeeded")
+        XCTAssertEqual(try persistedActionReceiptState(id: receiptID), "succeeded")
+        let successfulWrites = await healthStore.successfulWritesSnapshot()
+        XCTAssertEqual(successfulWrites.count, 1)
+    }
+
+    func testExternalSuccessWithLocalCommitFailureRecoversSucceededStateWithoutDuplicate() async throws {
+        HealthKitConnectionPreference.hasRequestedAuthorization = true
+        let meal = MealRecord(
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            totalCaloriesKcal: 430,
+            energyLikelyKcal: 430
+        )
+        let outbox = HealthSyncOutboxEntry(operation: "upsertMeal", recordID: meal.id)
+        context.insert(meal)
+        context.insert(outbox)
+        try context.save()
+
+        let healthStore = FakeHealthStoreClient()
+        let failingWorker = HealthSyncOutboxWorker(
+            healthStore: healthStore,
+            modelContainer: container,
+            willCommitExternalSuccess: { throw OutboxLocalCommitError.injected }
+        )
+        await failingWorker.processPending(in: context)
+        XCTAssertEqual(try XCTUnwrap(persistedOutboxSnapshots()[outbox.id]).state, "succeeded")
+        let firstWrites = await healthStore.successfulWritesSnapshot()
+        XCTAssertEqual(firstWrites.count, 1)
+
+        let persistedContext = ModelContext(container)
+        let outboxID = outbox.id
+        let persistedEntry = try XCTUnwrap(
+            persistedContext.fetch(
+                FetchDescriptor<HealthSyncOutboxEntry>(predicate: #Predicate { $0.id == outboxID })
+            ).first
+        )
+        XCTAssertEqual(persistedEntry.state, "succeeded")
+        XCTAssertEqual(persistedEntry.syncVersion, 1)
+        XCTAssertNil(persistedEntry.lastError)
+
+        await HealthSyncOutboxWorker(healthStore: healthStore, modelContainer: container)
+            .processPending()
+        let replayedWrites = await healthStore.successfulWritesSnapshot()
+        XCTAssertEqual(replayedWrites.count, 1)
+    }
+
+    private struct PersistedOutboxSnapshot {
+        let state: String
+        let attemptCount: Int
+        let lastError: String?
+        let syncIdentifier: String
+        let payloadData: Data
+    }
+
+    private func persistedOutboxSnapshots() throws -> [UUID: PersistedOutboxSnapshot] {
+        let verificationContext = ModelContext(container)
+        let entries = try verificationContext.fetch(FetchDescriptor<HealthSyncOutboxEntry>())
+        return Dictionary(uniqueKeysWithValues: entries.map { entry in
+            (entry.id, PersistedOutboxSnapshot(
+                state: entry.state,
+                attemptCount: entry.attemptCount,
+                lastError: entry.lastError,
+                syncIdentifier: entry.syncIdentifier,
+                payloadData: entry.payloadData
+            ))
+        })
+    }
+
+    private func persistedActionReceiptState(id: UUID) throws -> String? {
+        let verificationContext = ModelContext(container)
+        let receiptID = id
+        let receipt = try verificationContext.fetch(
+            FetchDescriptor<CommittedActionReceiptRecord>(predicate: #Predicate { $0.id == receiptID })
+        ).first
+        return receipt?.healthSyncStateRaw
+    }
 }
 
 extension FakeHealthStoreClient {
     func attemptedWritesSnapshot() -> [HealthWriteCommand] { attemptedWrites }
     func successfulWritesSnapshot() -> [HealthWriteCommand] { successfulWrites }
     func deletedReceiptsSnapshot() -> [HealthWriteReceipt] { deletedReceipts }
+}
+
+private enum OutboxReceiptLookupError: Error {
+    case injected
+}
+
+private enum OutboxLocalCommitError: Error {
+    case injected
 }

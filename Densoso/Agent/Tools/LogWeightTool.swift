@@ -33,7 +33,7 @@ struct LogWeightTool: ConfirmationRequiredTool {
             }
             measuredAt = parsed
         } else {
-            measuredAt = Date()
+            measuredAt = context.currentToolTimeAnchor
         }
         return .weight(
             WeightDraft(measuredAt: measuredAt, kilograms: kilograms)

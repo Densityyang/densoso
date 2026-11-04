@@ -333,6 +333,9 @@ struct OnboardingView: View {
         defer { isSaving = false }
 
         do {
+            let operationBarrier = PersistenceOperationBarrier.shared
+            let operationLease = try await operationBarrier.acquireMutationOperation()
+            defer { operationBarrier.release(operationLease) }
             if intelligenceMode == .cloudDeepSeek {
                 try KeychainStore.shared.saveAPIKey(apiKey)
                 try await dependencies.providerGovernanceRepository.setConsent(

@@ -5,6 +5,31 @@ import XCTest
 
 @MainActor
 final class WatchMessageInboxStoreTests: XCTestCase {
+    func testMissingReceiptCannotBeMarkedProcessed() throws {
+        let container = try makeContainer()
+        let store = WatchMessageInboxStore(modelContainer: container)
+        let envelope = WatchMessageEnvelope(payload: .transcript("保留在收件箱的消息"))
+        XCTAssertEqual(try store.ingest(envelope), .accepted)
+
+        let context = ModelContext(container)
+        let receipt = try XCTUnwrap(context.fetch(FetchDescriptor<WatchMessageReceiptRecord>()).first)
+        context.delete(receipt)
+        try context.save()
+
+        XCTAssertThrowsError(try store.setState(WatchReceiptState.processed, for: envelope.messageID)) {
+            XCTAssertEqual(
+                $0 as? WatchMessageInboxStoreError,
+                .receiptNotFound(envelope.messageID)
+            )
+        }
+        XCTAssertEqual(try store.inboxMessageCount(), 1)
+        XCTAssertEqual(try store.receiptCount(), 0)
+        XCTAssertEqual(try store.ingest(envelope), .accepted)
+        XCTAssertEqual(try store.inboxMessageCount(), 1)
+        XCTAssertEqual(try store.receiptCount(), 1)
+        XCTAssertEqual(try store.pendingTranscripts().map(\.messageID), [envelope.messageID])
+    }
+
     func testRepeatedOfflineTranscriptReplayCreatesOneDurableInboxMessage() throws {
         let store = try makeStore()
         let envelope = WatchMessageEnvelope(

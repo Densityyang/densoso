@@ -185,7 +185,7 @@ struct ProviderRequestExecutor: Sendable {
                 switch opened.response.statusCode {
                 case 200...299:
                     return ProviderHTTPStreamResult(
-                        chunks: opened.chunks,
+                        chunks: deadlineBoundedChunks(opened.chunks, deadline: deadline),
                         response: opened.response,
                         attempt: attempt
                     )
@@ -227,6 +227,11 @@ struct ProviderRequestExecutor: Sendable {
                 try await waitBeforeRetry(attempt: attempt, deadline: deadline)
             }
         }
+    }
+
+    func checkDeadline(_ deadline: Date) throws {
+        try Task.checkCancellation()
+        guard clock.now() < deadline else { throw ProviderError.timeout }
     }
 
     private func stream(
@@ -292,6 +297,70 @@ struct ProviderRequestExecutor: Sendable {
                 return (data, response)
             case .deadlineReached:
                 throw ProviderError.timeout
+            }
+        }
+    }
+
+    /// Keeps the original request deadline active while the caller consumes the
+    /// response body. The reader task owns the upstream iterator so cancelling
+    /// this stream also terminates URLSession's byte-reading task.
+    private func deadlineBoundedChunks(
+        _ source: AsyncThrowingStream<Data, Error>,
+        deadline: Date
+    ) -> AsyncThrowingStream<Data, Error> {
+        let clock = self.clock
+        return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(1)) { continuation in
+            let remaining = max(deadline.timeIntervalSince(clock.now()), 0)
+            let deadlineTask = Task {
+                do {
+                    try await Task.sleep(for: .seconds(remaining))
+                    continuation.finish(throwing: ProviderError.timeout)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    continuation.finish(throwing: ProviderError.timeout)
+                }
+            }
+            let readerTask = Task {
+                do {
+                    for try await chunk in source {
+                        try await yieldChunk(chunk, to: continuation, deadline: deadline, clock: clock)
+                    }
+                    guard clock.now() < deadline else {
+                        throw ProviderError.timeout
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: ProviderError.cancelled)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { @Sendable _ in
+                deadlineTask.cancel()
+                readerTask.cancel()
+            }
+        }
+    }
+
+    private func yieldChunk(
+        _ chunk: Data,
+        to continuation: AsyncThrowingStream<Data, Error>.Continuation,
+        deadline: Date,
+        clock: any ProviderRetryClock
+    ) async throws {
+        var pendingChunk = chunk
+        while true {
+            try Task.checkCancellation()
+            guard clock.now() < deadline else { throw ProviderError.timeout }
+            switch continuation.yield(pendingChunk) {
+            case .enqueued(_):
+                return
+            case .dropped(let droppedChunk):
+                pendingChunk = droppedChunk
+                try await Task.sleep(for: .milliseconds(1))
+            case .terminated:
+                throw CancellationError()
             }
         }
     }

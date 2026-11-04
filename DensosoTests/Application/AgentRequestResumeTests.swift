@@ -6,6 +6,64 @@ import XCTest
 
 @MainActor
 final class AgentRequestResumeTests: XCTestCase {
+    func testResumeKeepsReasoningPolicyFromOriginalHighComplexityRequest() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let conversationID = UUID()
+        let requestID = UUID()
+        let originalText = "请制定一个完整的四周训练计划"
+        let firstRepository = SwiftDataAgentRepository(modelContainer: container)
+        let interruptedProvider = ScriptedTextProvider(
+            scripts: [[.completed(.completed)]],
+            capabilities: [.text, .toolCalling, .reasoning]
+        )
+        let firstSession = makeSession(
+            container: container,
+            repository: firstRepository,
+            provider: interruptedProvider,
+            conversationID: conversationID,
+            budget: AgentBudget(deadline: .distantFuture)
+        )
+
+        do {
+            _ = try await firstSession.send(userText: originalText, requestID: requestID)
+            XCTFail("Expected the empty terminal response to interrupt the request")
+        } catch {
+            XCTAssertEqual(error as? AgentError, .emptyResponse)
+        }
+        XCTAssertEqual(interruptedProvider.recordedRequests().first?.thinking, .max)
+
+        let resumedProvider = ScriptedTextProvider(
+            scripts: [[.textDelta("计划请求已恢复。"), .completed(.completed)]],
+            capabilities: [.text, .toolCalling, .reasoning]
+        )
+        let resumedRepository = SwiftDataAgentRepository(modelContainer: container)
+        let resumedSession = makeSession(
+            container: container,
+            repository: resumedRepository,
+            provider: resumedProvider,
+            conversationID: conversationID,
+            budget: AgentBudget(deadline: .distantFuture)
+        )
+        try await resumedSession.restore()
+
+        _ = try await resumedSession.send(userText: "继续", requestID: requestID)
+
+        let resumedRequest = try XCTUnwrap(resumedProvider.recordedRequests().first)
+        XCTAssertEqual(resumedRequest.thinking, .max)
+        let resumedText = resumedRequest.messages
+            .flatMap { $0.content.compactMap { content -> String? in
+                if case .text(let text) = content { return text }
+                return nil
+            } }
+            .joined(separator: "\n")
+        XCTAssertTrue(resumedText.contains(originalText))
+        XCTAssertFalse(resumedText.contains("继续"))
+    }
+
     func testConsentRevokedDuringFinalProviderGateFallsBackWithoutStartingStream() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV9.self)
         let container = try ModelContainer(
@@ -787,7 +845,7 @@ final class AgentRequestResumeTests: XCTestCase {
                 .usage(usageOne),
                 .completed(.toolUse),
             ],
-            [],
+            [.completed(.completed)],
         ])
         let firstRepository = SwiftDataAgentRepository(modelContainer: container)
         let firstSession = makeSession(

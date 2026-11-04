@@ -115,7 +115,7 @@ struct LogMealTool: ConfirmationRequiredTool {
             }
             date = parsed
         } else {
-            date = Date()
+            date = context.currentToolTimeAnchor
         }
 
         guard !context.hasIssuedMealClarification() else {

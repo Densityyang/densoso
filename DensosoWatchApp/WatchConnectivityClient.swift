@@ -3,6 +3,11 @@ import Foundation
 import Observation
 @preconcurrency import WatchConnectivity
 
+enum WatchEnqueueResult: Equatable {
+    case persisted(UUID)
+    case rejected
+}
+
 @MainActor
 @Observable
 final class WatchConnectivityClient: NSObject, WCSessionDelegate {
@@ -62,53 +67,58 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
         }
     }
 
-    func sendTranscript(_ transcript: String) {
+    @discardableResult
+    func sendTranscript(_ transcript: String) -> WatchEnqueueResult {
         enqueue(.transcript(transcript))
     }
 
     func requestTodaySnapshot() {
-        enqueue(.requestTodaySnapshot)
+        _ = enqueue(.requestTodaySnapshot)
     }
 
-    private func enqueue(_ payload: WatchPayload) {
+    @discardableResult
+    private func enqueue(_ payload: WatchPayload) -> WatchEnqueueResult {
         guard outboxPersistenceAvailable else {
             statusMessage = "本机待发队列不可用，Watch 命令未发送。"
-            return
+            return .rejected
         }
         guard !WatchMessageAuthorizationPolicy.requiresPhoneConfirmation(for: payload) else {
             statusMessage = "待确认事项请在 iPhone 上查看并处理。"
-            return
+            return .rejected
         }
         if case .requestTodaySnapshot = payload,
            !WatchSnapshotRequestCoalescingPolicy.shouldEnqueue(pendingMessages: outbox.pending) {
             statusMessage = "刷新请求已在队列中，等待 iPhone 确认。"
-            return
+            return .rejected
         }
         do {
-            let envelope: WatchMessageEnvelope
-            switch payload {
-            case .transcript:
-                let predecessorSequence = outbox.latestPendingCausalSequence
-                envelope = try outbox.enqueueCausalCommand(
-                    payload,
-                    dependsOn: predecessorSequence
-                )
-            case .requestTodaySnapshot, .acknowledgement, .todaySnapshot:
-                envelope = WatchMessageEnvelope(payload: payload)
-                _ = try outbox.enqueue(envelope)
-            case .confirm, .reject:
-                statusMessage = "待确认事项请在 iPhone 上查看并处理。"
-                return
+            guard let outboxStore else {
+                outboxPersistenceAvailable = false
+                statusMessage = "本机待发队列不可用，Watch 命令未发送。"
+                return .rejected
             }
-            guard persistOutbox() else { return }
-            dispatch(envelope)
+            let commit = try WatchMessageOutboxPersistenceTransaction.enqueue(
+                payload,
+                in: outbox
+            ) { candidate in
+                try outboxStore.save(candidate)
+            }
+            outbox = commit.outbox
+            dispatch(commit.envelope)
             statusMessage = "消息已排队；确认仍由 iPhone 本地事务处理。"
+            return .persisted(commit.envelope.messageID)
         } catch {
+            if !(error is WatchMessageError) {
+                outboxPersistenceAvailable = false
+                statusMessage = "本机待发队列无法保存，命令仍留在编辑框。"
+                return .rejected
+            }
             if error as? WatchMessageError == .outboxCapacityExceeded {
                 statusMessage = "离线待发队列已满；连接 iPhone 后再发送。"
             } else {
                 statusMessage = error.localizedDescription
             }
+            return .rejected
         }
     }
 
@@ -159,11 +169,12 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
             let envelope = try WatchMessageCodec.decode(data)
             switch envelope.payload {
             case .acknowledgement(let acknowledgement):
-                outbox.acknowledge(acknowledgement)
+                var candidate = outbox
+                candidate.acknowledge(acknowledgement)
+                guard persistOutbox(candidate) else { return }
+                outbox = candidate
                 dispatchedIDs.remove(acknowledgement.messageID)
-                if persistOutbox() {
-                    statusMessage = acknowledgement.detail ?? acknowledgementLabel(acknowledgement.state)
-                }
+                statusMessage = acknowledgement.detail ?? acknowledgementLabel(acknowledgement.state)
             case .todaySnapshot(let snapshot):
                 apply(snapshot)
             case .transcript, .confirm, .reject, .requestTodaySnapshot:
@@ -175,14 +186,26 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
     }
 
     private func apply(_ snapshot: WatchTodaySnapshot) {
-        todaySnapshot = snapshot
-        var acknowledgedIDs = Set(snapshot.acknowledgedMessageIDs)
-        outbox.acknowledge(messageIDs: snapshot.acknowledgedMessageIDs)
-        if let watermark = snapshot.terminalCausalSequenceWatermark {
-            acknowledgedIDs.formUnion(outbox.acknowledge(throughCausalSequence: watermark))
+        guard WatchSnapshotRevisionPolicy.shouldApply(snapshot, over: todaySnapshot) else {
+            statusMessage = "忽略了较旧的 iPhone 摘要。"
+            return
         }
-        dispatchedIDs.subtract(acknowledgedIDs)
-        guard persistOutbox() else { return }
+        var candidate = outbox
+        var acknowledgedIDs = Set(snapshot.acknowledgedMessageIDs)
+        candidate.acknowledge(messageIDs: snapshot.acknowledgedMessageIDs)
+        if let watermark = snapshot.terminalCausalSequenceWatermark {
+            acknowledgedIDs.formUnion(candidate.acknowledge(throughCausalSequence: watermark))
+        }
+        let outboxWasPersisted = persistOutbox(candidate)
+        if outboxWasPersisted {
+            outbox = candidate
+            dispatchedIDs.subtract(acknowledgedIDs)
+        }
+        todaySnapshot = snapshot
+        guard outboxWasPersisted else {
+            statusMessage = "已更新 iPhone 摘要；本机待发队列无法保存，仍保留原队列。"
+            return
+        }
         if acknowledgedIDs.isEmpty {
             statusMessage = "已更新 Today 摘要。"
         } else {
@@ -200,7 +223,7 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
     }
 
     @discardableResult
-    private func persistOutbox() -> Bool {
+    private func persistOutbox(_ candidate: WatchMessageOutbox) -> Bool {
         guard outboxPersistenceAvailable else { return false }
         do {
             guard let outboxStore else {
@@ -208,7 +231,7 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
                 statusMessage = "本机待发队列不可用，后续 Watch 命令已停止发送。"
                 return false
             }
-            try outboxStore.save(outbox)
+            try outboxStore.save(candidate)
             return true
         } catch {
             outboxPersistenceAvailable = false

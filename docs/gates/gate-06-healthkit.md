@@ -45,9 +45,12 @@ must not be treated as the current main-line PR.
   only HealthKit-derived cache/index data in that window is removed and every
   affected daily read state is set to unknown; window-external records and manual
   weights are retained. Empty or failed days remain unknown, while days with
-  successfully read records become available. The foreground and daily
-  background refresh paths force this rebaseline; ordinary observer wakeups keep
-  using an existing anchored cursor.
+  successfully read records become available. Foreground activations force this
+  rebaseline. Daily background refresh uses anchored increments for samples and
+  workouts plus a three-day rolling overlap for aggregate streams. It avoids
+  clearing the 42-day snapshot and derived briefs on every run; a missing/reset
+  aggregate validation cursor or an unknown authorization boundary falls back
+  to a bounded full-window read.
 - HealthKit evaluates limited-history authorization using a sample's end date.
   Returned samples and workouts that start before the boundary but end at or
   after it remain eligible for import. A calendar day whose complete projection
@@ -60,9 +63,10 @@ must not be treated as the current main-line PR.
   `earliestPermittedSampleDate`. Device behavior of Apple's Beta API remains
   unmeasured until the owner supplies signed-device evidence. The app does not
   claim immediate detection of arbitrary permission changes made outside the
-  app. Rebaseline is triggered when authorization is confirmed
-  in Settings, when the app returns to foreground, and during the daily
-  background health refresh. Cloud-facing health reads stay closed until the
+  app. Full rebaseline is triggered when authorization is confirmed in Settings
+  or when the app returns to foreground. Daily background work uses the smaller
+  incremental windows described above and rebaselines only affected streams
+  when their cursor or authorization state requires it. Cloud-facing health reads stay closed until the
   synchronous cache purge succeeds; a failed purge leaves the export gate closed.
 - A never-connected installation keeps manually entered health context available
   only when persistence has no HealthKit markers. Restored HealthKit-marked

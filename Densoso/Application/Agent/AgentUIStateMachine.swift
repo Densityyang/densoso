@@ -106,7 +106,8 @@ enum AgentUIStateMachine {
     static func transition(
         from current: AgentUIState,
         event: AgentEvent,
-        hasDraftInCurrentTurn: Bool = false
+        hasDraftInCurrentTurn: Bool = false,
+        hasPendingActions: Bool = false
     ) -> AgentUIState {
         switch event {
         case .accepted(_), .providerRoundStarted(_, _), .assistantDelta(_):
@@ -122,7 +123,7 @@ enum AgentUIStateMachine {
         case .completed(_):
             current == .awaitingConfirmation || hasDraftInCurrentTurn ? .awaitingConfirmation : .completed
         case .cancelled(_):
-            current == .awaitingConfirmation || current == .draftReady || hasDraftInCurrentTurn
+            hasPendingActions || hasDraftInCurrentTurn
                 ? .awaitingConfirmation
                 : .idle
         case .failed(_):

@@ -20,6 +20,9 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     private var blockedSampleResponseContinuations: [HealthMetricID: CheckedContinuation<Void, Never>] = [:]
     private var blockedSampleResponseWaiters: [HealthMetricID: [CheckedContinuation<Void, Never>]] = [:]
     private var writeFailuresRemaining = 0
+    private var blockNextWrite = false
+    private var blockedWriteContinuation: CheckedContinuation<Void, Never>?
+    private var blockedWriteWaiters: [CheckedContinuation<Void, Never>] = []
 
     private(set) var authorizationScope: HealthAuthorizationScope?
     private(set) var backgroundStreams: Set<HealthMetricID> = []
@@ -55,6 +58,15 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
         workoutResponses = pages
     }
     func failNextWrites(_ count: Int) { writeFailuresRemaining = max(0, count) }
+    func blockNextHealthWrite() { blockNextWrite = true }
+    func waitUntilHealthWriteIsBlocked() async {
+        if blockedWriteContinuation != nil { return }
+        await withCheckedContinuation { blockedWriteWaiters.append($0) }
+    }
+    func resumeBlockedHealthWrite() {
+        blockedWriteContinuation?.resume()
+        blockedWriteContinuation = nil
+    }
 
     func isAvailable() async -> Bool { available }
 
@@ -120,6 +132,15 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     func save(_ command: HealthWriteCommand) async throws -> HealthWriteReceipt {
         guard available else { throw HealthStoreClientError.unavailable }
         attemptedWrites.append(command)
+        if blockNextWrite {
+            blockNextWrite = false
+            await withCheckedContinuation { continuation in
+                blockedWriteContinuation = continuation
+                let waiters = blockedWriteWaiters
+                blockedWriteWaiters.removeAll()
+                waiters.forEach { $0.resume() }
+            }
+        }
         if writeFailuresRemaining > 0 {
             writeFailuresRemaining -= 1
             throw FakeHealthStoreError.transient

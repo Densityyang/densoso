@@ -44,20 +44,11 @@ struct AppRoot: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var hasCompletedInitialDailyBriefRefresh = false
     @State private var isRefreshingStaleDailyBrief = false
-    @State private var lastSuccessfulHealthRefreshDay: Date?
-    @State private var isRebaseliningHealthForForeground = false
-    @State private var isRunningForegroundHealthRebaselineTask = false
-    @State private var isForegroundHealthRebaselineQueued = false
-    @State private var hasRebaselinedHealthForForeground = false
-    @State private var preparedHealthSnapshotRebuild: HealthKitSnapshotRebuildPreparation?
 
     @ViewBuilder
     var body: some View {
         if dependencies.persistenceWriteGate.state.allowsWrites {
             ContentView()
-                .onAppear {
-                    Task { await prepareHealthRebaselineForCurrentForegroundActivation() }
-                }
                 .task {
                     await dependencies.setupFoodDB()
                     await dependencies.restorePersistenceState()
@@ -66,7 +57,6 @@ struct AppRoot: View {
                         let testRefreshDate = Date()
                         do {
                             _ = try await dependencies.healthIntelligenceService.refresh(asOf: testRefreshDate)
-                            lastSuccessfulHealthRefreshDay = Calendar.autoupdatingCurrent.startOfDay(for: testRefreshDate)
                         } catch {
                             // Keep the UI-test seed; refresh policy is not exercised in this launch mode.
                         }
@@ -75,11 +65,11 @@ struct AppRoot: View {
                     }
                     dependencies.watchConnectivityCoordinator.activate()
                     if dependencies.healthKitService.hasRequestedAuthorization {
-                        await rebaselineHealthForCurrentForegroundActivation()
+                        await dependencies.foregroundHealthRebaselineCoordinator.activate()
                         let healthRepository = HealthRepository(modelContext: modelContext)
                         try? await dependencies.healthKitSyncCoordinator.startBackgroundObservers(using: healthRepository)
                     } else {
-                        await prepareHealthRebaselineForCurrentForegroundActivation()
+                        await purgeUnauthorizedHealthSnapshotIfNeeded()
                     }
                     dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
                     await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
@@ -87,7 +77,6 @@ struct AppRoot: View {
                     let initialRefreshDate = Date()
                     do {
                         _ = try await dependencies.healthIntelligenceService.refresh(asOf: initialRefreshDate)
-                        lastSuccessfulHealthRefreshDay = Calendar.autoupdatingCurrent.startOfDay(for: initialRefreshDate)
                     } catch {
                         // A stale cache can be retried when initial setup completes or on later activation.
                     }
@@ -112,13 +101,16 @@ struct AppRoot: View {
                     if phase == .active {
                         dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
                         Task {
-                            await prepareHealthRebaselineForCurrentForegroundActivation()
-                            await rebaselineHealthForCurrentForegroundActivation()
+                            if dependencies.healthKitService.hasRequestedAuthorization {
+                                await dependencies.foregroundHealthRebaselineCoordinator.activate()
+                            } else {
+                                await purgeUnauthorizedHealthSnapshotIfNeeded()
+                            }
                             AppIntentInbox.receivePendingDrafts(receiveWorkoutPlan: false)
                             await refreshStaleDailyBriefAfterActivation()
                         }
                     } else {
-                        hasRebaselinedHealthForForeground = false
+                        dependencies.foregroundHealthRebaselineCoordinator.deactivate()
                     }
                 }
         } else {
@@ -138,81 +130,39 @@ struct AppRoot: View {
     }
 
     @MainActor
-    private func prepareHealthRebaselineForCurrentForegroundActivation() async {
-        guard !launchConfiguration.isUITesting else { return }
-        guard dependencies.healthKitService.hasRequestedAuthorization else {
-            // A restored snapshot can contain HealthKit markers even when its
-            // connection preference was intentionally not restored. Purge the
-            // bounded cache locally without issuing HealthKit queries.
-            guard !dependencies.healthContextExportGate.isOpen else { return }
-            let repository = HealthRepository(modelContext: modelContext)
-            _ = try? await dependencies.healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(using: repository)
-            return
-        }
-
-        if isRunningForegroundHealthRebaselineTask {
-            _ = dependencies.healthContextExportGate.closeForSnapshotRebuild()
-            dependencies.healthIntelligenceService.invalidateBriefsForHealthSnapshotRebuild()
-            isForegroundHealthRebaselineQueued = true
-            preparedHealthSnapshotRebuild = nil
-            return
-        }
-        guard !hasRebaselinedHealthForForeground,
-              !isRebaseliningHealthForForeground else { return }
-
-        isRebaseliningHealthForForeground = true
-        let repository = HealthRepository(modelContext: modelContext)
-        preparedHealthSnapshotRebuild = try? await dependencies.healthKitSyncCoordinator
-            .prepareForegroundSnapshotRebuild(using: repository)
-    }
-
-    @MainActor
-    private func rebaselineHealthForCurrentForegroundActivation() async {
+    private func purgeUnauthorizedHealthSnapshotIfNeeded() async {
         guard !launchConfiguration.isUITesting,
-              dependencies.healthKitService.hasRequestedAuthorization,
-              !hasRebaselinedHealthForForeground,
-              !isRunningForegroundHealthRebaselineTask else { return }
-        if preparedHealthSnapshotRebuild == nil {
-            let repository = HealthRepository(modelContext: modelContext)
-            preparedHealthSnapshotRebuild = try? await dependencies.healthKitSyncCoordinator
-                .prepareForegroundSnapshotRebuild(using: repository)
-        }
-        isRunningForegroundHealthRebaselineTask = true
-        isRebaseliningHealthForForeground = true
-        defer {
-            isRebaseliningHealthForForeground = false
-            isRunningForegroundHealthRebaselineTask = false
-        }
-
+              !dependencies.healthKitService.hasRequestedAuthorization,
+              !dependencies.healthContextExportGate.isOpen else { return }
+        // A restored snapshot can contain HealthKit markers even when its
+        // connection preference was intentionally not restored. Purge locally
+        // without issuing HealthKit queries.
         let repository = HealthRepository(modelContext: modelContext)
-        let rebuild = preparedHealthSnapshotRebuild
-        _ = try? await dependencies.healthKitSyncCoordinator.syncAvailableData(
-            using: repository,
-            now: rebuild?.through ?? Date(),
-            forceRebaseline: true,
-            preparedSnapshotRebuild: rebuild
-        )
-        preparedHealthSnapshotRebuild = nil
-        let shouldRunQueuedRebaseline = isForegroundHealthRebaselineQueued
-        isForegroundHealthRebaselineQueued = false
-        hasRebaselinedHealthForForeground = !shouldRunQueuedRebaseline
-        if shouldRunQueuedRebaseline {
-            Task { @MainActor in
-                await self.prepareHealthRebaselineForCurrentForegroundActivation()
-                await self.rebaselineHealthForCurrentForegroundActivation()
-            }
-        }
+        _ = try? await dependencies.healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(using: repository)
     }
 
     private func refreshStaleDailyBriefAfterActivation() async {
-        guard !launchConfiguration.isUITesting else { return }
+        guard !launchConfiguration.isUITesting,
+              hasCompletedInitialDailyBriefRefresh,
+              !isRefreshingStaleDailyBrief else { return }
         let now = Date()
         let healthIntelligenceService = dependencies.healthIntelligenceService
+        let sourceFingerprintChanged: Bool
+        do {
+            sourceFingerprintChanged = try await healthIntelligenceService.hasDailyBriefSourceChanged(asOf: now)
+        } catch {
+            // Force a refresh attempt when fingerprint validation itself failed.
+            sourceFingerprintChanged = true
+        }
         guard !isRefreshingStaleDailyBrief,
               DailyBriefRefreshPolicy.shouldRefreshAfterActivation(
-                initialRefreshCompleted: hasCompletedInitialDailyBriefRefresh,
+                initialRefreshCompleted: true,
                 cachedBriefDayStart: healthIntelligenceService.dailyBrief?.dayStart,
-                lastSuccessfulRefreshDay: lastSuccessfulHealthRefreshDay,
+                validatedAt: healthIntelligenceService.dailyBriefValidatedAt,
+                lastSuccessfulAt: healthIntelligenceService.lastSuccessfulRefreshAt,
+                lastFailedAt: healthIntelligenceService.lastRefreshFailedAt,
+                consecutiveFailures: healthIntelligenceService.consecutiveRefreshFailures,
+                sourceFingerprintChanged: sourceFingerprintChanged,
                 asOf: now,
                 calendar: .autoupdatingCurrent
               ) else { return }
@@ -221,7 +171,6 @@ struct AppRoot: View {
         defer { isRefreshingStaleDailyBrief = false }
         do {
             _ = try await healthIntelligenceService.refresh(asOf: now)
-            lastSuccessfulHealthRefreshDay = Calendar.autoupdatingCurrent.startOfDay(for: now)
             dependencies.watchConnectivityCoordinator.refreshApplicationContext()
         } catch {
             // Keep the last successful brief; a later foreground activation can retry.
@@ -246,9 +195,8 @@ struct AppRoot: View {
             return
         }
 
-        let descriptor = FetchDescriptor<UserProfile>()
         let profile: UserProfile
-        if let existing = try? modelContext.fetch(descriptor).first {
+        if let existing = try? UserProfileSingletonPolicy.primary(in: modelContext) {
             profile = existing
         } else {
             profile = UserProfile(
@@ -300,8 +248,7 @@ struct AppRoot: View {
     }
 
     private func checkOnboarding() {
-        let descriptor = FetchDescriptor<UserProfile>()
-        if let profile = try? modelContext.fetch(descriptor).first {
+        if let profile = try? UserProfileSingletonPolicy.primary(in: modelContext) {
             appState.isOnboarded = true
             appState.userProfile = profile
         } else {

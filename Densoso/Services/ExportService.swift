@@ -11,13 +11,18 @@ final class ExportService {
     var lastError: String?
 
     @ObservationIgnored private let willSaveProjection: (() throws -> Void)?
+    @ObservationIgnored private let persistenceOperationBarrier: PersistenceOperationBarrier
 
-    init(willSaveProjection: (() throws -> Void)? = nil) {
+    init(
+        willSaveProjection: (() throws -> Void)? = nil,
+        persistenceOperationBarrier: PersistenceOperationBarrier = .shared
+    ) {
         self.willSaveProjection = willSaveProjection
+        self.persistenceOperationBarrier = persistenceOperationBarrier
     }
 
-    private static let formatVersion = 7
-    private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5, 6, 7]
+    private static let formatVersion = 8
+    private static let supportedFormatVersions: Set<Int> = [2, 3, 4, 5, 6, 7, 8]
     private static let backupReadBatchSize = 64
 
     struct BackupDocument: Codable {
@@ -44,6 +49,7 @@ final class ExportService {
         let userPreferences: [UserPreferenceExport]?
         let mealPortionPriors: [MealPortionPriorExport]?
         let mealDishPriors: [MealDishPriorExport]?
+        let mealPriorContributions: [MealPriorContributionExport]?
         let agentRequests: [AgentRequestExport]?
         let agentRequestCostBudgets: [AgentRequestCostBudgetExport]?
 
@@ -417,6 +423,19 @@ final class ExportService {
             let updatedAt: Date
         }
 
+        struct MealPriorContributionExport: Codable {
+            let id: UUID
+            let contributionKey: String
+            let sourceActionKey: String?
+            let priorKey: String
+            let kindRaw: String
+            let payloadData: Data
+            let observationWeight: Int
+            let isLegacyAggregate: Bool
+            let createdAt: Date
+            let updatedAt: Date
+        }
+
         struct DailyMetricsProjectionExport: Codable {
             let date: Date
             let projectionVersion: String
@@ -535,6 +554,7 @@ final class ExportService {
         case invalidUserPreference
         case invalidMealPortionPrior
         case invalidMealDishPrior
+        case invalidMealPriorContribution
         case invalidTrainingPlan
 
         var errorDescription: String? {
@@ -545,6 +565,7 @@ final class ExportService {
             case .invalidUserPreference: "The backup contains an invalid user-reported preference."
             case .invalidMealPortionPrior: "The backup contains an invalid personal meal portion prior."
             case .invalidMealDishPrior: "The backup contains an invalid personal dish prior."
+            case .invalidMealPriorContribution: "The backup contains an invalid learned meal prior contribution."
             case .invalidTrainingPlan: "The backup contains an invalid confirmed training plan."
             }
         }
@@ -584,6 +605,7 @@ final class ExportService {
             throw BackupError.checksumMismatch
         }
         try validateTrainingPlanBackupEvents(document.payload.scheduleEvents)
+        let restoredWorkoutRecords = Self.deduplicatedWorkoutRecords(document.payload.workoutRecords)
         let profileSource = document.payload.userProfile
         let restoredBirthDate: Date?
         if let profileSource,
@@ -894,13 +916,100 @@ final class ExportService {
                 updatedAt: prior.updatedAt
             )
         }
+        let validPortionPriorKeys = Set(mealPortionPriors.map(\.priorKey))
+        let validDishPriorKeys = Set(mealDishPriors.map(\.priorKey))
+        let mealActionKeys = Set(document.payload.mealRecords.compactMap { $0.sourceActionKey })
+        var contributionKeys = Set<String>()
+        var contributionIDs = Set<UUID>()
+        let mealPriorContributions = try (document.payload.mealPriorContributions ?? []).map { source in
+            guard let kind = MealPriorContributionKind(rawValue: source.kindRaw),
+                  !source.priorKey.isEmpty,
+                  source.priorKey.count <= 2_000,
+                  source.observationWeight > 0,
+                  source.observationWeight <= 1_000_000,
+                  source.updatedAt >= source.createdAt,
+                  contributionIDs.insert(source.id).inserted,
+                  contributionKeys.insert(source.contributionKey).inserted else {
+                throw BackupError.invalidMealPriorContribution
+            }
+            let owner: String
+            if let sourceActionKey = source.sourceActionKey {
+                owner = sourceActionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !owner.isEmpty,
+                      owner.count <= 512,
+                      owner == sourceActionKey,
+                      mealActionKeys.contains(owner),
+                      !source.isLegacyAggregate else {
+                    throw BackupError.invalidMealPriorContribution
+                }
+            } else {
+                owner = "legacy"
+                guard source.isLegacyAggregate else { throw BackupError.invalidMealPriorContribution }
+            }
+            guard source.contributionKey == "\(kind.rawValue):\(source.priorKey):\(owner)" else {
+                throw BackupError.invalidMealPriorContribution
+            }
+
+            switch kind {
+            case .portion:
+                guard validPortionPriorKeys.contains(source.priorKey),
+                      let payload = try? JSONDecoder().decode(MealPortionContributionPayload.self, from: source.payloadData),
+                      let expectedKey = MealPortionPriorStorageKey.make(
+                        foodID: payload.foodID,
+                        foodName: payload.foodName,
+                        unit: payload.unit
+                      ),
+                      expectedKey == source.priorKey,
+                      payload.foodName.trimmingCharacters(in: .whitespacesAndNewlines) == payload.foodName,
+                      (0.1...5_000).contains(payload.p10Grams),
+                      payload.p10Grams <= payload.p50Grams,
+                      payload.p50Grams <= payload.p90Grams,
+                      payload.p90Grams <= 5_000 else {
+                    throw BackupError.invalidMealPriorContribution
+                }
+            case .dish:
+                guard validDishPriorKeys.contains(source.priorKey),
+                      let payload = try? JSONDecoder().decode(MealDishContributionPayload.self, from: source.payloadData) else {
+                    throw BackupError.invalidMealPriorContribution
+                }
+                let ingredients = payload.ingredients.compactMap { ingredient in
+                    PersonalMealDishIngredientPrior(
+                        foodID: ingredient.foodID,
+                        name: ingredient.name,
+                        lowGrams: ingredient.lowGrams,
+                        likelyGrams: ingredient.likelyGrams,
+                        highGrams: ingredient.highGrams,
+                        preparation: ingredient.preparation,
+                        massBasis: ingredient.massBasis,
+                        sourceID: ingredient.sourceID,
+                        sourceRecordID: ingredient.sourceRecordID,
+                        sourceVersion: ingredient.sourceVersion,
+                        licenseStatus: ingredient.licenseStatus
+                    )
+                }
+                guard ingredients.count == payload.ingredients.count,
+                      MealDishPriorStorageKey.make(
+                        dishName: payload.dishName,
+                        cookingMethod: payload.cookingMethod,
+                        ingredients: ingredients
+                      )?.priorKey == source.priorKey else {
+                    throw BackupError.invalidMealPriorContribution
+                }
+            }
+            return source
+        }
         let legacyWeightEntries: [UserProfile.WeightEntry] = profileSource.flatMap { source in
             guard let data = source.weightHistoryJSON.data(using: .utf8) else { return nil }
             return try? JSONDecoder().decode([UserProfile.WeightEntry].self, from: data)
         } ?? []
 
-        await DailyMetricsProjectionWriteGate.acquire(for: context)
-        defer { DailyMetricsProjectionWriteGate.release(for: context) }
+        let restoreLease = try await persistenceOperationBarrier.acquireRestoreOperation()
+        defer { persistenceOperationBarrier.release(restoreLease) }
+
+        let projectionLease = try await DailyMetricsProjectionWriteGate.acquire(
+            storeID: ObjectIdentifier(context.container)
+        )
+        defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
         do {
             try Task.checkCancellation()
             // Transcripts are deliberately not part of backups. Remove unfinished
@@ -940,6 +1049,10 @@ final class ExportService {
             // replay a receipt for data that is no longer present.
             try context.delete(model: PendingActionRecord.self)
             try context.delete(model: CommittedActionReceiptRecord.self)
+            // Tool journals can contain prepared action payloads that are not
+            // exported. Clear them with the old dataset so an interrupted Agent
+            // invocation cannot replay an action against restored records.
+            try context.delete(model: ToolExecutionJournalRecord.self)
 
             try context.delete(model: UserProfile.self)
             try context.delete(model: ProfileRevisionRecord.self)
@@ -951,6 +1064,7 @@ final class ExportService {
             try context.delete(model: UserPreferenceRecord.self)
             try context.delete(model: PersonalMealPortionPriorRecord.self)
             try context.delete(model: PersonalMealDishPriorRecord.self)
+            try context.delete(model: MealPriorContributionRecord.self)
             try context.delete(model: DailyHealthSnapshotRecord.self)
             try context.delete(model: DailyBriefRecord.self)
             try context.delete(model: WeeklyBriefRecord.self)
@@ -959,6 +1073,9 @@ final class ExportService {
             try context.delete(model: WeeklyReport.self)
             try context.delete(model: HealthSyncOutboxEntry.self)
             try context.delete(model: HealthKitImportCursor.self)
+            // Sample indexes, pending day keys and tombstones belong to the
+            // dataset being replaced and must be rebuilt from fresh HealthKit sync.
+            try context.delete(model: HealthKitSampleIndexRecord.self)
 
             if let source = profileSource {
                 let profile = UserProfile(
@@ -1055,6 +1172,20 @@ final class ExportService {
                     updatedAt: source.updatedAt
                 ))
             }
+            for source in mealPriorContributions {
+                context.insert(MealPriorContributionRecord(
+                    id: source.id,
+                    contributionKey: source.contributionKey,
+                    sourceActionKey: source.sourceActionKey,
+                    priorKey: source.priorKey,
+                    kindRaw: source.kindRaw,
+                    payloadData: source.payloadData,
+                    observationWeight: source.observationWeight,
+                    isLegacyAggregate: source.isLegacyAggregate,
+                    createdAt: source.createdAt,
+                    updatedAt: source.updatedAt
+                ))
+            }
             if sourceRevisions.isEmpty, let source = profileSource {
                 context.insert(
                     ProfileRevisionRecord(
@@ -1080,7 +1211,7 @@ final class ExportService {
             let weights = document.payload.weightRecords ?? []
             let affectedDays = Set(
                 document.payload.mealRecords.map(\.date)
-                    + document.payload.workoutRecords.map(\.date)
+                    + restoredWorkoutRecords.map(\.date)
                     + weights.map(\.measuredAt)
                     + legacyWeightEntries.map(\.date)
                     + snapshotDates
@@ -1149,7 +1280,7 @@ final class ExportService {
                 context.insert(meal)
             }
 
-            for source in document.payload.workoutRecords {
+            for source in restoredWorkoutRecords {
                 let workout = WorkoutRecord(
                     date: source.date,
                     type: source.type,
@@ -1330,7 +1461,7 @@ final class ExportService {
             }
             try invalidateCloudHealthPoliciesForRestore(in: context)
             for date in affectedDays {
-                try DailyMetricsProjector.markPendingForReprojection(on: date, in: context)
+                try DailyMetricsProjector.markPendingForReprojectionWhileGateHeld(on: date, in: context)
             }
             try context.save()
             for date in affectedDays {
@@ -1346,7 +1477,7 @@ final class ExportService {
                 } catch let projectionError {
                     context.rollback()
                     do {
-                        try DailyMetricsProjector.markPendingForReprojection(on: date, in: context)
+                        try DailyMetricsProjector.markPendingForReprojectionWhileGateHeld(on: date, in: context)
                         try context.save()
                     } catch {
                         context.rollback()
@@ -1370,7 +1501,7 @@ final class ExportService {
 
             return ImportSummary(
                 meals: document.payload.mealRecords.count,
-                workouts: document.payload.workoutRecords.count,
+                workouts: restoredWorkoutRecords.count,
                 dailyMetrics: affectedDays.count,
                 weights: weights.count,
                 healthDays: snapshots.count,
@@ -1542,10 +1673,29 @@ final class ExportService {
         }
     }
 
+    private static func deduplicatedWorkoutRecords(
+        _ records: [BackupPayload.WorkoutRecordExport]
+    ) -> [BackupPayload.WorkoutRecordExport] {
+        let preferredFirst = records.sorted { lhs, rhs in
+            if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+            if lhs.id != rhs.id { return lhs.id.uuidString < rhs.id.uuidString }
+            if lhs.date != rhs.date { return lhs.date < rhs.date }
+            return (lhs.healthKitUUID?.uuidString ?? "") < (rhs.healthKitUUID?.uuidString ?? "")
+        }
+        var seenRecordIDs = Set<UUID>()
+        var seenHealthKitUUIDs = Set<UUID>()
+        let unique = preferredFirst.filter { record in
+            guard seenRecordIDs.insert(record.id).inserted else { return false }
+            guard let healthKitUUID = record.healthKitUUID else { return true }
+            return seenHealthKitUUIDs.insert(healthKitUUID).inserted
+        }
+        return unique.sorted {
+            $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date
+        }
+    }
+
     private func makePayload(context: ModelContext) throws -> BackupPayload {
-        var profileDescriptor = FetchDescriptor<UserProfile>()
-        profileDescriptor.fetchLimit = 1
-        let profile = try context.fetch(profileDescriptor).first
+        let profile = try UserProfileSingletonPolicy.primary(in: context)
         let profileRevisions = try fetchAllRecords(
             of: ProfileRevisionRecord.self,
             in: context,
@@ -1663,6 +1813,24 @@ final class ExportService {
                 sourceActionKey: prior.sourceActionKey,
                 createdAt: prior.createdAt,
                 updatedAt: prior.updatedAt
+            )
+        }
+        let mealPriorContributions = try fetchAllRecords(
+            of: MealPriorContributionRecord.self,
+            in: context,
+            sortedBy: [SortDescriptor(\.contributionKey)]
+        ).map { source in
+            BackupPayload.MealPriorContributionExport(
+                id: source.id,
+                contributionKey: source.contributionKey,
+                sourceActionKey: source.sourceActionKey,
+                priorKey: source.priorKey,
+                kindRaw: source.kindRaw,
+                payloadData: source.payloadData,
+                observationWeight: source.observationWeight,
+                isLegacyAggregate: source.isLegacyAggregate,
+                createdAt: source.createdAt,
+                updatedAt: source.updatedAt
             )
         }
         let healthSnapshots = try fetchAllRecords(
@@ -1972,6 +2140,7 @@ final class ExportService {
                 )
             },
             mealDishPriors: mealDishPriors,
+            mealPriorContributions: mealPriorContributions,
             agentRequests: agentRequestRecords.map { source in
                 .init(
                     requestID: source.requestID,

@@ -27,7 +27,7 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
         super.tearDown()
     }
 
-    func testLoadBuildsSevenDaySeriesAndPersistsCurrentWeek() throws {
+    func testLoadBuildsSevenDaySeriesAndPersistsCurrentWeek() async throws {
         let reference = makeDate(year: 2026, month: 7, day: 29)
         let profile = UserProfile(dailyDeficitTarget: 500)
         context.insert(profile)
@@ -36,7 +36,7 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
         context.insert(metric(daysBefore: 2, reference: reference, deficit: 700, meals: 4, workouts: 1))
         try context.save()
 
-        let snapshot = try WeeklyAnalyticsService(calendar: calendar).load(
+        let snapshot = try await WeeklyAnalyticsService(calendar: calendar).load(
             referenceDate: reference,
             profile: profile,
             in: context
@@ -64,9 +64,9 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
         XCTAssertEqual(reports[0].compliance, 2.0 / 3.0, accuracy: 0.001)
     }
 
-    func testMissingDaysRemainExplicitInsteadOfInventingMetrics() throws {
+    func testMissingDaysRemainExplicitInsteadOfInventingMetrics() async throws {
         let reference = makeDate(year: 2026, month: 7, day: 29)
-        let snapshot = try WeeklyAnalyticsService(calendar: calendar).load(
+        let snapshot = try await WeeklyAnalyticsService(calendar: calendar).load(
             referenceDate: reference,
             profile: nil,
             in: context
@@ -82,7 +82,7 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
         XCTAssertTrue(try context.fetch(FetchDescriptor<WeeklyReport>()).isEmpty)
     }
 
-    func testUnavailableAndLegacyRecomputeDaysAreExcludedFromEnergyTotals() throws {
+    func testUnavailableAndLegacyRecomputeDaysAreExcludedFromEnergyTotals() async throws {
         let reference = makeDate(year: 2026, month: 7, day: 29)
         let observed = metric(daysBefore: 0, reference: reference, deficit: 300, meals: 2, workouts: 0)
         let unavailable = metric(daysBefore: 1, reference: reference, deficit: 0, meals: 1, workouts: 0)
@@ -94,7 +94,7 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
         context.insert(legacy)
         try context.save()
 
-        let snapshot = try WeeklyAnalyticsService(calendar: calendar).load(
+        let snapshot = try await WeeklyAnalyticsService(calendar: calendar).load(
             referenceDate: reference,
             profile: nil,
             in: context

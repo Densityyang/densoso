@@ -568,3 +568,19 @@ enum CaloricEngine {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
+
+/// Shared pure projection boundary used by standalone and transactional writers.
+/// Callers build the same Sendable input snapshot before selecting when and how
+/// to commit the resulting model.
+enum DailyMetricsProjectionCalculator {
+    static func fingerprint(for input: DailyMetricsCalculationInput) -> String {
+        CaloricEngine.projectionFingerprint(for: input)
+    }
+
+    static func calculate(
+        _ input: DailyMetricsCalculationInput,
+        sourceFingerprint: String
+    ) -> DailyMetricsCalculationResult {
+        CaloricEngine.computeDailyMetricsResult(for: input, sourceFingerprint: sourceFingerprint)
+    }
+}

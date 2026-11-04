@@ -5,6 +5,11 @@ import SwiftData
 
 private struct HealthBriefCacheGenerationError: Error {}
 
+private struct HealthBriefRefreshWaiter {
+    let id: UUID
+    let continuation: CheckedContinuation<DailyHealthBrief?, Error>
+}
+
 /// Serializes brief-cache commits with synchronous HealthKit snapshot purges.
 final class HealthBriefCacheGenerationFence: @unchecked Sendable {
     private let lock = NSLock()
@@ -40,28 +45,55 @@ final class HealthBriefCacheGenerationFence: @unchecked Sendable {
 @MainActor
 @Observable
 final class HealthIntelligenceService {
+    typealias RefreshOperation = @MainActor (Date, UInt64) async throws -> HealthIntelligenceRefreshSnapshot
+    typealias ObserverRefreshDelay = @MainActor (Duration) async throws -> Void
+
     private let projectionActor: HealthProjectionActor
     private let briefCacheGenerationFence: HealthBriefCacheGenerationFence
+    private let persistenceOperationBarrier: PersistenceOperationBarrier
+    private let refreshOperation: RefreshOperation
+    private let observerRefreshDelay: ObserverRefreshDelay
     private var briefCacheGeneration: UInt64
     private var isBriefCacheInvalidated = false
     private var isBriefRefreshAllowed = true
+    private var refreshGeneration: UInt64 = 0
+    private var queuedRefreshDate: Date?
+    private var refreshRunnerTask: Task<Void, Never>?
+    private var refreshWaiters: [HealthBriefRefreshWaiter] = []
+    private var observerRefreshGeneration: UInt64 = 0
+    private var observerRefreshTask: Task<Void, Never>?
 
     private(set) var dailyBrief: DailyHealthBrief?
     private(set) var dailyBriefSourceFingerprint: String?
     private(set) var dailyBriefValidatedAt: Date?
     private(set) var weeklyBrief: WeeklyHealthBrief?
     private(set) var lastError: String?
+    private(set) var lastSuccessfulRefreshAt: Date?
+    private(set) var lastRefreshFailedAt: Date?
+    private(set) var consecutiveRefreshFailures = 0
 
     init(
         projectionActor: HealthProjectionActor,
-        briefCacheGenerationFence: HealthBriefCacheGenerationFence
+        briefCacheGenerationFence: HealthBriefCacheGenerationFence,
+        refreshOperation: RefreshOperation? = nil,
+        observerRefreshDelay: @escaping ObserverRefreshDelay = { duration in try await Task.sleep(for: duration) },
+        persistenceOperationBarrier: PersistenceOperationBarrier = .shared
     ) {
         self.projectionActor = projectionActor
         self.briefCacheGenerationFence = briefCacheGenerationFence
+        self.persistenceOperationBarrier = persistenceOperationBarrier
+        self.observerRefreshDelay = observerRefreshDelay
+        self.refreshOperation = refreshOperation ?? { date, cacheGeneration in
+            try await projectionActor.refresh(asOf: date, cacheGeneration: cacheGeneration)
+        }
         briefCacheGeneration = briefCacheGenerationFence.currentGeneration
     }
 
-    convenience init(modelContainer: ModelContainer, calendar: Calendar = .current) {
+    convenience init(
+        modelContainer: ModelContainer,
+        calendar: Calendar = .autoupdatingCurrent,
+        persistenceOperationBarrier: PersistenceOperationBarrier = .shared
+    ) {
         let briefCacheGenerationFence = HealthBriefCacheGenerationFence()
         self.init(
             projectionActor: HealthProjectionActor(
@@ -69,23 +101,59 @@ final class HealthIntelligenceService {
                 calendar: calendar,
                 briefCacheGenerationFence: briefCacheGenerationFence
             ),
-            briefCacheGenerationFence: briefCacheGenerationFence
+            briefCacheGenerationFence: briefCacheGenerationFence,
+            observerRefreshDelay: { duration in try await Task.sleep(for: duration) },
+            persistenceOperationBarrier: persistenceOperationBarrier
         )
     }
 
     @discardableResult
     func refresh(asOf date: Date = Date()) async throws -> DailyHealthBrief? {
         try await PerformanceSignposts.measureAsync("Health.StateRefresh") {
-            guard isBriefRefreshAllowed else { throw HealthBriefCacheGenerationError() }
-            let expectedGeneration = briefCacheGeneration
+            let waiterID = UUID()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<DailyHealthBrief?, Error>) in
+                    guard !Task.isCancelled else {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    guard isBriefRefreshAllowed else {
+                        continuation.resume(throwing: HealthBriefCacheGenerationError())
+                        return
+                    }
+                    refreshGeneration &+= 1
+                    queuedRefreshDate = date
+                    refreshWaiters.append(HealthBriefRefreshWaiter(id: waiterID, continuation: continuation))
+                    if refreshRunnerTask == nil {
+                        refreshRunnerTask = Task { @MainActor [weak self] in
+                            await self?.runRefreshQueue()
+                        }
+                    }
+                }
+            } onCancel: { [weak self] in
+                Task { @MainActor in
+                    self?.cancelRefreshWaiter(waiterID)
+                }
+            }
+        }
+    }
+
+    private func runRefreshQueue() async {
+        while let date = queuedRefreshDate {
+            queuedRefreshDate = nil
+            let requestGeneration = refreshGeneration
+            let expectedCacheGeneration = briefCacheGeneration
             lastError = nil
             do {
-                let snapshot = try await projectionActor.refresh(
-                    asOf: date,
-                    cacheGeneration: expectedGeneration
-                )
-                guard expectedGeneration == briefCacheGeneration,
-                      briefCacheGenerationFence.currentGeneration == expectedGeneration else {
+                let operationLease = try await persistenceOperationBarrier.acquireMutationOperation()
+                defer { persistenceOperationBarrier.release(operationLease) }
+                let snapshot = try await persistenceOperationBarrier.withLease(operationLease) {
+                    try await refreshOperation(date, expectedCacheGeneration)
+                }
+                guard requestGeneration == refreshGeneration else { continue }
+                guard isBriefRefreshAllowed,
+                      expectedCacheGeneration == briefCacheGeneration,
+                      briefCacheGenerationFence.currentGeneration == expectedCacheGeneration else {
                     throw HealthBriefCacheGenerationError()
                 }
                 isBriefCacheInvalidated = false
@@ -95,16 +163,77 @@ final class HealthIntelligenceService {
                 if snapshot.updatesWeeklyBrief {
                     weeklyBrief = snapshot.weeklyBrief
                 }
-                return snapshot.dailyBrief
+                lastRefreshFailedAt = nil
+                consecutiveRefreshFailures = 0
+                lastSuccessfulRefreshAt = date
+                lastError = nil
+                resumeRefreshWaiters(returning: snapshot.dailyBrief)
             } catch is HealthBriefCacheGenerationError {
-                throw HealthBriefCacheGenerationError()
+                guard requestGeneration == refreshGeneration else { continue }
+                resumeRefreshWaiters(throwing: HealthBriefCacheGenerationError())
             } catch {
+                guard requestGeneration == refreshGeneration else { continue }
+                lastRefreshFailedAt = Date()
+                consecutiveRefreshFailures += 1
                 let errorMessage = SharedErrorDescriptor.mapped(
                     from: error,
                     fallback: .projectionFailedFallback
                 ).userMessage
                 lastError = "无法更新健康摘要：\(errorMessage)"
-                throw error
+                resumeRefreshWaiters(throwing: error)
+            }
+        }
+        refreshRunnerTask = nil
+    }
+
+    private func resumeRefreshWaiters(returning brief: DailyHealthBrief?) {
+        let waiters = refreshWaiters
+        refreshWaiters.removeAll()
+        waiters.forEach { $0.continuation.resume(returning: brief) }
+    }
+
+    private func resumeRefreshWaiters(throwing error: Error) {
+        let waiters = refreshWaiters
+        refreshWaiters.removeAll()
+        waiters.forEach { $0.continuation.resume(throwing: error) }
+    }
+
+    private func cancelRefreshWaiter(_ id: UUID) {
+        guard let index = refreshWaiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = refreshWaiters.remove(at: index)
+        waiter.continuation.resume(throwing: CancellationError())
+        guard refreshWaiters.isEmpty else { return }
+        refreshGeneration &+= 1
+        queuedRefreshDate = nil
+    }
+
+    func hasDailyBriefSourceChanged(asOf date: Date = Date()) async throws -> Bool {
+        let currentFingerprint = try await projectionActor.dailyBriefSourceFingerprint(asOf: date)
+        return currentFingerprint != dailyBriefSourceFingerprint
+    }
+
+    /// Debounces the burst of per-stream observer callbacks and lets a newer
+    /// refresh generation supersede an older projection result.
+    func scheduleRefreshAfterHealthObserverEvent(
+        onComplete: @escaping @MainActor () -> Void = {}
+    ) {
+        observerRefreshGeneration &+= 1
+        let generation = observerRefreshGeneration
+        observerRefreshTask?.cancel()
+        observerRefreshTask = Task { @MainActor [weak self] in
+            do {
+                try await observerRefreshDelay(.milliseconds(300))
+            } catch {
+                return
+            }
+            guard let self, self.observerRefreshGeneration == generation else { return }
+            self.observerRefreshTask = nil
+            do {
+                _ = try await self.refresh()
+                guard self.observerRefreshGeneration == generation else { return }
+                onComplete()
+            } catch {
+                // A later observer callback or foreground activation can retry.
             }
         }
     }
@@ -126,9 +255,15 @@ final class HealthIntelligenceService {
     /// refresh already reading the previous HealthKit snapshot.
     func invalidateBriefsForHealthSnapshotRebuild() {
         briefCacheGeneration = briefCacheGenerationFence.invalidate()
+        refreshGeneration &+= 1
+        queuedRefreshDate = nil
         isBriefCacheInvalidated = true
         isBriefRefreshAllowed = false
         lastError = nil
+        lastRefreshFailedAt = nil
+        consecutiveRefreshFailures = 0
+        lastSuccessfulRefreshAt = nil
+        resumeRefreshWaiters(throwing: HealthBriefCacheGenerationError())
         dailyBrief = nil
         dailyBriefSourceFingerprint = nil
         dailyBriefValidatedAt = nil
@@ -169,6 +304,10 @@ final class HealthIntelligenceService {
     }
 
     func saveGoalProfile(_ goal: GoalProfile) async throws {
-        try await projectionActor.saveGoalProfile(goal)
+        let operationLease = try await persistenceOperationBarrier.acquireMutationOperation()
+        defer { persistenceOperationBarrier.release(operationLease) }
+        try await persistenceOperationBarrier.withLease(operationLease) {
+            try await projectionActor.saveGoalProfile(goal)
+        }
     }
 }

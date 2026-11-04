@@ -47,6 +47,9 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     private static let watchSnapshotEntryLimit = 10
 
     @ObservationIgnored private let session: WCSession
+    @ObservationIgnored private let modelContainer: ModelContainer
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let agentSession: AgentSession
     @ObservationIgnored private let healthIntelligenceService: HealthIntelligenceService
     @ObservationIgnored private let workoutPlanSchedulingService: WorkoutPlanSchedulingService
@@ -54,6 +57,9 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     @ObservationIgnored private var processingMessageIDs = Set<UUID>()
     @ObservationIgnored private var isResumingPendingCommands = false
     @ObservationIgnored private var needsAnotherResumePass = false
+    @ObservationIgnored private var modelContextSaveObserver: NSObjectProtocol?
+    private var snapshotRefreshOverride: WatchSnapshotRefreshState?
+    private static let snapshotRevisionDefaultsKey = "densoso.watch.snapshot.revision.v1"
 
     private(set) var isAvailable = false
     private(set) var isActivated = false
@@ -65,8 +71,13 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         agentSession: AgentSession,
         healthIntelligenceService: HealthIntelligenceService,
         workoutPlanSchedulingService: WorkoutPlanSchedulingService,
-        session: WCSession = .default
+        session: WCSession = .default,
+        defaults: UserDefaults = .standard,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
+        self.modelContainer = modelContainer
+        self.defaults = defaults
+        self.now = now
         self.agentSession = agentSession
         self.healthIntelligenceService = healthIntelligenceService
         self.workoutPlanSchedulingService = workoutPlanSchedulingService
@@ -75,6 +86,13 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         self.isAvailable = WCSession.isSupported()
         super.init()
         if isAvailable { session.delegate = self }
+        modelContextSaveObserver = NotificationCenter.default.addObserver(
+            forName: ModelContext.didSave,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshApplicationContext() }
+        }
     }
 
     func activate() {
@@ -137,6 +155,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
 
     private func setReceiptState(_ state: String, for messageID: UUID) throws {
         _ = try inboxStore.setState(state, for: messageID)
+        try inboxStore.verifyState(state, for: messageID)
         if isResumingPendingCommands {
             needsAnotherResumePass = true
         } else {
@@ -195,9 +214,12 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
         try setReceiptState(WatchReceiptState.processed, for: messageID)
     }
 
-    func pendingActionSummaries() -> [WatchPendingActionSummary] {
+    func pendingActionSummaries(asOf date: Date = Date()) -> [WatchPendingActionSummary] {
         agentSession.pendingActions
-            .filter { $0.state == .pending }
+            .filter {
+                $0.state == .pending
+                    && PendingActionExpirationPolicy.isActive(expiresAt: $0.expiresAt, asOf: date)
+            }
             .sorted { lhs, rhs in
                 if lhs.expiresAt != rhs.expiresAt { return lhs.expiresAt < rhs.expiresAt }
                 return lhs.id.uuidString < rhs.id.uuidString
@@ -222,11 +244,30 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
 
     private func makeTodaySnapshot() throws -> WatchTodaySnapshot {
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
+        let generatedAt = now()
+        let today = calendar.startOfDay(for: generatedAt)
         let dayAfterTomorrow = calendar.date(byAdding: .day, value: 2, to: today)!
         let todayBrief = healthIntelligenceService.dailyBrief.flatMap { brief in
             calendar.isDate(brief.dayStart, inSameDayAs: today) ? brief : nil
         }
+        let sourceValidatedAt = todayBrief == nil ? nil : healthIntelligenceService.dailyBriefValidatedAt
+        let dailyBriefFingerprint = todayBrief == nil ? nil : healthIntelligenceService.dailyBriefSourceFingerprint
+        let dailyLoopSnapshot = DailyLoopSnapshotComposer(calendar: calendar).compose(
+            asOf: generatedAt,
+            dailyBrief: todayBrief,
+            dailyBriefSourceFingerprint: dailyBriefFingerprint,
+            dailyBriefValidatedAt: sourceValidatedAt,
+            pendingActions: agentSession.pendingActions,
+            workoutPlans: []
+        )
+        let sourceFingerprint = dailyLoopSnapshot.sourceFingerprint
+        let refreshState: WatchSnapshotRefreshState = snapshotRefreshOverride ?? {
+            switch dailyLoopSnapshot.refreshState {
+            case .fresh: .fresh
+            case .stale, .refreshRequired: .stale
+            case .error: .failed
+            }
+        }()
         let received = try inboxStore.recentProcessedMessageIDs()
         let terminalCausalSequenceWatermark = try inboxStore.highestContiguousTerminalCausalSequence()
         let singleSessionPlans = try workoutPlanSchedulingService
@@ -259,16 +300,38 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 return lhs.actionID.uuidString < rhs.actionID.uuidString
             }
             .prefix(Self.watchSnapshotEntryLimit))
+        let receiptPredicate = #Predicate<CommittedActionReceiptRecord> {
+            $0.actionTypeRaw == "meal" || $0.actionTypeRaw == "weight"
+        }
+        var receiptDescriptor = FetchDescriptor<CommittedActionReceiptRecord>(
+            predicate: receiptPredicate,
+            sortBy: [SortDescriptor(\.committedAt, order: .reverse)]
+        )
+        receiptDescriptor.fetchLimit = Self.watchSnapshotEntryLimit
+        let healthSyncSummaries = try ModelContext(modelContainer).fetch(receiptDescriptor).compactMap { receipt in
+            guard let state = HealthSyncState(rawValue: receipt.healthSyncStateRaw) else { return nil }
+            return WatchHealthSyncSummary(
+                actionID: receipt.actionID,
+                actionType: receipt.actionTypeRaw,
+                state: state,
+                updatedAt: receipt.committedAt
+            )
+        }
         return WatchTodaySnapshot(
-            generatedAt: Date(),
+            generatedAt: generatedAt,
             summary: todayBrief?.summary ?? "暂无本地健康摘要",
             domains: todayBrief?.domains.map {
                 WatchHealthDomainStatus(domain: $0.domain, status: $0.status)
             } ?? [],
-            pendingActions: pendingActionSummaries(),
+            pendingActions: pendingActionSummaries(asOf: generatedAt),
             workoutPlans: scheduledPlans,
             acknowledgedMessageIDs: received,
             terminalCausalSequenceWatermark: terminalCausalSequenceWatermark,
+            sourceValidatedAt: sourceValidatedAt,
+            sourceFingerprint: sourceFingerprint,
+            refreshState: refreshState,
+            snapshotRevision: nextSnapshotRevision(),
+            healthSyncSummaries: healthSyncSummaries,
             tomorrowGuidance: todayBrief?.healthState?.tomorrowGuidance.map { guidance in
                 WatchTomorrowGuidanceSummary(
                     expectedState: guidance.expectedState,
@@ -285,6 +348,13 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 )
             }
         )
+    }
+
+    private func nextSnapshotRevision() -> UInt64 {
+        let current = defaults.string(forKey: Self.snapshotRevisionDefaultsKey).flatMap(UInt64.init) ?? 0
+        let next = current == .max ? current : current + 1
+        defaults.set(String(next), forKey: Self.snapshotRevisionDefaultsKey)
+        return next
     }
 
     private func receive(_ data: Data) async -> Data? {
@@ -342,9 +412,33 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
                 refreshApplicationContext()
                 return acknowledgement(for: envelope.messageID, state: .accepted, detail: "转写已保存在本机，等待你检查")
             case .requestTodaySnapshot:
-                try setReceiptState(WatchReceiptState.processed, for: envelope.messageID)
+                snapshotRefreshOverride = .refreshing
                 refreshApplicationContext()
-                return acknowledgement(for: envelope.messageID, state: .processed, detail: "已更新 Today 摘要")
+                var refreshError: Error?
+                do {
+                    _ = try await healthIntelligenceService.refresh()
+                    snapshotRefreshOverride = nil
+                } catch {
+                    refreshError = error
+                    snapshotRefreshOverride = .failed
+                }
+                do {
+                    try setReceiptState(WatchReceiptState.processed, for: envelope.messageID)
+                } catch {
+                    snapshotRefreshOverride = refreshError == nil ? nil : .failed
+                    refreshApplicationContext()
+                    throw error
+                }
+                refreshApplicationContext()
+                if let refreshError {
+                    lastError = "Watch 请求的健康数据刷新失败：\(safeWatchErrorMessage(refreshError))"
+                    return acknowledgement(
+                        for: envelope.messageID,
+                        state: .processed,
+                        detail: "刷新失败，保留上次摘要并标记为过期。"
+                    )
+                }
+                return acknowledgement(for: envelope.messageID, state: .processed, detail: "已重新验证 Today 健康摘要")
             case .confirm, .reject:
                 return try rejectPendingMessage(
                     envelope,

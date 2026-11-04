@@ -44,6 +44,7 @@ public enum SharedErrorReason: String, Codable, CaseIterable, Sendable {
     case networkFailure
     case timeout
     case malformedResponse
+    case incompleteResponse
     case schemaViolation
     case contentRejected
     case unsupportedCapability

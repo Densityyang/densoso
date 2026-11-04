@@ -403,7 +403,7 @@ final class DensosoMigrationTests: XCTestCase {
         )
         XCTAssertTrue(sampleIndex.needsRequery)
         XCTAssertFalse(sampleIndex.isTombstoned)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "12.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
     }
 
     func testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity() async throws {
@@ -445,7 +445,7 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "8.0.0")
 
         container = try openCurrentStore(at: location.storeURL)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "12.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
         let migratedUsage = try XCTUnwrap(
             container!.mainContext.fetch(FetchDescriptor<ProviderUsageRecord>()).first
         )
@@ -493,8 +493,11 @@ final class DensosoMigrationTests: XCTestCase {
         defer { location.remove() }
         var container: ModelContainer? = try makeContainer(version: DensosoSchemaV5.self, url: location.storeURL)
         var context: ModelContext? = ModelContext(container!)
-        let date = Date(timeIntervalSince1970: 1_700_000_000)
-        let day = Calendar.current.startOfDay(for: date)
+        var calendar = Calendar.current
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let day = try XCTUnwrap(calendar.date(from: DateComponents(year: 2025, month: 1, day: 1)))
+        let date = try XCTUnwrap(calendar.date(bySettingHour: 23, minute: 30, second: 0, of: day))
+        let previousDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: day))
         let sample = HealthSampleSnapshot(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000801")!,
             metric: .bodyMass,
@@ -505,20 +508,18 @@ final class DensosoMigrationTests: XCTestCase {
             deviceModel: "private.device.model",
             syncIdentifier: "private.sync.identifier"
         )
-        let calendar = Calendar.current
-        let wakeDay = calendar.date(byAdding: .day, value: 1, to: day)!
         let sleepSample = HealthSampleSnapshot(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000802")!,
             metric: .sleepAnalysis,
-            startDate: calendar.date(bySettingHour: 22, minute: 0, second: 0, of: day)!,
-            endDate: calendar.date(bySettingHour: 6, minute: 0, second: 0, of: wakeDay)!,
+            startDate: calendar.date(bySettingHour: 22, minute: 0, second: 0, of: previousDay)!,
+            endDate: calendar.date(bySettingHour: 6, minute: 0, second: 0, of: day)!,
             categoryValue: "asleepCore",
             sourceBundleIdentifier: "com.example.health",
             deviceModel: "Watch6,1"
         )
         let legacySnapshot = LegacyDailyHealthSnapshot(
             dayStart: day,
-            timezoneIdentifier: Calendar.current.timeZone.identifier,
+            timezoneIdentifier: calendar.timeZone.identifier,
             weightKilograms: 68.5,
             healthKitSamples: [sample, sleepSample],
             algorithmVersion: "v3"
@@ -527,7 +528,7 @@ final class DensosoMigrationTests: XCTestCase {
         encoder.dateEncodingStrategy = .millisecondsSince1970
         let payload = try encoder.encode(legacySnapshot)
         context!.insert(DailyHealthSnapshotRecord(
-            dayKey: Self.dayKey(day),
+            dayKey: Self.dayKey(day, calendar: calendar),
             timezoneID: legacySnapshot.timezoneIdentifier,
             payloadData: payload,
             snapshotHash: "legacy-sample-payload",
@@ -568,7 +569,7 @@ final class DensosoMigrationTests: XCTestCase {
         })
         XCTAssertEqual(sampleIndex.sampleID, sample.id)
         XCTAssertEqual(sampleIndex.stream, HealthMetricID.bodyMass.rawValue)
-        XCTAssertEqual(sampleIndex.dayKey, Self.dayKey(day))
+        XCTAssertEqual(sampleIndex.dayKey, Self.dayKey(day, calendar: calendar))
         XCTAssertEqual(sampleIndex.startDate, sample.startDate)
         XCTAssertEqual(sampleIndex.endDate, sample.endDate)
         XCTAssertEqual(sampleIndex.pendingDayKeysJSON, "[]")
@@ -578,12 +579,14 @@ final class DensosoMigrationTests: XCTestCase {
             try migratedContext.fetchCount(FetchDescriptor<DensosoSchemaV6.HealthKitSampleIndexRecord>()),
             2
         )
-        let wakeDayKey = Self.dayKey(wakeDay)
-        let wakePredicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == wakeDayKey }
-        let wakeSnapshotRecord = try XCTUnwrap(
-            migratedContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: wakePredicate)).first
-        )
-        let wakeSnapshot = try migratedDecoder.decode(DailyHealthSnapshot.self, from: wakeSnapshotRecord.payloadData)
+        let migratedWakeDayKey = Self.dayKey(calendar.startOfDay(for: sleepSample.endDate), calendar: calendar)
+        let migratedWakeRecord = try XCTUnwrap(migratedContext.fetch(
+            FetchDescriptor<DailyHealthSnapshotRecord>(predicate: #Predicate { $0.dayKey == migratedWakeDayKey })
+        ).first)
+        let wakeSnapshot = try migratedDecoder.decode(DailyHealthSnapshot.self, from: migratedWakeRecord.payloadData)
+        XCTAssertEqual(migratedWakeRecord.dayKey, "2025-01-01")
+        XCTAssertEqual(wakeSnapshot.timezoneIdentifier, "America/Los_Angeles")
+        XCTAssertEqual(wakeSnapshot.dayStart, calendar.startOfDay(for: sleepSample.endDate))
         XCTAssertEqual(wakeSnapshot.healthKitSampleSummary?.sleep?.totalAsleepMinutes, 480)
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "6.0.0")
     }
@@ -1147,7 +1150,7 @@ final class DensosoMigrationTests: XCTestCase {
     }
 
     private func openCurrentStore(at url: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV12.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         let configuration = ModelConfiguration("Densoso", schema: schema, url: url)
         return try ModelContainer(
             for: schema,
@@ -1156,7 +1159,7 @@ final class DensosoMigrationTests: XCTestCase {
         )
     }
 
-    func testV11DiskStoreMigratesToV12WithDishPriorTableAndPreservedPolicy() throws {
+    func testV11DiskStoreMigratesToV14WithDishPriorTableAndPreservedPolicy() throws {
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
         let date = Date(timeIntervalSince1970: 1_750_000_000)
@@ -1191,7 +1194,47 @@ final class DensosoMigrationTests: XCTestCase {
         let policy = try XCTUnwrap(context.fetch(FetchDescriptor<CloudHealthContextPolicyRecord>()).first)
         XCTAssertEqual(policy.policyHash, "v11-policy-hash")
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<PersonalMealDishPriorRecord>()), 0)
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
+    }
+
+    func testV12DiskStoreMigratesToV14WithEmptyToolExecutionJournalAndContributionLedger() throws {
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        var source: ModelContainer? = try makeContainer(
+            version: DensosoSchemaV12.self,
+            url: location.storeURL
+        )
+        source?.mainContext.insert(ConversationRecord())
+        try source?.mainContext.save()
+        source = nil
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "12.0.0")
+
+        let migrated = try openCurrentStore(at: location.storeURL)
+        XCTAssertEqual(
+            try migrated.mainContext.fetchCount(FetchDescriptor<ToolExecutionJournalRecord>()),
+            0
+        )
+        XCTAssertEqual(try migrated.mainContext.fetchCount(FetchDescriptor<MealPriorContributionRecord>()), 0)
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
+    }
+
+    func testV13DiskStoreAddsEmptyMealPriorContributionLedger() throws {
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        var source: ModelContainer? = try makeContainer(version: DensosoSchemaV13.self, url: location.storeURL)
+        source?.mainContext.insert(MealRecord(
+            date: Date(timeIntervalSince1970: 1_800_000_000),
+            totalCaloriesKcal: 480,
+            sourceActionKey: "pre-v14-meal"
+        ))
+        try source?.mainContext.save()
+        source = nil
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "13.0.0")
+
+        let migrated = try openCurrentStore(at: location.storeURL)
+        XCTAssertEqual(try migrated.mainContext.fetchCount(FetchDescriptor<MealRecord>()), 1)
+        XCTAssertEqual(try migrated.mainContext.fetchCount(FetchDescriptor<MealPriorContributionRecord>()), 0)
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
     }
 
     func testV9StoreMigratesToV10WithPreMigrationBackupAndRetrySafeOpen() throws {
@@ -1226,8 +1269,8 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(try reopenedContext.fetchCount(FetchDescriptor<PersonalMealPortionPriorRecord>()), 0)
     }
 
-    private static func dayKey(_ date: Date) -> String {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+    private static func dayKey(_ date: Date, calendar: Calendar = .current) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 

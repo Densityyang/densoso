@@ -445,7 +445,7 @@ struct HistoryScreen: View {
         Task { @MainActor in
             for meal in selected {
                 do {
-                    try await HealthRepository(modelContext: modelContext).delete(meal)
+                    try await HealthRepository(modelContext: modelContext).deleteMeal(id: meal.id)
                     meals.removeAll { $0.id == meal.id }
                 } catch {
                     loadError = SharedErrorDescriptor.mapped(
@@ -463,7 +463,7 @@ struct HistoryScreen: View {
         Task { @MainActor in
             for workout in selected {
                 do {
-                    try await HealthRepository(modelContext: modelContext).delete(workout)
+                    try await HealthRepository(modelContext: modelContext).deleteWorkout(id: workout.id)
                     workouts.removeAll { $0.id == workout.id }
                 } catch {
                     loadError = SharedErrorDescriptor.mapped(
@@ -481,7 +481,7 @@ struct HistoryScreen: View {
         Task { @MainActor in
             for weight in selected {
                 do {
-                    try await HealthRepository(modelContext: modelContext).delete(weight)
+                    try await HealthRepository(modelContext: modelContext).deleteWeight(id: weight.id)
                     weights.removeAll { $0.id == weight.id }
                 } catch {
                     loadError = SharedErrorDescriptor.mapped(

@@ -41,7 +41,9 @@ cursor without changing the daily snapshot does not invalidate the projection.
 Historical days use their end boundary; the current day uses the current time.
 Both projection entry points share the same fingerprint comparison and skip
 writes when inputs are unchanged; pending legacy rows still run through
-projection. Daily-brief cache versions
+projection. `DailyMetricsProjectionCalculator` supplies the shared pure
+fingerprint and calculation path while each owning repository retains its own
+transaction boundary. Daily-brief cache versions
 include the recommendation-policy version, while DailyLoop exposes its own
 algorithm version for its on-demand composed snapshot.
 Historical recompute copies each day's SwiftData inputs into Sendable value

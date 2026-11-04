@@ -8,8 +8,13 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
 
     private let healthStore: any HealthStoreClient
     private let modelContainer: ModelContainer
+    private let persistenceOperationBarrier: PersistenceOperationBarrier
+    private let willFetchActionReceipt: (() throws -> Void)?
+    private let willCommitExternalSuccess: (() throws -> Void)?
     private let maximumAttempts = 8
     private var isProcessing = false
+
+    private static let receiptReconciliationTargets = ["succeeded", "retryable", "terminal"]
 
     private struct OutboxCursor {
         let createdAt: Date
@@ -21,19 +26,47 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
         let id: UUID
     }
 
-    init(healthStore: any HealthStoreClient, modelContainer: ModelContainer) {
+    init(
+        healthStore: any HealthStoreClient,
+        modelContainer: ModelContainer,
+        persistenceOperationBarrier: PersistenceOperationBarrier = .shared,
+        willFetchActionReceipt: (() throws -> Void)? = nil,
+        willCommitExternalSuccess: (() throws -> Void)? = nil
+    ) {
         self.healthStore = healthStore
         self.modelContainer = modelContainer
+        self.persistenceOperationBarrier = persistenceOperationBarrier
+        self.willFetchActionReceipt = willFetchActionReceipt
+        self.willCommitExternalSuccess = willCommitExternalSuccess
     }
 
     func processPending() async {
-        await processPending(in: modelContainer.mainContext)
+        await run(in: ModelContext(modelContainer), now: Date())
     }
 
-    func processPending(in modelContext: ModelContext, now: Date = Date()) async {
+    func processPending(in requestingContext: ModelContext, now: Date = Date()) async {
+        await run(in: ModelContext(requestingContext.container), now: now)
+    }
+
+    private func run(in modelContext: ModelContext, now: Date) async {
         guard !isProcessing else { return }
         isProcessing = true
         defer { isProcessing = false }
+        let operationLease: PersistenceOperationBarrier.Lease
+        do {
+            operationLease = try await persistenceOperationBarrier.acquireOutboxOperation()
+        } catch {
+            return
+        }
+        defer { persistenceOperationBarrier.release(operationLease) }
+        await persistenceOperationBarrier.withLease(operationLease) {
+            await self.runWithOperationLease(in: modelContext, now: now)
+        }
+    }
+
+    private func runWithOperationLease(in modelContext: ModelContext, now: Date) async {
+        guard !Task.isCancelled else { return }
+        reconcileActionReceipts(in: modelContext)
         guard HealthKitConnectionPreference.hasRequestedAuthorization else { return }
         let sendingState = "sending"
         let recoverySort = [
@@ -74,6 +107,7 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
                 }
                 entry.state = "sending"
                 entry.attemptCount += 1
+                let operationGeneration = entry.attemptCount
                 do {
                     try modelContext.save()
                 } catch {
@@ -81,41 +115,103 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
                     return
                 }
 
+                var externalReceipt: HealthWriteReceipt?
+                var externalOperationCompleted = false
+                var shouldUpdateActionReceipt = false
                 do {
-                    let superseded = try isSuperseded(entry, in: modelContext)
-                    if superseded {
-                        entry.state = "succeeded"
-                        entry.lastError = nil
-                    } else if entry.operation == "deleteMeal" || entry.operation == "deleteWeight" {
-                        let receipt = deleteReceipt(for: entry)
-                        try await healthStore.deleteOwnSample(receipt: receipt)
-                        entry.payloadData = try JSONEncoder().encode(receipt)
-                        entry.state = "succeeded"
-                        entry.lastError = nil
-                    } else if entry.operation == "upsertWorkout" || entry.operation == "deleteWorkout" {
-                        throw HealthOutboxError.unsupportedOperation("Workout HealthKit writes are disabled in V3.")
-                    } else {
-                        let command = try writeCommand(for: entry, in: modelContext)
-                        let receipt = try await healthStore.save(command)
-                        entry.payloadData = try JSONEncoder().encode(receipt)
-                        entry.state = "succeeded"
-                        entry.lastError = nil
+                    // The caller's context may have been alive before another
+                    // context committed a newer outbox generation. Start the
+                    // external operation from a fresh store view.
+                    let executionContext = ModelContext(modelContainer)
+                    guard let executionEntry = try activeOperationEntry(
+                        id: entry.id,
+                        generation: operationGeneration,
+                        in: executionContext
+                    ) else { continue }
+                    let superseded = try isSuperseded(executionEntry, in: executionContext)
+                    if !superseded {
+                        if executionEntry.operation == "deleteMeal" || executionEntry.operation == "deleteWeight" {
+                            let receipt = deleteReceipt(for: executionEntry)
+                            try await healthStore.deleteOwnSample(receipt: receipt)
+                            externalReceipt = receipt
+                            externalOperationCompleted = true
+                        } else if executionEntry.operation == "upsertWorkout" || executionEntry.operation == "deleteWorkout" {
+                            throw HealthOutboxError.unsupportedOperation("Workout HealthKit writes are disabled in V3.")
+                        } else {
+                            let command = try writeCommand(for: executionEntry, in: executionContext)
+                            externalReceipt = try await healthStore.save(command)
+                            externalOperationCompleted = true
+                        }
                     }
-                    entry.nextAttemptAt = nil
-                    if !superseded { updateActionReceipt(for: entry, in: modelContext, state: "succeeded") }
-                    try modelContext.save()
+
+                    // The external operation may suspend while another local write
+                    // supersedes this entry. Re-fetch by ID and validate the attempt
+                    // generation in a new context before committing its result.
+                    let commitContext = ModelContext(modelContainer)
+                    guard let currentEntry = try activeOperationEntry(
+                        id: entry.id,
+                        generation: operationGeneration,
+                        in: commitContext
+                    ) else { continue }
+                    let supersededAfterExternalOperation = try isSuperseded(currentEntry, in: commitContext)
+                    shouldUpdateActionReceipt = !superseded && !supersededAfterExternalOperation
+                    if let externalReceipt {
+                        currentEntry.payloadData = try JSONEncoder().encode(externalReceipt)
+                    }
+                    currentEntry.state = "succeeded"
+                    currentEntry.lastError = nil
+                    currentEntry.nextAttemptAt = nil
+                    if shouldUpdateActionReceipt {
+                        try updateActionReceipt(for: currentEntry, in: commitContext, state: "succeeded")
+                    }
+                    if externalOperationCompleted { try willCommitExternalSuccess?() }
+                    try commitContext.save()
                 } catch {
-                    let terminal = isTerminal(error) || entry.attemptCount >= maximumAttempts
-                    entry.state = terminal ? "terminal" : "retryable"
-                    entry.lastError = SharedErrorDescriptor.mapped(
-                        from: error,
-                        fallback: .healthKitUnavailableFallback
-                    ).diagnosticSafeDetail
-                    let delay = min(pow(2.0, Double(min(entry.attemptCount, 10))) * 30, 21_600)
-                    entry.nextAttemptAt = terminal ? nil : now.addingTimeInterval(delay)
-                    updateActionReceipt(for: entry, in: modelContext, state: entry.state)
-                    do { try modelContext.save() }
-                    catch { modelContext.rollback(); return }
+                    modelContext.rollback()
+                    let reconciliationContext = ModelContext(modelContainer)
+                    guard let currentEntry = try? activeOperationEntry(
+                        id: entry.id,
+                        generation: operationGeneration,
+                        in: reconciliationContext
+                    ) else { continue }
+                    let terminal = isTerminal(error) || currentEntry.attemptCount >= maximumAttempts
+                    let targetState = externalOperationCompleted
+                        ? "succeeded"
+                        : (terminal ? "terminal" : "retryable")
+                    if let externalReceipt,
+                       let receiptData = try? JSONEncoder().encode(externalReceipt) {
+                        currentEntry.payloadData = receiptData
+                    }
+                    currentEntry.state = targetState
+                    currentEntry.lastError = targetState == "succeeded"
+                        ? nil
+                        : SharedErrorDescriptor.mapped(
+                            from: error,
+                            fallback: .healthKitUnavailableFallback
+                        ).diagnosticSafeDetail
+                    let delay = min(pow(2.0, Double(min(currentEntry.attemptCount, 10))) * 30, 21_600)
+                    currentEntry.nextAttemptAt = targetState == "retryable" ? now.addingTimeInterval(delay) : nil
+                    do {
+                        if shouldUpdateActionReceipt || !externalOperationCompleted {
+                            try updateActionReceipt(for: currentEntry, in: reconciliationContext, state: targetState)
+                        }
+                        try reconciliationContext.save()
+                    } catch {
+                        reconciliationContext.rollback()
+                        let recoveryContext = ModelContext(modelContainer)
+                        guard let recoverableEntry = try? activeOperationEntry(
+                            id: entry.id,
+                            generation: operationGeneration,
+                            in: recoveryContext
+                        ) else { continue }
+                        recoverableEntry.state = Self.receiptReconciliationState(for: targetState)
+                        recoverableEntry.lastError = "\(SharedErrorDescriptor.mapped(from: error, fallback: .healthKitUnavailableFallback).diagnosticSafeDetail) Receipt reconciliation pending."
+                        recoverableEntry.nextAttemptAt = targetState == "retryable"
+                            ? now.addingTimeInterval(delay)
+                            : nil
+                        do { try recoveryContext.save() }
+                        catch { recoveryContext.rollback(); return }
+                    }
                 }
             }
         }
@@ -148,6 +244,57 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
         var descriptor = FetchDescriptor<HealthSyncOutboxEntry>(predicate: predicate, sortBy: sortBy)
         descriptor.fetchLimit = Self.outboxBatchSize
         return try modelContext.fetch(descriptor)
+    }
+
+    private func activeOperationEntry(
+        id: UUID,
+        generation: Int,
+        in modelContext: ModelContext
+    ) throws -> HealthSyncOutboxEntry? {
+        let entryID = id
+        let attemptGeneration = generation
+        let sendingState = "sending"
+        var descriptor = FetchDescriptor<HealthSyncOutboxEntry>(
+            predicate: #Predicate {
+                $0.id == entryID && $0.state == sendingState && $0.attemptCount == attemptGeneration
+            }
+        )
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private static func receiptReconciliationState(for target: String) -> String {
+        "receiptReconciliation-\(target)"
+    }
+
+    private func reconcileActionReceipts(in modelContext: ModelContext) {
+        let sortBy = [
+            SortDescriptor(\HealthSyncOutboxEntry.createdAt),
+            SortDescriptor(\HealthSyncOutboxEntry.id),
+        ]
+        for target in Self.receiptReconciliationTargets {
+            let reconciliationState = Self.receiptReconciliationState(for: target)
+            while true {
+                var descriptor = FetchDescriptor<HealthSyncOutboxEntry>(
+                    predicate: #Predicate { $0.state == reconciliationState },
+                    sortBy: sortBy
+                )
+                descriptor.fetchLimit = Self.outboxBatchSize
+                guard let entries = try? modelContext.fetch(descriptor) else { return }
+                guard !entries.isEmpty else { break }
+                for entry in entries {
+                    do {
+                        try updateActionReceipt(for: entry, in: modelContext, state: target)
+                        entry.state = target
+                        entry.lastError = nil
+                        try modelContext.save()
+                    } catch {
+                        modelContext.rollback()
+                        return
+                    }
+                }
+            }
+        }
     }
 
     private func writeCommand(for entry: HealthSyncOutboxEntry, in modelContext: ModelContext) throws -> HealthWriteCommand {
@@ -275,14 +422,19 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
         }
     }
 
-    private func updateActionReceipt(for entry: HealthSyncOutboxEntry, in modelContext: ModelContext, state: String) {
+    private func updateActionReceipt(
+        for entry: HealthSyncOutboxEntry,
+        in modelContext: ModelContext,
+        state: String
+    ) throws {
         guard let receiptID = entry.receiptID else { return }
+        try willFetchActionReceipt?()
         var descriptor = FetchDescriptor<CommittedActionReceiptRecord>(
             predicate: #Predicate { $0.id == receiptID }
         )
         descriptor.fetchLimit = 1
-        guard let records = try? modelContext.fetch(descriptor),
-              let receipt = records.first else { return }
+        let records = try modelContext.fetch(descriptor)
+        guard let receipt = records.first else { throw HealthOutboxError.missingActionReceipt }
         receipt.healthSyncStateRaw = state
     }
 
@@ -298,6 +450,8 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
         }
         guard let error = error as? HealthOutboxError else { return false }
         switch error {
+        case .missingActionReceipt:
+            return false
         case .missingSourceRecord, .refuseHealthKitEcho, .unavailableMealEnergy, .unsupportedOperation:
             return true
         }
@@ -306,6 +460,7 @@ final class HealthSyncOutboxWorker: HealthSyncOutboxProcessing {
 
 private enum HealthOutboxError: SharedErrorDescribing {
     case missingSourceRecord
+    case missingActionReceipt
     case refuseHealthKitEcho
     case unavailableMealEnergy
     case unsupportedOperation(String)
@@ -316,6 +471,13 @@ private enum HealthOutboxError: SharedErrorDescribing {
             SharedErrorDescriptor(
                 code: .actionConflict,
                 userMessage: "源记录已不可用，无法同步到 Apple Health。",
+                subsystem: .healthKit,
+                reason: .actionNotFound
+            )
+        case .missingActionReceipt:
+            SharedErrorDescriptor(
+                code: .actionConflict,
+                userMessage: "操作回执暂不可用，健康同步状态将在后续重试中对账。",
                 subsystem: .healthKit,
                 reason: .actionNotFound
             )

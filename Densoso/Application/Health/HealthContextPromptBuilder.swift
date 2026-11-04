@@ -4,12 +4,31 @@ import Foundation
 enum HealthContextPromptBuilder {
     static let promptVersion = NarrativePromptVersion.current
 
-    private static let healthTerms = [
-        "今日", "今天", "本周", "上周", "趋势", "睡眠", "体重", "活动量", "运动负荷",
-        "训练", "运动", "活动", "步数", "心率", "hrv", "疲劳", "状态", "休息",
-        "健康", "缺口", "摄入", "消耗", "精力", "压力", "heart", "sleep", "weight", "activity", "workout",
-        "training", "fatigue", "trend", "calorie", "energy", "stress",
+    private static let healthEntityTerms = [
+        "睡眠", "睡得", "睡觉", "睡不着", "睡不好", "没睡好", "睡了", "入睡", "夜醒", "老醒", "失眠",
+        "sleep", "slept", "sleeping", "insomnia",
+        "饮食", "吃了", "吃什么", "进食", "早餐", "午餐", "晚餐", "食材", "营养", "蛋白质", "碳水",
+        "热量", "卡路里", "摄入", "meal", "food", "nutrition", "protein", "carbohydrate", "calorie", "intake",
+        "体重", "身高", "体脂", "腰围", "血压", "心率", "心率变异", "血糖", "体温", "身体指标",
+        "weight", "body mass", "body fat", "blood pressure", "heart rate", "hrv", "blood sugar", "bmi",
+        "运动", "训练", "锻炼", "跑步", "步数", "活动量", "运动负荷", "恢复", "疲劳", "酸痛",
+        "workout", "exercise", "training", "running", "steps", "activity", "recovery", "fatigue", "soreness",
     ]
+    private static let personalContextTerms = ["我", "我的", "自己", "i ", "i'", "my ", "me "]
+    private static let personalActionTerms = [
+        "记录", "记一下", "保存", "打卡", "估算", "估一估", "安排", "plan", "log", "estimate", "track",
+    ]
+    private static let analysisIntentTerms = [
+        "分析", "解读", "总结", "趋势", "状态", "怎么样", "如何", "怎么", "是否", "多少", "多久",
+        "为什么", "适合", "应该", "建议", "疲劳", "乏力", "要不要", "可以吗", "吗", "查看", "查询",
+        "analyze", "analysis", "interpret", "trend", "how is", "how am", "how do", "should i", "can i",
+    ]
+    private static let followUpTerms = [
+        "那我", "那今天", "那明天", "那昨天", "那前天", "那现在", "那这", "那它", "那如果",
+        "这个", "这样", "刚才", "继续", "它", "这些", "上述", "前面说的", "相关吗",
+        "what about", "and then", "that", "this", "those", "continue", "it ",
+    ]
+    private static let healthRetrievalIntentTerms = analysisIntentTerms + ["什么"]
     private static let readinessActivityTerms = [
         "跑", "训练", "运动", "锻炼", "健身", "游泳", "骑行", "骑车", "步行", "散步", "举铁", "练",
         "run", "running", "walk", "walking", "workout", "exercise", "train", "swim", "cycle", "cycling", "hike", "lift",
@@ -19,9 +38,27 @@ enum HealthContextPromptBuilder {
         "can i", "should i", "am i", "is it okay", "is it safe", "okay to", "safe to", "could i",
     ]
 
-    static func shouldIncludeSummary(for userText: String) -> Bool {
+    static func shouldIncludeSummary(for userText: String, priorHealthContext: Bool = false) -> Bool {
         let normalized = userText.lowercased()
-        return healthTerms.contains { normalized.contains($0) }
+        if containsHealthEntity(in: normalized) {
+            return personalContextTerms.contains(where: normalized.contains)
+                || personalActionTerms.contains(where: normalized.contains)
+                || healthRetrievalIntentTerms.contains(where: normalized.contains)
+        }
+        return priorHealthContext && isContextualFollowUp(normalized)
+    }
+
+    static func hasPriorHealthContext(in priorUserMessages: [String]) -> Bool {
+        for message in priorUserMessages.reversed() {
+            if containsHealthEntity(in: message) { return true }
+            guard isContextualFollowUp(message.lowercased()) else { return false }
+        }
+        return false
+    }
+
+    static func containsHealthEntity(in userText: String) -> Bool {
+        let normalized = userText.lowercased()
+        return healthEntityTerms.contains { normalized.contains($0) }
             || isActivityReadinessQuestion(normalized)
     }
 
@@ -31,9 +68,10 @@ enum HealthContextPromptBuilder {
         summary: HealthContextSummary?,
         narrativeContext: HealthNarrativeContext? = nil,
         structuredNarrative: Bool = false,
-        cloudHealthPolicy: CloudHealthContextPolicy? = nil
+        cloudHealthPolicy: CloudHealthContextPolicy? = nil,
+        priorHealthContext: Bool = false
     ) -> String {
-        guard shouldIncludeSummary(for: userText) else { return basePrompt }
+        guard shouldIncludeSummary(for: userText, priorHealthContext: priorHealthContext) else { return basePrompt }
         var prompt = basePrompt
         if let summary,
            let data = try? encoded(summary),
@@ -60,7 +98,7 @@ enum HealthContextPromptBuilder {
             }
         }
         guard structuredNarrative,
-              requiresNarrative(for: userText),
+              requiresNarrative(for: userText, priorHealthContext: priorHealthContext),
               let narrativeContext,
               let contextData = try? encoded(narrativeContext),
               let contextJSON = String(data: contextData, encoding: .utf8) else {
@@ -76,23 +114,26 @@ enum HealthContextPromptBuilder {
         """
     }
 
-    static func requiresNarrative(for userText: String) -> Bool {
-        guard shouldIncludeSummary(for: userText) else { return false }
+    static func requiresNarrative(for userText: String, priorHealthContext: Bool = false) -> Bool {
+        guard shouldIncludeSummary(for: userText, priorHealthContext: priorHealthContext) else { return false }
         let normalized = userText.lowercased()
-        let captureTerms = ["记录", "记一下", "保存", "打卡", "吃了", "摄入", "安排训练", "训练计划"]
-        guard !captureTerms.contains(where: normalized.contains) else { return false }
-        let queryTerms = [
-            "分析", "总结", "趋势", "状态", "怎么样", "如何", "是否", "多少", "多久",
-            "为什么", "适合", "应该", "太累", "疲劳", "乏力", "要不要", "可以吗", "吗", "查看", "看看", "查询", "?", "？",
-            "analyze", "trend", "how is", "how am", "should i",
+        let captureTerms = [
+            "记录", "记一下", "保存", "打卡", "吃了", "摄入", "估算", "估一估", "安排训练", "训练计划",
+            "log", "track", "estimate", "plan",
         ]
-        return queryTerms.contains(where: normalized.contains)
+        guard !captureTerms.contains(where: normalized.contains) else { return false }
+        return analysisIntentTerms.contains(where: normalized.contains)
+            || (priorHealthContext && followUpTerms.contains(where: normalized.contains))
             || isActivityReadinessQuestion(normalized)
     }
 
     private static func isActivityReadinessQuestion(_ normalized: String) -> Bool {
         readinessActivityTerms.contains(where: normalized.contains)
             && readinessQuestionTerms.contains(where: normalized.contains)
+    }
+
+    private static func isContextualFollowUp(_ normalized: String) -> Bool {
+        followUpTerms.contains(where: normalized.contains)
     }
 
     private static func encoded(_ summary: HealthContextSummary) throws -> Data {

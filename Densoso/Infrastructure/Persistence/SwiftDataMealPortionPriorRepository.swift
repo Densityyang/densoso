@@ -2,6 +2,26 @@ import DensosoDomain
 import Foundation
 import SwiftData
 
+enum MealPriorContributionKind: String, Codable {
+    case portion
+    case dish
+}
+
+struct MealPortionContributionPayload: Codable {
+    let foodID: String?
+    let foodName: String
+    let unit: String
+    let p10Grams: Double
+    let p50Grams: Double
+    let p90Grams: Double
+}
+
+struct MealDishContributionPayload: Codable {
+    let dishName: String
+    let cookingMethod: String?
+    let ingredients: [PersonalMealDishIngredientPrior]
+}
+
 @ModelActor
 actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
     func all() async throws -> [PersonalMealPortionPrior] {
@@ -75,6 +95,7 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
         record.p90Grams = values.p90
         record.sourceActionKey = nil
         record.updatedAt = now
+        try Self.deleteContributions(kind: .portion, priorKey: values.priorKey, in: modelContext)
         if case nil = existingByID { modelContext.insert(record) }
         try modelContext.save()
     }
@@ -166,6 +187,7 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
         record.ingredientsJSON = ingredientsJSON
         record.isUserManaged = true
         record.updatedAt = now
+        try Self.deleteContributions(kind: .dish, priorKey: values.priorKey, in: modelContext)
         if existingByID == nil { modelContext.insert(record) }
         try modelContext.save()
     }
@@ -221,44 +243,55 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
                 continue
             }
             let priorKey = key.priorKey
-            let predicate = #Predicate<PersonalMealDishPriorRecord> { $0.priorKey == priorKey }
-            var descriptor = FetchDescriptor(predicate: predicate)
-            descriptor.fetchLimit = 1
-            if let record = try context.fetch(descriptor).first {
-                guard record.sourceActionKey != sourceActionKey else { continue }
-                // Manual templates are user-controlled. Only a fresh, explicit
-                // per-dish opt-in can intentionally replace their saved amounts.
-                guard !record.isUserManaged || isUserManaged else { continue }
-                let previous = Self.decodeDishIngredients(record.ingredientsJSON)
-                let priorObservationCount = previous != nil
-                    && (0...1_000_000).contains(record.observationCount)
-                    ? record.observationCount
-                    : 0
-                let merged = Self.averagedDishIngredients(
-                    previous: previous,
-                    incoming: ingredients,
-                    priorObservationCount: priorObservationCount
-                )
-                record.ingredientsJSON = try Self.encodeDishIngredients(merged)
-                record.observationCount = min(1_000_000, priorObservationCount + 1)
-                record.isUserManaged = record.isUserManaged || isUserManaged
-                record.sourceActionKey = sourceActionKey
-                record.updatedAt = now
-            } else {
-                context.insert(PersonalMealDishPriorRecord(
-                    priorKey: key.priorKey,
-                    dishKey: key.dishKey,
-                    dishName: dish.name.trimmingCharacters(in: .whitespacesAndNewlines),
-                    cookingMethodKey: key.cookingMethodKey,
-                    cookingMethod: dish.cookingMethod,
-                    ingredientsJSON: try Self.encodeDishIngredients(ingredients),
-                    observationCount: 1,
-                    isUserManaged: isUserManaged,
-                    sourceActionKey: sourceActionKey,
-                    createdAt: now,
-                    updatedAt: now
-                ))
+            let record = try dishPriorRecord(priorKey: priorKey, in: context)
+            if isUserManaged {
+                // An explicit template opt-in becomes user-managed and therefore
+                // remains available if its originating meal is later deleted.
+                    guard record?.isUserManaged != true else { continue }
+                if let record {
+                    record.ingredientsJSON = try Self.encodeDishIngredients(ingredients)
+                    record.observationCount = 0
+                    record.isUserManaged = true
+                    record.sourceActionKey = nil
+                    record.updatedAt = now
+                } else {
+                    context.insert(PersonalMealDishPriorRecord(
+                        priorKey: key.priorKey,
+                        dishKey: key.dishKey,
+                        dishName: dish.name.trimmingCharacters(in: .whitespacesAndNewlines),
+                        cookingMethodKey: key.cookingMethodKey,
+                        cookingMethod: dish.cookingMethod,
+                        ingredientsJSON: try Self.encodeDishIngredients(ingredients),
+                        observationCount: 0,
+                        isUserManaged: true,
+                        sourceActionKey: nil,
+                        createdAt: now,
+                        updatedAt: now
+                    ))
+                }
+                try Self.deleteContributions(kind: .dish, priorKey: key.priorKey, in: context)
+                continue
             }
+
+            guard record?.isUserManaged != true else { continue }
+            if let record, record.sourceActionKey == sourceActionKey { continue }
+            if let record {
+                try Self.seedLegacyDishAggregateIfNeeded(record, in: context, now: now)
+            }
+            try Self.upsertContribution(
+                kind: .dish,
+                priorKey: priorKey,
+                sourceActionKey: sourceActionKey,
+                payloadData: try JSONEncoder().encode(MealDishContributionPayload(
+                    dishName: dish.name.trimmingCharacters(in: .whitespacesAndNewlines),
+                    cookingMethod: dish.cookingMethod,
+                    ingredients: ingredients
+                )),
+                observationWeight: 1,
+                in: context,
+                now: now
+            )
+            try Self.recomputeDishPrior(priorKey: priorKey, in: context, now: now)
         }
     }
 
@@ -281,32 +314,311 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
             guard grams.isFinite, (0.1...5_000).contains(grams) else { continue }
             let p10 = max(0.1, grams * 0.9)
             let p90 = min(5_000, grams * 1.1)
-            let predicate = #Predicate<PersonalMealPortionPriorRecord> { $0.priorKey == key }
-            var descriptor = FetchDescriptor(predicate: predicate)
-            descriptor.fetchLimit = 1
-            if let record = try context.fetch(descriptor).first {
-                record.foodID = ingredient.foodID
-                record.foodName = ingredient.name
-                record.unit = correction.unit
-                record.p10Grams = p10
-                record.p50Grams = grams
-                record.p90Grams = p90
-                record.sourceActionKey = sourceActionKey
-                record.updatedAt = now
-            } else {
-                context.insert(PersonalMealPortionPriorRecord(
-                    priorKey: key,
-                    foodID: ingredient.foodID,
-                    foodName: ingredient.name,
-                    unit: correction.unit,
-                    p10Grams: p10,
-                    p50Grams: grams,
-                    p90Grams: p90,
-                    sourceActionKey: sourceActionKey,
-                    createdAt: now,
-                    updatedAt: now
-                ))
+            let record = try portionPriorRecord(priorKey: key, in: context)
+            // A nil source key denotes a manually managed prior. Confirmation
+            // learning must never replace it.
+            guard record?.sourceActionKey != nil || record == nil else { continue }
+            if let record, record.sourceActionKey == sourceActionKey { continue }
+            if let record {
+                try seedLegacyPortionContributionIfNeeded(record, in: context, now: now)
             }
+            let payload = MealPortionContributionPayload(
+                foodID: ingredient.foodID,
+                foodName: ingredient.name.trimmingCharacters(in: .whitespacesAndNewlines),
+                unit: correction.unit,
+                p10Grams: p10,
+                p50Grams: grams,
+                p90Grams: p90
+            )
+            try upsertContribution(
+                kind: .portion,
+                priorKey: key,
+                sourceActionKey: sourceActionKey,
+                payloadData: try JSONEncoder().encode(payload),
+                observationWeight: 1,
+                in: context,
+                now: now
+            )
+            try recomputePortionPrior(priorKey: key, in: context, now: now)
+        }
+    }
+
+    /// Removes only auto learned evidence owned by a deleted meal. User-managed
+    /// priors have no meal contribution and are deliberately left untouched.
+    static func removeMealContributions(
+        sourceActionKey: String?,
+        in context: ModelContext,
+        now: Date = Date()
+    ) throws {
+        guard let sourceActionKey = sourceActionKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sourceActionKey.isEmpty else { return }
+        let predicate = #Predicate<MealPriorContributionRecord> { $0.sourceActionKey == sourceActionKey }
+        let contributions = try context.fetch(FetchDescriptor(predicate: predicate))
+        var affected: [String: Set<String>] = [:]
+        for contribution in contributions {
+            affected[contribution.kindRaw, default: []].insert(contribution.priorKey)
+        }
+        for contribution in contributions { context.delete(contribution) }
+        for (kindRaw, priorKeys) in affected {
+            guard let kind = MealPriorContributionKind(rawValue: kindRaw) else {
+                throw MealPortionPriorRepositoryError.invalidValue
+            }
+            for priorKey in priorKeys {
+                switch kind {
+                case .portion:
+                    try recomputePortionPrior(priorKey: priorKey, in: context, now: now)
+                case .dish:
+                    try recomputeDishPrior(priorKey: priorKey, in: context, now: now)
+                }
+            }
+        }
+    }
+
+    private static func deleteContributions(
+        kind: MealPriorContributionKind,
+        priorKey: String,
+        in context: ModelContext
+    ) throws {
+        for contribution in try contributions(kind: kind, priorKey: priorKey, in: context) {
+            context.delete(contribution)
+        }
+    }
+
+    private static func portionPriorRecord(priorKey: String, in context: ModelContext) throws -> PersonalMealPortionPriorRecord? {
+        let predicate = #Predicate<PersonalMealPortionPriorRecord> { $0.priorKey == priorKey }
+        var descriptor = FetchDescriptor(predicate: predicate)
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+
+    private static func dishPriorRecord(priorKey: String, in context: ModelContext) throws -> PersonalMealDishPriorRecord? {
+        let predicate = #Predicate<PersonalMealDishPriorRecord> { $0.priorKey == priorKey }
+        var descriptor = FetchDescriptor(predicate: predicate)
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+
+    private static func contributions(
+        kind: MealPriorContributionKind,
+        priorKey: String,
+        in context: ModelContext
+    ) throws -> [MealPriorContributionRecord] {
+        let rawKind = kind.rawValue
+        let predicate = #Predicate<MealPriorContributionRecord> {
+            $0.kindRaw == rawKind && $0.priorKey == priorKey
+        }
+        return try context.fetch(FetchDescriptor(predicate: predicate, sortBy: [
+            SortDescriptor(\.createdAt),
+            SortDescriptor(\.contributionKey),
+        ]))
+    }
+
+    private static func contributionKey(kind: MealPriorContributionKind, priorKey: String, sourceActionKey: String?) -> String {
+        let owner = sourceActionKey ?? "legacy"
+        return "\(kind.rawValue):\(priorKey):\(owner)"
+    }
+
+    private static func upsertContribution(
+        kind: MealPriorContributionKind,
+        priorKey: String,
+        sourceActionKey: String,
+        payloadData: Data,
+        observationWeight: Int,
+        in context: ModelContext,
+        now: Date
+    ) throws {
+        let key = contributionKey(kind: kind, priorKey: priorKey, sourceActionKey: sourceActionKey)
+        let predicate = #Predicate<MealPriorContributionRecord> { $0.contributionKey == key }
+        var descriptor = FetchDescriptor(predicate: predicate)
+        descriptor.fetchLimit = 1
+        if let record = try context.fetch(descriptor).first {
+            guard record.sourceActionKey == sourceActionKey,
+                  record.kindRaw == kind.rawValue,
+                  record.priorKey == priorKey,
+                  !record.isLegacyAggregate else { throw MealPortionPriorRepositoryError.invalidValue }
+            record.payloadData = payloadData
+            record.observationWeight = max(1, observationWeight)
+            record.updatedAt = now
+        } else {
+            context.insert(MealPriorContributionRecord(
+                contributionKey: key,
+                sourceActionKey: sourceActionKey,
+                priorKey: priorKey,
+                kindRaw: kind.rawValue,
+                payloadData: payloadData,
+                observationWeight: observationWeight,
+                createdAt: now,
+                updatedAt: now
+            ))
+        }
+    }
+
+    private static func seedLegacyPortionContributionIfNeeded(
+        _ record: PersonalMealPortionPriorRecord,
+        in context: ModelContext,
+        now: Date
+    ) throws {
+        guard try contributions(kind: .portion, priorKey: record.priorKey, in: context).isEmpty else { return }
+        let payload = MealPortionContributionPayload(
+            foodID: record.foodID,
+            foodName: record.foodName,
+            unit: record.unit,
+            p10Grams: record.p10Grams,
+            p50Grams: record.p50Grams,
+            p90Grams: record.p90Grams
+        )
+        context.insert(MealPriorContributionRecord(
+            contributionKey: contributionKey(kind: .portion, priorKey: record.priorKey, sourceActionKey: nil),
+            sourceActionKey: nil,
+            priorKey: record.priorKey,
+            kindRaw: MealPriorContributionKind.portion.rawValue,
+            payloadData: try JSONEncoder().encode(payload),
+            observationWeight: 1,
+            isLegacyAggregate: true,
+            createdAt: record.createdAt,
+            updatedAt: now
+        ))
+    }
+
+    private static func seedLegacyDishAggregateIfNeeded(
+        _ record: PersonalMealDishPriorRecord,
+        in context: ModelContext,
+        now: Date
+    ) throws {
+        guard record.observationCount > 0,
+              try contributions(kind: .dish, priorKey: record.priorKey, in: context).isEmpty,
+              let ingredients = decodeDishIngredients(record.ingredientsJSON) else { return }
+        let payload = MealDishContributionPayload(
+            dishName: record.dishName,
+            cookingMethod: record.cookingMethod,
+            ingredients: ingredients
+        )
+        context.insert(MealPriorContributionRecord(
+            contributionKey: contributionKey(kind: .dish, priorKey: record.priorKey, sourceActionKey: nil),
+            sourceActionKey: nil,
+            priorKey: record.priorKey,
+            kindRaw: MealPriorContributionKind.dish.rawValue,
+            payloadData: try JSONEncoder().encode(payload),
+            observationWeight: max(1, record.observationCount),
+            isLegacyAggregate: true,
+            createdAt: record.createdAt,
+            updatedAt: now
+        ))
+    }
+
+    private static func recomputePortionPrior(priorKey: String, in context: ModelContext, now: Date) throws {
+        let record = try portionPriorRecord(priorKey: priorKey, in: context)
+        guard record?.sourceActionKey != nil || record == nil else { return }
+        let evidence = try contributions(kind: .portion, priorKey: priorKey, in: context)
+        guard !evidence.isEmpty else {
+            if let record, record.sourceActionKey != nil { context.delete(record) }
+            return
+        }
+        let decoded = try evidence.map { item -> (payload: MealPortionContributionPayload, weight: Int, sourceActionKey: String?) in
+            guard item.observationWeight > 0,
+                  let payload = try? JSONDecoder().decode(MealPortionContributionPayload.self, from: item.payloadData),
+                  let expectedKey = MealPortionPriorStorageKey.make(
+                    foodID: payload.foodID,
+                    foodName: payload.foodName,
+                    unit: payload.unit
+                  ), expectedKey == priorKey,
+                  (0.1...5_000).contains(payload.p10Grams),
+                  payload.p10Grams <= payload.p50Grams,
+                  payload.p50Grams <= payload.p90Grams,
+                  payload.p90Grams <= 5_000 else { throw MealPortionPriorRepositoryError.invalidValue }
+            return (payload, item.observationWeight, item.sourceActionKey)
+        }
+        let totalWeight = decoded.reduce(0.0) { $0 + Double($1.weight) }
+        let latest = decoded.last!.payload
+        let sourceActionKey = decoded.last(where: { $0.sourceActionKey != nil })?.sourceActionKey
+        let p10 = decoded.reduce(0.0) { $0 + $1.payload.p10Grams * Double($1.weight) } / totalWeight
+        let p50 = decoded.reduce(0.0) { $0 + $1.payload.p50Grams * Double($1.weight) } / totalWeight
+        let p90 = decoded.reduce(0.0) { $0 + $1.payload.p90Grams * Double($1.weight) } / totalWeight
+        if let record {
+            record.foodID = latest.foodID
+            record.foodName = latest.foodName
+            record.unit = latest.unit
+            record.p10Grams = p10
+            record.p50Grams = p50
+            record.p90Grams = p90
+            record.sourceActionKey = sourceActionKey
+            record.updatedAt = now
+        } else {
+            context.insert(PersonalMealPortionPriorRecord(
+                priorKey: priorKey,
+                foodID: latest.foodID,
+                foodName: latest.foodName,
+                unit: latest.unit,
+                p10Grams: p10,
+                p50Grams: p50,
+                p90Grams: p90,
+                sourceActionKey: sourceActionKey,
+                createdAt: now,
+                updatedAt: now
+            ))
+        }
+    }
+
+    private static func recomputeDishPrior(priorKey: String, in context: ModelContext, now: Date) throws {
+        let record = try dishPriorRecord(priorKey: priorKey, in: context)
+        guard record?.isUserManaged != true else { return }
+        let evidence = try contributions(kind: .dish, priorKey: priorKey, in: context)
+        guard !evidence.isEmpty else {
+            if let record, !record.isUserManaged { context.delete(record) }
+            return
+        }
+        var aggregate: [PersonalMealDishIngredientPrior]?
+        var totalWeight = 0
+        var latestPayload: MealDishContributionPayload?
+        var latestSourceActionKey: String?
+        for item in evidence {
+            guard item.observationWeight > 0,
+                  let payload = try? JSONDecoder().decode(MealDishContributionPayload.self, from: item.payloadData),
+                  let expectedKey = MealDishPriorStorageKey.make(
+                    dishName: payload.dishName,
+                    cookingMethod: payload.cookingMethod,
+                    ingredients: payload.ingredients
+                  ), expectedKey == priorKey else { throw MealPortionPriorRepositoryError.invalidValue }
+            aggregate = averagedDishIngredients(
+                previous: aggregate,
+                incoming: payload.ingredients,
+                priorObservationCount: totalWeight,
+                incomingObservationCount: item.observationWeight
+            )
+            totalWeight += item.observationWeight
+            latestPayload = payload
+            if let sourceActionKey = item.sourceActionKey { latestSourceActionKey = sourceActionKey }
+        }
+        guard let ingredients = aggregate, let latestPayload,
+              let key = MealDishPriorStorageKey.make(
+                dishName: latestPayload.dishName,
+                cookingMethod: latestPayload.cookingMethod,
+                ingredients: ingredients
+              ), key.priorKey == priorKey else { throw MealPortionPriorRepositoryError.invalidValue }
+        let encoded = try encodeDishIngredients(ingredients)
+        if let record {
+            record.dishKey = key.dishKey
+            record.dishName = latestPayload.dishName
+            record.cookingMethodKey = key.cookingMethodKey
+            record.cookingMethod = latestPayload.cookingMethod
+            record.ingredientsJSON = encoded
+            record.observationCount = totalWeight
+            record.sourceActionKey = latestSourceActionKey
+            record.updatedAt = now
+        } else {
+            context.insert(PersonalMealDishPriorRecord(
+                priorKey: priorKey,
+                dishKey: key.dishKey,
+                dishName: latestPayload.dishName,
+                cookingMethodKey: key.cookingMethodKey,
+                cookingMethod: latestPayload.cookingMethod,
+                ingredientsJSON: encoded,
+                observationCount: totalWeight,
+                isUserManaged: false,
+                sourceActionKey: latestSourceActionKey,
+                createdAt: now,
+                updatedAt: now
+            ))
         }
     }
 
@@ -519,7 +831,8 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
     private static func averagedDishIngredients(
         previous: [PersonalMealDishIngredientPrior]?,
         incoming: [PersonalMealDishIngredientPrior],
-        priorObservationCount: Int
+        priorObservationCount: Int,
+        incomingObservationCount: Int = 1
     ) -> [PersonalMealDishIngredientPrior] {
         guard let previous,
               priorObservationCount > 0,
@@ -527,7 +840,7 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
             return incoming.sorted { $0.id < $1.id }
         }
         let oldWeight = Double(priorObservationCount)
-        let newWeight = 1.0
+        let newWeight = Double(max(1, incomingObservationCount))
         let incomingByID = Dictionary(uniqueKeysWithValues: incoming.map { ($0.id, $0) })
         return previous.compactMap { old in
             guard let new = incomingByID[old.id] else { return nil }

@@ -2,16 +2,21 @@ import DensosoDomain
 import Foundation
 import SwiftData
 import SwiftUI
+import Combine
 
 struct ChatScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(AppState.self) private var appState
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @FocusState private var composerFocused: Bool
 
     @State private var messages: [ChatMessage] = []
-    @State private var inputText = ""
-    @State private var inputSource: VoiceCommandEnvelope.Source = .manualText
+    @SceneStorage("densoso.chat.composer.draft") private var inputText = ""
+    @SceneStorage("densoso.chat.composer.source") private var inputSourceRaw = VoiceCommandEnvelope.Source.manualText.rawValue
+    @SceneStorage("densoso.chat.watch.messageID") private var storedWatchMessageID = ""
+    @SceneStorage("densoso.chat.watch.originalText") private var storedWatchOriginalText = ""
+    @SceneStorage("densoso.chat.watch.attemptRequestID") private var storedWatchAttemptRequestID = ""
     @State private var agentUIState: AgentUIState = .idle
     @State private var voiceUIState: VoiceCaptureUIState = .idle
     @State private var imageCaptureState: MealImageCaptureState = .idle
@@ -36,6 +41,21 @@ struct ChatScreen: View {
     @State private var todayMealsReadError: String?
     @State private var correctingMealID: UUID?
     @State private var mealCorrectionError: String?
+    @State private var committedHealthSyncState: HealthSyncState?
+    @State private var isRetryingHealthSync = false
+
+    private var inputSource: VoiceCommandEnvelope.Source {
+        get { VoiceCommandEnvelope.Source(rawValue: inputSourceRaw) ?? .manualText }
+        nonmutating set { inputSourceRaw = newValue.rawValue }
+    }
+
+    private var activePendingActions: [PendingAction] {
+        PendingActionExpirationPolicy.activeActions(dependencies.agentSession.pendingActions, asOf: Date())
+    }
+
+    private var isAgentRequestActive: Bool {
+        agentUIState.isBusy || dependencies.agentSession.hasActiveRequest
+    }
 
     var body: some View {
         NavigationStack {
@@ -56,10 +76,34 @@ struct ChatScreen: View {
                         await prepareInitialState()
                     }
                     restorePendingWatchTranscript()
+                    if dependencies.agentSession.hasActiveRequest {
+                        setAgentUIState(.thinking)
+                    }
+                    if let event = dependencies.agentSession.latestEvent {
+                        transitionAgentUI(using: event)
+                    }
                 }
             }
             .onChange(of: dependencies.agentSession.pendingActions) { _, _ in
                 Task { await refreshDailyLoopSnapshot() }
+                dependencies.watchConnectivityCoordinator.refreshApplicationContext()
+            }
+            .onChange(of: dependencies.agentSession.lastConfirmationStatus) { _, status in
+                committedHealthSyncState = status?.externalSyncState
+                Task { await reloadCommittedHealthSyncStatus() }
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: ModelContext.didSave)
+                    .receive(on: DispatchQueue.main)
+            ) { notification in
+                refreshCommittedHealthSyncStatus(from: notification)
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task {
+                    try? await dependencies.agentSession.reloadPendingActions()
+                    await refreshDailyLoopSnapshot()
+                }
             }
             .onChange(of: dependencies.healthIntelligenceService.dailyBrief) { _, _ in
                 Task { await refreshDailyLoopSnapshot() }
@@ -141,16 +185,19 @@ struct ChatScreen: View {
                         )
                     }
 
-                    if !dependencies.agentSession.pendingActions.isEmpty {
-                        ForEach(dependencies.agentSession.pendingActions) { action in
-                            PendingActionConfirmationCard(action: action) {
+                    if !activePendingActions.isEmpty {
+                        ForEach(activePendingActions) { action in
+                            PendingActionConfirmationCard(
+                                action: action,
+                                isProcessing: dependencies.agentSession.isActionInFlight(action.id)
+                            ) {
                                 confirm(action)
                             } onReject: {
                                 Task {
                                     do {
                                         try await dependencies.agentSession.rejectPendingAction(id: action.id)
                                         setAgentUIState(
-                                            dependencies.agentSession.pendingActions.isEmpty
+                                        activePendingActions.isEmpty
                                                 ? .completed
                                                 : .awaitingConfirmation
                                         )
@@ -167,6 +214,41 @@ struct ChatScreen: View {
                                     }
                                 }
                             }
+                        }
+                    }
+                    if let statusError = dependencies.agentSession.pendingActionsReadError {
+                        Label("已保存的本地状态无法完整重读：\(statusError)", systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(OrbitPalette.coral)
+                            .orbitCard()
+                        Button("重新读取待处理事项") {
+                            Task { try? await dependencies.agentSession.reloadPendingActions() }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    if let confirmation = dependencies.agentSession.lastConfirmationStatus,
+                       confirmation.localCommitted {
+                        let state = committedHealthSyncState ?? confirmation.externalSyncState
+                        Label(
+                            "本机已保存 · \(healthSyncStatusLabel(state))",
+                            systemImage: healthSyncStatusSymbol(state)
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(healthSyncStatusColor(state))
+                        .orbitCard()
+                        if state == .retryable {
+                            Button(isRetryingHealthSync ? "正在重试健康同步…" : "重试 Apple 健康同步") {
+                                guard !isRetryingHealthSync else { return }
+                                isRetryingHealthSync = true
+                                Task {
+                                    await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
+                                    await reloadCommittedHealthSyncStatus()
+                                    await refreshDailyLoopSnapshot(refreshHealth: true)
+                                    isRetryingHealthSync = false
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isRetryingHealthSync)
                         }
                     }
 
@@ -341,7 +423,7 @@ struct ChatScreen: View {
                         .textFieldStyle(.plain)
                         .focused($composerFocused)
                         .submitLabel(.send)
-                        .disabled(agentUIState.isBusy)
+                        .disabled(isAgentRequestActive)
                         .accessibilityIdentifier("today-composer")
                         .onSubmit {
                             Task { await send(text: inputText) }
@@ -355,7 +437,7 @@ struct ChatScreen: View {
                     .buttonStyle(.borderedProminent)
                     .buttonBorderShape(.circle)
                     .controlSize(.large)
-                    .disabled(agentUIState.isBusy || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(isAgentRequestActive || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityLabel("发送")
                     .accessibilityIdentifier("today-send")
                 }
@@ -374,7 +456,7 @@ struct ChatScreen: View {
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.circle)
                 .controlSize(.large)
-                .disabled(agentUIState.isBusy)
+                .disabled(isAgentRequestActive)
                 .accessibilityLabel("照片记餐")
                 .accessibilityIdentifier("today-photo-secondary")
 
@@ -401,7 +483,7 @@ struct ChatScreen: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .tint(voiceUIState.isRecording ? OrbitPalette.coral : OrbitPalette.gold)
-                .disabled(agentUIState.isBusy || voiceUIState.isCaptureControlLocked)
+                .disabled(isAgentRequestActive || voiceUIState.isCaptureControlLocked)
                 .accessibilityLabel(voiceUIState.buttonTitle)
                 .accessibilityIdentifier("today-voice-primary")
 
@@ -456,6 +538,7 @@ struct ChatScreen: View {
 
     private func prepareInitialState() async {
         refreshTodayMeals()
+        await reloadCommittedHealthSyncStatus()
         _ = try? await dependencies.healthIntelligenceService.refresh()
         await refreshDailyLoopSnapshot()
         if appState.shouldFocusComposer { focusComposer() }
@@ -513,7 +596,7 @@ struct ChatScreen: View {
                     from: error,
                     fallback: .projectionFailedFallback
                 )
-                dailyLoopSnapshot = DailyLoopSnapshotComposer(calendar: .current).compose(
+                dailyLoopSnapshot = DailyLoopSnapshotComposer(calendar: .autoupdatingCurrent).compose(
                     asOf: Date(),
                     dailyBrief: nil,
                     errorCode: descriptor.code.rawValue,
@@ -554,6 +637,71 @@ struct ChatScreen: View {
                 fallback: .projectionFailedFallback
             )
             todayMealsReadError = "读取今日已确认餐食失败：\(descriptor.userMessage)"
+        }
+    }
+
+    private func refreshCommittedHealthSyncStatus(from notification: Notification) {
+        guard let status = dependencies.agentSession.lastConfirmationStatus else { return }
+        if notification.userInfo?[.invalidatedAllIdentifiers] != nil {
+            Task { await reloadCommittedHealthSyncStatus() }
+            return
+        }
+        let relevantType = Schema.entityName(for: CommittedActionReceiptRecord.self)
+        let keys: [ModelContext.NotificationKey] = [
+            .insertedIdentifiers,
+            .updatedIdentifiers,
+            .deletedIdentifiers,
+        ]
+        guard keys.contains(where: { key in
+            guard let identifiers = notification.userInfo?[key] as? Set<PersistentIdentifier> else { return false }
+            return identifiers.contains(where: { $0.entityName == relevantType })
+        }) else { return }
+        Task { await reloadCommittedHealthSyncStatus() }
+    }
+
+    private func reloadCommittedHealthSyncStatus() async {
+        guard let status = dependencies.agentSession.lastConfirmationStatus else {
+            committedHealthSyncState = nil
+            return
+        }
+        let actionID = status.actionID
+        let context = ModelContext(dependencies.modelContainer)
+        let predicate = #Predicate<CommittedActionReceiptRecord> { $0.actionID == actionID }
+        var descriptor = FetchDescriptor<CommittedActionReceiptRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        do {
+            guard let receipt = try context.fetch(descriptor).first,
+                  let state = HealthSyncState(rawValue: receipt.healthSyncStateRaw) else { return }
+            committedHealthSyncState = state
+        } catch {
+            // Keep the durable receipt state last observed by AgentSession visible.
+        }
+    }
+
+    private func healthSyncStatusLabel(_ state: HealthSyncState) -> String {
+        switch state {
+        case .pending, .sending: "Apple 健康同步待处理"
+        case .succeeded: "Apple 健康已同步"
+        case .retryable: "Apple 健康同步失败，可重试"
+        case .terminal: "Apple 健康同步不可用"
+        case .notApplicable: "无需健康同步"
+        }
+    }
+
+    private func healthSyncStatusSymbol(_ state: HealthSyncState) -> String {
+        switch state {
+        case .pending, .sending: "arrow.triangle.2.circlepath"
+        case .succeeded: "checkmark.circle.fill"
+        case .retryable, .terminal: "exclamationmark.triangle.fill"
+        case .notApplicable: "checkmark.circle"
+        }
+    }
+
+    private func healthSyncStatusColor(_ state: HealthSyncState) -> Color {
+        switch state {
+        case .pending, .sending: OrbitPalette.gold
+        case .succeeded, .notApplicable: OrbitPalette.green
+        case .retryable, .terminal: OrbitPalette.coral
         }
     }
 
@@ -607,22 +755,33 @@ struct ChatScreen: View {
                 )
             }
 
-            try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
-                try Task.checkCancellation()
-                meal.totalCaloriesKcal = Int(correctedEnergy.likely.rounded())
-                meal.energyLowKcal = correctedEnergy.low
-                meal.energyLikelyKcal = correctedEnergy.likely
-                meal.energyHighKcal = correctedEnergy.high
-                meal.evidenceData = encodedMealEvidence
-                for update in dishUpdates {
-                    update.dish.energyLowKcal = update.energy.low
-                    update.dish.energyLikelyKcal = update.energy.likely
-                    update.dish.energyHighKcal = update.energy.high
-                    update.dish.estimatedCaloriesKcal = Int(update.energy.likely.rounded())
-                    update.dish.evidenceData = update.evidenceData
-                }
+            let operationBarrier = PersistenceOperationBarrier.shared
+            let operationLease = try await operationBarrier.acquireMutationOperation()
+            defer { operationBarrier.release(operationLease) }
+            try await operationBarrier.withLease(operationLease) {
+                try await DailyMetricsProjectionWriteGate.withLockAndLease(
+                    for: modelContext,
+                    dayKeys: [DailyMetricsProjectionWriteGate.dayKey(for: meal.date)]
+                ) { lease in
+                    try Task.checkCancellation()
+                    meal.totalCaloriesKcal = Int(correctedEnergy.likely.rounded())
+                    meal.energyLowKcal = correctedEnergy.low
+                    meal.energyLikelyKcal = correctedEnergy.likely
+                    meal.energyHighKcal = correctedEnergy.high
+                    meal.evidenceData = encodedMealEvidence
+                    for update in dishUpdates {
+                        update.dish.energyLowKcal = update.energy.low
+                        update.dish.energyLikelyKcal = update.energy.likely
+                        update.dish.energyHighKcal = update.energy.high
+                        update.dish.estimatedCaloriesKcal = Int(update.energy.likely.rounded())
+                        update.dish.evidenceData = update.evidenceData
+                    }
 
-                try await HealthRepository(modelContext: modelContext).update(meal)
+                    try await HealthRepository(modelContext: modelContext).updateMealWhileStoreGateHeld(
+                        id: meal.id,
+                        lease: lease
+                    )
+                }
             }
             refreshTodayMeals()
             dependencies.watchConnectivityCoordinator.refreshApplicationContext()
@@ -678,10 +837,17 @@ struct ChatScreen: View {
            !pendingActionIDsAtTurnStart.contains(action.id) {
             currentTurnHasDraft = true
         }
+        if case .cancelled = event {
+            // The Agent rejects drafts created by a cancelled request. Derive the
+            // terminal UI state from the refreshed active-action list below.
+            pendingActionIDsAtTurnStart = []
+            currentTurnHasDraft = false
+        }
         let nextState = AgentUIStateMachine.transition(
             from: agentUIState,
             event: event,
-            hasDraftInCurrentTurn: currentTurnHasDraft
+            hasDraftInCurrentTurn: currentTurnHasDraft,
+            hasPendingActions: !dependencies.agentSession.pendingActions.isEmpty
         )
         setAgentUIState(nextState)
         switch event {
@@ -791,7 +957,8 @@ struct ChatScreen: View {
         var recordedFirstToken = false
         var recordedActionDraft = false
         let sourceForRequest = inputSource
-        guard !agentUIState.isBusy else { return }
+        let draftTextAtStart = inputText
+        guard !agentUIState.isBusy, !dependencies.agentSession.hasActiveRequest else { return }
         if multimodalRequest?.image == nil {
             imageCaptureState = .idle
         }
@@ -806,9 +973,10 @@ struct ChatScreen: View {
             if userText == pendingWatchOriginalText {
                 agentRequestID = watchMessageID
             } else {
-                if pendingWatchAttemptText != userText {
+                if pendingWatchAttemptText != userText || pendingWatchAttemptRequestID == nil {
                     pendingWatchAttemptText = userText
                     pendingWatchAttemptRequestID = UUID()
+                    storedWatchAttemptRequestID = pendingWatchAttemptRequestID?.uuidString ?? ""
                 }
                 agentRequestID = pendingWatchAttemptRequestID
             }
@@ -816,25 +984,54 @@ struct ChatScreen: View {
             agentRequestID = nil
         }
         var watchTranscriptWasDurablyHandled = false
+        var watchReceiptFailed = false
+        var agentResponseCompleted = false
+        var shouldKeepDraftForReview = false
         let route = VoiceCommandRouter().route(
             VoiceCommandEnvelope(text: userText, source: sourceForRequest)
         )
-        inputText = ""
-        inputSource = .manualText
         defer {
             if let watchMessageID {
                 if watchTranscriptWasDurablyHandled {
-                    try? dependencies.watchConnectivityCoordinator.markTranscriptProcessed(watchMessageID)
                     claimedWatchMessageIDs.remove(watchMessageID)
                     pendingWatchMessageID = nil
                     pendingWatchOriginalText = nil
                     pendingWatchAttemptText = nil
                     pendingWatchAttemptRequestID = nil
+                    storedWatchMessageID = ""
+                    storedWatchOriginalText = ""
+                    storedWatchAttemptRequestID = ""
+                    if ChatComposerDraftPolicy.canClearAfterRequest(
+                        currentText: inputText,
+                        currentSource: inputSource,
+                        submittedText: draftTextAtStart,
+                        submittedSource: sourceForRequest,
+                        requestSucceeded: true,
+                        retainForReview: shouldKeepDraftForReview
+                    ) {
+                        inputText = ""
+                        inputSource = .manualText
+                    }
                 } else {
-                    inputText = userText
-                    inputSource = .watchDictation
-                    voiceDraftSummary = "尚未生成可恢复的云端草稿；Watch 转写仍保存在本机，可检查后重试。"
+                    if inputText.isEmpty {
+                        inputText = userText
+                        inputSource = sourceForRequest
+                    }
+                    voiceDraftSummary = watchReceiptFailed
+                        ? "Agent 已处理此转写，但终态回执尚未可靠保存；原转写仍保留，可安全重试。"
+                        : "尚未生成可恢复的云端草稿；Watch 转写仍保存在本机，可检查后重试。"
                 }
+            } else if !watchReceiptFailed,
+                      ChatComposerDraftPolicy.canClearAfterRequest(
+                        currentText: inputText,
+                        currentSource: inputSource,
+                        submittedText: draftTextAtStart,
+                        submittedSource: sourceForRequest,
+                        requestSucceeded: agentResponseCompleted,
+                        retainForReview: shouldKeepDraftForReview
+                      ) {
+                inputText = ""
+                inputSource = .manualText
             }
             dependencies.watchConnectivityCoordinator.refreshApplicationContext()
         }
@@ -864,11 +1061,12 @@ struct ChatScreen: View {
             switch path {
             case .localOnDevice:
                 let result = try await dependencies.localIntelligence.extract(from: userText)
-                present(
+                shouldKeepDraftForReview = present(
                     AgentTurnContract.local(result),
                     originalText: userText,
                     source: sourceForRequest
                 )
+                agentResponseCompleted = true
                 setAgentUIState(.completed)
                 if sourceForRequest != .manualText { voiceUIState = .completed }
             case .cloudDeepSeek, .cloudQwen:
@@ -917,15 +1115,24 @@ struct ChatScreen: View {
                 guard let response = completedResponse else {
                     throw AgentError.invalidInputEnvelope
                 }
+                agentResponseCompleted = true
+                if let watchMessageID {
+                    do {
+                        try dependencies.watchConnectivityCoordinator.markTranscriptProcessed(watchMessageID)
+                        watchTranscriptWasDurablyHandled = true
+                    } catch {
+                        watchReceiptFailed = true
+                        throw error
+                    }
+                }
                 let stagedActions = dependencies.agentSession.pendingActions.filter {
                     !pendingActionIDsBeforeTurn.contains($0.id)
                 }
-                present(
+                shouldKeepDraftForReview = present(
                     AgentTurnContract.cloud(reply: response.text, stagedActions: stagedActions),
                     originalText: userText,
                     source: sourceForRequest
                 )
-                watchTranscriptWasDurablyHandled = watchMessageID != nil
                 await refreshDailyLoopSnapshot()
                 if sourceForRequest != .manualText { voiceUIState = .completed }
             case .manual:
@@ -937,6 +1144,11 @@ struct ChatScreen: View {
                 if sourceForRequest != .manualText { voiceUIState = .submitted }
             }
         } catch {
+            if watchReceiptFailed {
+                setAgentUIState(.failed)
+                addMessage(text: "Agent 已完成处理，但 Watch 终态回执暂未保存。转写仍保留在输入框，可重试确认状态。", isUser: false)
+                return
+            }
             if (error as? ProviderError) == .cancelled {
                 let hasNewPendingAction = currentTurnHasDraft && dependencies.agentSession.pendingActions.contains {
                     !pendingActionIDsAtTurnStart.contains($0.id) && $0.state == .pending
@@ -959,11 +1171,12 @@ struct ChatScreen: View {
         }
     }
 
+    @discardableResult
     private func present(
         _ turn: AgentTurnResult,
         originalText: String,
         source: VoiceCommandEnvelope.Source
-    ) {
+    ) -> Bool {
         addMessage(text: turn.text, isUser: false)
         let proposal = turn.intents.compactMap { intent -> LocalRecordSuggestion? in
             guard case .captureProposal(let suggestion) = intent else { return nil }
@@ -971,7 +1184,7 @@ struct ChatScreen: View {
         }.first
         guard let suggestion = proposal else {
             // PendingActionConfirmationCard reads the shared AgentSession queue.
-            return
+            return false
         }
 
         let subject = switch suggestion.kind {
@@ -986,6 +1199,7 @@ struct ChatScreen: View {
             text: "本机识别到可能的\(subject)意图（\(suggestion.item)\(amount)），目前还没有待确认草稿，也没有保存数据。原话保留在编辑框，可修改后切换云端代理继续生成统一确认草稿。",
             isUser: false
         )
+        return true
     }
 
     private func addMessage(text: String, isUser: Bool) {
@@ -993,16 +1207,19 @@ struct ChatScreen: View {
     }
 
     private func confirm(_ action: PendingAction) {
+        guard !dependencies.agentSession.isActionInFlight(action.id) else { return }
         setAgentUIState(.committing)
         Task {
             do {
                 let message = try await dependencies.agentSession.confirmPendingAction(action)
-                _ = try? await dependencies.healthIntelligenceService.refresh()
-                await refreshDailyLoopSnapshot()
+                // The local transaction is already committed here. Publish its
+                // new authoritative state immediately; HealthKit work retries
+                // independently in the outbox worker.
                 dependencies.watchConnectivityCoordinator.refreshApplicationContext()
+                await refreshDailyLoopSnapshot()
                 addMessage(text: message, isUser: false)
                 setAgentUIState(
-                    dependencies.agentSession.pendingActions.isEmpty
+                    activePendingActions.isEmpty
                         ? .completed
                         : .awaitingConfirmation
                 )
@@ -1018,16 +1235,31 @@ struct ChatScreen: View {
     }
 
     private func restorePendingWatchTranscript() {
+        if pendingWatchMessageID == nil,
+           let storedID = UUID(uuidString: storedWatchMessageID) {
+            pendingWatchMessageID = storedID
+            claimedWatchMessageIDs.insert(storedID)
+            inputSource = .watchDictation
+            pendingWatchOriginalText = storedWatchOriginalText.isEmpty ? inputText : storedWatchOriginalText
+            if inputText != pendingWatchOriginalText {
+                pendingWatchAttemptText = inputText
+                pendingWatchAttemptRequestID = UUID(uuidString: storedWatchAttemptRequestID)
+            }
+            return
+        }
         guard inputText.isEmpty, pendingWatchMessageID == nil else { return }
         do {
             guard let pending = try dependencies.watchConnectivityCoordinator.nextPendingTranscript(
                 excluding: claimedWatchMessageIDs
             ) else { return }
             pendingWatchMessageID = pending.messageID
+            storedWatchMessageID = pending.messageID.uuidString
             claimedWatchMessageIDs.insert(pending.messageID)
             pendingWatchOriginalText = pending.text
+            storedWatchOriginalText = pending.text
             pendingWatchAttemptText = nil
             pendingWatchAttemptRequestID = nil
+            storedWatchAttemptRequestID = ""
             inputText = pending.text
             inputSource = .watchDictation
             showTextEditor = true

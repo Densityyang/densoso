@@ -316,23 +316,36 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
                             title: title,
                             startTime: session.date,
                             endTime: nil,
-                            notes: notes
+                            notes: notes,
+                            source: .confirmedTrainingPlan
                         )
                     })
                     continue
                 }
 
                 guard event.date >= start, event.date < end else { continue }
-                scheduleItems.append(
-                    AgentScheduleItem(
-                        title: event.title,
-                        startTime: event.startTime,
-                        endTime: event.endTime,
-                        notes: ConfirmedWorkoutPlanEntry.decode(notes: event.notes) == nil
-                            ? event.notes
-                            : nil
+                if let workoutPlan = ConfirmedWorkoutPlanEntry.decode(notes: event.notes) {
+                    guard workoutPlan.state != .terminal else { continue }
+                    scheduleItems.append(
+                        AgentScheduleItem(
+                            title: event.title,
+                            startTime: event.startTime,
+                            endTime: event.endTime,
+                            notes: nil,
+                            source: .confirmedWorkoutPlan
+                        )
                     )
-                )
+                } else {
+                    scheduleItems.append(
+                        AgentScheduleItem(
+                            title: event.title,
+                            startTime: event.startTime,
+                            endTime: event.endTime,
+                            notes: event.notes,
+                            source: .scheduleEvent
+                        )
+                    )
+                }
             }
         }
         return scheduleItems.sorted {

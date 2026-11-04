@@ -16,6 +16,11 @@ enum WatchReceiptState {
     static let rejected = "rejected"
 }
 
+enum WatchMessageInboxStoreError: Error, Equatable {
+    case receiptNotFound(UUID)
+    case receiptStateNotDurable(UUID)
+}
+
 fileprivate struct CausalSequenceReceiptCounts {
     var receiptCount = 0
     var terminalReceiptCount = 0
@@ -89,6 +94,7 @@ final class WatchMessageInboxStore {
     func ingest(_ envelope: WatchMessageEnvelope) throws -> WatchMessageIngestResult {
         let data = try WatchMessageCodec.encode(envelope)
         let key = envelope.messageID.uuidString.lowercased()
+        let messageID = envelope.messageID
         let payloadHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let context = ModelContext(modelContainer)
         var result: WatchMessageIngestResult = .accepted
@@ -109,6 +115,29 @@ final class WatchMessageInboxStore {
             }
 
             let inboxID = Self.conversationID
+            let role = "watch-envelope"
+            let existingMessagePredicate = #Predicate<MessageRecord> { message in
+                message.conversationID == inboxID
+                    && message.roleRaw == role
+                    && message.requestID == messageID
+            }
+            var existingMessageDescriptor = FetchDescriptor<MessageRecord>(predicate: existingMessagePredicate)
+            existingMessageDescriptor.fetchLimit = 1
+            if let existingMessage = try context.fetch(existingMessageDescriptor).first {
+                guard existingMessage.contentData == data else {
+                    result = .payloadConflict
+                    return
+                }
+                // Repair a missing receipt around the existing idempotent message
+                // instead of inserting a second inbox row for the same request.
+                context.insert(WatchMessageReceiptRecord(
+                    messageID: key,
+                    schemaVersion: envelope.schemaVersion,
+                    payloadHash: payloadHash
+                ))
+                result = .accepted
+                return
+            }
             let conversationPredicate = #Predicate<ConversationRecord> { $0.id == inboxID }
             var conversationDescriptor = FetchDescriptor<ConversationRecord>(predicate: conversationPredicate)
             conversationDescriptor.fetchLimit = 1
@@ -128,7 +157,7 @@ final class WatchMessageInboxStore {
             let lastOrdinal = try context.fetch(messageDescriptor).first?.ordinal ?? -1
             context.insert(MessageRecord(
                 conversationID: Self.conversationID,
-                roleRaw: "watch-envelope",
+                roleRaw: role,
                 contentData: data,
                 ordinal: lastOrdinal + 1,
                 requestID: envelope.messageID
@@ -330,7 +359,9 @@ final class WatchMessageInboxStore {
         let predicate = #Predicate<WatchMessageReceiptRecord> { $0.messageID == key }
         var descriptor = FetchDescriptor<WatchMessageReceiptRecord>(predicate: predicate)
         descriptor.fetchLimit = 1
-        guard let receipt = try context.fetch(descriptor).first else { return nil }
+        guard let receipt = try context.fetch(descriptor).first else {
+            throw WatchMessageInboxStoreError.receiptNotFound(messageID)
+        }
         let oldState = receipt.state
         let inboxID = Self.conversationID
         let role = "watch-envelope"
@@ -344,6 +375,10 @@ final class WatchMessageInboxStore {
         receipt.state = state
         receipt.processedAt = Date()
         try context.save()
+        let verificationContext = ModelContext(modelContainer)
+        guard try verificationContext.fetch(descriptor).first?.state == state else {
+            throw WatchMessageInboxStoreError.receiptStateNotDurable(messageID)
+        }
         if let causalSequence,
            let terminalCausalSequenceWatermarkCache {
             terminalCausalSequenceWatermarkCache.recordReceiptStateChange(
@@ -353,6 +388,20 @@ final class WatchMessageInboxStore {
             )
         }
         return causalSequence
+    }
+
+    func verifyState(_ state: String, for messageID: UUID) throws {
+        let context = ModelContext(modelContainer)
+        let key = messageID.uuidString.lowercased()
+        let predicate = #Predicate<WatchMessageReceiptRecord> { $0.messageID == key }
+        var descriptor = FetchDescriptor<WatchMessageReceiptRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        guard let receipt = try context.fetch(descriptor).first else {
+            throw WatchMessageInboxStoreError.receiptNotFound(messageID)
+        }
+        guard receipt.state == state else {
+            throw WatchMessageInboxStoreError.receiptStateNotDurable(messageID)
+        }
     }
 
     func recentProcessedMessageIDs(limit: Int = 100) throws -> [UUID] {

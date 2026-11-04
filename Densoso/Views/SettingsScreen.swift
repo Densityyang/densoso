@@ -1001,6 +1001,14 @@ struct SettingsScreen: View {
                 warnings.append("备份数据已恢复，但对话状态刷新失败：\(safeErrorMessage(error))")
             }
 
+            await dependencies.foregroundHealthRebaselineCoordinator.rebaselineAfterDatasetRestore()
+            switch dependencies.foregroundHealthRebaselineCoordinator.state {
+            case .completed:
+                break
+            case .partiallyCompleted, .failed, .superseded, .preparing, .syncing, .queued, .idle:
+                warnings.append("备份数据已恢复，但 Apple 健康数据的首次同步尚未完整完成；系统会按重试策略继续同步。")
+            }
+
             if summary.pendingProjectionDays > 0 {
                 warnings.append("备份数据已恢复，但有 \(summary.pendingProjectionDays) 天的每日指标仍待更新；系统已保留重试标记。")
             }
@@ -1324,7 +1332,11 @@ private struct ProfileEditorSheet: View {
         let now = Date()
         var projectionPending = false
         do {
-            try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
+            let operationBarrier = PersistenceOperationBarrier.shared
+            let operationLease = try await operationBarrier.acquireMutationOperation()
+            defer { operationBarrier.release(operationLease) }
+            try await operationBarrier.withLease(operationLease) {
+                try await DailyMetricsProjectionWriteGate.withLockAndLease(for: modelContext) { lease in
                 try Task.checkCancellation()
                 let weightChanged = abs(profile.weightKg - weightValue) > 0.001
                 let revisionChanged = profile.name != trimmedName
@@ -1370,7 +1382,8 @@ private struct ProfileEditorSheet: View {
                             source: "manual",
                             algorithmVersion: "weight-v2",
                             confidence: 0.9
-                        )
+                        ),
+                        whileHoldingStoreGate: lease
                     )
                     let day = Calendar.current.startOfDay(for: now)
                     let predicate = #Predicate<DailyMetrics> { $0.date == day }
@@ -1379,7 +1392,7 @@ private struct ProfileEditorSheet: View {
                     ) ?? true
                 } else {
                     do {
-                        try DailyMetricsProjector.markPendingForReprojection(on: now, in: modelContext)
+                        try DailyMetricsProjector.markPendingForReprojectionWhileGateHeld(on: now, in: modelContext)
                         try modelContext.save()
                     } catch {
                         modelContext.rollback()
@@ -1395,10 +1408,11 @@ private struct ProfileEditorSheet: View {
                         // Profile/revision and the initial pending marker are durable.
                         // Keep the editor open with a truthful saved-but-pending result.
                         modelContext.rollback()
-                        try? DailyMetricsProjector.markPendingForReprojection(on: now, in: modelContext)
+                        try? DailyMetricsProjector.markPendingForReprojectionWhileGateHeld(on: now, in: modelContext)
                         try? modelContext.save()
                         projectionPending = true
                     }
+                }
                 }
             }
             if projectionPending {

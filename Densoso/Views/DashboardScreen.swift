@@ -12,7 +12,10 @@ struct DashboardScreen: View {
     @State private var metrics: DailyMetrics?
     @State private var weekly: WeeklyAnalyticsSnapshot?
     @State private var healthSnapshotStatus: String?
-    @State private var loadError: String?
+    @State private var healthRefreshError: String?
+    @State private var projectionReadError: String?
+    @State private var isLoadingProjection = true
+    @State private var projectionLoadGeneration = 0
 
     var body: some View {
         NavigationStack {
@@ -61,8 +64,26 @@ struct DashboardScreen: View {
                     }
                     .orbitCard()
 
+                    if isLoadingProjection, (metrics != nil || weekly != nil) {
+                        Label("正在刷新；暂时显示上次读取的数据", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .orbitCard()
+                    }
+
                     if let metrics {
                         todayCard(metrics)
+                    } else if isLoadingProjection {
+                        ProgressView("正在读取今日指标")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .orbitCard()
+                    } else if projectionReadError != nil {
+                        ContentUnavailableView(
+                            "今日数据暂不可用",
+                            systemImage: "exclamationmark.triangle",
+                            description: Text("读取失败；刷新后重试。")
+                        )
+                        .orbitCard()
                     } else {
                         ContentUnavailableView(
                             "今日暂无记录",
@@ -74,6 +95,17 @@ struct DashboardScreen: View {
 
                     if let weekly, weekly.hasData, weekly.totalDeficitKcal != nil {
                         weeklyCard(weekly)
+                    } else if isLoadingProjection {
+                        ProgressView("正在读取七日趋势")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .orbitCard()
+                    } else if projectionReadError != nil {
+                        ContentUnavailableView(
+                            "趋势暂不可用",
+                            systemImage: "exclamationmark.triangle",
+                            description: Text("读取失败；刷新后重试。")
+                        )
+                        .orbitCard()
                     } else {
                         ContentUnavailableView(
                             "七日趋势等待数据",
@@ -83,8 +115,14 @@ struct DashboardScreen: View {
                         .orbitCard()
                     }
 
-                    if let loadError {
-                        Label(loadError, systemImage: "exclamationmark.triangle.fill")
+                    if let projectionReadError, (metrics != nil || weekly != nil) {
+                        Label("显示上次读取的数据，可能已过时：\(projectionReadError)", systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(OrbitPalette.coral)
+                            .orbitCard()
+                    }
+                    if let healthRefreshError {
+                        Label("健康数据刷新失败；趋势保留上次成功读取的内容：\(healthRefreshError)", systemImage: "heart.text.square")
                             .font(.footnote)
                             .foregroundStyle(OrbitPalette.coral)
                             .orbitCard()
@@ -104,13 +142,18 @@ struct DashboardScreen: View {
             .task { await loadData() }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active else { return }
-                // Clear this view's value-type snapshot synchronously when the
-                // app foregrounds; AppRoot then purges the HealthKit window.
-                weekly = nil
+                // Re-read persisted projections when returning to the foreground.
                 if dependencies.healthKitService.hasRequestedAuthorization {
-                    healthSnapshotStatus = "最近 42 天的健康数据正在重新验证；旧趋势已隐藏。"
+                    healthSnapshotStatus = "正在重新验证健康摘要；读取完成前会保留上次成功数据并标记刷新状态。"
                 }
                 Task { await loadData() }
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: ModelContext.didSave)
+                    .receive(on: DispatchQueue.main)
+            ) { notification in
+                guard Self.containsDashboardProjectionChanges(notification) else { return }
+                Task { await loadWeeklyProjection() }
             }
             .onChange(of: dependencies.healthIntelligenceService.weeklyBrief) { _, _ in
                 Task { await loadWeeklyProjection() }
@@ -252,13 +295,12 @@ struct DashboardScreen: View {
     }
 
     private func loadData() async {
-        loadError = nil
-        weekly = nil
+        healthRefreshError = nil
         if dependencies.healthContextExportGate.isOpen {
             do {
                 _ = try await dependencies.healthIntelligenceService.refresh()
             } catch {
-                loadError = SharedErrorDescriptor.mapped(
+                healthRefreshError = SharedErrorDescriptor.mapped(
                     from: error,
                     fallback: .projectionFailedFallback
                 ).userMessage
@@ -268,36 +310,72 @@ struct DashboardScreen: View {
     }
 
     private func loadWeeklyProjection() async {
-        weekly = nil
+        projectionLoadGeneration &+= 1
+        let generation = projectionLoadGeneration
+        isLoadingProjection = true
+        defer {
+            if projectionLoadGeneration == generation { isLoadingProjection = false }
+        }
         do {
             let calendar = Calendar.current
             let today = calendar.startOfDay(for: Date())
             let predicate = #Predicate<DailyMetrics> { $0.date == today }
             metrics = try modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: predicate)).first
+            guard projectionLoadGeneration == generation else { return }
+            projectionReadError = nil
             guard dependencies.healthContextExportGate.isOpen else {
                 weekly = nil
                 healthSnapshotStatus = "健康数据缓存尚未完成安全清理，趋势暂不可用；手工记录仍保留。"
                 return
             }
             let goal = try await dependencies.healthIntelligenceService.goalProfile(asOf: today)
+            guard projectionLoadGeneration == generation else { return }
             guard dependencies.healthContextExportGate.isOpen else {
                 weekly = nil
                 healthSnapshotStatus = "健康数据缓存尚未完成安全清理，趋势暂不可用；手工记录仍保留。"
                 return
             }
-            weekly = try WeeklyAnalyticsService(calendar: calendar).load(
+            weekly = try await WeeklyAnalyticsService(calendar: calendar).load(
                 referenceDate: today,
                 profile: profiles.first,
                 goal: goal,
                 in: modelContext
             )
+            guard projectionLoadGeneration == generation else { return }
+            projectionReadError = nil
             healthSnapshotStatus = nil
         } catch {
-            loadError = SharedErrorDescriptor.mapped(
+            guard projectionLoadGeneration == generation else { return }
+            projectionReadError = SharedErrorDescriptor.mapped(
                 from: error,
                 fallback: .projectionFailedFallback
             ).userMessage
         }
+    }
+
+    static func containsDashboardProjectionChanges(_ notification: Notification) -> Bool {
+        if notification.userInfo?[.invalidatedAllIdentifiers] != nil { return true }
+        let keys: [ModelContext.NotificationKey] = [
+            .insertedIdentifiers,
+            .updatedIdentifiers,
+            .deletedIdentifiers,
+            .invalidatedAllIdentifiers,
+        ]
+        let relevantTypes: Set<String> = [
+            Schema.entityName(for: DailyMetrics.self),
+            Schema.entityName(for: MealRecord.self),
+            Schema.entityName(for: WorkoutRecord.self),
+            Schema.entityName(for: WeightRecord.self),
+            Schema.entityName(for: DailyHealthSnapshotRecord.self),
+            Schema.entityName(for: UserProfile.self),
+            Schema.entityName(for: ProfileRevisionRecord.self),
+            Schema.entityName(for: GoalProfileRecord.self),
+        ]
+        for key in keys {
+            guard let identifiers = notification.userInfo?[key] as? Set<PersistentIdentifier> else { continue }
+            if identifiers.contains(where: { relevantTypes.contains($0.entityName) }) { return true }
+        }
+        return false
     }
 
     private func approximatePrefix(for availability: MetricAvailability) -> String {

@@ -4,6 +4,10 @@ import Foundation
 import SwiftData
 
 enum ConfirmationFaultPoint: String, Sendable {
+    case beforeRejectSave
+    case beforeExpirationSave
+    case beforeCommittingSave
+    case beforeRecoverySave
     case afterRecord
     case afterProjection
     case afterOutbox
@@ -42,6 +46,135 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         transactionReceiptReplayTestActionTypeRaw = actionTypeRaw
     }
 
+    func beginToolExecution(_ entry: ToolExecutionJournalEntry) throws -> ToolExecutionJournalEntry {
+        if let existing = try toolExecutionJournal(invocationID: entry.invocationID) {
+            guard existing.requestID == entry.requestID,
+                  existing.conversationID == entry.conversationID,
+                  existing.toolName == entry.toolName,
+                  existing.argumentsHash == entry.argumentsHash,
+                  existing.requestTimeAnchor == entry.requestTimeAnchor else {
+                throw ToolExecutionJournalError.invocationIdentityMismatch
+            }
+            return existing
+        }
+        modelContext.insert(DensosoSchemaV13.ToolExecutionJournalRecord(entry))
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+        return entry
+    }
+
+    func storePreparedToolPayload(
+        invocationID: String,
+        payloadData: Data,
+        updatedAt: Date
+    ) throws {
+        guard let record = try toolExecutionJournalRecord(invocationID: invocationID) else {
+            throw ToolExecutionJournalError.invocationIdentityMismatch
+        }
+        if let existingData = record.preparedPayloadData, existingData != payloadData {
+            throw ToolExecutionJournalError.invocationIdentityMismatch
+        }
+        record.preparedPayloadData = payloadData
+        record.updatedAt = updatedAt
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    func completeToolExecution(
+        invocationID: String,
+        resultData: Data,
+        updatedAt: Date
+    ) throws {
+        guard let record = try toolExecutionJournalRecord(invocationID: invocationID) else {
+            throw ToolExecutionJournalError.invocationIdentityMismatch
+        }
+        record.resultData = resultData
+        record.stateRaw = ToolExecutionJournalState.completed.rawValue
+        record.completedAt = updatedAt
+        record.updatedAt = updatedAt
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    func failToolExecution(
+        invocationID: String,
+        resultData: Data?,
+        updatedAt: Date
+    ) throws {
+        guard let record = try toolExecutionJournalRecord(invocationID: invocationID) else {
+            throw ToolExecutionJournalError.invocationIdentityMismatch
+        }
+        record.resultData = resultData
+        record.stateRaw = ToolExecutionJournalState.failed.rawValue
+        record.completedAt = nil
+        record.updatedAt = updatedAt
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    func failToolExecutions(
+        pendingActionID: UUID,
+        resultData: Data,
+        updatedAt: Date
+    ) throws {
+        let targetID = pendingActionID
+        let predicate = #Predicate<DensosoSchemaV13.ToolExecutionJournalRecord> {
+            $0.pendingActionID == targetID
+        }
+        let records = try modelContext.fetch(
+            FetchDescriptor<DensosoSchemaV13.ToolExecutionJournalRecord>(predicate: predicate)
+        )
+        guard !records.isEmpty else { return }
+        for record in records {
+            record.resultData = resultData
+            record.stateRaw = ToolExecutionJournalState.failed.rawValue
+            record.completedAt = nil
+            record.updatedAt = updatedAt
+        }
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    func toolExecutionJournal(
+        requestID: UUID,
+        conversationID: UUID
+    ) throws -> [ToolExecutionJournalEntry] {
+        let targetRequestID = requestID
+        let targetConversationID = conversationID
+        let predicate = #Predicate<DensosoSchemaV13.ToolExecutionJournalRecord> {
+            $0.requestID == targetRequestID && $0.conversationID == targetConversationID
+        }
+        return try modelContext.fetch(
+            FetchDescriptor<DensosoSchemaV13.ToolExecutionJournalRecord>(
+                predicate: predicate,
+                sortBy: [
+                    SortDescriptor(\DensosoSchemaV13.ToolExecutionJournalRecord.logicalRound),
+                    SortDescriptor(\DensosoSchemaV13.ToolExecutionJournalRecord.callIndex),
+                ]
+            )
+        ).map { try $0.entry() }
+    }
+
     func stage(
         payload: ActionPayload,
         canonicalPayloadData: Data,
@@ -51,12 +184,75 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         conversationID: UUID,
         createdAt: Date,
         expiresAt: Date
-    ) throws -> PendingAction {
+    ) async throws -> PendingAction {
+        try await stageInternal(
+            payload: payload,
+            canonicalPayloadData: canonicalPayloadData,
+            canonicalPayloadHash: canonicalPayloadHash,
+            idempotencyKey: idempotencyKey,
+            clientRequestID: clientRequestID,
+            conversationID: conversationID,
+            createdAt: createdAt,
+            expiresAt: expiresAt,
+            invocationID: nil
+        )
+    }
+
+    func stageToolAction(
+        payload: ActionPayload,
+        canonicalPayloadData: Data,
+        canonicalPayloadHash: String,
+        idempotencyKey: String,
+        clientRequestID: UUID,
+        conversationID: UUID,
+        createdAt: Date,
+        expiresAt: Date,
+        invocationID: String,
+        requestDeadline: Date? = nil
+    ) async throws -> PendingAction {
+        try await stageInternal(
+            payload: payload,
+            canonicalPayloadData: canonicalPayloadData,
+            canonicalPayloadHash: canonicalPayloadHash,
+            idempotencyKey: idempotencyKey,
+            clientRequestID: clientRequestID,
+            conversationID: conversationID,
+            createdAt: createdAt,
+            expiresAt: expiresAt,
+            invocationID: invocationID,
+            requestDeadline: requestDeadline
+        )
+    }
+
+    private func stageInternal(
+        payload: ActionPayload,
+        canonicalPayloadData: Data,
+        canonicalPayloadHash: String,
+        idempotencyKey: String,
+        clientRequestID: UUID,
+        conversationID: UUID,
+        createdAt: Date,
+        expiresAt: Date,
+        invocationID: String?,
+        requestDeadline: Date? = nil
+    ) async throws -> PendingAction {
+        let operationBarrier = PersistenceOperationBarrier.shared
+        let operationLease = try await operationBarrier.acquireMutationOperation()
+        defer { operationBarrier.release(operationLease) }
         guard ActionPayload.supportedSchemaVersions.contains(ActionPayload.currentSchemaVersion),
               Self.sha256(canonicalPayloadData) == canonicalPayloadHash,
               try payload.canonicalData(schemaVersion: ActionPayload.currentSchemaVersion) == canonicalPayloadData,
               try payload.canonicalPayloadHash(schemaVersion: ActionPayload.currentSchemaVersion) == canonicalPayloadHash else {
             throw ConfirmationError.payloadCorrupt
+        }
+        let journalPayloadData: Data
+        if invocationID == nil {
+            journalPayloadData = Data()
+        } else {
+            journalPayloadData = try ToolExecutionPayloadCodec.encode(payload)
+        }
+        if let requestDeadline, Date() >= requestDeadline {
+            throw ConfirmationError.requestDeadlineExceeded
         }
         if let existing = try pendingAction(idempotencyKey: idempotencyKey) {
             do {
@@ -68,11 +264,33 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                       existing.clientRequestID == clientRequestID else {
                     throw ConfirmationError.invariantViolation("idempotency key collision")
                 }
-                return try map(existing)
+                let action = try map(existing)
+                if let invocationID {
+                    if let requestDeadline, Date() >= requestDeadline {
+                        throw ConfirmationError.requestDeadlineExceeded
+                    }
+                    do {
+                        try linkToolExecution(
+                            invocationID: invocationID,
+                            preparedPayloadData: journalPayloadData,
+                            pendingActionID: action.id,
+                            updatedAt: createdAt
+                        )
+                        try modelContext.save()
+                    } catch {
+                        modelContext.rollback()
+                        throw error
+                    }
+                }
+                return action
             } catch ConfirmationError.notFound {
                 guard existing.stateRaw == PendingActionState.pending.rawValue
                     || existing.stateRaw == PendingActionState.committing.rawValue else {
                     throw ConfirmationError.invariantViolation("legacy action cannot be restaged")
+                }
+                if let requestDeadline, Date() >= requestDeadline {
+                    modelContext.rollback()
+                    throw ConfirmationError.requestDeadlineExceeded
                 }
                 existing.stateRaw = PendingActionState.failed.rawValue
                 existing.failureCode = "legacy_unbound_action"
@@ -97,7 +315,23 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             expiresAt: expiresAt
         )
         modelContext.insert(record)
-        try modelContext.save()
+        do {
+            if let requestDeadline, Date() >= requestDeadline {
+                throw ConfirmationError.requestDeadlineExceeded
+            }
+            if let invocationID {
+                try linkToolExecution(
+                    invocationID: invocationID,
+                    preparedPayloadData: journalPayloadData,
+                    pendingActionID: record.id,
+                    updatedAt: createdAt
+                )
+            }
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
         return PendingAction(
             id: record.id,
             idempotencyKey: idempotencyKey,
@@ -111,7 +345,10 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         )
     }
 
-    func activeActions(conversationID: UUID, now: Date) throws -> [PendingAction] {
+    func activeActions(conversationID: UUID, now: Date) async throws -> [PendingAction] {
+        let operationBarrier = PersistenceOperationBarrier.shared
+        let operationLease = try await operationBarrier.acquireMutationOperation()
+        defer { operationBarrier.release(operationLease) }
         let pendingState = PendingActionState.pending.rawValue
         let committingState = PendingActionState.committing.rawValue
         let expiredState = PendingActionState.expired.rawValue
@@ -219,7 +456,14 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         return actions
     }
 
-    func reject(id: UUID, conversationID: UUID, now: Date) throws {
+    func reject(id: UUID, conversationID: UUID, now: Date) async throws {
+        let operationBarrier = PersistenceOperationBarrier.shared
+        let operationLease = try await operationBarrier.acquireMutationOperation()
+        defer { operationBarrier.release(operationLease) }
+        let projectionLease = try await DailyMetricsProjectionWriteGate.acquire(
+            storeID: ObjectIdentifier(modelContainer)
+        )
+        defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
         guard let action = try pendingAction(id: id) else { throw ConfirmationError.notFound }
         let presentedAction = try map(action)
         guard presentedAction.conversationID == conversationID else { throw ConfirmationError.notFound }
@@ -229,14 +473,22 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         if state == .pending && action.expiresAt <= now {
             action.stateRaw = PendingActionState.expired.rawValue
             action.updatedAt = now
-            try modelContext.save()
+            do {
+                try injectFailure(.beforeExpirationSave)
+                try modelContext.save()
+            }
+            catch { modelContext.rollback(); throw error }
             throw ConfirmationError.expired
         }
         switch state {
         case .pending:
             action.stateRaw = PendingActionState.rejected.rawValue
             action.updatedAt = now
-            try modelContext.save()
+            do {
+                try injectFailure(.beforeRejectSave)
+                try modelContext.save()
+            }
+            catch { modelContext.rollback(); throw error }
         case .expired: throw ConfirmationError.expired
         case .rejected: return
         case .committing: throw ConfirmationError.alreadyCommitting
@@ -249,7 +501,10 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         conversationID: UUID,
         expectedPayloadHash: String,
         now: Date
-    ) throws -> CommitReceipt {
+    ) async throws -> CommitReceipt {
+        let operationBarrier = PersistenceOperationBarrier.shared
+        let operationLease = try await operationBarrier.acquireMutationOperation()
+        defer { operationBarrier.release(operationLease) }
         guard let action = try pendingAction(id: id) else { throw ConfirmationError.notFound }
         guard ActionPayload.supportedSchemaVersions.contains(action.schemaVersion) else {
             throw ConfirmationError.unsupportedAction
@@ -267,6 +522,11 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
               try payload.canonicalPayloadHash(schemaVersion: action.schemaVersion) == storedPayloadHash else {
             throw ConfirmationError.payloadCorrupt
         }
+        let projectionLease = try await DailyMetricsProjectionWriteGate.acquire(
+            storeID: ObjectIdentifier(modelContainer),
+            dayKeys: projectionDayKeys(for: payload)
+        )
+        defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
         if let receipt = try receipt(actionID: id) {
             let mappedReceipt = try map(receipt)
             try validate(
@@ -292,13 +552,21 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         guard action.expiresAt > now else {
             action.stateRaw = PendingActionState.expired.rawValue
             action.updatedAt = now
-            try modelContext.save()
+            do {
+                try injectFailure(.beforeExpirationSave)
+                try modelContext.save()
+            }
+            catch { modelContext.rollback(); throw error }
             throw ConfirmationError.expired
         }
 
         action.stateRaw = PendingActionState.committing.rawValue
         action.updatedAt = now
-        try modelContext.save()
+        do {
+            try injectFailure(.beforeCommittingSave)
+            try modelContext.save()
+        }
+        catch { modelContext.rollback(); throw error }
 
         do {
             var committedReceipt: CommitReceipt?
@@ -494,7 +762,14 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         }
     }
 
-    func recoverInterruptedCommits(now: Date) throws {
+    func recoverInterruptedCommits(now: Date) async throws {
+        let operationBarrier = PersistenceOperationBarrier.shared
+        let operationLease = try await operationBarrier.acquireMutationOperation()
+        defer { operationBarrier.release(operationLease) }
+        let projectionLease = try await DailyMetricsProjectionWriteGate.acquire(
+            storeID: ObjectIdentifier(modelContainer)
+        )
+        defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
         let committingState = PendingActionState.committing.rawValue
         var changed = false
         let committingSort = [
@@ -609,7 +884,13 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             outboxCursorIdempotencyKey = lastEntry.idempotencyKey
             if outboxEntries.count < Self.recoveryBatchSize { break }
         }
-        if changed { try modelContext.save() }
+        if changed {
+            do {
+                try injectFailure(.beforeRecoverySave)
+                try modelContext.save()
+            }
+            catch { modelContext.rollback(); throw error }
+        }
     }
 
     private func makeMeal(from draft: MealDraft, sourceActionKey: String) throws -> MealRecord {
@@ -682,7 +963,14 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     private func updateProfileWeight(_ kilograms: Double, measuredAt: Date) throws {
         let primaryProfileKey = "primary"
         let predicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
-        var descriptor = FetchDescriptor<UserProfile>(predicate: predicate)
+        var descriptor = FetchDescriptor<UserProfile>(
+            predicate: predicate,
+            sortBy: [
+                SortDescriptor(\.updatedAt, order: .reverse),
+                SortDescriptor(\.createdAt),
+                SortDescriptor(\.name),
+            ]
+        )
         descriptor.fetchLimit = 1
         let profile: UserProfile
         if let existing = try modelContext.fetch(descriptor).first {
@@ -726,7 +1014,14 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         )
         let primaryProfileKey = "primary"
         let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
-        var profileDescriptor = FetchDescriptor<UserProfile>(predicate: profilePredicate)
+        var profileDescriptor = FetchDescriptor<UserProfile>(
+            predicate: profilePredicate,
+            sortBy: [
+                SortDescriptor(\.updatedAt, order: .reverse),
+                SortDescriptor(\.createdAt),
+                SortDescriptor(\.name),
+            ]
+        )
         profileDescriptor.fetchLimit = 1
         let profileKey = try modelContext.fetch(profileDescriptor).first?.profileKey ?? primaryProfileKey
         let effectiveRevision = try EffectiveProfileRevisionReader.latest(
@@ -773,18 +1068,20 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             weightObservations: weightObservations,
             in: modelContext
         )
-        let expectedFingerprint = CaloricEngine.projectionFingerprint(
-            day: day,
+        let calculationInput = CaloricEngine.calculationInput(
+            date: day,
+            calendar: calendar,
             meals: projectionInputs.meals,
             workouts: projectionInputs.workouts,
-            profile: effectiveProfile,
-            weight: effectiveWeight,
-            activeEnergy: healthSnapshot?.activeEnergyForProjection,
-            basalEnergy: healthSnapshot?.restingEnergyForProjection,
-            steps: healthSnapshot?.stepCountForProjection,
-            exerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
-            context: fingerprintContext
+            effectiveProfile: effectiveProfile,
+            effectiveWeight: effectiveWeight,
+            healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
+            healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection,
+            healthKitSteps: healthSnapshot?.stepCountForProjection,
+            healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
+            fingerprintContext: fingerprintContext
         )
+        let expectedFingerprint = DailyMetricsProjectionCalculator.fingerprint(for: calculationInput)
         let historicalInputsMissing = day < calendar.startOfDay(for: now)
             && !HistoricalMetricsEligibilityPolicy.hasValidInputs(
                 profile: effectiveProfile,
@@ -812,19 +1109,10 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             }
             if !historicalInputsMissing && !existingMetrics.requiresRecompute { return }
         }
-        let projected = CaloricEngine.computeDailyMetrics(
-            date: day,
-            calendar: calendar,
-            meals: projectionInputs.meals,
-            workouts: projectionInputs.workouts,
-            effectiveProfile: effectiveProfile,
-            effectiveWeight: effectiveWeight,
-            healthKitActiveEnergyKcal: healthSnapshot?.activeEnergyForProjection,
-            healthKitRestingEnergyKcal: healthSnapshot?.restingEnergyForProjection,
-            healthKitSteps: healthSnapshot?.stepCountForProjection,
-            healthKitExerciseMinutes: healthSnapshot?.exerciseMinutesForProjection,
-            fingerprintContext: fingerprintContext
-        )
+        let projected = DailyMetricsProjectionCalculator.calculate(
+            calculationInput,
+            sourceFingerprint: expectedFingerprint
+        ).makeDailyMetrics()
         HistoricalMetricsEligibilityPolicy.markPendingIfHistoricalInputsAreMissing(
             projected,
             on: day,
@@ -927,7 +1215,14 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         )
         let primaryProfileKey = "primary"
         let profilePredicate = #Predicate<UserProfile> { $0.profileKey == primaryProfileKey }
-        var profileDescriptor = FetchDescriptor<UserProfile>(predicate: profilePredicate)
+        var profileDescriptor = FetchDescriptor<UserProfile>(
+            predicate: profilePredicate,
+            sortBy: [
+                SortDescriptor(\.updatedAt, order: .reverse),
+                SortDescriptor(\.createdAt),
+                SortDescriptor(\.name),
+            ]
+        )
         profileDescriptor.fetchLimit = 1
         let profile = try modelContext.fetch(profileDescriptor).first
         let target = max(profile?.dailyDeficitTarget ?? 500, 0)
@@ -1054,6 +1349,44 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         var descriptor = FetchDescriptor<PendingActionRecord>(predicate: predicate)
         descriptor.fetchLimit = 1
         return try modelContext.fetch(descriptor).first
+    }
+
+    private func toolExecutionJournalRecord(
+        invocationID: String
+    ) throws -> DensosoSchemaV13.ToolExecutionJournalRecord? {
+        let targetInvocationID = invocationID
+        let predicate = #Predicate<DensosoSchemaV13.ToolExecutionJournalRecord> {
+            $0.invocationID == targetInvocationID
+        }
+        var descriptor = FetchDescriptor<DensosoSchemaV13.ToolExecutionJournalRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private func linkToolExecution(
+        invocationID: String,
+        preparedPayloadData: Data,
+        pendingActionID: UUID,
+        updatedAt: Date
+    ) throws {
+        guard let record = try toolExecutionJournalRecord(invocationID: invocationID),
+              record.preparedPayloadData == preparedPayloadData,
+              (record.stateRaw == ToolExecutionJournalState.prepared.rawValue
+                || record.stateRaw == ToolExecutionJournalState.staged.rawValue) else {
+            throw ToolExecutionJournalError.invocationIdentityMismatch
+        }
+        if let existingID = record.pendingActionID, existingID != pendingActionID {
+            throw ToolExecutionJournalError.invocationIdentityMismatch
+        }
+        record.pendingActionID = pendingActionID
+        record.stateRaw = ToolExecutionJournalState.staged.rawValue
+        record.updatedAt = updatedAt
+    }
+
+    private func toolExecutionJournal(
+        invocationID: String
+    ) throws -> ToolExecutionJournalEntry? {
+        try toolExecutionJournalRecord(invocationID: invocationID)?.entry()
     }
 
     private func pendingAction(idempotencyKey: String) throws -> PendingActionRecord? {
@@ -1204,6 +1537,17 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
     private func validateActionType(_ record: PendingActionRecord, matches payload: ActionPayload) throws {
         guard record.actionTypeRaw == payload.actionType.rawValue else {
             throw ConfirmationError.payloadCorrupt
+        }
+    }
+
+    private func projectionDayKeys(for payload: ActionPayload) -> Set<String>? {
+        switch payload {
+        case .meal(let draft):
+            return [DailyMetricsProjectionWriteGate.dayKey(for: draft.occurredAt)]
+        case .weight(let draft):
+            return [DailyMetricsProjectionWriteGate.dayKey(for: draft.measuredAt)]
+        case .workoutPlan, .trainingPlan, .dailyCheckIn, .userPreference:
+            return nil
         }
     }
 

@@ -3,6 +3,28 @@ import XCTest
 @testable import DensosoDomain
 
 final class WatchMessageOutboxTests: XCTestCase {
+    func testDurableEnqueueFailureDoesNotPublishCandidateQueue() throws {
+        enum PersistenceFailure: Error { case unavailable }
+        let original = WatchMessageOutbox()
+
+        XCTAssertThrowsError(try WatchMessageOutboxPersistenceTransaction.enqueue(
+            .transcript("保留这条转写"),
+            in: original
+        ) { _ in
+            throw PersistenceFailure.unavailable
+        })
+        XCTAssertTrue(original.pending.isEmpty)
+
+        let committed = try WatchMessageOutboxPersistenceTransaction.enqueue(
+            .transcript("可靠入队"),
+            in: original
+        ) { candidate in
+            XCTAssertEqual(candidate.pending.count, 1)
+        }
+        XCTAssertEqual(committed.outbox.pending, [committed.envelope])
+        XCTAssertTrue(original.pending.isEmpty)
+    }
+
     func testHundredOfflineMessagesRemainOrderedAndDuplicateReplaysDoNotAddRows() throws {
         let base = Date(timeIntervalSince1970: 1_800_000_000)
         var outbox = WatchMessageOutbox()
@@ -197,6 +219,11 @@ final class WatchMessageOutboxTests: XCTestCase {
         legacyPayload["totalExpenditureKcal"] = 2_100
         legacyPayload["deficitKcal"] = -300
         legacyPayload.removeValue(forKey: "terminalCausalSequenceWatermark")
+        legacyPayload.removeValue(forKey: "sourceValidatedAt")
+        legacyPayload.removeValue(forKey: "sourceFingerprint")
+        legacyPayload.removeValue(forKey: "refreshState")
+        legacyPayload.removeValue(forKey: "snapshotRevision")
+        legacyPayload.removeValue(forKey: "healthSyncSummaries")
         legacyPayload["tomorrowGuidance"] = try XCTUnwrap(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(guidance)) as? [String: Any]
         )
@@ -210,6 +237,8 @@ final class WatchMessageOutboxTests: XCTestCase {
         XCTAssertNil(decodedLegacyPayload.recoverySummary)
         XCTAssertNil(decodedLegacyPayload.terminalCausalSequenceWatermark)
         XCTAssertEqual(decodedLegacyPayload.domains, [domain])
+        XCTAssertEqual(decodedLegacyPayload.refreshState, .stale)
+        XCTAssertEqual(decodedLegacyPayload.snapshotRevision, 0)
         let reencodedLegacyPayload = try JSONEncoder().encode(decodedLegacyPayload)
         let reencodedLegacyObject = try XCTUnwrap(
             JSONSerialization.jsonObject(with: reencodedLegacyPayload) as? [String: Any]
@@ -228,6 +257,53 @@ final class WatchMessageOutboxTests: XCTestCase {
         )
         XCTAssertNil(legacyConstruction.tomorrowGuidance)
         XCTAssertNil(legacyConstruction.recoverySummary)
+    }
+
+    func testSnapshotFreshnessFieldsAndRevisionRoundTripAndRejectOlderDelivery() throws {
+        let validatedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let older = WatchTodaySnapshot(
+            generatedAt: validatedAt,
+            summary: "上一版摘要",
+            domains: [],
+            pendingActions: [],
+            acknowledgedMessageIDs: [],
+            sourceValidatedAt: validatedAt,
+            sourceFingerprint: "source-a",
+            refreshState: .stale,
+            snapshotRevision: 10
+        )
+        let newer = WatchTodaySnapshot(
+            generatedAt: validatedAt.addingTimeInterval(60),
+            summary: "新摘要",
+            domains: [],
+            pendingActions: [],
+            acknowledgedMessageIDs: [],
+            sourceValidatedAt: validatedAt.addingTimeInterval(30),
+            sourceFingerprint: "source-b",
+            refreshState: .fresh,
+            snapshotRevision: 11
+        )
+        let roundTrip = try JSONDecoder().decode(WatchTodaySnapshot.self, from: JSONEncoder().encode(newer))
+
+        XCTAssertEqual(roundTrip, newer)
+        XCTAssertEqual(roundTrip.refreshState, .fresh)
+        XCTAssertTrue(WatchSnapshotRevisionPolicy.shouldApply(newer, over: older))
+        XCTAssertFalse(WatchSnapshotRevisionPolicy.shouldApply(older, over: newer))
+        XCTAssertFalse(WatchSnapshotRevisionPolicy.shouldApply(newer, over: newer))
+
+        let failedRefresh = WatchTodaySnapshot(
+            generatedAt: validatedAt.addingTimeInterval(120),
+            summary: older.summary,
+            domains: older.domains,
+            pendingActions: older.pendingActions,
+            acknowledgedMessageIDs: [],
+            sourceValidatedAt: older.sourceValidatedAt,
+            sourceFingerprint: older.sourceFingerprint,
+            refreshState: .failed,
+            snapshotRevision: 12
+        )
+        XCTAssertEqual(failedRefresh.summary, older.summary)
+        XCTAssertEqual(failedRefresh.refreshState, .failed)
     }
 
     func testTodaySnapshotExpiresAtInjectedCalendarLocalMidnight() throws {

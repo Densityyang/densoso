@@ -153,7 +153,8 @@ private actor PromptInjectionReadRepository: AgentReadRepository {
                 title: injectedScheduleText,
                 startTime: date,
                 endTime: nil,
-                notes: injectedScheduleText
+                notes: injectedScheduleText,
+                source: .scheduleEvent
             )
         ]
     }
@@ -168,7 +169,7 @@ private struct PromptInjectionHarness {
         provider: any TextModelProvider,
         readRepository: any AgentReadRepository
     ) async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: container)

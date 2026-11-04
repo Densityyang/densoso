@@ -1,0 +1,186 @@
+import DensosoDomain
+import XCTest
+@testable import Densoso
+
+@MainActor
+final class ForegroundHealthRebaselineCoordinatorTests: XCTestCase {
+    func testRepeatedActivationDuringPreparationRunsOneFullRebaseline() async throws {
+        var calls = 0
+        var releasePreparation: CheckedContinuation<HealthSyncResult, Error>?
+        let coordinator = ForegroundHealthRebaselineCoordinator(
+            retryDelayNanoseconds: { _ in 0 },
+            operation: { _, _ in
+                calls += 1
+                return try await withCheckedThrowingContinuation { continuation in
+                    releasePreparation = continuation
+                }
+            }
+        )
+
+        let firstActivation = Task { @MainActor in await coordinator.activate() }
+        try await waitUntil { calls == 1 }
+        let duplicateActivation = Task { @MainActor in await coordinator.activate() }
+        await Task.yield()
+        XCTAssertEqual(calls, 1)
+
+        releasePreparation?.resume(returning: Self.successfulResult)
+        await firstActivation.value
+        await duplicateActivation.value
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(coordinator.state, .completed(generation: 1))
+    }
+
+    func testDatasetRestoreRequestsAnotherFullRebaselineInSameForegroundSession() async throws {
+        var fullRebaselineArguments: [Bool] = []
+        let coordinator = ForegroundHealthRebaselineCoordinator(
+            operation: { requiresFullRebaseline, _ in
+                fullRebaselineArguments.append(requiresFullRebaseline)
+                return Self.successfulResult
+            }
+        )
+
+        await coordinator.activate()
+        XCTAssertEqual(coordinator.state, .completed(generation: 1))
+        await coordinator.rebaselineAfterDatasetRestore()
+
+        XCTAssertEqual(fullRebaselineArguments, [true, true])
+        XCTAssertEqual(coordinator.state, .completed(generation: 2))
+    }
+
+    func testPartialFailureIsRetriedIncrementallyWithoutLosingSuccessfulStreams() async throws {
+        var fullRebaselineArguments: [Bool] = []
+        var callCount = 0
+        let coordinator = ForegroundHealthRebaselineCoordinator(
+            retryDelayNanoseconds: { _ in 1_000_000 },
+            operation: { requiresFullRebaseline, _ in
+                callCount += 1
+                fullRebaselineArguments.append(requiresFullRebaseline)
+                if callCount == 1 {
+                    return HealthSyncResult(
+                        completedStreams: [.stepCount, .sleepAnalysis],
+                        failedStreams: [.heartRate: Self.failure(.heartRate)]
+                    )
+                }
+                return Self.successfulResult
+            }
+        )
+
+        await coordinator.activate()
+        try await waitUntil {
+            if case .completed = coordinator.state { return true }
+            return false
+        }
+
+        XCTAssertEqual(fullRebaselineArguments, [true, false])
+        XCTAssertTrue(coordinator.pendingFailedStreams.isEmpty)
+    }
+
+    func testGlobalFailureDoesNotMarkActivationCompleteAndUsesFullRebaselineOnRetry() async throws {
+        var fullRebaselineArguments: [Bool] = []
+        var callCount = 0
+        let coordinator = ForegroundHealthRebaselineCoordinator(
+            retryDelayNanoseconds: { _ in 1_000_000 },
+            operation: { requiresFullRebaseline, _ in
+                callCount += 1
+                fullRebaselineArguments.append(requiresFullRebaseline)
+                if callCount == 1 { throw TestFailure.injected }
+                return Self.successfulResult
+            }
+        )
+
+        await coordinator.activate()
+        try await waitUntil {
+            if case .completed = coordinator.state { return true }
+            return false
+        }
+
+        XCTAssertEqual(fullRebaselineArguments, [true, true])
+    }
+
+    func testSupersededRunIsNotMarkedCompleteAndRetriesTheActivation() async throws {
+        var fullRebaselineArguments: [Bool] = []
+        var callCount = 0
+        let coordinator = ForegroundHealthRebaselineCoordinator(
+            retryDelayNanoseconds: { _ in 1_000_000 },
+            operation: { requiresFullRebaseline, _ in
+                callCount += 1
+                fullRebaselineArguments.append(requiresFullRebaseline)
+                if callCount == 1 { throw HealthSyncSupersededError() }
+                return Self.successfulResult
+            }
+        )
+
+        await coordinator.activate()
+        try await waitUntil {
+            if case .completed = coordinator.state { return true }
+            return false
+        }
+
+        XCTAssertEqual(fullRebaselineArguments, [true, true])
+    }
+
+    func testNewActivationQueuesBehindCurrentPreparation() async throws {
+        var calls = 0
+        var releaseFirst: CheckedContinuation<HealthSyncResult, Error>?
+        let coordinator = ForegroundHealthRebaselineCoordinator(
+            retryDelayNanoseconds: { _ in 0 },
+            operation: { _, _ in
+                calls += 1
+                if calls == 1 {
+                    return try await withCheckedThrowingContinuation { continuation in
+                        releaseFirst = continuation
+                    }
+                }
+                return Self.successfulResult
+            }
+        )
+
+        let firstActivation = Task { @MainActor in await coordinator.activate() }
+        try await waitUntil { calls == 1 }
+        coordinator.deactivate()
+        let nextActivation = Task { @MainActor in await coordinator.activate() }
+        await Task.yield()
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(coordinator.state, .queued(generation: 2))
+
+        releaseFirst?.resume(returning: Self.successfulResult)
+        await firstActivation.value
+        await nextActivation.value
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(coordinator.state, .completed(generation: 2))
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(2),
+        condition: @MainActor () -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition() {
+            guard clock.now < deadline else { throw TestFailure.timedOut }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    private static var successfulResult: HealthSyncResult {
+        HealthSyncResult(completedStreams: HealthKitSyncCoordinator.observedStreams, failedStreams: [:])
+    }
+
+    private static func failure(_ metric: HealthMetricID) -> HealthSyncFailure {
+        HealthSyncFailure(
+            stream: metric,
+            requestID: UUID(),
+            descriptor: SharedErrorDescriptor(
+                code: .healthKitUnavailable,
+                userMessage: "HealthKit unavailable",
+                subsystem: .healthKit,
+                reason: .healthKitUnavailable
+            )
+        )
+    }
+
+    private enum TestFailure: Error {
+        case injected
+        case timedOut
+    }
+}

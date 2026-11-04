@@ -55,6 +55,7 @@ final class ToolRegistry {
         context: AgentSession,
         clientRequestID: UUID
     ) async throws -> String {
+        try Task.checkCancellation()
         guard let tool = allTools.first(where: { $0.definition.name == name }) else {
             throw ToolError.unknownTool(name)
         }
@@ -68,6 +69,7 @@ final class ToolRegistry {
             context: context,
             clientRequestID: clientRequestID
         )
+        try Task.checkCancellation()
         return AgentToolOutputLimiter.limit(output)
     }
 
@@ -77,7 +79,7 @@ final class ToolRegistry {
 }
 
 enum AgentToolOutputLimiter {
-    static let maximumUTF8Bytes = 8_192
+    static let maximumUTF8Bytes = 64_000
 
     static func limit(_ output: String) -> String {
         guard output.utf8.count > maximumUTF8Bytes else { return output }
@@ -138,6 +140,12 @@ extension ConfirmationRequiredTool {
             try await prepare(argumentsJSON: argumentsJSON, context: context),
             clientRequestID: clientRequestID
         )
+        return try AgentToolResult.stagedAction(action)
+    }
+}
+
+enum AgentToolResult {
+    static func stagedAction(_ action: PendingAction) throws -> String {
         let response: JSONValue = .object([
             "actionId": .string(action.id.uuidString.lowercased()),
             "effect": .string(ToolEffect.stagesAction.rawValue),

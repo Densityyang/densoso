@@ -67,6 +67,7 @@ struct DeepSeekProvider: MultimodalModelProvider {
                         deadline: request.deadline,
                         beforeNetworkAttempt: request.networkAttemptGate
                     )
+                    try executor.checkDeadline(request.deadline)
                     logSink.record(
                         ProviderLogRedactor.metadata(
                             requestID: request.requestID,
@@ -82,8 +83,9 @@ struct DeepSeekProvider: MultimodalModelProvider {
                     var didEmitText = false
                     var didFinish = false
                     for try await chunk in result.chunks {
-                        try Task.checkCancellation()
+                        try executor.checkDeadline(request.deadline)
                         for event in try parser.consume(chunk) {
+                            try executor.checkDeadline(request.deadline)
                             let eventType = try Self.eventType(event)
                             switch eventType {
                             case "response.output_text.delta":
@@ -106,7 +108,8 @@ struct DeepSeekProvider: MultimodalModelProvider {
                                 throw ProviderError.contentRejected
                             case "response.completed":
                                 let response = try Self.responsePayload(event.payload)
-                                try Self.emitOutput(
+                                try Self.requireStatus("completed", in: response)
+                                let hasToolCalls = try Self.emitOutput(
                                     from: response,
                                     providerModel: descriptor.model,
                                     attempt: result.attempt,
@@ -116,10 +119,13 @@ struct DeepSeekProvider: MultimodalModelProvider {
                                     didEmitText: &didEmitText,
                                     continuation: continuation
                                 )
-                                continuation.yield(.completed(.completed))
+                                try executor.checkDeadline(request.deadline)
+                                continuation.yield(.completed(hasToolCalls ? .toolUse : .completed))
                                 didFinish = true
                             case "response.incomplete":
                                 let response = try Self.responsePayload(event.payload)
+                                try Self.requireStatus("incomplete", in: response)
+                                _ = try Self.incompleteStopReason(from: response)
                                 try Self.emitOutput(
                                     from: response,
                                     providerModel: descriptor.model,
@@ -128,8 +134,10 @@ struct DeepSeekProvider: MultimodalModelProvider {
                                     imageCount: request.imageCount,
                                     latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
                                     didEmitText: &didEmitText,
+                                    allowToolCalls: false,
                                     continuation: continuation
                                 )
+                                try executor.checkDeadline(request.deadline)
                                 continuation.yield(.completed(.maxTokens))
                                 didFinish = true
                             case "response.failed", "error":
@@ -142,10 +150,16 @@ struct DeepSeekProvider: MultimodalModelProvider {
                         if didFinish { break }
                     }
                     if !didFinish {
-                        for event in try parser.finish() {
-                            if try Self.eventType(event) == "response.completed" {
+                        try executor.checkDeadline(request.deadline)
+                        let finalEvents = try parser.finish()
+                        try executor.checkDeadline(request.deadline)
+                        for event in finalEvents {
+                            try executor.checkDeadline(request.deadline)
+                            switch try Self.eventType(event) {
+                            case "response.completed":
                                 let response = try Self.responsePayload(event.payload)
-                                try Self.emitOutput(
+                                try Self.requireStatus("completed", in: response)
+                                let hasToolCalls = try Self.emitOutput(
                                     from: response,
                                     providerModel: descriptor.model,
                                     attempt: result.attempt,
@@ -155,12 +169,39 @@ struct DeepSeekProvider: MultimodalModelProvider {
                                     didEmitText: &didEmitText,
                                     continuation: continuation
                                 )
-                                continuation.yield(.completed(.completed))
+                                try executor.checkDeadline(request.deadline)
+                                continuation.yield(.completed(hasToolCalls ? .toolUse : .completed))
                                 didFinish = true
+                            case "response.incomplete":
+                                let response = try Self.responsePayload(event.payload)
+                                try Self.requireStatus("incomplete", in: response)
+                                _ = try Self.incompleteStopReason(from: response)
+                                try Self.emitOutput(
+                                    from: response,
+                                    providerModel: descriptor.model,
+                                    attempt: result.attempt,
+                                    requestID: request.requestID,
+                                    imageCount: request.imageCount,
+                                    latencyMilliseconds: Self.latencyMilliseconds(since: startedAt),
+                                    didEmitText: &didEmitText,
+                                    allowToolCalls: false,
+                                    continuation: continuation
+                                )
+                                try executor.checkDeadline(request.deadline)
+                                continuation.yield(.completed(.maxTokens))
+                                didFinish = true
+                            case "response.failed", "error":
+                                throw Self.responseError(event.payload)
+                            default:
+                                break
+                            }
+                            if didFinish {
+                                break
                             }
                         }
                     }
                     guard didFinish else { throw ProviderError.malformedResponse }
+                    try executor.checkDeadline(request.deadline)
                     continuation.finish()
                 } catch is CancellationError {
                     logSink.record(
@@ -248,6 +289,12 @@ struct DeepSeekProvider: MultimodalModelProvider {
         return object
     }
 
+    private static func requireStatus(_ expected: String, in response: [String: JSONValue]) throws {
+        guard response["status"]?.stringValue == expected else {
+            throw ProviderError.malformedResponse
+        }
+    }
+
     private static func emitOutput(
         from response: [String: JSONValue],
         providerModel: String,
@@ -256,20 +303,24 @@ struct DeepSeekProvider: MultimodalModelProvider {
         imageCount: Int,
         latencyMilliseconds: Int,
         didEmitText: inout Bool,
+        allowToolCalls: Bool = true,
         continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
-    ) throws {
+    ) throws -> Bool {
         if response["status"]?.stringValue == "failed" {
             throw responseError(.object(response))
         }
         guard let output = response["output"] else { throw ProviderError.malformedResponse }
         guard case .array(let items) = output else { throw ProviderError.malformedResponse }
         var calls: [ToolCall] = []
+        var hasToolCalls = false
         var reasoning: [JSONValue] = []
         var fallbackText = ""
         for item in items {
             guard let object = item.objectValue else { throw ProviderError.malformedResponse }
             switch object["type"]?.stringValue {
             case "function_call":
+                hasToolCalls = true
+                guard allowToolCalls else { continue }
                 guard let name = object["name"]?.stringValue,
                       let callID = object["call_id"]?.stringValue ?? object["id"]?.stringValue,
                       let rawArguments = object["arguments"] else {
@@ -342,6 +393,15 @@ struct DeepSeekProvider: MultimodalModelProvider {
                     )
                 )
             )
+        }
+        return hasToolCalls
+    }
+
+    private static func incompleteStopReason(from response: [String: JSONValue]) throws -> ProviderStopReason {
+        switch response["incomplete_details"]?.objectValue?["reason"]?.stringValue {
+        case "max_output_tokens": .maxTokens
+        case "content_filter": throw ProviderError.contentRejected
+        default: throw ProviderError.malformedResponse
         }
     }
 

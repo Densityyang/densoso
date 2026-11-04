@@ -71,19 +71,30 @@ final class TrainingPlanSchedulingService {
 
     private let modelContainer: ModelContainer
     private let client: any MultiDayWorkoutSchedulingClient
+    private let persistenceOperationBarrier: PersistenceOperationBarrier
     private let compiler = TrainingPlanCompiler()
     private var schedulingActionIDs = Set<UUID>()
     private var schedulingWaiters: [UUID: [CheckedContinuation<Void, Error>]] = [:]
 
     init(
         modelContainer: ModelContainer,
-        client: any MultiDayWorkoutSchedulingClient = WorkoutKitMultiDaySchedulingClient()
+        client: any MultiDayWorkoutSchedulingClient = WorkoutKitMultiDaySchedulingClient(),
+        persistenceOperationBarrier: PersistenceOperationBarrier = .shared
     ) {
         self.modelContainer = modelContainer
         self.client = client
+        self.persistenceOperationBarrier = persistenceOperationBarrier
     }
 
     func scheduleConfirmedPlan(actionID: UUID) async throws {
+        let operationLease = try await persistenceOperationBarrier.acquireMutationOperation()
+        defer { persistenceOperationBarrier.release(operationLease) }
+        try await persistenceOperationBarrier.withLease(operationLease) {
+            try await scheduleConfirmedPlanWhileLeased(actionID: actionID)
+        }
+    }
+
+    private func scheduleConfirmedPlanWhileLeased(actionID: UUID) async throws {
         if schedulingActionIDs.contains(actionID) {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 schedulingWaiters[actionID, default: []].append(continuation)
