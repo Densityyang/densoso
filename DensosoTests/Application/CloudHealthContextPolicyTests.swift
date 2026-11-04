@@ -377,12 +377,13 @@ final class CloudHealthContextPolicyTests: XCTestCase {
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
         )
         let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
-        let expectedPolicy = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+        let expectedSnapshot = try await CloudHealthContextPolicy.confirmExpandedPolicy(
             provider: .deepSeek,
             allowedClasses: [.healthSleep],
             repository: repository,
             changeSource: .settings
         )
+        let expectedPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
 
         try await repository.setConsent(
             provider: .deepSeek,
@@ -400,7 +401,7 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         let currentSnapshot = try await repository.currentCloudHealthContextPolicySnapshot(
             provider: .deepSeek
         )
-        XCTAssertEqual(currentSnapshot, expectedPolicy.snapshot)
+        XCTAssertEqual(currentSnapshot, expectedSnapshot)
         let authorized = try await CloudHealthContextPolicy.withCurrentSendConsent(
             from: repository,
             provider: .deepSeek,
@@ -423,12 +424,13 @@ final class CloudHealthContextPolicyTests: XCTestCase {
             granted: true,
             policyVersion: "cloud-health-text-v1"
         )
-        let expected = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
             provider: .deepSeek,
             allowedClasses: [.healthSleep],
             repository: repository,
             changeSource: .settings
         )
+        let expected = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
 
         try await repository.setConsent(
             provider: .deepSeek,
@@ -445,7 +447,7 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         ) { "text-body" }
         XCTAssertEqual(authorized, "text-body")
         let currentPolicy = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
-        XCTAssertEqual(currentPolicy, expected)
+        XCTAssertEqual(currentPolicy, expected.snapshot)
     }
 
     func testMealImageConsentChangeDoesNotInvalidateUnrelatedTextRequest() async throws {
@@ -461,12 +463,13 @@ final class CloudHealthContextPolicyTests: XCTestCase {
             granted: true,
             policyVersion: "cloud-health-text-v1"
         )
-        let expected = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
             provider: .deepSeek,
             allowedClasses: [.healthActivity],
             repository: repository,
             changeSource: .settings
         )
+        let expected = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
 
         try await repository.setConsent(
             provider: .deepSeek,
@@ -489,7 +492,7 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         ) { "text-body" }
         XCTAssertEqual(authorized, "text-body")
         let currentPolicy = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
-        XCTAssertEqual(currentPolicy, expected)
+        XCTAssertEqual(currentPolicy, expected.snapshot)
     }
 
     func testImageRequestPersistsHealthRevocationBeforeProviderSerialization() async throws {
