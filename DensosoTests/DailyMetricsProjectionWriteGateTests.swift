@@ -21,6 +21,11 @@ final class DailyMetricsProjectionWriteGateTests: XCTestCase {
         super.tearDown()
     }
 
+    func testUncontendedStoreWideLeaseIsGranted() async throws {
+        let lease = try await DailyMetricsProjectionWriteGate.acquire(for: container)
+        DailyMetricsProjectionWriteGate.release(lease)
+    }
+
     func testChildTaskCannotInheritParentGateOwnership() async throws {
         let parentReady = GateTestSignal()
         let releaseParent = GateTestSignal()

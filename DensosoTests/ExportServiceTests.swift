@@ -209,12 +209,10 @@ final class ExportServiceTests: XCTestCase {
     }
 
     func testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied() async throws {
-        print("[ExportServiceTests] backup-consent: create source context")
         let (sourceContainer, source) = try makeContext()
         let sourceGovernance = SwiftDataProviderGovernanceRepository(modelContainer: sourceContainer)
         let policyVersionSentinel = "PRIVATE-CLOUD-POLICY-SENTINEL"
         for provider in [ProviderID.deepSeek, .qwen] {
-            print("[ExportServiceTests] backup-consent: confirm policy \(provider.rawValue)")
             _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
                 provider: provider,
                 allowedClasses: Set(CloudHealthContextPolicy.dataClasses),
@@ -222,43 +220,33 @@ final class ExportServiceTests: XCTestCase {
                 confirmedAt: Date(),
                 changeSource: .settings
             )
-            print("[ExportServiceTests] backup-consent: policy confirmed \(provider.rawValue)")
             for dataClass in CloudHealthContextPolicy.dataClasses {
-                print("[ExportServiceTests] backup-consent: set \(provider.rawValue)/\(dataClass.rawValue)")
                 try await sourceGovernance.setConsent(
                     provider: provider,
                     dataClass: dataClass,
                     granted: true,
                     policyVersion: policyVersionSentinel
                 )
-                print("[ExportServiceTests] backup-consent: set complete \(provider.rawValue)/\(dataClass.rawValue)")
             }
         }
 
-        print("[ExportServiceTests] backup-consent: export start")
         let service = ExportService(persistenceOperationBarrier: PersistenceOperationBarrier())
         let backupURL = try await service.exportJSON(context: source)
-        print("[ExportServiceTests] backup-consent: export complete")
         defer { try? FileManager.default.removeItem(at: backupURL) }
         let backupText = String(decoding: try Data(contentsOf: backupURL), as: UTF8.self)
         XCTAssertFalse(backupText.contains("ConsentRecord"))
         XCTAssertFalse(backupText.contains("consentKey"))
         XCTAssertFalse(backupText.contains(policyVersionSentinel))
 
-        print("[ExportServiceTests] backup-consent: create target context")
         let (targetContainer, target) = try makeContext()
-        print("[ExportServiceTests] backup-consent: restore start")
         _ = try await service.restoreJSON(url: backupURL, context: target)
-        print("[ExportServiceTests] backup-consent: restore complete")
         let restoredGovernance = SwiftDataProviderGovernanceRepository(modelContainer: targetContainer)
         for provider in [ProviderID.deepSeek, .qwen] {
             for dataClass in CloudHealthContextPolicy.dataClasses {
-                print("[ExportServiceTests] backup-consent: read restored \(provider.rawValue)/\(dataClass.rawValue)")
                 let isGranted = try await restoredGovernance.isConsentGranted(
                     provider: provider,
                     dataClass: dataClass
                 )
-                print("[ExportServiceTests] backup-consent: read complete \(provider.rawValue)/\(dataClass.rawValue)")
                 XCTAssertFalse(
                     isGranted,
                     "A backup restore without a cloud policy must leave \(provider.rawValue)/\(dataClass.rawValue) denied"

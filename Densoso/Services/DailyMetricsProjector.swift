@@ -86,8 +86,6 @@ enum DailyMetricsProjectionWriteGate {
             hold(lease)
             return lease
         }
-        print("[DailyMetricsProjectionWriteGate] waiting store=\(key) requested=\(requestedKeys) held=\(heldContexts[key] ?? [:]) queued=\(waiters[key]?.count ?? 0)")
-
         let waiterID = UUID()
         let lease = await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Lease?, Never>) in
@@ -207,7 +205,8 @@ enum DailyMetricsProjectionWriteGate {
     }
 
     private static func keysConflict(_ lhs: Set<String>, _ rhs: Set<String>) -> Bool {
-        lhs.contains(storeWideKey) || rhs.contains(storeWideKey) || !lhs.isDisjoint(with: rhs)
+        guard !lhs.isEmpty, !rhs.isEmpty else { return false }
+        return lhs.contains(storeWideKey) || rhs.contains(storeWideKey) || !lhs.isDisjoint(with: rhs)
     }
 
     private static func notifyWaiterCountObservers(for key: ObjectIdentifier) {

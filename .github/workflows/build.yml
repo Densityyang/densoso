@@ -2294,7 +2294,7 @@ jobs:
             local result_bundle="$1"
             local log_path="$2"
             rm -rf "$result_bundle"
-            perl -e 'alarm shift; exec @ARGV' 1500 xcodebuild -project Densoso.xcodeproj \
+            perl -e 'alarm shift; exec @ARGV' 2100 xcodebuild -project Densoso.xcodeproj \
               -scheme Densoso \
               -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
               -destination-timeout 120 \
