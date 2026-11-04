@@ -131,6 +131,11 @@ final class HealthKitSyncCoordinator {
         let authorizationBoundaryUnavailable: Bool
     }
 
+    private struct WorkoutSyncOutcome {
+        let generation: UInt64
+        let hasChanges: Bool
+    }
+
     init(
         healthStore: any HealthStoreClient = HealthKitHealthStoreClient(),
         observer: (any HealthObserverClient)? = nil,
@@ -518,7 +523,7 @@ final class HealthKitSyncCoordinator {
             }
             try ensureCurrentScanGeneration(scanGeneration, for: .workout)
             guard let plan = windowPlans[.workout] else { throw HealthStoreClientError.invalidAnchor }
-            let completedWorkoutGeneration = try await syncWorkouts(
+            let workoutOutcome = try await syncWorkouts(
                 repository: repository,
                 now: now,
                 plan: plan,
@@ -526,7 +531,7 @@ final class HealthKitSyncCoordinator {
                 readRecordCounter: readRecordCounter,
                 onScanGenerationAdvanced: { scanGenerations[.workout] = $0 }
             )
-            scanGenerations[.workout] = completedWorkoutGeneration
+            scanGenerations[.workout] = workoutOutcome.generation
             completedStreams.insert(.workout)
         } catch let error as HealthSyncSupersededError {
             throw error
@@ -735,15 +740,22 @@ final class HealthKitSyncCoordinator {
                 )
                 scanGeneration = generations[metric] ?? scanGenerationByMetric[metric, default: 0]
             }
-            let rebuiltScanGeneration = try await syncWorkouts(
+            let workoutOutcome = try await syncWorkouts(
                 repository: repository,
                 now: now,
                 plan: plan,
                 scanGeneration: scanGeneration,
                 onScanGenerationAdvanced: { scanGeneration = $0 }
             )
-            scanGeneration = rebuiltScanGeneration
+            scanGeneration = workoutOutcome.generation
             try ensureCurrentScanGeneration(scanGeneration, for: metric)
+            let pendingEffortDays = try repository.pendingHealthSampleDays(
+                stream: HealthMetricID.workoutEffort.rawValue
+            )
+            if workoutOutcome.hasChanges || !pendingEffortDays.isEmpty {
+                _ = try await sync(stream: .workoutEffort, using: repository, now: now)
+                try ensureCurrentScanGeneration(scanGeneration, for: metric)
+            }
             return scanGeneration
         } else if Self.aggregateStreams.contains(metric) {
             let plan: WindowPlan
@@ -974,18 +986,18 @@ final class HealthKitSyncCoordinator {
         scanGeneration: UInt64,
         readRecordCounter: HealthSyncReadRecordCounter? = nil,
         onScanGenerationAdvanced: ((UInt64) -> Void)? = nil
-    ) async throws -> UInt64 {
+    ) async throws -> WorkoutSyncOutcome {
         var currentGeneration = scanGeneration
         var didRecoverInvalidAnchor = false
         while true {
             do {
-                try await syncWorkoutPages(
+                let hasChanges = try await syncWorkoutPages(
                     repository: repository,
                     plan: plan,
                     scanGeneration: currentGeneration,
                     readRecordCounter: readRecordCounter
                 )
-                return currentGeneration
+                return WorkoutSyncOutcome(generation: currentGeneration, hasChanges: hasChanges)
             } catch let error as HealthSyncSupersededError {
                 throw error
             } catch let error as HealthStoreClientError where error == .invalidAnchor && !didRecoverInvalidAnchor {
@@ -1027,7 +1039,7 @@ final class HealthKitSyncCoordinator {
         plan: WindowPlan,
         scanGeneration: UInt64,
         readRecordCounter: HealthSyncReadRecordCounter?
-    ) async throws {
+    ) async throws -> Bool {
         let cursor = try repository.cursorSnapshot(for: "workouts")
         let start = min(cursor?.lookbackStart ?? plan.queryStart, plan.queryStart)
         var anchor = cursor?.anchorData
@@ -1093,7 +1105,7 @@ final class HealthKitSyncCoordinator {
                     stream: "workouts",
                     readStateUpdates: readStateUpdates
                 )
-                return
+                return !latestWorkoutsByUUID.isEmpty || !deletedUUIDs.isEmpty
             }
             anchor = nextAnchor
         }

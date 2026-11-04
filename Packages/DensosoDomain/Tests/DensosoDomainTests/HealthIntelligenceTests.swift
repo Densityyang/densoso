@@ -111,6 +111,349 @@ final class HealthIntelligenceTests: XCTestCase {
         XCTAssertEqual(stages.core + stages.deep + stages.rem, 120, accuracy: 0.001)
     }
 
+    func testOverlappingDifferentSleepStagesDoNotDoubleCount() throws {
+        let wakeDate = try date(2026, 3, 12)
+        let samples = [
+            sleep(wakeDate, start: (-1, 23, 0), end: (0, 1, 0), stage: .asleepCore),
+            sleep(wakeDate, start: (0, 0, 0), end: (0, 2, 0), stage: .asleepDeep),
+        ]
+
+        let summary = try XCTUnwrap(HealthIntelligenceEngine(calendar: calendar).sleepSummary(
+            for: wakeDate,
+            samples: samples
+        ))
+
+        XCTAssertEqual(summary.totalAsleepMinutes, 180, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(summary.mainSleepMinutes), 180, accuracy: 0.001)
+        XCTAssertTrue(summary.hasConflictingSourceStages)
+        let stages = try XCTUnwrap(summary.stages)
+        XCTAssertEqual(stages.core, 60, accuracy: 0.001)
+        XCTAssertEqual(stages.deep, 120, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(stages.core + stages.deep + stages.rem, summary.mainSleepMinutes ?? 0)
+        XCTAssertEqual(try XCTUnwrap(summary.stageCoverage), 1, accuracy: 0.001)
+    }
+
+    func testSleepStageDurationsNeverExceedMainSleepAndDuplicateStagesAreDeterministic() throws {
+        let wakeDate = try date(2026, 3, 13)
+        let samples = [
+            sleep(wakeDate, start: (-1, 22, 30), end: (0, 2, 0), stage: .asleepCore),
+            sleep(wakeDate, start: (-1, 23, 30), end: (0, 1, 0), stage: .asleepDeep),
+            sleep(wakeDate, start: (0, 0, 30), end: (0, 1, 30), stage: .asleepREM),
+            sleep(wakeDate, start: (0, 0, 30), end: (0, 1, 30), stage: .asleepREM),
+        ]
+        let engine = HealthIntelligenceEngine(calendar: calendar)
+
+        let forward = try XCTUnwrap(engine.sleepSummary(for: wakeDate, samples: samples))
+        let reversed = try XCTUnwrap(engine.sleepSummary(for: wakeDate, samples: Array(samples.reversed())))
+
+        XCTAssertEqual(forward, reversed)
+        let stages = try XCTUnwrap(forward.stages)
+        let mainMinutes = try XCTUnwrap(forward.mainSleepMinutes)
+        XCTAssertLessThanOrEqual(stages.core + stages.deep + stages.rem, mainMinutes)
+        XCTAssertEqual(stages.core, 90, accuracy: 0.001)
+        XCTAssertEqual(stages.deep, 90, accuracy: 0.001)
+        XCTAssertEqual(stages.rem, 30, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(forward.stageCoverage), 1, accuracy: 0.001)
+    }
+
+    func testOverlappingSleepStagesAcrossSourcesRemainNonOverlapping() throws {
+        let wakeDate = try date(2026, 3, 14)
+        let watch = sleep(
+            wakeDate,
+            start: (-1, 23, 0),
+            end: (0, 1, 0),
+            stage: .asleepCore,
+            source: "com.apple.watchkitapp",
+            device: "Watch10,1"
+        )
+        let thirdParty = sleep(
+            wakeDate,
+            start: (0, 0, 0),
+            end: (0, 2, 0),
+            stage: .asleepDeep,
+            source: "com.example.sleep"
+        )
+
+        let summary = try XCTUnwrap(HealthIntelligenceEngine(calendar: calendar).sleepSummary(
+            for: wakeDate,
+            samples: [thirdParty, watch]
+        ))
+
+        XCTAssertEqual(summary.totalAsleepMinutes, 180, accuracy: 0.001)
+        XCTAssertEqual(summary.selectedSourceBundleIdentifier, "com.apple.watchkitapp")
+        XCTAssertEqual(summary.selectedSourceIdentifier, "com.apple.watchkitapp")
+        XCTAssertEqual(summary.supplementalSourceIdentifiers, ["com.example.sleep"])
+        let stages = try XCTUnwrap(summary.stages)
+        XCTAssertEqual(stages.core, 120, accuracy: 0.001)
+        XCTAssertEqual(stages.deep, 60, accuracy: 0.001)
+        XCTAssertEqual(stages.core + stages.deep + stages.rem, 180, accuracy: 0.001)
+        XCTAssertTrue(summary.hasConflictingSourceStages)
+    }
+
+    func testNonWatchSourcesSupplementUncoveredSleepIntervals() throws {
+        let wakeDate = try date(2026, 3, 15)
+        let sourceA = sleep(
+            wakeDate,
+            start: (-1, 23, 0),
+            end: (0, 2, 0),
+            stage: .asleepCore,
+            source: "com.example.sleep-a"
+        )
+        let sourceB = sleep(
+            wakeDate,
+            start: (0, 2, 0),
+            end: (0, 7, 0),
+            stage: .asleepREM,
+            source: "com.example.sleep-b"
+        )
+        let engine = HealthIntelligenceEngine(calendar: calendar)
+
+        let summary = try XCTUnwrap(engine.sleepSummary(for: wakeDate, samples: [sourceA, sourceB]))
+        let reversed = try XCTUnwrap(engine.sleepSummary(for: wakeDate, samples: [sourceB, sourceA]))
+
+        XCTAssertEqual(summary, reversed)
+        XCTAssertEqual(summary.totalAsleepMinutes, 480, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(summary.mainSleepMinutes), 480, accuracy: 0.001)
+        XCTAssertEqual(summary.selectedSourceBundleIdentifier, "com.example.sleep-b")
+        XCTAssertEqual(summary.selectedSourceIdentifier, "com.example.sleep-b")
+        XCTAssertEqual(summary.supplementalSourceIdentifiers, ["com.example.sleep-a"])
+        XCTAssertFalse(summary.hasConflictingSourceStages)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: summary.sourceCoverage.map { ($0.sourceIdentifier, $0.asleepMinutes) }),
+            ["com.example.sleep-a": 180, "com.example.sleep-b": 300]
+        )
+    }
+
+    func testNonWatchOverlappingSourcesDoNotDoubleCountAndTieBreakIsDeterministic() throws {
+        let wakeDate = try date(2026, 3, 16)
+        let sourceA = sleep(
+            wakeDate,
+            start: (-1, 23, 0),
+            end: (0, 4, 0),
+            stage: .asleepCore,
+            source: "com.example.sleep-a"
+        )
+        let sourceB = sleep(
+            wakeDate,
+            start: (-1, 23, 0),
+            end: (0, 4, 0),
+            stage: .asleepDeep,
+            source: "com.example.sleep-b"
+        )
+        let engine = HealthIntelligenceEngine(calendar: calendar)
+
+        let first = try XCTUnwrap(engine.sleepSummary(for: wakeDate, samples: [sourceB, sourceA]))
+        let reversed = try XCTUnwrap(engine.sleepSummary(for: wakeDate, samples: [sourceA, sourceB]))
+
+        XCTAssertEqual(first, reversed)
+        XCTAssertEqual(first.totalAsleepMinutes, 300, accuracy: 0.001)
+        XCTAssertEqual(first.selectedSourceBundleIdentifier, "com.example.sleep-a")
+        XCTAssertTrue(first.supplementalSourceIdentifiers.isEmpty)
+        XCTAssertEqual(first.sourceCoverage, [SleepSourceCoverage(sourceIdentifier: "com.example.sleep-a", asleepMinutes: 300)])
+        XCTAssertTrue(first.hasConflictingSourceStages)
+    }
+
+    func testSelectedSleepSourceMustContributeAfterSameSourceAwakeResolution() throws {
+        let wakeDate = try date(2026, 3, 21)
+        let preferredButVetoed = [
+            sleep(
+                wakeDate,
+                start: (-1, 23, 0),
+                end: (0, 1, 0),
+                stage: .asleepCore,
+                source: "com.apple.watch-a",
+                device: "Watch10,1"
+            ),
+            sleep(
+                wakeDate,
+                start: (-1, 23, 0),
+                end: (0, 1, 0),
+                stage: .awake,
+                source: "com.apple.watch-a",
+                device: "Watch10,1"
+            ),
+        ]
+        let contributing = sleep(
+            wakeDate,
+            start: (0, 0, 0),
+            end: (0, 2, 0),
+            stage: .asleepCore,
+            source: "com.apple.watch-b",
+            device: "Watch11,1"
+        )
+
+        let summary = try XCTUnwrap(HealthIntelligenceEngine(calendar: calendar).sleepSummary(
+            for: wakeDate,
+            samples: preferredButVetoed + [contributing]
+        ))
+
+        XCTAssertEqual(summary.totalAsleepMinutes, 60, accuracy: 0.001)
+        XCTAssertEqual(summary.selectedSourceBundleIdentifier, "com.apple.watch-b")
+        XCTAssertEqual(summary.selectedSourceIdentifier, "com.apple.watch-b")
+        XCTAssertTrue(summary.supplementalSourceIdentifiers.isEmpty)
+        XCTAssertEqual(summary.sourceCoverage, [
+            SleepSourceCoverage(sourceIdentifier: "com.apple.watch-b", asleepMinutes: 60),
+        ])
+    }
+
+    func testHigherPriorityAwakeOnlySourcePreventsConflictingSleepFill() throws {
+        let wakeDate = try date(2026, 3, 22)
+        let watchAwake = sleep(
+            wakeDate,
+            start: (0, 0, 0),
+            end: (0, 1, 0),
+            stage: .awake,
+            source: "com.apple.watchkitapp",
+            device: "Watch10,1"
+        )
+        let thirdPartyAsleep = sleep(
+            wakeDate,
+            start: (0, 0, 0),
+            end: (0, 1, 0),
+            stage: .asleepCore,
+            source: "com.example.sleep"
+        )
+
+        let summary = try XCTUnwrap(HealthIntelligenceEngine(calendar: calendar).sleepSummary(
+            for: wakeDate,
+            samples: [thirdPartyAsleep, watchAwake]
+        ))
+
+        XCTAssertNil(summary.mainSleepMinutes)
+        XCTAssertTrue(summary.hasConflictingSourceStages)
+        XCTAssertTrue(summary.sourceCoverage.isEmpty)
+    }
+
+    func testBriefAwakeGapDoesNotSplitMainSleepEpisode() throws {
+        let wakeDate = try date(2026, 3, 17)
+        let samples = [
+            sleep(wakeDate, start: (-1, 23, 0), end: (0, 2, 0), stage: .asleepCore),
+            sleep(wakeDate, start: (0, 2, 0), end: (0, 2, 5), stage: .awake),
+            sleep(wakeDate, start: (0, 2, 5), end: (0, 7, 0), stage: .asleepREM),
+        ]
+
+        let summary = try XCTUnwrap(HealthIntelligenceEngine(calendar: calendar).sleepSummary(
+            for: wakeDate,
+            samples: samples
+        ))
+
+        XCTAssertEqual(summary.totalAsleepMinutes, 475, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(summary.mainSleepMinutes), 475, accuracy: 0.001)
+        XCTAssertEqual(summary.napMinutes, 0, accuracy: 0.001)
+        let stages = try XCTUnwrap(summary.stages)
+        XCTAssertEqual(stages.core + stages.rem, 475, accuracy: 0.001)
+    }
+
+    func testLongAwakeGapSeparatesIndependentSleepEpisodesAndNapUsesEpisodeTotals() throws {
+        let wakeDate = try date(2026, 3, 18)
+        let samples = [
+            sleep(wakeDate, start: (-1, 23, 0), end: (0, 2, 0), stage: .asleepCore),
+            sleep(wakeDate, start: (0, 2, 0), end: (0, 3, 0), stage: .awake),
+            sleep(wakeDate, start: (0, 3, 0), end: (0, 7, 0), stage: .asleepREM),
+            sleep(wakeDate, start: (0, 13, 0), end: (0, 14, 0), stage: .asleepUnspecified),
+        ]
+
+        let summary = try XCTUnwrap(HealthIntelligenceEngine(calendar: calendar).sleepSummary(
+            for: wakeDate,
+            samples: samples
+        ))
+
+        XCTAssertEqual(summary.totalAsleepMinutes, 480, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(summary.mainSleepMinutes), 240, accuracy: 0.001)
+        XCTAssertEqual(summary.napMinutes, 240, accuracy: 0.001)
+    }
+
+    func testAwakeDurationIsExcludedFromAsleepMinutesAndSleepStages() throws {
+        let wakeDate = try date(2026, 3, 19)
+        let samples = [
+            sleep(wakeDate, start: (-1, 23, 0), end: (0, 2, 0), stage: .asleepCore),
+            sleep(wakeDate, start: (0, 2, 0), end: (0, 2, 20), stage: .awake),
+            sleep(wakeDate, start: (0, 2, 20), end: (0, 7, 0), stage: .asleepREM),
+        ]
+
+        let summary = try XCTUnwrap(HealthIntelligenceEngine(calendar: calendar).sleepSummary(
+            for: wakeDate,
+            samples: samples
+        ))
+
+        XCTAssertEqual(summary.totalAsleepMinutes, 460, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(summary.mainSleepMinutes), 460, accuracy: 0.001)
+        let stages = try XCTUnwrap(summary.stages)
+        XCTAssertEqual(stages.core, 180, accuracy: 0.001)
+        XCTAssertEqual(stages.rem, 280, accuracy: 0.001)
+        XCTAssertEqual(stages.core + stages.rem, summary.mainSleepMinutes ?? 0, accuracy: 0.001)
+    }
+
+    func testSleepEpisodeDurationUsesAbsoluteTimeAcrossDaylightSavingChange() throws {
+        var daylightCalendar = Calendar(identifier: .gregorian)
+        daylightCalendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let wakeDate = try XCTUnwrap(daylightCalendar.date(from: DateComponents(
+            year: 2026,
+            month: 3,
+            day: 8,
+            hour: 12
+        )))
+        let start = try XCTUnwrap(daylightCalendar.date(from: DateComponents(
+            year: 2026,
+            month: 3,
+            day: 8,
+            hour: 0,
+            minute: 30
+        )))
+        let end = try XCTUnwrap(daylightCalendar.date(from: DateComponents(
+            year: 2026,
+            month: 3,
+            day: 8,
+            hour: 7
+        )))
+        let sample = SleepSampleInterval(startDate: start, endDate: end, stage: .asleepCore)
+
+        let summary = try XCTUnwrap(HealthIntelligenceEngine(calendar: daylightCalendar).sleepSummary(
+            for: wakeDate,
+            samples: [sample]
+        ))
+
+        XCTAssertEqual(summary.totalAsleepMinutes, 330, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(summary.mainSleepMinutes), 330, accuracy: 0.001)
+    }
+
+    func testSleepSummaryPersistsSelectedSourcesAndDecodesLegacyPayload() throws {
+        let wakeDate = try date(2026, 3, 20)
+        let primary = sleep(
+            wakeDate,
+            start: (-1, 23, 0),
+            end: (0, 2, 0),
+            stage: .asleepCore,
+            source: "com.example.primary"
+        )
+        let supplemental = sleep(
+            wakeDate,
+            start: (0, 2, 0),
+            end: (0, 7, 0),
+            stage: .asleepDeep,
+            source: "com.example.supplemental"
+        )
+        let summary = try XCTUnwrap(HealthIntelligenceEngine(calendar: calendar).sleepSummary(
+            for: wakeDate,
+            samples: [primary, supplemental]
+        ))
+
+        XCTAssertEqual(summary.algorithmVersion, AlgorithmVersions.healthIntelligence)
+        XCTAssertEqual(summary.selectedSourceIdentifier, "com.example.supplemental")
+        XCTAssertEqual(summary.supplementalSourceIdentifiers, ["com.example.primary"])
+        let roundTrip = try JSONDecoder().decode(SleepSummary.self, from: JSONEncoder().encode(summary))
+        XCTAssertEqual(roundTrip, summary)
+
+        let legacyPayload = Data("""
+        {"wakeDate":0,"totalAsleepMinutes":240,"mainSleepMinutes":240,"napMinutes":0,"stageCoverage":null,"stages":null,"selectedSourceBundleIdentifier":null}
+        """.utf8)
+        let legacy = try JSONDecoder().decode(SleepSummary.self, from: legacyPayload)
+        XCTAssertEqual(legacy.algorithmVersion, SleepSummary.legacyAlgorithmVersion)
+        XCTAssertNil(legacy.selectedSourceIdentifier)
+        XCTAssertTrue(legacy.supplementalSourceIdentifiers.isEmpty)
+        XCTAssertTrue(legacy.sourceCoverage.isEmpty)
+    }
+
     func testBaselineReadinessAndZeroMADDoNotCreateAnomaly() throws {
         let engine = HealthIntelligenceEngine(calendar: calendar)
         let asOf = try date(2026, 4, 1)
@@ -380,6 +723,31 @@ final class HealthIntelligenceTests: XCTestCase {
         XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .body })?.status, .partial)
         XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .sleep })?.status, .noData)
         XCTAssertEqual(partialResult.dailyBrief.trainingLoad.dataCoverage, .unknown)
+    }
+
+    func testConflictingSleepSourcesMarkHealthDomainCoveragePartial() throws {
+        let today = try date(2026, 10, 21)
+        let conflict = SleepSummary(
+            wakeDate: today,
+            totalAsleepMinutes: 0,
+            mainSleepMinutes: nil,
+            napMinutes: 0,
+            stageCoverage: nil,
+            stages: nil,
+            selectedSourceBundleIdentifier: "com.apple.watchkitapp",
+            hasConflictingSourceStages: true
+        )
+        let day = HealthIntelligenceDay(
+            dayStart: today,
+            sleepSummary: conflict,
+            healthReadStates: [HealthMetricID.sleepAnalysis.rawValue: .available]
+        )
+
+        let result = try XCTUnwrap(HealthIntelligenceEngine(calendar: calendar).makeDailyBrief(days: [day]))
+        let sleepDomain = try XCTUnwrap(result.dailyBrief.healthState?.domains.first { $0.domain == .sleep })
+
+        XCTAssertEqual(sleepDomain.dataCoverage, .partial)
+        XCTAssertEqual(sleepDomain.status, .partial)
     }
 
     func testMetricWindowCoverageReportsThirtyAuthorizedDaysWithinFortyTwoDayTarget() throws {

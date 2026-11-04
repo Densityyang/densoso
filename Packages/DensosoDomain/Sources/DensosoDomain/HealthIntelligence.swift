@@ -125,6 +125,18 @@ public struct SleepStageMinutes: Codable, Equatable, Sendable {
     }
 }
 
+public struct SleepSourceCoverage: Codable, Equatable, Sendable {
+    /// Stable source key: bundle identifier, `device:<model>`, or `unknown`.
+    public let sourceIdentifier: String
+    /// Effective asleep minutes contributed after source and stage conflict resolution.
+    public let asleepMinutes: Double
+
+    public init(sourceIdentifier: String, asleepMinutes: Double) {
+        self.sourceIdentifier = sourceIdentifier
+        self.asleepMinutes = asleepMinutes
+    }
+}
+
 public struct SleepSummary: Codable, Equatable, Sendable {
     public let wakeDate: Date
     public let totalAsleepMinutes: Double
@@ -133,6 +145,15 @@ public struct SleepSummary: Codable, Equatable, Sendable {
     public let stageCoverage: Double?
     public let stages: SleepStageMinutes?
     public let selectedSourceBundleIdentifier: String?
+    public let selectedSourceIdentifier: String?
+    public let supplementalSourceIdentifiers: [String]
+    public let sourceCoverage: [SleepSourceCoverage]
+    /// True when selected sources disagreed on an overlapping interval and the
+    /// deterministic precedence policy had to resolve the stage conflict.
+    public let hasConflictingSourceStages: Bool
+    public let algorithmVersion: String
+
+    public static let legacyAlgorithmVersion = "health-intelligence-v3"
 
     public init(
         wakeDate: Date,
@@ -141,7 +162,12 @@ public struct SleepSummary: Codable, Equatable, Sendable {
         napMinutes: Double,
         stageCoverage: Double?,
         stages: SleepStageMinutes?,
-        selectedSourceBundleIdentifier: String?
+        selectedSourceBundleIdentifier: String?,
+        selectedSourceIdentifier: String? = nil,
+        supplementalSourceIdentifiers: [String] = [],
+        sourceCoverage: [SleepSourceCoverage] = [],
+        hasConflictingSourceStages: Bool = false,
+        algorithmVersion: String = AlgorithmVersions.healthIntelligence
     ) {
         self.wakeDate = wakeDate
         self.totalAsleepMinutes = totalAsleepMinutes
@@ -150,7 +176,64 @@ public struct SleepSummary: Codable, Equatable, Sendable {
         self.stageCoverage = stageCoverage
         self.stages = stages
         self.selectedSourceBundleIdentifier = selectedSourceBundleIdentifier
+        self.selectedSourceIdentifier = selectedSourceIdentifier ?? selectedSourceBundleIdentifier
+        self.supplementalSourceIdentifiers = Array(Set(supplementalSourceIdentifiers)).sorted()
+        self.sourceCoverage = sourceCoverage.sorted { $0.sourceIdentifier < $1.sourceIdentifier }
+        self.hasConflictingSourceStages = hasConflictingSourceStages
+        self.algorithmVersion = algorithmVersion
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case wakeDate
+        case totalAsleepMinutes
+        case mainSleepMinutes
+        case napMinutes
+        case stageCoverage
+        case stages
+        case selectedSourceBundleIdentifier
+        case selectedSourceIdentifier
+        case supplementalSourceIdentifiers
+        case sourceCoverage
+        case hasConflictingSourceStages
+        case algorithmVersion
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        wakeDate = try container.decode(Date.self, forKey: .wakeDate)
+        totalAsleepMinutes = try container.decode(Double.self, forKey: .totalAsleepMinutes)
+        mainSleepMinutes = try container.decodeIfPresent(Double.self, forKey: .mainSleepMinutes)
+        napMinutes = try container.decodeIfPresent(Double.self, forKey: .napMinutes) ?? 0
+        stageCoverage = try container.decodeIfPresent(Double.self, forKey: .stageCoverage)
+        stages = try container.decodeIfPresent(SleepStageMinutes.self, forKey: .stages)
+        selectedSourceBundleIdentifier = try container.decodeIfPresent(
+            String.self,
+            forKey: .selectedSourceBundleIdentifier
+        )
+        selectedSourceIdentifier = try container.decodeIfPresent(String.self, forKey: .selectedSourceIdentifier)
+            ?? selectedSourceBundleIdentifier
+        supplementalSourceIdentifiers = Array(Set(
+            try container.decodeIfPresent([String].self, forKey: .supplementalSourceIdentifiers) ?? []
+        )).sorted()
+        sourceCoverage = (try container.decodeIfPresent([SleepSourceCoverage].self, forKey: .sourceCoverage) ?? [])
+            .sorted { $0.sourceIdentifier < $1.sourceIdentifier }
+        hasConflictingSourceStages = try container.decodeIfPresent(Bool.self, forKey: .hasConflictingSourceStages) ?? false
+        algorithmVersion = try container.decodeIfPresent(String.self, forKey: .algorithmVersion)
+            ?? Self.legacyAlgorithmVersion
+    }
+}
+
+private struct ResolvedSleepSegment: Equatable {
+    let start: Date
+    let end: Date
+    let stage: SleepStage
+}
+
+private struct SleepEpisode {
+    let start: Date
+    let end: Date
+    let segments: [ResolvedSleepSegment]
+    let asleepSeconds: TimeInterval
 }
 
 public struct TrainingWorkoutInput: Codable, Equatable, Sendable {
@@ -793,6 +876,9 @@ public struct HealthIntelligenceResult: Codable, Equatable, Sendable {
 }
 
 public struct HealthIntelligenceEngine: Sendable {
+    /// Asleep intervals separated by at most this gap belong to one sleep episode.
+    /// Awake minutes remain excluded from asleep duration and stage coverage.
+    public static let maximumSleepEpisodeGapMinutes = 30.0
     public static let algorithmVersion = AlgorithmVersions.healthIntelligence
     public static let dailyBriefCacheAlgorithmVersion = [
         AlgorithmVersions.healthIntelligence,
@@ -842,88 +928,148 @@ public struct HealthIntelligenceEngine: Sendable {
               let windowStart = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: previousDay),
               let windowEnd = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: wakeDay) else { return nil }
 
-        let valid = samples.filter { $0.stage.isAsleep && $0.endDate > $0.startDate }
-        guard !valid.isEmpty else { return nil }
-        let appleWatchSamples = valid.filter {
-            $0.isAppleWatchSample && $0.endDate > windowStart && $0.startDate < windowEnd
+        let valid = samples.filter {
+            ($0.stage.isAsleep || $0.stage == .awake)
+                && $0.endDate > $0.startDate
+                && $0.endDate > windowStart
+                && $0.startDate < windowEnd
         }
-        let selectedSource: String?
-        let clipped: [(start: Date, end: Date, stage: SleepStage)]
+        guard valid.contains(where: { $0.stage.isAsleep }) else { return nil }
+
         func sourceKey(_ sample: SleepSampleInterval) -> String {
             if let bundle = sample.sourceBundleIdentifier, !bundle.isEmpty { return bundle }
             if let model = sample.deviceModel, !model.isEmpty { return "device:\(model)" }
             return "unknown"
         }
-        func clip(_ samples: [SleepSampleInterval]) -> [(start: Date, end: Date, stage: SleepStage)] {
-            samples.compactMap { sample in
-                let start = max(sample.startDate, windowStart)
-                let end = min(sample.endDate, windowEnd)
-                guard end > start else { return nil }
-                return (start, end, sample.stage)
-            }
+        func asleepCoverageDuration(_ sourceSamples: [SleepSampleInterval]) -> TimeInterval {
+            Self.unionDuration(sourceSamples.filter { $0.stage.isAsleep }, start: windowStart, end: windowEnd)
         }
-        if !appleWatchSamples.isEmpty {
-            let watchGroups = Dictionary(grouping: appleWatchSamples, by: sourceKey)
-            let rankedWatchSources = watchGroups.sorted { lhs, rhs in
-                let lhsDuration = Self.unionDuration(lhs.value, start: windowStart, end: windowEnd)
-                let rhsDuration = Self.unionDuration(rhs.value, start: windowStart, end: windowEnd)
-                return lhsDuration == rhsDuration ? lhs.key < rhs.key : lhsDuration > rhsDuration
-            }
-            var watchIntervals: [(start: Date, end: Date, stage: SleepStage)] = []
-            var coveredIntervals: [(Date, Date)] = []
-            for (index, source) in rankedWatchSources.enumerated() {
-                let sourceIntervals = clip(source.value)
-                let uniqueIntervals = index == 0
-                    ? sourceIntervals
-                    : sourceIntervals.flatMap { interval in
-                        Self.subtract((interval.start, interval.end), coveredBy: coveredIntervals).map {
-                            (start: $0.0, end: $0.1, stage: interval.stage)
-                        }
-                    }
-                watchIntervals.append(contentsOf: uniqueIntervals)
-                coveredIntervals = Self.merge(coveredIntervals + uniqueIntervals.map { ($0.start, $0.end) })
-            }
-            let selectedWatchSource = rankedWatchSources.first?.value.first?.sourceBundleIdentifier
-            let nonWatchGroups = Dictionary(grouping: valid.filter { !$0.isAppleWatchSample }, by: sourceKey)
-            let rankedNonWatchSources = nonWatchGroups.sorted { lhs, rhs in
-                let lhsDuration = Self.unionDuration(lhs.value, start: windowStart, end: windowEnd)
-                let rhsDuration = Self.unionDuration(rhs.value, start: windowStart, end: windowEnd)
-                return lhsDuration == rhsDuration ? lhs.key < rhs.key : lhsDuration > rhsDuration
-            }
-            var supplemental: [(start: Date, end: Date, stage: SleepStage)] = []
-            for (_, sourceSamples) in rankedNonWatchSources {
-                let uniqueIntervals = clip(sourceSamples).flatMap { interval in
-                    Self.subtract((interval.start, interval.end), coveredBy: coveredIntervals).map {
-                        (start: $0.0, end: $0.1, stage: interval.stage)
-                    }
+        func reportedCoverageDuration(_ sourceSamples: [SleepSampleInterval]) -> TimeInterval {
+            Self.unionDuration(
+                sourceSamples.filter { $0.stage.isAsleep || $0.stage == .awake },
+                start: windowStart,
+                end: windowEnd
+            )
+        }
+        func ranked(_ sources: [String: [SleepSampleInterval]]) -> [(key: String, samples: [SleepSampleInterval])] {
+            sources.map { (key: $0.key, samples: $0.value) }
+                // Awake-only observations still carry authority: a higher
+                // priority source explicitly reporting wake must prevent a
+                // lower priority source from filling that interval as asleep.
+                .filter { reportedCoverageDuration($0.samples) > 0 }
+                .sorted { lhs, rhs in
+                    let lhsDuration = asleepCoverageDuration(lhs.samples)
+                    let rhsDuration = asleepCoverageDuration(rhs.samples)
+                    if lhsDuration != rhsDuration { return lhsDuration > rhsDuration }
+                    let lhsReported = reportedCoverageDuration(lhs.samples)
+                    let rhsReported = reportedCoverageDuration(rhs.samples)
+                    if lhsReported != rhsReported { return lhsReported > rhsReported }
+                    return lhs.key < rhs.key
                 }
-                supplemental.append(contentsOf: uniqueIntervals)
-                coveredIntervals = Self.merge(coveredIntervals + uniqueIntervals.map { ($0.start, $0.end) })
-            }
-            // Prefer one Watch source on overlap and one best non-Watch source
-            // per uncovered interval; this preserves unique segments without
-            // double-counting cross-source stages.
-            clipped = watchIntervals + supplemental
-            selectedSource = selectedWatchSource
-        } else {
-            let bySource = Dictionary(grouping: valid, by: sourceKey)
-            let winner = bySource.sorted { lhs, rhs in
-                let lhsDuration = Self.unionDuration(lhs.value, start: windowStart, end: windowEnd)
-                let rhsDuration = Self.unionDuration(rhs.value, start: windowStart, end: windowEnd)
-                return lhsDuration == rhsDuration ? lhs.key < rhs.key : lhsDuration < rhsDuration
-            }.last
-            selectedSource = winner?.value.first?.sourceBundleIdentifier
-            clipped = clip(winner?.value ?? [])
         }
 
-        let asleepIntervals = Self.merge(clipped.map { ($0.start, $0.end) })
-        guard !asleepIntervals.isEmpty else { return nil }
-        let sleepMinutes = asleepIntervals.reduce(0) { $0 + $1.1.timeIntervalSince($1.0) } / 60
-        let main = asleepIntervals.max { $0.1.timeIntervalSince($0.0) < $1.1.timeIntervalSince($1.0) }
-        let mainMinutes = main.map { $0.1.timeIntervalSince($0.0) / 60 }
-        let naps = max(sleepMinutes - (mainMinutes ?? 0), 0)
+        let bySource = Dictionary(grouping: valid, by: sourceKey)
+        let watchGroups = Dictionary(uniqueKeysWithValues: bySource.filter { $0.value.contains(where: \.isAppleWatchSample) })
+        let nonWatchGroups = Dictionary(uniqueKeysWithValues: bySource.filter { !$0.value.contains(where: \.isAppleWatchSample) })
+        let rankedWatchSources = ranked(watchGroups)
+        // A Watch source is always the primary layer when present. Without one,
+        // the source with the broadest distinct asleep coverage anchors the merge.
+        let rankedSources = rankedWatchSources.isEmpty
+            ? ranked(nonWatchGroups)
+            : rankedWatchSources + ranked(nonWatchGroups)
+        guard !rankedSources.isEmpty else { return nil }
 
-        guard let main, let mainMinutes, mainMinutes >= 90 else {
+        var coveredIntervals: [(Date, Date)] = []
+        var resolvedAsleep: [(start: Date, end: Date, stage: SleepStage)] = []
+        var resolvedSourceSegments: [ResolvedSleepSegment] = []
+        var effectiveCoverage: [SleepSourceCoverage] = []
+        var contributingSources: [String] = []
+        var hasConflictingSourceStages = bySource.values.contains { sourceSamples in
+            for (index, lhs) in sourceSamples.enumerated() {
+                let lhsStart = max(lhs.startDate, windowStart)
+                let lhsEnd = min(lhs.endDate, windowEnd)
+                guard lhsEnd > lhsStart else { continue }
+                for rhs in sourceSamples.dropFirst(index + 1) where lhs.stage != rhs.stage {
+                    let rhsStart = max(rhs.startDate, windowStart)
+                    let rhsEnd = min(rhs.endDate, windowEnd)
+                    if max(lhsStart, rhsStart) < min(lhsEnd, rhsEnd) { return true }
+                }
+            }
+            return false
+        }
+
+        for source in rankedSources {
+            let sourceSegments = Self.resolveSleepSourceSegments(
+                source.samples,
+                start: windowStart,
+                end: windowEnd
+            )
+            for segment in sourceSegments {
+                if resolvedSourceSegments.contains(where: { previous in
+                    previous.stage != segment.stage
+                        && max(previous.start, segment.start) < min(previous.end, segment.end)
+                }) {
+                    hasConflictingSourceStages = true
+                }
+            }
+            var sourceCoverageIntervals: [(Date, Date)] = []
+            var contributions: [(start: Date, end: Date, stage: SleepStage)] = []
+            for segment in sourceSegments {
+                sourceCoverageIntervals.append((segment.start, segment.end))
+                guard segment.stage.isAsleep else { continue }
+                contributions.append(contentsOf: Self.subtract(
+                    (segment.start, segment.end),
+                    coveredBy: coveredIntervals
+                ).map { (start: $0.0, end: $0.1, stage: segment.stage) })
+            }
+            let contributionSeconds = contributions.reduce(0) { $0 + $1.end.timeIntervalSince($1.start) }
+            if contributionSeconds > 0 {
+                resolvedAsleep.append(contentsOf: contributions)
+                effectiveCoverage.append(SleepSourceCoverage(
+                    sourceIdentifier: source.key,
+                    asleepMinutes: contributionSeconds / 60
+                ))
+                contributingSources.append(source.key)
+            }
+            // Awake segments are included as source coverage so lower-ranked
+            // sources cannot contradict a higher-ranked source's awake period.
+            coveredIntervals = Self.merge(coveredIntervals + sourceCoverageIntervals)
+            resolvedSourceSegments.append(contentsOf: sourceSegments)
+        }
+
+        guard !resolvedAsleep.isEmpty else {
+            // Keep a conflict-only summary when a preferred source reports
+            // awake while a lower-priority source reports sleep. Returning nil
+            // would lose the evidence needed to mark this domain partial.
+            return SleepSummary(
+                wakeDate: wakeDay,
+                totalAsleepMinutes: 0,
+                mainSleepMinutes: nil,
+                napMinutes: 0,
+                stageCoverage: nil,
+                stages: nil,
+                selectedSourceBundleIdentifier: nil,
+                selectedSourceIdentifier: nil,
+                supplementalSourceIdentifiers: [],
+                sourceCoverage: [],
+                hasConflictingSourceStages: hasConflictingSourceStages
+            )
+        }
+        let totalAsleepSeconds = resolvedAsleep.reduce(0) { $0 + $1.end.timeIntervalSince($1.start) }
+        let episodes = Self.sleepEpisodes(
+            from: resolvedAsleep,
+            maximumAwakeGap: Self.maximumSleepEpisodeGapMinutes * 60
+        )
+        guard let main = episodes.sorted(by: Self.sleepEpisodePrecedes).first else { return nil }
+        let sleepMinutes = totalAsleepSeconds / 60
+        let mainMinutes = main.asleepSeconds / 60
+        let naps = max(sleepMinutes - mainMinutes, 0)
+        let selectedSourceIdentifier = contributingSources.first
+        let selectedSource = rankedSources.first(where: { $0.key == selectedSourceIdentifier })?.samples
+            .first(where: { $0.stage.isAsleep })?.sourceBundleIdentifier
+        let supplementalSources = Array(contributingSources.dropFirst())
+
+        guard mainMinutes >= 90 else {
             return SleepSummary(
                 wakeDate: wakeDay,
                 totalAsleepMinutes: sleepMinutes,
@@ -931,19 +1077,21 @@ public struct HealthIntelligenceEngine: Sendable {
                 napMinutes: sleepMinutes,
                 stageCoverage: nil,
                 stages: nil,
-                selectedSourceBundleIdentifier: selectedSource
+                selectedSourceBundleIdentifier: selectedSource,
+                selectedSourceIdentifier: selectedSourceIdentifier,
+                supplementalSourceIdentifiers: supplementalSources,
+                sourceCoverage: effectiveCoverage,
+                hasConflictingSourceStages: hasConflictingSourceStages
             )
         }
-        let mainStageIntervals = clipped.filter { $0.start < main.1 && $0.end > main.0 }
-        let stageIntervals: [SleepStage: [(Date, Date)]] = Dictionary(grouping: mainStageIntervals, by: { $0.stage })
-            .mapValues { values in Self.merge(values.map { (max($0.start, main.0), min($0.end, main.1)) }) }
         func minutes(_ stage: SleepStage) -> Double {
-            (stageIntervals[stage] ?? []).reduce(0) { $0 + $1.1.timeIntervalSince($1.0) } / 60
+            main.segments.filter { $0.stage == stage }
+                .reduce(0) { $0 + $1.end.timeIntervalSince($1.start) } / 60
         }
         let core = minutes(.asleepCore)
         let deep = minutes(.asleepDeep)
         let rem = minutes(.asleepREM)
-        let stagedMinutes = min(core + deep + rem, mainMinutes)
+        let stagedMinutes = core + deep + rem
         let coverage = mainMinutes > 0 ? stagedMinutes / mainMinutes : 0
         let visibleStages = coverage >= 0.60 ? SleepStageMinutes(core: core, deep: deep, rem: rem) : nil
         return SleepSummary(
@@ -953,8 +1101,102 @@ public struct HealthIntelligenceEngine: Sendable {
             napMinutes: naps,
             stageCoverage: coverage,
             stages: visibleStages,
-            selectedSourceBundleIdentifier: selectedSource
+            selectedSourceBundleIdentifier: selectedSource,
+            selectedSourceIdentifier: selectedSourceIdentifier,
+            supplementalSourceIdentifiers: supplementalSources,
+            sourceCoverage: effectiveCoverage,
+            hasConflictingSourceStages: hasConflictingSourceStages
         )
+    }
+
+    private static func resolveSleepSourceSegments(
+        _ samples: [SleepSampleInterval],
+        start windowStart: Date,
+        end windowEnd: Date
+    ) -> [ResolvedSleepSegment] {
+        let clipped = samples.compactMap { sample -> ResolvedSleepSegment? in
+            guard sample.stage.isAsleep || sample.stage == .awake else { return nil }
+            let start = max(sample.startDate, windowStart)
+            let end = min(sample.endDate, windowEnd)
+            guard end > start else { return nil }
+            return ResolvedSleepSegment(start: start, end: end, stage: sample.stage)
+        }
+        let boundaries = Set(clipped.flatMap { [$0.start, $0.end] }).sorted()
+        guard boundaries.count > 1 else { return [] }
+
+        var result: [ResolvedSleepSegment] = []
+        for (start, end) in zip(boundaries, boundaries.dropFirst()) where end > start {
+            let active = clipped.filter { $0.start < end && $0.end > start }
+            guard let winner = active.max(by: { lhs, rhs in
+                sleepStagePriority(lhs.stage) < sleepStagePriority(rhs.stage)
+            }) else { continue }
+            if let last = result.last, last.stage == winner.stage, last.end == start {
+                result[result.count - 1] = ResolvedSleepSegment(start: last.start, end: end, stage: last.stage)
+            } else {
+                result.append(ResolvedSleepSegment(start: start, end: end, stage: winner.stage))
+            }
+        }
+        return result
+    }
+
+    private static func sleepStagePriority(_ stage: SleepStage) -> Int {
+        // Awake is an explicit veto over overlapping asleep values from the same
+        // source. Specific stages outrank unspecified; the fixed ordering makes
+        // malformed same-source overlaps deterministic.
+        switch stage {
+        case .awake: 5
+        case .asleepDeep: 4
+        case .asleepREM: 3
+        case .asleepCore: 2
+        case .asleepUnspecified: 1
+        case .inBed, .unknown: 0
+        }
+    }
+
+    private static func sleepEpisodes(
+        from segments: [(start: Date, end: Date, stage: SleepStage)],
+        maximumAwakeGap: TimeInterval
+    ) -> [SleepEpisode] {
+        let asleep = segments
+            .filter { $0.stage.isAsleep && $0.end > $0.start }
+            .map { ResolvedSleepSegment(start: $0.start, end: $0.end, stage: $0.stage) }
+            .sorted { $0.start == $1.start ? $0.end < $1.end : $0.start < $1.start }
+        guard let first = asleep.first else { return [] }
+
+        var result: [SleepEpisode] = []
+        var episodeSegments = [first]
+        var episodeStart = first.start
+        var episodeEnd = first.end
+        var asleepSeconds = first.end.timeIntervalSince(first.start)
+        for segment in asleep.dropFirst() {
+            if segment.start.timeIntervalSince(episodeEnd) > maximumAwakeGap {
+                result.append(SleepEpisode(
+                    start: episodeStart,
+                    end: episodeEnd,
+                    segments: episodeSegments,
+                    asleepSeconds: asleepSeconds
+                ))
+                episodeSegments = []
+                episodeStart = segment.start
+                asleepSeconds = 0
+            }
+            episodeSegments.append(segment)
+            episodeEnd = max(episodeEnd, segment.end)
+            asleepSeconds += segment.end.timeIntervalSince(segment.start)
+        }
+        result.append(SleepEpisode(
+            start: episodeStart,
+            end: episodeEnd,
+            segments: episodeSegments,
+            asleepSeconds: asleepSeconds
+        ))
+        return result
+    }
+
+    private static func sleepEpisodePrecedes(_ lhs: SleepEpisode, _ rhs: SleepEpisode) -> Bool {
+        if lhs.asleepSeconds != rhs.asleepSeconds { return lhs.asleepSeconds > rhs.asleepSeconds }
+        if lhs.end != rhs.end { return lhs.end > rhs.end }
+        return lhs.start < rhs.start
     }
 
     public func trainingLoad(
@@ -1630,8 +1872,18 @@ public struct HealthIntelligenceEngine: Sendable {
                 }
             }
         }
-        if unknownCount == 0 { return .complete }
-        return availableCount == 0 ? .unknown : .partial
+        let coverage: HealthDataCoverage
+        if unknownCount == 0 {
+            coverage = .complete
+        } else {
+            coverage = availableCount == 0 ? .unknown : .partial
+        }
+        if coverage != .unknown,
+           metrics.contains(.sleepAnalysis),
+           days.contains(where: { $0.sleepSummary?.hasConflictingSourceStages == true }) {
+            return .partial
+        }
+        return coverage
     }
 
     private static func hasData(_ day: HealthIntelligenceDay) -> Bool {

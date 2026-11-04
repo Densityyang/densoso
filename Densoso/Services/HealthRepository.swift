@@ -19,6 +19,10 @@ private struct HealthKitSampleIndexUpdate {
     }
 }
 
+private struct StaleHealthSnapshot {
+    let record: DailyHealthSnapshotRecord
+}
+
 /// Coordinates local health-record writes and their derived daily metrics.
 /// Source changes and pending markers commit before detached calculation; each
 /// verified projection then commits on this context actor, leaving a durable
@@ -30,6 +34,12 @@ final class HealthRepository: HealthSyncRepository {
     private static let healthKitSampleIndexPredicateBatchSize = 64
     private static let importedWorkoutBatchSize = 400
     private static let workoutEffortFetchBatchSize = 64
+    private static let snapshotHealthKitMetrics: Set<HealthMetricID> = [
+        .workout, .workoutEffort, .stepCount, .activeEnergy, .restingEnergy,
+        .exerciseMinutes, .sleepAnalysis, .heartRate, .restingHeartRate,
+        .heartRateVariabilitySDNN, .respiratoryRate, .bodyMass, .height,
+        .bodyFatPercentage, .wristTemperature,
+    ]
 
     private let modelContext: ModelContext
     private let persistenceOperationBarrier: PersistenceOperationBarrier
@@ -204,6 +214,9 @@ final class HealthRepository: HealthSyncRepository {
                     + existingCoordinationDates
                     + Array(normalizedReadStateUpdates.keys)
             ) { affectedDates in
+            var workoutDaysNeedingEffortReconciliation = Set(
+                existingCoordinationDates.map { calendar.startOfDay(for: $0) }
+            )
             let importedPredicate = #Predicate<WorkoutRecord> { $0.healthKitUUID != nil }
             var importedDescriptor = FetchDescriptor<WorkoutRecord>(
                 predicate: importedPredicate,
@@ -261,23 +274,32 @@ final class HealthRepository: HealthSyncRepository {
             for snapshot in snapshots {
                 if let existing = workoutsByHealthKitUUID[snapshot.healthKitUUID] {
                     affectedDates.insert(existing.date)
+                    workoutDaysNeedingEffortReconciliation.insert(calendar.startOfDay(for: existing.date))
                     apply(snapshot, to: existing)
                     affectedDates.insert(existing.date)
+                    workoutDaysNeedingEffortReconciliation.insert(calendar.startOfDay(for: existing.date))
                 } else {
                     let workout = WorkoutRecord()
                     apply(snapshot, to: workout)
                     modelContext.insert(workout)
                     workoutsByHealthKitUUID[snapshot.healthKitUUID] = workout
                     affectedDates.insert(workout.date)
+                    workoutDaysNeedingEffortReconciliation.insert(calendar.startOfDay(for: workout.date))
                 }
             }
 
             for healthKitUUID in Set(deletedHealthKitUUIDs) {
                 if let workout = workoutsByHealthKitUUID[healthKitUUID] {
                     affectedDates.insert(workout.date)
+                    workoutDaysNeedingEffortReconciliation.insert(calendar.startOfDay(for: workout.date))
                     modelContext.delete(workout)
                 }
             }
+
+            try markWorkoutEffortIndexesForRequery(
+                on: workoutDaysNeedingEffortReconciliation,
+                affecting: &affectedDates
+            )
 
             if let cursor = try cursorRecord(stream: stream) {
                 cursor.anchorData = nextAnchorData
@@ -302,6 +324,41 @@ final class HealthRepository: HealthSyncRepository {
                 affectedDates.insert(day)
             }
             }
+        }
+    }
+
+    /// A workout may arrive after its effort sample. Persist a requery marker in
+    /// the same transaction as the workout and cursor so a later effort sync can
+    /// rebuild the association, even if the next observer event contains no new
+    /// effort samples.
+    private func markWorkoutEffortIndexesForRequery(
+        on days: Set<Date>,
+        affecting affectedDates: inout Set<Date>
+    ) throws {
+        guard !days.isEmpty else { return }
+        let dayKeys = Array(Set(days.map { Self.dayKey(for: $0) })).sorted()
+        let stream = HealthMetricID.workoutEffort.rawValue
+        let sortBy = [SortDescriptor(\HealthKitSampleIndexRecord.sampleID)]
+        var offset = 0
+        while true {
+            let predicate = #Predicate<HealthKitSampleIndexRecord> {
+                $0.stream == stream && dayKeys.contains($0.dayKey)
+            }
+            var descriptor = FetchDescriptor<HealthKitSampleIndexRecord>(predicate: predicate, sortBy: sortBy)
+            descriptor.fetchOffset = offset
+            descriptor.fetchLimit = Self.healthKitSampleIndexBatchSize
+            let records = try modelContext.fetch(descriptor)
+            guard !records.isEmpty else { return }
+            for record in records {
+                let projectionDayKeys = Self.projectionDayKeys(for: record, stream: stream)
+                Self.setPendingDayKeys(
+                    Self.pendingDayKeys(for: record).union(projectionDayKeys),
+                    on: record
+                )
+                affectedDates.formUnion(Self.indexedProjectionDays(for: record, stream: stream))
+            }
+            offset += records.count
+            if records.count < Self.healthKitSampleIndexBatchSize { return }
         }
     }
 
@@ -489,9 +546,26 @@ final class HealthRepository: HealthSyncRepository {
             throw HealthStoreClientError.invalidAnchor
         }
         let days = HealthDataWindowPolicy.days(from: firstDay, through: lastDay, calendar: calendar)
-        let orderedMetrics = metrics.sorted { $0.rawValue < $1.rawValue }
-        var clearedMetrics = metrics
-        if metrics.contains(.workout) {
+        let currentTimeZoneIdentifier = calendar.timeZone.identifier
+        let staleSnapshotsByDay = try staleHealthSnapshotsByCurrentLocalDay(
+            calendar: calendar,
+            currentTimeZoneIdentifier: currentTimeZoneIdentifier,
+            from: firstDay,
+            through: lastDay
+        )
+        let staleSnapshotsInWindow = staleSnapshotsByDay.filter { entry in
+            entry.key >= firstDay && entry.key <= lastDay
+        }
+        // A timezone or cache algorithm change invalidates every HealthKit
+        // projection for the affected window. Re-query all streams so an old
+        // aggregate is never relabelled with the new day or algorithm version.
+        let rebuildingAllSnapshotMetrics = !staleSnapshotsInWindow.isEmpty
+        let metricsToRebuild = rebuildingAllSnapshotMetrics
+            ? metrics.union(Self.snapshotHealthKitMetrics)
+            : metrics
+        let orderedMetrics = metricsToRebuild.sorted { $0.rawValue < $1.rawValue }
+        var clearedMetrics = metricsToRebuild
+        if metricsToRebuild.contains(.workout) {
             clearedMetrics.insert(.workoutEffort)
         }
 
@@ -533,7 +607,22 @@ final class HealthRepository: HealthSyncRepository {
             }
 
             for day in days {
-                var snapshot = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
+                let dayKey = Self.dayKey(for: day, calendar: calendar)
+                let canonicalRecord = try healthSnapshotRecord(dayKey: dayKey)
+                let staleRecords = staleSnapshotsByDay[day, default: []]
+                let selectedStaleRecord = canonicalRecord == nil
+                    ? staleRecords.first?.record
+                    : nil
+                let recordToUpdate = canonicalRecord ?? selectedStaleRecord
+                var snapshot = try recordToUpdate.map {
+                    try Self.decodeHealthSnapshot($0.payloadData, decoder: JSONDecoder())
+                } ?? Self.emptyHealthSnapshot(for: day)
+                if !staleRecords.isEmpty {
+                    let retainedRecordID = recordToUpdate?.id
+                    for staleRecord in staleRecords where staleRecord.record.id != retainedRecordID {
+                        modelContext.delete(staleRecord.record)
+                    }
+                }
                 let summary = snapshot.healthKitSampleSummary
                 let filteredSummary = summary.map {
                     DailyHealthSampleSummary(
@@ -547,25 +636,37 @@ final class HealthRepository: HealthSyncRepository {
                 for metric in metrics {
                     readStates[metric.rawValue] = .dataUnavailableOrReadScopeUnknown
                 }
-                if metrics.contains(.workout) {
+                if metricsToRebuild.contains(.workout) {
+                    readStates[HealthMetricID.workout.rawValue] = .dataUnavailableOrReadScopeUnknown
                     readStates[HealthMetricID.workoutEffort.rawValue] = .dataUnavailableOrReadScopeUnknown
+                }
+                if rebuildingAllSnapshotMetrics {
+                    for metric in Self.snapshotHealthKitMetrics {
+                        readStates[metric.rawValue] = .dataUnavailableOrReadScopeUnknown
+                    }
                 }
                 snapshot = Self.replacing(
                     snapshot,
-                    activeEnergyKcal: metrics.contains(.activeEnergy) ? .some(nil) : nil,
-                    restingEnergyKcal: metrics.contains(.restingEnergy) ? .some(nil) : nil,
-                    stepCount: metrics.contains(.stepCount) ? .some(nil) : nil,
-                    exerciseMinutes: metrics.contains(.exerciseMinutes) ? .some(nil) : nil,
-                    weightKilograms: metrics.contains(.bodyMass)
+                    activeEnergyKcal: metricsToRebuild.contains(.activeEnergy) ? .some(nil) : nil,
+                    restingEnergyKcal: metricsToRebuild.contains(.restingEnergy) ? .some(nil) : nil,
+                    stepCount: metricsToRebuild.contains(.stepCount) ? .some(nil) : nil,
+                    exerciseMinutes: metricsToRebuild.contains(.exerciseMinutes) ? .some(nil) : nil,
+                    weightKilograms: metricsToRebuild.contains(.bodyMass)
                         ? .some(try latestLocalWeightKilograms(on: day))
                         : nil,
                     healthKitSamples: .some(legacySamples),
                     healthKitSampleSummary: .some(filteredSummary),
-                    healthReadStates: .some(readStates)
+                    healthReadStates: .some(readStates),
+                    algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
                 )
-                try upsertHealthSnapshot(snapshot, for: day)
+                try upsertHealthSnapshot(
+                    snapshot,
+                    for: day,
+                    rebaselineTimezone: true,
+                    updating: recordToUpdate
+                )
             }
-            if metrics.contains(.bodyMass) {
+            if metricsToRebuild.contains(.bodyMass) {
                 try addDailyMetricDates(from: firstDay, through: end, to: &affectedDates)
             }
 
@@ -584,7 +685,58 @@ final class HealthRepository: HealthSyncRepository {
                     cursor.updatedAt = Date()
                 }
             }
+            if rebuildingAllSnapshotMetrics {
+                let currentTime = Date()
+                for cursor in try modelContext.fetch(FetchDescriptor<HealthKitImportCursor>()) {
+                    cursor.anchorData = nil
+                    cursor.lastSuccessfulAt = nil
+                    cursor.lookbackStart = nil
+                    cursor.updatedAt = currentTime
+                }
+            }
         }
+    }
+
+    private func staleHealthSnapshotsByCurrentLocalDay(
+        calendar: Calendar,
+        currentTimeZoneIdentifier: String,
+        from start: Date,
+        through end: Date
+    ) throws -> [Date: [StaleHealthSnapshot]] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let searchStart = calendar.date(byAdding: .day, value: -2, to: start) ?? start
+        let searchEnd = calendar.date(byAdding: .day, value: 2, to: end) ?? end
+        let lowerDayKey = Self.dayKey(for: searchStart, calendar: calendar)
+        let upperDayKey = Self.dayKey(for: searchEnd, calendar: calendar)
+        let predicate = #Predicate<DailyHealthSnapshotRecord> {
+            $0.dayKey >= lowerDayKey && $0.dayKey <= upperDayKey
+        }
+        var staleByDay: [Date: [StaleHealthSnapshot]] = [:]
+        for record in try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate)) {
+            guard let snapshot = try? Self.decodeHealthSnapshot(record.payloadData, decoder: decoder) else { continue }
+            let day = calendar.startOfDay(for: snapshot.dayStart)
+            let canonicalDayKey = Self.dayKey(for: day, calendar: calendar)
+            let hasStaleSleepSummary = snapshot.healthKitSampleSummary?.sleep.map {
+                $0.algorithmVersion != AlgorithmVersions.healthIntelligence
+            } ?? false
+            let isStale = record.timezoneID != currentTimeZoneIdentifier
+                || snapshot.timezoneIdentifier != currentTimeZoneIdentifier
+                || record.dayKey != canonicalDayKey
+                || record.algorithmVersion != DailyHealthSnapshot.currentAlgorithmVersion
+                || snapshot.algorithmVersion != DailyHealthSnapshot.currentAlgorithmVersion
+                || hasStaleSleepSummary
+            guard isStale else { continue }
+            staleByDay[day, default: []].append(StaleHealthSnapshot(record: record))
+        }
+        for day in staleByDay.keys {
+            staleByDay[day]?.sort {
+                $0.record.createdAt == $1.record.createdAt
+                    ? $0.record.dayKey < $1.record.dayKey
+                    : $0.record.createdAt < $1.record.createdAt
+            }
+        }
+        return staleByDay
     }
 
     private func removeHealthKitSampleIndexes(
@@ -1097,6 +1249,9 @@ final class HealthRepository: HealthSyncRepository {
         workout.type = snapshot.activityType
         workout.durationMinutes = Int((snapshot.duration / 60).rounded())
         workout.estimatedCaloriesBurned = Int((resolvedEnergy?.kilocalories ?? 0).rounded())
+        // HealthKit does not provide the user's subjective workout intensity.
+        // Do not inherit WorkoutRecord's manual-entry default (`moderate`).
+        workout.intensity = "unknown"
         workout.healthKitUUID = snapshot.healthKitUUID
         workout.logicalSessionID = snapshot.logicalSessionID
         workout.workoutOrigin = snapshot.origin.rawValue
@@ -1498,25 +1653,41 @@ final class HealthRepository: HealthSyncRepository {
         return try Self.decodeHealthSnapshot(record.payloadData, decoder: JSONDecoder())
     }
 
-    private func upsertHealthSnapshot(_ snapshot: DailyHealthSnapshot, for day: Date) throws {
-        let dayKey = Self.dayKey(for: day)
+    private func upsertHealthSnapshot(
+        _ snapshot: DailyHealthSnapshot,
+        for day: Date,
+        rebaselineTimezone: Bool = false,
+        updating sourceRecord: DailyHealthSnapshotRecord? = nil
+    ) throws {
+        let calendar = Calendar.current
+        let normalizedDay = rebaselineTimezone ? calendar.startOfDay(for: day) : day
+        let normalizedSnapshot = rebaselineTimezone
+            ? Self.replacing(
+                snapshot,
+                dayStart: normalizedDay,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            )
+            : snapshot
+        let dayKey = Self.dayKey(for: normalizedDay, calendar: calendar)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
         encoder.outputFormatting = [.sortedKeys]
-        let payloadData = try encoder.encode(snapshot)
+        let payloadData = try encoder.encode(normalizedSnapshot)
         let hash = SHA256.hash(data: payloadData).map { String(format: "%02x", $0) }.joined()
-        if let record = try healthSnapshotRecord(dayKey: dayKey) {
-            record.timezoneID = snapshot.timezoneIdentifier
+        if let record = try healthSnapshotRecord(dayKey: dayKey) ?? sourceRecord {
+            record.dayKey = dayKey
+            record.timezoneID = normalizedSnapshot.timezoneIdentifier
             record.payloadData = payloadData
             record.snapshotHash = hash
-            record.algorithmVersion = snapshot.algorithmVersion
+            record.algorithmVersion = normalizedSnapshot.algorithmVersion
         } else {
             modelContext.insert(DailyHealthSnapshotRecord(
                 dayKey: dayKey,
-                timezoneID: snapshot.timezoneIdentifier,
+                timezoneID: normalizedSnapshot.timezoneIdentifier,
                 payloadData: payloadData,
                 snapshotHash: hash,
-                algorithmVersion: snapshot.algorithmVersion
+                algorithmVersion: normalizedSnapshot.algorithmVersion
             ))
         }
     }
@@ -1540,8 +1711,8 @@ final class HealthRepository: HealthSyncRepository {
         return try decoder.decode(DailyHealthSnapshot.self, from: data)
     }
 
-    private static func dayKey(for date: Date) -> String {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+    private static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
@@ -1659,6 +1830,8 @@ final class HealthRepository: HealthSyncRepository {
 
     private static func replacing(
         _ source: DailyHealthSnapshot,
+        dayStart: Date? = nil,
+        timezoneIdentifier: String? = nil,
         activeEnergyKcal: Double?? = nil,
         restingEnergyKcal: Double?? = nil,
         stepCount: Double?? = nil,
@@ -1666,11 +1839,12 @@ final class HealthRepository: HealthSyncRepository {
         weightKilograms: Double?? = nil,
         healthKitSamples: [HealthSampleSnapshot]?? = nil,
         healthKitSampleSummary: DailyHealthSampleSummary?? = nil,
-        healthReadStates: [String: HealthReadState]?? = nil
+        healthReadStates: [String: HealthReadState]?? = nil,
+        algorithmVersion: String? = nil
     ) -> DailyHealthSnapshot {
         DailyHealthSnapshot(
-            dayStart: source.dayStart,
-            timezoneIdentifier: source.timezoneIdentifier,
+            dayStart: dayStart ?? source.dayStart,
+            timezoneIdentifier: timezoneIdentifier ?? source.timezoneIdentifier,
             energyIntakeKcal: source.energyIntakeKcal,
             activeEnergyKcal: activeEnergyKcal ?? source.activeEnergyKcal,
             restingEnergyKcal: restingEnergyKcal ?? source.restingEnergyKcal,
@@ -1680,7 +1854,7 @@ final class HealthRepository: HealthSyncRepository {
             healthKitSamples: healthKitSamples ?? source.healthKitSamples,
             healthKitSampleSummary: healthKitSampleSummary ?? source.healthKitSampleSummary,
             healthReadStates: healthReadStates ?? source.healthReadStates,
-            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            algorithmVersion: algorithmVersion ?? source.algorithmVersion
         )
     }
 }

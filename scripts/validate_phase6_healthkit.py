@@ -56,7 +56,7 @@ def main() -> int:
     snapshot_contract = require_text(
         "Packages/DensosoDomain/Sources/DensosoDomain/HealthDomainDrafts.swift",
         (
-            'public static let currentAlgorithmVersion = "daily-health-snapshot-v2"',
+            'public static let currentAlgorithmVersion = "daily-health-snapshot-v3"',
             "public let healthKitSampleSummary: DailyHealthSampleSummary?",
             "case healthKitSamples",
             "try container.encodeIfPresent(healthKitSampleSummary, forKey: .healthKitSampleSummary)",
@@ -471,12 +471,12 @@ def main() -> int:
         errors.append("legacy training-load caches without coverage must decode as unknown and omit numeric placeholders")
     if unknown_vital_trend not in normalized_domain_coverage:
         errors.append("unknown vital-trend coverage must clear its median and reset its baseline/status")
-    if "health-intelligence-v3" not in require_text(
+    if "health-intelligence-v4" not in require_text(
         "Packages/DensosoDomain/Sources/DensosoDomain/AlgorithmVersions.swift",
-        ("public static let healthIntelligence = \"health-intelligence-v3\"",),
+        ("public static let healthIntelligence = \"health-intelligence-v4\"",),
         errors,
     ):
-        errors.append("health-intelligence-v3 must invalidate briefs built with the old coverage semantics")
+        errors.append("health-intelligence-v4 must invalidate briefs built with the old coverage semantics")
     require_text(
         "Packages/DensosoDomain/Tests/DensosoDomainTests/HealthIntelligenceTests.swift",
         (

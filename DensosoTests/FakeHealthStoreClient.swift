@@ -10,7 +10,7 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     private var sampleResponses: [HealthMetricID: [HealthSamplePage]] = [:]
     private var sampleRequestLog: [HealthMetricID: [HealthSampleRequest]] = [:]
     private var workoutRequestStarts: [Date] = []
-    private var workoutRequestAnchors: [Data?] = []
+    private var recordedWorkoutRequestAnchors: [Data?] = []
     private var authorizedSampleStarts: [HealthMetricID: Date] = [:]
     private var authorizationBoundaryFailures: Set<HealthMetricID> = []
     private var authorizationBoundaryQueryFailures: Set<HealthMetricID> = []
@@ -160,7 +160,7 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     func workoutChanges(from startDate: Date, after anchor: Data?) async throws -> HealthChangePage<WorkoutSnapshot> {
         guard available else { throw HealthStoreClientError.unavailable }
         workoutRequestStarts.append(startDate)
-        workoutRequestAnchors.append(anchor)
+        recordedWorkoutRequestAnchors.append(anchor)
         if workoutInvalidAnchorFailuresRemaining > 0 {
             workoutInvalidAnchorFailuresRemaining -= 1
             throw HealthStoreClientError.invalidAnchor
@@ -260,7 +260,7 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
         sampleRequestLog[metric] ?? []
     }
     func workoutRequestStartDates() -> [Date] { workoutRequestStarts }
-    func workoutRequestAnchors() -> [Data?] { workoutRequestAnchors }
+    func workoutRequestAnchors() -> [Data?] { recordedWorkoutRequestAnchors }
 
     func waitForObserverCompletion(after count: Int) async {
         if observerCompletions > count { return }

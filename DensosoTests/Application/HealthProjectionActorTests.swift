@@ -417,6 +417,389 @@ final class HealthProjectionActorTests: XCTestCase {
         XCTAssertEqual(state.trainingLoad.estimatedWorkoutCount, 1)
     }
 
+    func testTimezoneChangeReassignsHealthSamplesToCurrentLocalDaysAcrossDST() throws {
+        var currentCalendar = Calendar(identifier: .gregorian)
+        currentCalendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        var oldCalendar = Calendar(identifier: .gregorian)
+        oldCalendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))
+        let firstDay = try XCTUnwrap(currentCalendar.date(from: DateComponents(year: 2026, month: 11, day: 1)))
+        let secondDay = try XCTUnwrap(currentCalendar.date(byAdding: .day, value: 1, to: firstDay))
+        let thirdDay = try XCTUnwrap(currentCalendar.date(byAdding: .day, value: 1, to: secondDay))
+        let oldSecondDay = try XCTUnwrap(oldCalendar.date(from: DateComponents(year: 2026, month: 11, day: 2)))
+        let oldAbsoluteSampleDate = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-02T09:30:00Z"))
+        let currentAbsoluteSampleDate = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-02T07:30:00Z"))
+        let staleSample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000805")!,
+            metric: .heartRate,
+            startDate: oldAbsoluteSampleDate,
+            endDate: oldAbsoluteSampleDate.addingTimeInterval(60),
+            value: 99
+        )
+        let currentSample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000806")!,
+            metric: .heartRate,
+            startDate: currentAbsoluteSampleDate,
+            endDate: currentAbsoluteSampleDate.addingTimeInterval(60),
+            value: 72
+        )
+        let mismatchedSample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000807")!,
+            metric: .heartRate,
+            startDate: oldAbsoluteSampleDate,
+            endDate: oldAbsoluteSampleDate.addingTimeInterval(60),
+            value: 88
+        )
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        let currentTimeZoneIdentifier = currentCalendar.timeZone.identifier
+        let heartRateReadState = [HealthMetricID.heartRate.rawValue: HealthReadState.available]
+
+        let staleSnapshot = DailyHealthSnapshot(
+            dayStart: oldSecondDay,
+            timezoneIdentifier: oldCalendar.timeZone.identifier,
+            healthKitSampleSummary: DailyHealthSampleSummary(samples: [staleSample], dayStart: oldSecondDay),
+            healthReadStates: heartRateReadState,
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey(secondDay, calendar: currentCalendar),
+            timezoneID: oldCalendar.timeZone.identifier,
+            payloadData: try encoder.encode(staleSnapshot),
+            snapshotHash: "timezone-stale-day-absolute-time",
+            algorithmVersion: staleSnapshot.algorithmVersion
+        ))
+
+        let currentSnapshot = DailyHealthSnapshot(
+            dayStart: firstDay,
+            timezoneIdentifier: currentTimeZoneIdentifier,
+            healthKitSampleSummary: DailyHealthSampleSummary(samples: [currentSample], dayStart: firstDay),
+            healthReadStates: heartRateReadState,
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey(firstDay, calendar: currentCalendar),
+            timezoneID: currentTimeZoneIdentifier,
+            payloadData: try encoder.encode(currentSnapshot),
+            snapshotHash: "timezone-current-dst-day",
+            algorithmVersion: currentSnapshot.algorithmVersion
+        ))
+
+        let mismatchedDayKeySnapshot = DailyHealthSnapshot(
+            dayStart: secondDay,
+            timezoneIdentifier: currentTimeZoneIdentifier,
+            healthKitSampleSummary: DailyHealthSampleSummary(samples: [mismatchedSample], dayStart: secondDay),
+            healthReadStates: heartRateReadState,
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey(thirdDay, calendar: currentCalendar),
+            timezoneID: currentTimeZoneIdentifier,
+            payloadData: try encoder.encode(mismatchedDayKeySnapshot),
+            snapshotHash: "timezone-daykey-payload-mismatch",
+            algorithmVersion: mismatchedDayKeySnapshot.algorithmVersion
+        ))
+        try context.save()
+
+        let days = try HealthIntelligenceReadModel(calendar: currentCalendar).loadDays(
+            from: firstDay,
+            through: thirdDay,
+            in: context
+        )
+        let first = try XCTUnwrap(days.first { $0.dayStart == firstDay })
+        let second = try XCTUnwrap(days.first { $0.dayStart == secondDay })
+        let third = try XCTUnwrap(days.first { $0.dayStart == thirdDay })
+
+        XCTAssertTrue(currentCalendar.isDate(currentAbsoluteSampleDate, inSameDayAs: firstDay))
+        XCTAssertEqual(first.heartRateSamples, [72])
+        XCTAssertEqual(second.heartRateSamples, [])
+        XCTAssertEqual(third.heartRateSamples, [])
+        XCTAssertEqual(second.healthReadStates?[HealthMetricID.heartRate.rawValue], .dataUnavailableOrReadScopeUnknown)
+        XCTAssertEqual(third.healthReadStates?[HealthMetricID.heartRate.rawValue], .dataUnavailableOrReadScopeUnknown)
+    }
+
+    func testReadModelFailsClosedForOldSnapshotAndSleepAlgorithmVersions() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let firstDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 1)))
+        let secondDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: firstDay))
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        let sample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000809")!,
+            metric: .heartRate,
+            startDate: firstDay.addingTimeInterval(12 * 60 * 60),
+            endDate: firstDay.addingTimeInterval(12 * 60 * 60 + 60),
+            value: 86
+        )
+        let outdatedSnapshot = DailyHealthSnapshot(
+            dayStart: firstDay,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            healthKitSampleSummary: DailyHealthSampleSummary(samples: [sample], dayStart: firstDay),
+            healthReadStates: [HealthMetricID.heartRate.rawValue: .available],
+            algorithmVersion: "daily-health-snapshot-v2"
+        )
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey(firstDay, calendar: calendar),
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(outdatedSnapshot),
+            snapshotHash: "stale-snapshot-algorithm",
+            algorithmVersion: outdatedSnapshot.algorithmVersion
+        ))
+        let outdatedSleep = SleepSummary(
+            wakeDate: secondDay,
+            totalAsleepMinutes: 300,
+            mainSleepMinutes: 300,
+            napMinutes: 0,
+            stageCoverage: nil,
+            stages: nil,
+            selectedSourceBundleIdentifier: "com.example.health",
+            algorithmVersion: SleepSummary.legacyAlgorithmVersion
+        )
+        let currentSnapshotWithStaleSleep = DailyHealthSnapshot(
+            dayStart: secondDay,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            healthKitSampleSummary: DailyHealthSampleSummary(
+                metrics: [],
+                sleep: outdatedSleep,
+                workoutEffort: []
+            ),
+            healthReadStates: [HealthMetricID.sleepAnalysis.rawValue: .available],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey(secondDay, calendar: calendar),
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(currentSnapshotWithStaleSleep),
+            snapshotHash: "stale-sleep-algorithm",
+            algorithmVersion: currentSnapshotWithStaleSleep.algorithmVersion
+        ))
+        try context.save()
+
+        let days = try HealthIntelligenceReadModel(calendar: calendar).loadDays(
+            from: firstDay,
+            through: secondDay,
+            in: context
+        )
+        let first = try XCTUnwrap(days.first { $0.dayStart == firstDay })
+        let second = try XCTUnwrap(days.first { $0.dayStart == secondDay })
+        XCTAssertEqual(first.heartRateSamples, [])
+        XCTAssertEqual(first.healthReadStates?[HealthMetricID.heartRate.rawValue], .dataUnavailableOrReadScopeUnknown)
+        XCTAssertNil(second.sleepSummary)
+        XCTAssertEqual(second.healthReadStates?[HealthMetricID.sleepAnalysis.rawValue], .dataUnavailableOrReadScopeUnknown)
+    }
+
+    func testTrainingLoadCanonicalizesOnlyMatchingLogicalWorkoutSessions() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let day = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 4)))
+        let start = day.addingTimeInterval(9 * 60 * 60)
+        let logicalSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000810")!
+        let sessionWithEffortID = UUID(uuidString: "00000000-0000-0000-0000-000000000811")!
+        let sessionWithoutEffortID = UUID(uuidString: "00000000-0000-0000-0000-000000000812")!
+        let sessionWithoutID1 = UUID(uuidString: "00000000-0000-0000-0000-000000000813")!
+        let sessionWithoutID2 = UUID(uuidString: "00000000-0000-0000-0000-000000000814")!
+        let crossSourceID1 = UUID(uuidString: "00000000-0000-0000-0000-000000000816")!
+        let crossSourceID2 = UUID(uuidString: "00000000-0000-0000-0000-000000000817")!
+        let differentTypeID1 = UUID(uuidString: "00000000-0000-0000-0000-000000000818")!
+        let differentTypeID2 = UUID(uuidString: "00000000-0000-0000-0000-000000000819")!
+        let sameSourceID1 = UUID(uuidString: "00000000-0000-0000-0000-000000000820")!
+        let sameSourceID2 = UUID(uuidString: "00000000-0000-0000-0000-000000000821")!
+        func workout(
+            id: UUID,
+            logicalSessionID: UUID?,
+            durationMinutes: Int,
+            dataQuality: WorkoutDataQuality,
+            date: Date? = nil,
+            type: String = "running",
+            sourceBundleIdentifier: String? = nil,
+            origin: WorkoutOrigin = .watchHealthKit
+        ) -> WorkoutRecord {
+            let record = WorkoutRecord(
+                date: date ?? start,
+                type: type,
+                durationMinutes: durationMinutes,
+                intensity: "unknown",
+                logicalSessionID: logicalSessionID,
+                workoutOrigin: origin.rawValue,
+                sourceBundleIdentifier: sourceBundleIdentifier,
+                dataQuality: dataQuality.rawValue
+            )
+            record.id = id
+            return record
+        }
+
+        let sessionWithEffort = workout(
+            id: sessionWithEffortID,
+            logicalSessionID: logicalSessionID,
+            durationMinutes: 35,
+            dataQuality: .partial
+        )
+        let sessionWithoutEffort = workout(
+            id: sessionWithoutEffortID,
+            logicalSessionID: logicalSessionID,
+            durationMinutes: 80,
+            dataQuality: .complete
+        )
+        let independent1 = workout(
+            id: sessionWithoutID1,
+            logicalSessionID: nil,
+            durationMinutes: 20,
+            dataQuality: .complete
+        )
+        let independent2 = workout(
+            id: sessionWithoutID2,
+            logicalSessionID: nil,
+            durationMinutes: 20,
+            dataQuality: .complete
+        )
+        let crossSourceDuplicate1 = workout(
+            id: crossSourceID1,
+            logicalSessionID: nil,
+            durationMinutes: 30,
+            dataQuality: .partial,
+            date: start.addingTimeInterval(2 * 60),
+            sourceBundleIdentifier: "com.example.health.phone",
+            origin: .externalHealthKit
+        )
+        let crossSourceDuplicate2Start = start.addingTimeInterval(2 * 60 + 30)
+        let crossSourceDuplicate2 = workout(
+            id: crossSourceID2,
+            logicalSessionID: nil,
+            durationMinutes: 30,
+            dataQuality: .complete,
+            date: crossSourceDuplicate2Start,
+            sourceBundleIdentifier: "com.example.health.watch",
+            origin: .watchHealthKit
+        )
+        let differentTypeStart = start.addingTimeInterval(5 * 60)
+        let differentType1 = workout(
+            id: differentTypeID1,
+            logicalSessionID: nil,
+            durationMinutes: 30,
+            dataQuality: .complete,
+            date: differentTypeStart,
+            type: "running",
+            sourceBundleIdentifier: "com.example.health.phone",
+            origin: .externalHealthKit
+        )
+        let differentType2 = workout(
+            id: differentTypeID2,
+            logicalSessionID: nil,
+            durationMinutes: 30,
+            dataQuality: .complete,
+            date: differentTypeStart.addingTimeInterval(30),
+            type: "cycling",
+            sourceBundleIdentifier: "com.example.health.watch",
+            origin: .watchHealthKit
+        )
+        let sameSourceStart = start.addingTimeInterval(10 * 60)
+        let sameSource1 = workout(
+            id: sameSourceID1,
+            logicalSessionID: nil,
+            durationMinutes: 30,
+            dataQuality: .complete,
+            date: sameSourceStart,
+            sourceBundleIdentifier: "com.example.health.same-source",
+            origin: .externalHealthKit
+        )
+        let sameSource2 = workout(
+            id: sameSourceID2,
+            logicalSessionID: nil,
+            durationMinutes: 30,
+            dataQuality: .complete,
+            date: sameSourceStart.addingTimeInterval(30),
+            sourceBundleIdentifier: "com.example.health.same-source",
+            origin: .externalHealthKit
+        )
+        let effortSample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000815")!,
+            metric: .workoutEffort,
+            startDate: start,
+            endDate: start.addingTimeInterval(35 * 60),
+            value: 8
+        )
+        let sampleSummary = DailyHealthSampleSummary(
+            samples: [effortSample],
+            dayStart: day,
+            workoutEffort: [WorkoutEffortDailyAggregate(workoutRecordID: sessionWithEffortID, score: 8)]
+        )
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            healthKitSampleSummary: sampleSummary,
+            healthReadStates: [HealthMetricID.workoutEffort.rawValue: .available],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey(day, calendar: calendar),
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "logical-session-effort-fixture",
+            algorithmVersion: snapshot.algorithmVersion
+        ))
+        let originalRecords = [
+            sessionWithEffort,
+            sessionWithoutEffort,
+            independent1,
+            independent2,
+            crossSourceDuplicate1,
+            crossSourceDuplicate2,
+            differentType1,
+            differentType2,
+            sameSource1,
+            sameSource2,
+        ]
+        for record in originalRecords {
+            context.insert(record)
+        }
+        try context.save()
+
+        let days = try HealthIntelligenceReadModel(calendar: calendar).loadDays(
+            from: day,
+            through: day,
+            in: context
+        )
+        let projectedDay = try XCTUnwrap(days.first)
+        XCTAssertEqual(projectedDay.workouts.count, 8)
+        XCTAssertTrue(projectedDay.workouts.contains(TrainingWorkoutInput(
+            startedAt: start,
+            durationMinutes: 35,
+            effortScore: 8,
+            intensity: "unknown"
+        )), "The duplicate with valid effort is the canonical session input")
+        XCTAssertTrue(projectedDay.workouts.contains(TrainingWorkoutInput(
+            startedAt: crossSourceDuplicate2Start,
+            durationMinutes: 30,
+            effortScore: nil,
+            intensity: "unknown"
+        )), "A cross-source pair with matching activity and near-identical bounds merges to its higher-quality record")
+        XCTAssertTrue(projectedDay.workouts.contains(where: { $0.startedAt == differentTypeStart }))
+        XCTAssertTrue(projectedDay.workouts.contains(where: { $0.startedAt == differentTypeStart.addingTimeInterval(30) }))
+        XCTAssertTrue(projectedDay.workouts.contains(where: { $0.startedAt == sameSourceStart }))
+        XCTAssertTrue(projectedDay.workouts.contains(where: { $0.startedAt == sameSourceStart.addingTimeInterval(30) }))
+        XCTAssertEqual(try context.fetch(FetchDescriptor<WorkoutRecord>()).count, originalRecords.count)
+    }
+
     func testLoadDaysIncludesAllWorkoutsAcrossStableFetchPages() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current

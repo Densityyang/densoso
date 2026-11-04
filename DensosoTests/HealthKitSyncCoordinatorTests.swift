@@ -75,6 +75,158 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             .first(where: { $0.stream == "workouts" })?.anchorData, Data([1]))
     }
 
+    func testEffortSampleIsReassociatedWhenWorkoutArrivesLater() async throws {
+        let now = Date()
+        let day = Calendar.current.startOfDay(for: now)
+        let sample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000081")!,
+            metric: .workoutEffort,
+            startDate: now.addingTimeInterval(-45 * 60),
+            endDate: now.addingTimeInterval(-15 * 60),
+            value: 8
+        )
+        let fake = FakeHealthStoreClient()
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+        let repository = HealthRepository(modelContext: context)
+        try await coordinator.startBackgroundObservers(using: repository)
+
+        // The effort stream is observed before HealthKit has delivered the
+        // corresponding workout record. Its sample is retained, but cannot yet
+        // be associated with a WorkoutRecord.
+        await fake.setSampleResponses([
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([2]), readState: .available),
+        ], for: .workoutEffort)
+        await fake.triggerObserver(.workoutEffort)
+        await fake.waitForObserverCompletion(after: 0)
+        let snapshotBeforeWorkout = try healthSnapshot(on: day)
+        XCTAssertTrue(snapshotBeforeWorkout.healthKitSampleSummary?.workoutEffort.isEmpty ?? true)
+
+        let workoutID = UUID(uuidString: "00000000-0000-0000-0000-000000000082")!
+        let workout = try WorkoutSnapshot(
+            healthKitUUID: workoutID,
+            startedAt: now.addingTimeInterval(-60 * 60),
+            duration: 45 * 60,
+            activityType: "running",
+            energyInput: .init(),
+            origin: .externalHealthKit,
+            dataQuality: .complete
+        )
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [workout], deletedObjectIDs: [], nextAnchorData: Data([1]))
+        ])
+        // A first-time workout rebuild invalidates its dependent effort cache.
+        // The follow-up effort scan reads the sample, then requeries that day
+        // against the now-committed WorkoutRecord.
+        await fake.setSampleResponses([
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([2]), readState: .available),
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([3]), readState: .available),
+        ], for: .workoutEffort)
+        let priorCompletions = await fake.completedObserverCount()
+        await fake.triggerObserver(.workout)
+        await fake.waitForObserverCompletion(after: priorCompletions)
+
+        let imported = try XCTUnwrap(context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+            $0.healthKitUUID == workoutID
+        })
+        let reconciled = try healthSnapshot(on: day)
+        XCTAssertEqual(reconciled.healthKitSampleSummary?.effortScore(for: imported.id), 8)
+        XCTAssertTrue(try repository.pendingHealthSampleDays(stream: HealthMetricID.workoutEffort.rawValue).isEmpty)
+
+        let retryCompletions = await fake.completedObserverCount()
+        await fake.triggerObserver(.workout)
+        await fake.waitForObserverCompletion(after: retryCompletions)
+        let retried = try healthSnapshot(on: day)
+        XCTAssertEqual(retried.healthKitSampleSummary?.workoutEffort, reconciled.healthKitSampleSummary?.workoutEffort)
+    }
+
+    func testWorkoutUpdateRebuildsEffortAssociationForAffectedDay() async throws {
+        let now = Date()
+        let day = Calendar.current.startOfDay(for: now)
+        let workoutID = UUID(uuidString: "00000000-0000-0000-0000-000000000083")!
+        let sample = effortSample(id: "00000000-0000-0000-0000-000000000084", at: now)
+        let original = try WorkoutSnapshot(
+            healthKitUUID: workoutID,
+            startedAt: now.addingTimeInterval(-60 * 60),
+            duration: 45 * 60,
+            activityType: "running",
+            energyInput: .init(),
+            origin: .externalHealthKit,
+            dataQuality: .complete
+        )
+        let repository = HealthRepository(modelContext: context)
+        let originalRecordID = try await seedWorkoutAndEffort(original, sample: sample, day: day, repository: repository)
+        XCTAssertEqual(try healthSnapshot(on: day).healthKitSampleSummary?.effortScore(for: originalRecordID), 7)
+
+        let updated = try WorkoutSnapshot(
+            healthKitUUID: workoutID,
+            startedAt: now.addingTimeInterval(-5 * 60),
+            duration: 15 * 60,
+            activityType: "running",
+            energyInput: .init(),
+            origin: .externalHealthKit,
+            dataQuality: .complete
+        )
+        let fake = FakeHealthStoreClient()
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [updated], deletedObjectIDs: [], nextAnchorData: Data([2]))
+        ])
+        await fake.setSampleResponses([
+            HealthSamplePage(samples: [], nextAnchorData: Data([2]), readState: .available),
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([3]), readState: .available),
+        ], for: .workoutEffort)
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+        try await coordinator.startBackgroundObservers(using: repository)
+
+        await fake.triggerObserver(.workout)
+        await fake.waitForObserverCompletion(after: 0)
+
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+            $0.healthKitUUID == workoutID
+        })
+        XCTAssertEqual(record.id, originalRecordID)
+        XCTAssertEqual(record.date, updated.startedAt)
+        XCTAssertNil(try healthSnapshot(on: day).healthKitSampleSummary?.effortScore(for: record.id))
+        XCTAssertTrue(try repository.pendingHealthSampleDays(stream: HealthMetricID.workoutEffort.rawValue).isEmpty)
+    }
+
+    func testWorkoutDeletionRemovesOrphanedEffortAssociation() async throws {
+        let now = Date()
+        let day = Calendar.current.startOfDay(for: now)
+        let workoutID = UUID(uuidString: "00000000-0000-0000-0000-000000000085")!
+        let sample = effortSample(id: "00000000-0000-0000-0000-000000000086", at: now)
+        let workout = try WorkoutSnapshot(
+            healthKitUUID: workoutID,
+            startedAt: now.addingTimeInterval(-60 * 60),
+            duration: 45 * 60,
+            activityType: "running",
+            energyInput: .init(),
+            origin: .externalHealthKit,
+            dataQuality: .complete
+        )
+        let repository = HealthRepository(modelContext: context)
+        let workoutRecordID = try await seedWorkoutAndEffort(workout, sample: sample, day: day, repository: repository)
+        XCTAssertEqual(try healthSnapshot(on: day).healthKitSampleSummary?.effortScore(for: workoutRecordID), 7)
+
+        let fake = FakeHealthStoreClient()
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [], deletedObjectIDs: [workoutID], nextAnchorData: Data([2]))
+        ])
+        await fake.setSampleResponses([
+            HealthSamplePage(samples: [], nextAnchorData: Data([2]), readState: .available),
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([3]), readState: .available),
+        ], for: .workoutEffort)
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+        try await coordinator.startBackgroundObservers(using: repository)
+
+        await fake.triggerObserver(.workout)
+        await fake.waitForObserverCompletion(after: 0)
+
+        XCTAssertFalse(context.fetch(FetchDescriptor<WorkoutRecord>()).contains { $0.healthKitUUID == workoutID })
+        XCTAssertTrue(try healthSnapshot(on: day).healthKitSampleSummary?.workoutEffort.isEmpty ?? false)
+        XCTAssertTrue(try repository.pendingHealthSampleDays(stream: HealthMetricID.workoutEffort.rawValue).isEmpty)
+    }
+
     func testMeasuredDailyActivityAggregateFeedsProjectionWithoutWorkoutEnergy() async throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let day = Calendar.current.startOfDay(for: now)
@@ -2476,6 +2628,44 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             origin: .externalHealthKit,
             dataQuality: .complete
         )
+    }
+
+    private func effortSample(id: String, at date: Date) -> HealthSampleSnapshot {
+        HealthSampleSnapshot(
+            id: UUID(uuidString: id)!,
+            metric: .workoutEffort,
+            startDate: date.addingTimeInterval(-45 * 60),
+            endDate: date.addingTimeInterval(-15 * 60),
+            value: 7
+        )
+    }
+
+    private func seedWorkoutAndEffort(
+        _ workout: WorkoutSnapshot,
+        sample: HealthSampleSnapshot,
+        day: Date,
+        repository: HealthRepository
+    ) async throws -> UUID {
+        let targetStart = try XCTUnwrap(
+            HealthDataWindowPolicy.initialBackfillStart(through: Date(), calendar: Calendar.current)
+        )
+        try await repository.applyImportedWorkouts(
+            [workout],
+            deletedHealthKitUUIDs: [],
+            nextAnchorData: Data([1]),
+            lookbackStart: targetStart,
+            readStateUpdates: [day: .available]
+        )
+        try await repository.applyImportedHealthSamples(
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
+            stream: HealthMetricID.workoutEffort.rawValue,
+            lastSuccessfulAt: sample.endDate,
+            lookbackStart: targetStart,
+            replacements: [HealthSampleDaySnapshot(dayStart: day, samples: [sample], readState: .available)]
+        )
+        return try XCTUnwrap(context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+            $0.healthKitUUID == workout.healthKitUUID
+        }).id
     }
 
     private func seedAnchoredCursors(targetStart: Date, now: Date) throws {

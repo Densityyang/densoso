@@ -31,7 +31,7 @@ final class HealthIntelligenceServiceTests: XCTestCase {
                 HealthMetricID.activeEnergy.rawValue: .available,
                 HealthMetricID.restingEnergy.rawValue: .available,
             ],
-            algorithmVersion: "v3"
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
@@ -40,7 +40,7 @@ final class HealthIntelligenceServiceTests: XCTestCase {
             timezoneID: snapshot.timezoneIdentifier,
             payloadData: try encoder.encode(snapshot),
             snapshotHash: "source-hash-1",
-            algorithmVersion: "v3"
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
         ))
         let metric = DailyMetrics(
             date: day,
@@ -149,7 +149,7 @@ final class HealthIntelligenceServiceTests: XCTestCase {
                 HealthMetricID.activeEnergy.rawValue: .available,
                 HealthMetricID.restingEnergy.rawValue: .available,
             ],
-            algorithmVersion: "v3"
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970

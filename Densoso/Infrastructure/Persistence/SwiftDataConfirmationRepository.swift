@@ -290,7 +290,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                     do {
                         try modelContext.transaction {
                             guard let currentAction = try pendingAction(id: pendingActionID),
-                                  currentAction.conversationID == conversationID,
+                                   try storedConversationID(for: currentAction) == conversationID,
                                   currentAction.stateRaw == PendingActionState.pending.rawValue,
                                   try receipt(actionID: pendingActionID) == nil else {
                                 throw ConfirmationError.invariantViolation("action changed before cancellation expiration")
@@ -317,7 +317,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                         // Recheck durable state and receipt within the same
                         // transaction as both the rejection and Journal update.
                         guard let currentAction = try pendingAction(id: pendingActionID),
-                              currentAction.conversationID == conversationID,
+                              try storedConversationID(for: currentAction) == conversationID,
                               currentAction.stateRaw == PendingActionState.pending.rawValue,
                               try receipt(actionID: pendingActionID) == nil else {
                             throw ConfirmationError.invariantViolation("action changed before cancellation cleanup")
@@ -337,7 +337,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                     try modelContext.transaction {
                         guard try receipt(actionID: pendingActionID) == nil,
                               let currentAction = try pendingAction(id: pendingActionID),
-                              currentAction.conversationID == conversationID,
+                              try storedConversationID(for: currentAction) == conversationID,
                               currentAction.stateRaw == PendingActionState.expired.rawValue else {
                             throw ConfirmationError.invariantViolation("action changed before expired Journal reconciliation")
                         }
@@ -357,7 +357,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                     try modelContext.transaction {
                         guard try receipt(actionID: pendingActionID) == nil,
                               let currentAction = try pendingAction(id: pendingActionID),
-                              currentAction.conversationID == conversationID,
+                              try storedConversationID(for: currentAction) == conversationID,
                               currentAction.stateRaw == PendingActionState.rejected.rawValue else {
                             throw ConfirmationError.invariantViolation("action changed before rejected Journal reconciliation")
                         }
@@ -747,7 +747,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             do {
                 try modelContext.transaction {
                     guard let currentAction = try pendingAction(id: id),
-                          currentAction.conversationID == conversationID,
+                          try storedConversationID(for: currentAction) == conversationID,
                           currentAction.stateRaw == PendingActionState.pending.rawValue,
                           try receipt(actionID: id) == nil else {
                         throw ConfirmationError.invariantViolation("action changed before expiration")
@@ -771,7 +771,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             do {
                 try modelContext.transaction {
                     guard let currentAction = try pendingAction(id: id),
-                          currentAction.conversationID == conversationID,
+                          try storedConversationID(for: currentAction) == conversationID,
                           currentAction.stateRaw == PendingActionState.pending.rawValue,
                           try receipt(actionID: id) == nil else {
                         throw ConfirmationError.invariantViolation("action changed before rejection")
@@ -793,7 +793,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             try modelContext.transaction {
                 guard try receipt(actionID: id) == nil,
                       let currentAction = try pendingAction(id: id),
-                      currentAction.conversationID == conversationID,
+                      try storedConversationID(for: currentAction) == conversationID,
                       currentAction.stateRaw == PendingActionState.rejected.rawValue else {
                     throw ConfirmationError.invariantViolation("action changed before rejected Journal reconciliation")
                 }
@@ -862,7 +862,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             do {
                 try modelContext.transaction {
                     guard let currentAction = try pendingAction(id: id),
-                          currentAction.conversationID == conversationID,
+                          try storedConversationID(for: currentAction) == conversationID,
                           currentAction.stateRaw == PendingActionState.pending.rawValue,
                           try receipt(actionID: id) == nil else {
                         throw ConfirmationError.invariantViolation("action changed before confirmation expiration")
@@ -1878,6 +1878,10 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             throw ConfirmationError.notFound
         }
         throw ConfirmationError.payloadCorrupt
+    }
+
+    private func storedConversationID(for action: PendingActionRecord) throws -> UUID {
+        try decodeEnvelope(action.payloadData).conversationID
     }
 
     private func map(_ record: PendingActionRecord) throws -> PendingAction {

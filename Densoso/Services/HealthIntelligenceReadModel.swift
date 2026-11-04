@@ -9,6 +9,8 @@ struct HealthIntelligenceReadModel: Sendable {
     static let weightFetchBatchSize = 64
     static let schedulePlanFetchBatchSize = 64
     static let subjectiveCheckInFetchLimit = 128
+    private static let crossSourceWorkoutBoundaryTolerance: TimeInterval = 60
+    private static let crossSourceWorkoutDurationToleranceMinutes = 2.0
 
     private let calendar: Calendar
     private let engine: HealthIntelligenceEngine
@@ -274,10 +276,27 @@ struct HealthIntelligenceReadModel: Sendable {
         )
         let decoder = makeDecoder()
         var snapshotByDay: [Date: DailyHealthSnapshot] = [:]
+        let currentTimeZoneIdentifier = calendar.timeZone.identifier
         for record in snapshots {
             guard let snapshot = try? decoder.decode(DailyHealthSnapshot.self, from: record.payloadData) else { continue }
+            guard record.algorithmVersion == DailyHealthSnapshot.currentAlgorithmVersion,
+                  snapshot.algorithmVersion == DailyHealthSnapshot.currentAlgorithmVersion else {
+                // Old compact summaries cannot be recomputed from the index
+                // alone. The sync rebaseline must repopulate them before they
+                // can be used for health analysis.
+                continue
+            }
+            guard record.timezoneID == currentTimeZoneIdentifier,
+                  snapshot.timezoneIdentifier == currentTimeZoneIdentifier else {
+                // A row produced in another timezone may have a dayKey that no
+                // longer describes the payload's local day. The foreground
+                // rebaseline rewrites in-window rows before they are read again.
+                continue
+            }
             let day = calendar.startOfDay(for: snapshot.dayStart)
-            if day >= start && day <= end { snapshotByDay[day] = snapshot }
+            guard day >= start && day <= end,
+                  dayKey(day) == record.dayKey else { continue }
+            snapshotByDay[day] = snapshot
         }
 
         let metricsPredicate = #Predicate<DailyMetrics> {
@@ -354,7 +373,12 @@ struct HealthIntelligenceReadModel: Sendable {
             workoutRecords.append(contentsOf: batch)
             workoutCursor = WorkoutCursor(date: last.date, id: last.id)
         }
-        let workoutsByDay = Dictionary(grouping: workoutRecords, by: { calendar.startOfDay(for: $0.date) })
+        let effortScoresByWorkoutID = Self.availableWorkoutEffortScores(in: snapshotByDay)
+        let trainingWorkouts = Self.canonicalTrainingWorkouts(
+            workoutRecords,
+            effortScoresByWorkoutID: effortScoresByWorkoutID
+        )
+        let workoutsByDay = Dictionary(grouping: trainingWorkouts, by: { calendar.startOfDay(for: $0.startedAt) })
         var queryStartByMetric: [String: Date] = [:]
         for cursor in try context.fetch(FetchDescriptor<HealthKitImportCursor>()) {
             if let lookbackStart = cursor.lookbackStart {
@@ -380,12 +404,16 @@ struct HealthIntelligenceReadModel: Sendable {
             for metric in projectionMetrics where projectionReadStates[metric.rawValue] == nil {
                 projectionReadStates[metric.rawValue] = .dataUnavailableOrReadScopeUnknown
             }
+            if let sleep = sampleSummary?.sleep,
+               sleep.algorithmVersion != AlgorithmVersions.healthIntelligence {
+                projectionReadStates[HealthMetricID.sleepAnalysis.rawValue] = .dataUnavailableOrReadScopeUnknown
+            }
             func availableAggregate(_ metric: HealthMetricID) -> HealthMetricSampleAggregate? {
                 guard projectionReadStates[metric.rawValue] == .available else { return nil }
                 return sampleSummary?.aggregate(for: metric)
             }
-            func dailyAverage(_ metric: HealthMetricID) -> [Double] {
-                guard let value = availableAggregate(metric)?.averageValue else { return [] }
+            func dailyRepresentative(_ metric: HealthMetricID) -> [Double] {
+                guard let value = availableAggregate(metric)?.representativeValue else { return [] }
                 return [value]
             }
             let bodyMassReadState = projectionReadStates[HealthMetricID.bodyMass.rawValue]
@@ -411,18 +439,7 @@ struct HealthIntelligenceReadModel: Sendable {
             // HealthKit workout is persisted. The daily read state describes
             // completeness of the whole day's query; an unknown or partial
             // query must not hide a workout whose individual record is known.
-            let workoutRecordsForDay = workoutsByDay[dayStart] ?? []
-            let workouts = workoutRecordsForDay.map { record in
-                let effort = availableAggregate(.workoutEffort) != nil
-                    ? sampleSummary?.effortScore(for: record.id)
-                    : nil
-                return TrainingWorkoutInput(
-                    startedAt: record.date,
-                    durationMinutes: Double(record.durationMinutes),
-                    effortScore: effort,
-                    intensity: record.intensity
-                )
-            }
+            let workouts = workoutsByDay[dayStart] ?? []
             let metric = metricsByDay[dayStart]
             let metricReadResult = metric.map(DailyMetricsReadModelMapper.make)
             let proteinGrams = metricReadResult?.proteinG.value
@@ -447,13 +464,14 @@ struct HealthIntelligenceReadModel: Sendable {
                 weightSamplesKilograms: weightSamples,
                 sleepSamples: [],
                 sleepSummary: projectionReadStates[HealthMetricID.sleepAnalysis.rawValue] == .available
+                        && sampleSummary?.sleep?.algorithmVersion == AlgorithmVersions.healthIntelligence
                     ? sampleSummary?.sleep
                     : nil,
-                heartRateSamples: dailyAverage(.heartRate),
-                restingHeartRateSamples: dailyAverage(.restingHeartRate),
-                heartRateVariabilitySamples: dailyAverage(.heartRateVariabilitySDNN),
-                respiratoryRateSamples: dailyAverage(.respiratoryRate),
-                wristTemperatureSamples: dailyAverage(.wristTemperature),
+                heartRateSamples: dailyRepresentative(.heartRate),
+                restingHeartRateSamples: dailyRepresentative(.restingHeartRate),
+                heartRateVariabilitySamples: dailyRepresentative(.heartRateVariabilitySDNN),
+                respiratoryRateSamples: dailyRepresentative(.respiratoryRate),
+                wristTemperatureSamples: dailyRepresentative(.wristTemperature),
                 workouts: workouts,
                 healthReadStates: projectionReadStates,
                 healthQueryStartByMetric: queryStartByMetric
@@ -465,6 +483,130 @@ struct HealthIntelligenceReadModel: Sendable {
     private func dayKey(_ date: Date) -> String {
         let components = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
+
+    private static func availableWorkoutEffortScores(
+        in snapshotsByDay: [Date: DailyHealthSnapshot]
+    ) -> [UUID: Double] {
+        var scores: [UUID: Double] = [:]
+        for snapshot in snapshotsByDay.values
+        where snapshot.healthReadStates?[HealthMetricID.workoutEffort.rawValue] == .available {
+            guard let summary = snapshot.healthKitSampleSummary,
+                  summary.aggregate(for: .workoutEffort) != nil else { continue }
+            for effort in summary.workoutEffort
+            where effort.score.isFinite && (1...10).contains(effort.score) {
+                scores[effort.workoutRecordID] = effort.score
+            }
+        }
+        return scores
+    }
+
+    private static func canonicalTrainingWorkouts(
+        _ records: [WorkoutRecord],
+        effortScoresByWorkoutID: [UUID: Double]
+    ) -> [TrainingWorkoutInput] {
+        var recordsBySessionID: [UUID: [WorkoutRecord]] = [:]
+        var recordsWithoutSessionID: [WorkoutRecord] = []
+        for record in records {
+            guard let logicalSessionID = record.logicalSessionID else {
+                recordsWithoutSessionID.append(record)
+                continue
+            }
+            recordsBySessionID[logicalSessionID, default: []].append(record)
+        }
+
+        let orderedRecordsWithoutSessionID = recordsWithoutSessionID.sorted {
+            $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date
+        }
+        var crossSourceDuplicateClusters: [[WorkoutRecord]] = []
+        for record in orderedRecordsWithoutSessionID {
+            if let clusterIndex = crossSourceDuplicateClusters.firstIndex(where: { cluster in
+                cluster.allSatisfy { areHighConfidenceCrossSourceDuplicates(record, $0) }
+            }) {
+                crossSourceDuplicateClusters[clusterIndex].append(record)
+            } else {
+                crossSourceDuplicateClusters.append([record])
+            }
+        }
+
+        let sessionClusters = Array(recordsBySessionID.values) + crossSourceDuplicateClusters
+        let canonicalRecords = sessionClusters.compactMap { sessionRecords in
+            sessionRecords.sorted { lhs, rhs in
+                Self.preferredTrainingWorkout(
+                    lhs,
+                    over: rhs,
+                    effortScoresByWorkoutID: effortScoresByWorkoutID
+                )
+            }.first
+        }
+        return canonicalRecords.sorted {
+            $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date
+        }.map { record in
+            TrainingWorkoutInput(
+                startedAt: record.date,
+                durationMinutes: Double(record.durationMinutes),
+                effortScore: effortScoresByWorkoutID[record.id],
+                intensity: record.intensity
+            )
+        }
+    }
+
+    private static func areHighConfidenceCrossSourceDuplicates(
+        _ lhs: WorkoutRecord,
+        _ rhs: WorkoutRecord
+    ) -> Bool {
+        let healthKitOrigins: Set<String> = [
+            WorkoutOrigin.watchHealthKit.rawValue,
+            WorkoutOrigin.externalHealthKit.rawValue,
+        ]
+        guard healthKitOrigins.contains(lhs.workoutOrigin),
+              healthKitOrigins.contains(rhs.workoutOrigin),
+              let lhsSource = lhs.sourceBundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              let rhsSource = rhs.sourceBundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !lhsSource.isEmpty,
+              !rhsSource.isEmpty,
+              lhsSource != rhsSource else { return false }
+
+        let lhsType = lhs.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let rhsType = rhs.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lhsType.isEmpty,
+              lhsType == rhsType,
+              lhs.durationMinutes > 0,
+              rhs.durationMinutes > 0,
+              abs(lhs.date.timeIntervalSince(rhs.date)) <= crossSourceWorkoutBoundaryTolerance,
+              abs(
+                lhs.date.addingTimeInterval(Double(lhs.durationMinutes) * 60)
+                    .timeIntervalSince(rhs.date.addingTimeInterval(Double(rhs.durationMinutes) * 60))
+              ) <= crossSourceWorkoutBoundaryTolerance,
+              abs(Double(lhs.durationMinutes) - Double(rhs.durationMinutes))
+                <= crossSourceWorkoutDurationToleranceMinutes else { return false }
+        return true
+    }
+
+    private static func preferredTrainingWorkout(
+        _ candidate: WorkoutRecord,
+        over current: WorkoutRecord,
+        effortScoresByWorkoutID: [UUID: Double]
+    ) -> Bool {
+        let candidateHasEffort = candidate.durationMinutes > 0 && effortScoresByWorkoutID[candidate.id] != nil
+        let currentHasEffort = current.durationMinutes > 0 && effortScoresByWorkoutID[current.id] != nil
+        if candidateHasEffort != currentHasEffort { return candidateHasEffort }
+
+        func qualityRank(_ rawValue: String) -> Int {
+            switch rawValue {
+            case WorkoutDataQuality.complete.rawValue: return 2
+            case WorkoutDataQuality.partial.rawValue: return 1
+            case WorkoutDataQuality.unavailable.rawValue: return 0
+            default: return -1
+            }
+        }
+        let candidateQuality = qualityRank(candidate.dataQuality)
+        let currentQuality = qualityRank(current.dataQuality)
+        if candidateQuality != currentQuality { return candidateQuality > currentQuality }
+        if candidate.durationMinutes != current.durationMinutes {
+            return candidate.durationMinutes > current.durationMinutes
+        }
+        return candidate.id.uuidString < current.id.uuidString
     }
 
     private func makeDecoder() -> JSONDecoder {

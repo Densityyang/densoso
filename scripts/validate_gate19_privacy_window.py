@@ -1022,7 +1022,7 @@ SOURCE_CONTRACTS: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] 
     (
         "health_intelligence_cache_version_invalidates_old_coverage",
         "Packages/DensosoDomain/Sources/DensosoDomain/AlgorithmVersions.swift",
-        ("public static let healthIntelligence = \"health-intelligence-v3\"",),
+        ("public static let healthIntelligence = \"health-intelligence-v4\"",),
         (),
     ),
     (

@@ -180,6 +180,191 @@ final class HealthRepositoryTests: XCTestCase {
         }))
     }
 
+    func testSnapshotRebuildNormalizesTimezoneMetadataAndPreservesAbsoluteHealthKitSamples() async throws {
+        let currentCalendar = Calendar.current
+        let sourceDay = currentCalendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let components = currentCalendar.dateComponents([.year, .month, .day], from: sourceDay)
+        let oldTimezoneCandidate = ["Pacific/Kiritimati", "Etc/GMT+12", "America/Los_Angeles", "Asia/Tokyo"]
+            .first { identifier in
+                guard let timezone = TimeZone(identifier: identifier) else { return false }
+                var candidateCalendar = currentCalendar
+                candidateCalendar.timeZone = timezone
+                guard let candidateOldDay = candidateCalendar.date(from: components) else { return false }
+                return !currentCalendar.isDate(candidateOldDay, inSameDayAs: sourceDay)
+            }
+        let oldTimezoneIdentifier = try XCTUnwrap(oldTimezoneCandidate)
+        var oldCalendar = currentCalendar
+        oldCalendar.timeZone = try XCTUnwrap(TimeZone(identifier: oldTimezoneIdentifier))
+        let oldDayStart = try XCTUnwrap(oldCalendar.date(from: components))
+        let day = currentCalendar.startOfDay(for: oldDayStart)
+        let dayAfter = try XCTUnwrap(currentCalendar.date(byAdding: .day, value: 1, to: day))
+        let sampleStart = oldDayStart
+        let sampleEnd = min(sampleStart.addingTimeInterval(60), dayAfter.addingTimeInterval(-1))
+        let sample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000804")!,
+            metric: .heartRate,
+            startDate: sampleStart,
+            endDate: sampleEnd,
+            value: 72
+        )
+        let snapshot = DailyHealthSnapshot(
+            dayStart: oldDayStart,
+            timezoneIdentifier: oldTimezoneIdentifier,
+            healthKitSamples: [sample],
+            healthKitSampleSummary: DailyHealthSampleSummary(samples: [sample], dayStart: oldDayStart),
+            healthReadStates: [
+                HealthMetricID.stepCount.rawValue: .available,
+                HealthMetricID.heartRate.rawValue: .available,
+            ],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        func dayKey(_ date: Date, calendar: Calendar) -> String {
+            let components = calendar.dateComponents([.year, .month, .day], from: date)
+            return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        }
+        let oldDayKey = dayKey(oldDayStart, calendar: oldCalendar)
+        let currentDayKey = Self.dayKey(day)
+        XCTAssertNotEqual(oldDayKey, currentDayKey)
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: oldDayKey,
+            timezoneID: oldTimezoneIdentifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "stale-timezone-snapshot",
+            algorithmVersion: snapshot.algorithmVersion
+        ))
+        let brief = DailyBriefRecord(
+            cacheKey: "timezone-rebuild-brief",
+            dayKey: oldDayKey,
+            snapshotHash: "stale-timezone-snapshot",
+            algorithmVersion: "old",
+            payloadData: Data()
+        )
+        context.insert(brief)
+        try context.save()
+
+        try await HealthRepository(modelContext: context).prepareHealthKitSnapshotRebuild(
+            for: [.stepCount],
+            from: day,
+            through: day
+        )
+
+        let records = try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+        let record = try XCTUnwrap(records.first)
+        XCTAssertEqual(records.count, 1, "Rebaseline must migrate the old key instead of creating a duplicate snapshot")
+        XCTAssertEqual(record.dayKey, currentDayKey)
+        XCTAssertEqual(record.timezoneID, currentCalendar.timeZone.identifier)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let rebuilt = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+        XCTAssertEqual(rebuilt.dayStart, day)
+        XCTAssertEqual(rebuilt.timezoneIdentifier, currentCalendar.timeZone.identifier)
+        XCTAssertEqual(Self.dayKey(rebuilt.dayStart), record.dayKey)
+        XCTAssertEqual(rebuilt.algorithmVersion, DailyHealthSnapshot.currentAlgorithmVersion)
+        XCTAssertEqual(rebuilt.healthReadStates?[HealthMetricID.heartRate.rawValue], .dataUnavailableOrReadScopeUnknown)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<DailyBriefRecord>()).isEmpty)
+        XCTAssertEqual(currentCalendar.startOfDay(for: sampleStart), day)
+        XCTAssertLessThan(sampleStart, dayAfter)
+
+        try await HealthRepository(modelContext: context).applyImportedHealthSamples(
+            HealthSamplePage(samples: [sample], nextAnchorData: Data([2]), readState: .available),
+            stream: HealthMetricID.heartRate.rawValue,
+            lastSuccessfulAt: sampleEnd,
+            lookbackStart: day,
+            replacements: [HealthSampleDaySnapshot(
+                dayStart: day,
+                samples: [sample],
+                readState: .available
+            )]
+        )
+        let refreshed = try decoder.decode(
+            DailyHealthSnapshot.self,
+            from: try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first).payloadData
+        )
+        XCTAssertEqual(refreshed.healthKitSampleSummary?.aggregate(for: .heartRate)?.latestSampleAt, sampleEnd)
+        let sampleIndex = try XCTUnwrap(context.fetch(FetchDescriptor<HealthKitSampleIndexRecord>()).first)
+        XCTAssertEqual(sampleIndex.startDate, sampleStart)
+        XCTAssertEqual(sampleIndex.endDate, sampleEnd)
+        XCTAssertEqual(sampleIndex.dayKey, currentDayKey)
+        let projectedDays = try HealthIntelligenceReadModel(calendar: currentCalendar).loadDays(
+            from: day,
+            through: day,
+            in: context
+        )
+        XCTAssertEqual(try XCTUnwrap(projectedDays.first).heartRateSamples, [72])
+    }
+
+    func testOldSnapshotAlgorithmTriggersAllStreamRebuildAndCacheInvalidation() async throws {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let sample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000808")!,
+            metric: .heartRate,
+            startDate: day.addingTimeInterval(12 * 60 * 60),
+            endDate: day.addingTimeInterval(12 * 60 * 60 + 60),
+            value: 91
+        )
+        let oldAlgorithmVersion = "daily-health-snapshot-v2"
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            healthKitSampleSummary: DailyHealthSampleSummary(samples: [sample], dayStart: day),
+            healthReadStates: [HealthMetricID.heartRate.rawValue: .available],
+            algorithmVersion: oldAlgorithmVersion
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: Self.dayKey(day),
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "old-algorithm-snapshot",
+            algorithmVersion: oldAlgorithmVersion
+        ))
+        context.insert(HealthKitImportCursor(
+            stream: HealthMetricID.heartRate.rawValue,
+            anchorData: Data([1]),
+            lastSuccessfulAt: day,
+            lookbackStart: day
+        ))
+        context.insert(HealthKitImportCursor(
+            stream: HealthMetricID.activeEnergy.rawValue,
+            anchorData: Data([2]),
+            lastSuccessfulAt: day,
+            lookbackStart: day
+        ))
+        context.insert(DailyBriefRecord(
+            cacheKey: "old-algorithm-daily-brief",
+            dayKey: Self.dayKey(day),
+            snapshotHash: "old-algorithm-snapshot",
+            algorithmVersion: "old",
+            payloadData: Data()
+        ))
+        let dayAfter = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: day))
+        context.insert(WeeklyReport(weekStartDate: day, weekEndDate: dayAfter))
+        try context.save()
+
+        try await HealthRepository(modelContext: context).prepareHealthKitSnapshotRebuild(
+            for: [.stepCount],
+            from: day,
+            through: day
+        )
+
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).first)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let rebuilt = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+        XCTAssertEqual(rebuilt.algorithmVersion, DailyHealthSnapshot.currentAlgorithmVersion)
+        XCTAssertNil(rebuilt.healthKitSampleSummary?.aggregate(for: .heartRate))
+        XCTAssertEqual(rebuilt.healthReadStates?[HealthMetricID.heartRate.rawValue], .dataUnavailableOrReadScopeUnknown)
+        let cursors = try context.fetch(FetchDescriptor<HealthKitImportCursor>())
+        XCTAssertEqual(cursors.count, 2)
+        XCTAssertTrue(cursors.allSatisfy { $0.anchorData == nil && $0.lastSuccessfulAt == nil && $0.lookbackStart == nil })
+        XCTAssertTrue(try context.fetch(FetchDescriptor<DailyBriefRecord>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<WeeklyReport>()).isEmpty)
+    }
+
     override func tearDown() {
         context = nil
         container = nil
@@ -1825,7 +2010,7 @@ final class HealthRepositoryTests: XCTestCase {
                 HealthMetricID.activeEnergy.rawValue: .available,
                 HealthMetricID.restingEnergy.rawValue: .available,
             ],
-            algorithmVersion: "v3"
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
@@ -1834,7 +2019,7 @@ final class HealthRepositoryTests: XCTestCase {
             timezoneID: Calendar.current.timeZone.identifier,
             payloadData: try encoder.encode(snapshot),
             snapshotHash: "fixture",
-            algorithmVersion: "v3"
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
         ))
         try context.save()
 
