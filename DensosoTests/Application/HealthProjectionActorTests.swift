@@ -236,7 +236,7 @@ final class HealthProjectionActorTests: XCTestCase {
                 timezoneIdentifier: calendar.timeZone.identifier,
                 stepCount: Double(5_000 + offset + 41),
                 healthReadStates: [HealthMetricID.stepCount.rawValue: .available],
-                algorithmVersion: "projection-actor-fixture-v1"
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
             )
             context.insert(DailyHealthSnapshotRecord(
                 dayKey: dayKey(day, calendar: calendar),
@@ -413,8 +413,10 @@ final class HealthProjectionActorTests: XCTestCase {
 
         let state = try XCTUnwrap(readModel.todayHealthState(asOf: asOf, in: context))
         XCTAssertEqual(state.trainingLoad.dataCoverage, .partial)
-        XCTAssertEqual(state.trainingLoad.recentSevenDayLoad, 150, accuracy: 0.001)
-        XCTAssertEqual(state.trainingLoad.estimatedWorkoutCount, 1)
+        XCTAssertEqual(projectedDay.workouts.first?.intensity, "unknown")
+        XCTAssertEqual(state.trainingLoad.recentSevenDayLoad, 0, accuracy: 0.001)
+        XCTAssertEqual(state.trainingLoad.unavailableEffortCount, 1)
+        XCTAssertEqual(state.trainingLoad.estimatedWorkoutCount, 0)
     }
 
     func testTimezoneChangeReassignsHealthSamplesToCurrentLocalDaysAcrossDST() throws {
@@ -776,7 +778,7 @@ final class HealthProjectionActorTests: XCTestCase {
             through: day,
             in: context
         )
-        let projectedDay = try XCTUnwrap(days.first)
+        let projectedDay = try XCTUnwrap(days.first(where: { $0.dayStart == day }))
         XCTAssertEqual(projectedDay.workouts.count, 8)
         XCTAssertTrue(projectedDay.workouts.contains(TrainingWorkoutInput(
             startedAt: start,
@@ -846,7 +848,8 @@ final class HealthProjectionActorTests: XCTestCase {
         try context.save()
 
         let projectedDay = try XCTUnwrap(
-            HealthIntelligenceReadModel(calendar: calendar).loadDays(through: day, in: context).first
+            HealthIntelligenceReadModel(calendar: calendar).loadDays(through: day, in: context)
+                .first(where: { $0.dayStart == day })
         )
         XCTAssertTrue(projectedDay.workouts.contains(TrainingWorkoutInput(
             startedAt: start,

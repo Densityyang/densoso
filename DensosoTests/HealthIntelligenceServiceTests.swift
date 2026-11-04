@@ -316,7 +316,7 @@ final class HealthIntelligenceServiceTests: XCTestCase {
                 timezoneIdentifier: calendar.timeZone.identifier,
                 stepCount: Double(5_000 + offset),
                 healthReadStates: [HealthMetricID.stepCount.rawValue: .available],
-                algorithmVersion: "history-fixture-v4"
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
             )
             context.insert(DailyHealthSnapshotRecord(
                 dayKey: dayKey(day),
