@@ -10,10 +10,16 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     private var sampleResponses: [HealthMetricID: [HealthSamplePage]] = [:]
     private var sampleRequestLog: [HealthMetricID: [HealthSampleRequest]] = [:]
     private var workoutRequestStarts: [Date] = []
+    private var workoutRequestAnchors: [Data?] = []
     private var authorizedSampleStarts: [HealthMetricID: Date] = [:]
     private var authorizationBoundaryFailures: Set<HealthMetricID> = []
+    private var authorizationBoundaryQueryFailures: Set<HealthMetricID> = []
     private var workoutResponses: [HealthChangePage<WorkoutSnapshot>] = []
     private var workoutPagesBeforeFailure: Int?
+    private var workoutPagesBeforeInvalidAnchor: Int?
+    private var workoutInvalidAnchorFailuresRemaining = 0
+    private var samplePagesBeforeInvalidAnchor: [HealthMetricID: Int] = [:]
+    private var sampleInvalidAnchorFailuresRemaining: [HealthMetricID: Int] = [:]
     private var observerHandler: HealthObserverClient.UpdateHandler?
     private var observerCompletions = 0
     private var completionWaiters: [CheckedContinuation<Void, Never>] = []
@@ -41,6 +47,9 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     func failAuthorizationBoundaryLookup(for metric: HealthMetricID) {
         authorizationBoundaryFailures.insert(metric)
     }
+    func failAuthorizationBoundaryQuery(for metric: HealthMetricID) {
+        authorizationBoundaryQueryFailures.insert(metric)
+    }
     func failAggregate(for metric: HealthMetricID) { aggregateFailures.insert(metric) }
     func setSampleResponses(_ pages: [HealthSamplePage], for metric: HealthMetricID) {
         sampleResponses[metric] = pages
@@ -61,6 +70,21 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     func failWorkoutChanges(afterSuccessfulPageCount count: Int) {
         workoutPagesBeforeFailure = max(0, count)
     }
+    func failWorkoutChangesWithInvalidAnchor(afterSuccessfulPageCount count: Int = 0) {
+        workoutPagesBeforeInvalidAnchor = max(0, count)
+    }
+    func failNextWorkoutChangesWithInvalidAnchor(_ count: Int = 1) {
+        workoutInvalidAnchorFailuresRemaining = max(0, count)
+    }
+    func failSampleChangesWithInvalidAnchor(
+        for metric: HealthMetricID,
+        afterSuccessfulPageCount count: Int = 0
+    ) {
+        samplePagesBeforeInvalidAnchor[metric] = max(0, count)
+    }
+    func failNextSampleChangesWithInvalidAnchor(for metric: HealthMetricID, count: Int = 1) {
+        sampleInvalidAnchorFailuresRemaining[metric] = max(0, count)
+    }
     func failNextWrites(_ count: Int) { writeFailuresRemaining = max(0, count) }
     func blockNextHealthWrite() { blockNextWrite = true }
     func waitUntilHealthWriteIsBlocked() async {
@@ -75,6 +99,9 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     func isAvailable() async -> Bool { available }
 
     func earliestAuthorizedSampleDate(for metric: HealthMetricID) async throws -> Date? {
+        if authorizationBoundaryQueryFailures.contains(metric) {
+            throw HealthStoreClientError.queryFailed("fake authorization boundary query failure")
+        }
         if authorizationBoundaryFailures.contains(metric) {
             throw HealthStoreClientError.authorizationBoundaryUnavailable
         }
@@ -98,6 +125,17 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     func samples(_ request: HealthSampleRequest) async throws -> HealthSamplePage {
         guard available else { throw HealthStoreClientError.unavailable }
         sampleRequestLog[request.metric, default: []].append(request)
+        if let failuresRemaining = sampleInvalidAnchorFailuresRemaining[request.metric], failuresRemaining > 0 {
+            sampleInvalidAnchorFailuresRemaining[request.metric] = failuresRemaining - 1
+            throw HealthStoreClientError.invalidAnchor
+        }
+        if let remainingPages = samplePagesBeforeInvalidAnchor[request.metric] {
+            if remainingPages == 0 {
+                samplePagesBeforeInvalidAnchor.removeValue(forKey: request.metric)
+                throw HealthStoreClientError.invalidAnchor
+            }
+            samplePagesBeforeInvalidAnchor[request.metric] = remainingPages - 1
+        }
         let response: HealthSamplePage
         if var pages = sampleResponses[request.metric], !pages.isEmpty {
             response = pages.removeFirst()
@@ -122,12 +160,24 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     func workoutChanges(from startDate: Date, after anchor: Data?) async throws -> HealthChangePage<WorkoutSnapshot> {
         guard available else { throw HealthStoreClientError.unavailable }
         workoutRequestStarts.append(startDate)
+        workoutRequestAnchors.append(anchor)
+        if workoutInvalidAnchorFailuresRemaining > 0 {
+            workoutInvalidAnchorFailuresRemaining -= 1
+            throw HealthStoreClientError.invalidAnchor
+        }
         if let remainingPages = workoutPagesBeforeFailure {
             if remainingPages == 0 {
                 workoutPagesBeforeFailure = nil
                 throw HealthStoreClientError.queryFailed("fake workout page failure")
             }
             workoutPagesBeforeFailure = remainingPages - 1
+        }
+        if let remainingPages = workoutPagesBeforeInvalidAnchor {
+            if remainingPages == 0 {
+                workoutPagesBeforeInvalidAnchor = nil
+                throw HealthStoreClientError.invalidAnchor
+            }
+            workoutPagesBeforeInvalidAnchor = remainingPages - 1
         }
         guard !workoutResponses.isEmpty else {
             return HealthChangePage(
@@ -210,6 +260,7 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
         sampleRequestLog[metric] ?? []
     }
     func workoutRequestStartDates() -> [Date] { workoutRequestStarts }
+    func workoutRequestAnchors() -> [Data?] { workoutRequestAnchors }
 
     func waitForObserverCompletion(after count: Int) async {
         if observerCompletions > count { return }

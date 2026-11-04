@@ -98,6 +98,8 @@ final class AgentSession {
     private let conversationRepository: any ConversationRepository
     private let confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)?
     private let healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)?
+    private let recentWorkoutsProvider: (@Sendable (Date, Date, Int) async throws -> [AgentRecentWorkout])?
+    private let dailyMetricsProvider: (@Sendable (Date, Date) async throws -> [AgentDailyMetric])?
     private let confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)?
     private let conversationID: UUID
     private let persistenceOperationBarrier = PersistenceOperationBarrier.shared
@@ -151,6 +153,8 @@ final class AgentSession {
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
         confirmedFoodHistory: (any ConfirmedFoodHistoryProviding)? = nil,
         healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil,
+        recentWorkoutsProvider: (@Sendable (Date, Date, Int) async throws -> [AgentRecentWorkout])? = nil,
+        dailyMetricsProvider: (@Sendable (Date, Date) async throws -> [AgentDailyMetric])? = nil,
         confirmedWorkoutPlanHandler: (@MainActor (UUID) async throws -> Void)? = nil,
         pendingActionNow: @escaping @Sendable () -> Date = Date.init
     ) {
@@ -165,6 +169,8 @@ final class AgentSession {
         self.conversationRepository = conversationRepository
         self.confirmedFoodHistory = confirmedFoodHistory
         self.healthNarrativeContextProvider = healthNarrativeContextProvider
+        self.recentWorkoutsProvider = recentWorkoutsProvider
+        self.dailyMetricsProvider = dailyMetricsProvider
         self.confirmedWorkoutPlanHandler = confirmedWorkoutPlanHandler
         self.conversationID = conversationID
         self.budgetFactory = budgetFactory
@@ -2191,7 +2197,10 @@ final class AgentSession {
     }
 
     func dailyMetrics(from startDate: Date, through endDate: Date) async throws -> [AgentDailyMetric] {
-        try await readRepository.dailyMetrics(from: startDate, through: endDate)
+        if let dailyMetricsProvider {
+            return try await dailyMetricsProvider(startDate, endDate)
+        }
+        return try await readRepository.dailyMetrics(from: startDate, through: endDate)
     }
 
     func recentMeals(from startDate: Date, through endDate: Date, limit: Int) async throws -> [AgentRecentMeal] {
@@ -2203,10 +2212,14 @@ final class AgentSession {
     }
 
     func recentWorkouts(from startDate: Date, through endDate: Date, limit: Int) async throws -> [AgentRecentWorkout] {
-        try await readRepository.recentWorkouts(
+        let queryLimit = min(limit + 1, AgentRecentWorkoutsLimits.maximumQueryWorkoutCount)
+        if let recentWorkoutsProvider {
+            return try await recentWorkoutsProvider(startDate, endDate, queryLimit)
+        }
+        return try await readRepository.recentWorkouts(
             from: startDate,
             through: endDate,
-            limit: min(limit + 1, AgentRecentWorkoutsLimits.maximumQueryWorkoutCount)
+            limit: queryLimit
         )
     }
 

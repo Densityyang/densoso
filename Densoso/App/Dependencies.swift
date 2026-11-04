@@ -14,11 +14,13 @@ enum HealthContextExportGateError: Error {
 final class HealthContextExportGate {
     private var generation: UInt64 = 0
     private var nextForegroundPurgeHoldToken: UInt64 = 0
+    private var healthKitCacheMayExist: Bool
     private(set) var foregroundPurgeHoldToken: UInt64?
     private(set) var isOpen: Bool
 
-    init(initiallyOpen: Bool = false) {
+    init(initiallyOpen: Bool = false, healthKitCacheMayExist: Bool = false) {
         isOpen = initiallyOpen
+        self.healthKitCacheMayExist = healthKitCacheMayExist
     }
 
     func closeForSnapshotRebuild() -> UInt64 {
@@ -31,7 +33,8 @@ final class HealthContextExportGate {
     /// task can be scheduled. A never-authorized installation with an open gate
     /// has no HealthKit cache to purge, so it keeps manual-only context available.
     func closeForForegroundActivation(hasRequestedAuthorization: Bool) {
-        guard hasRequestedAuthorization || !isOpen else { return }
+        if hasRequestedAuthorization { healthKitCacheMayExist = true }
+        guard hasRequestedAuthorization || healthKitCacheMayExist || !isOpen else { return }
         if foregroundPurgeHoldToken != nil {
             if isOpen { _ = closeForSnapshotRebuild() }
             return
@@ -45,14 +48,22 @@ final class HealthContextExportGate {
         return beginForegroundPurgeHold()
     }
 
-    func releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(_ token: UInt64?) {
+    func releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(
+        _ token: UInt64?,
+        healthKitCacheMayRemain: Bool = true
+    ) {
         guard let token, foregroundPurgeHoldToken == token else { return }
         foregroundPurgeHoldToken = nil
+        healthKitCacheMayExist = healthKitCacheMayRemain
         isOpen = true
     }
 
     func openAfterSuccessfulPurge(generation expectedGeneration: UInt64) {
         guard generation == expectedGeneration else { return }
+        // A successful HealthKit refresh can repopulate the cache immediately
+        // after this purge. Keep the history until an explicitly local,
+        // unauthorized purge confirms that no imported cache remains.
+        healthKitCacheMayExist = true
         guard foregroundPurgeHoldToken == nil else { return }
         isOpen = true
     }
@@ -143,7 +154,8 @@ final class Dependencies {
         )
         let hasCachedHealthKitData = Self.hasPersistedHealthKitData(in: modelContainer.mainContext)
         let healthContextExportGate = HealthContextExportGate(
-            initiallyOpen: !healthKitService.hasRequestedAuthorization && !hasCachedHealthKitData
+            initiallyOpen: !healthKitService.hasRequestedAuthorization && !hasCachedHealthKitData,
+            healthKitCacheMayExist: healthKitService.hasRequestedAuthorization || hasCachedHealthKitData
         )
         self.healthContextExportGate = healthContextExportGate
         let briefCacheGenerationFence = HealthBriefCacheGenerationFence()
@@ -300,6 +312,20 @@ final class Dependencies {
             healthNarrativeContextProvider: {
                 try await healthContextExportGate.withAllowedExport {
                     try await healthProjectionActor.healthNarrativeContext()
+                }
+            },
+            recentWorkoutsProvider: { startDate, endDate, limit in
+                try await healthContextExportGate.withAllowedExport {
+                    try await agentRepository.recentWorkouts(
+                        from: startDate,
+                        through: endDate,
+                        limit: limit
+                    )
+                }
+            },
+            dailyMetricsProvider: { startDate, endDate in
+                try await healthContextExportGate.withAllowedExport {
+                    try await agentRepository.dailyMetrics(from: startDate, through: endDate)
                 }
             },
             confirmedWorkoutPlanHandler: { actionID in

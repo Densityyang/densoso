@@ -24,6 +24,7 @@ final class ForegroundHealthRebaselineCoordinatorTests: XCTestCase {
         coordinator.prepareActivation(onNewGeneration: prepareExportGate)
         await coordinator.activate()
         XCTAssertEqual(preparationCount, 1)
+        XCTAssertEqual(coordinator.foregroundRebaselineAttemptCount, 1)
         XCTAssertTrue(gate.isOpen)
         XCTAssertNil(gate.foregroundPurgeHoldToken)
 
@@ -31,6 +32,7 @@ final class ForegroundHealthRebaselineCoordinatorTests: XCTestCase {
         await coordinator.activate()
 
         XCTAssertEqual(preparationCount, 1)
+        XCTAssertEqual(coordinator.foregroundRebaselineAttemptCount, 1)
         XCTAssertTrue(gate.isOpen)
         XCTAssertNil(gate.foregroundPurgeHoldToken)
     }
@@ -64,6 +66,7 @@ final class ForegroundHealthRebaselineCoordinatorTests: XCTestCase {
         XCTAssertTrue(gate.isOpen)
         XCTAssertNil(gate.foregroundPurgeHoldToken)
         XCTAssertNotEqual(secondHoldToken, 0)
+        XCTAssertEqual(coordinator.foregroundRebaselineAttemptCount, 2)
     }
 
     func testRepeatedActivationDuringPreparationRunsOneFullRebaseline() async throws {
@@ -107,6 +110,7 @@ final class ForegroundHealthRebaselineCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(fullRebaselineArguments, [true, true])
         XCTAssertEqual(coordinator.state, .completed(generation: 2))
+        XCTAssertEqual(coordinator.foregroundRebaselineAttemptCount, 2)
     }
 
     func testPartialFailureIsRetriedIncrementallyWithoutLosingSuccessfulStreams() async throws {
@@ -135,6 +139,7 @@ final class ForegroundHealthRebaselineCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(fullRebaselineArguments, [true, false])
         XCTAssertTrue(coordinator.pendingFailedStreams.isEmpty)
+        XCTAssertEqual(coordinator.foregroundRebaselineAttemptCount, 1)
     }
 
     func testGlobalFailureDoesNotMarkActivationCompleteAndUsesFullRebaselineOnRetry() async throws {
@@ -157,6 +162,7 @@ final class ForegroundHealthRebaselineCoordinatorTests: XCTestCase {
         }
 
         XCTAssertEqual(fullRebaselineArguments, [true, true])
+        XCTAssertEqual(coordinator.foregroundRebaselineAttemptCount, 2)
     }
 
     func testSupersededRunIsNotMarkedCompleteAndRetriesTheActivation() async throws {
@@ -179,6 +185,7 @@ final class ForegroundHealthRebaselineCoordinatorTests: XCTestCase {
         }
 
         XCTAssertEqual(fullRebaselineArguments, [true, true])
+        XCTAssertEqual(coordinator.foregroundRebaselineAttemptCount, 2)
     }
 
     func testNewActivationQueuesBehindCurrentPreparation() async throws {

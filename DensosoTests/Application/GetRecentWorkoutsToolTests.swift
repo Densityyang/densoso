@@ -6,6 +6,88 @@ import DensosoDomain
 
 @MainActor
 final class GetRecentWorkoutsToolTests: XCTestCase {
+    func testAgentRecentWorkoutsAndDailyMetricsFailClosedUntilHealthGateOpens() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: container)
+        let governance = InMemoryProviderGovernanceRepository()
+        let preferences = IntelligencePreferences()
+        let gate = HealthContextExportGate()
+        let workout = AgentRecentWorkout(
+            occurredAt: Date().addingTimeInterval(-60),
+            workoutType: "gate-controlled-healthkit-workout",
+            durationMinutes: 30,
+            intensity: "moderate",
+            estimatedCaloriesKcal: 220
+        )
+        let session = AgentSession(
+            providerSelector: TestProviderSelector(ScriptedTextProvider(scripts: [])),
+            intelligencePreferences: preferences,
+            providerConfiguration: ProviderConfigurationPreferences(),
+            governanceRepository: governance,
+            usageLedger: ProviderUsageLedger(
+                repository: governance,
+                pricingDescriptorSource: TestPricingDescriptorCatalog.source
+            ),
+            registry: ToolRegistry(),
+            confirmationCoordinator: ConfirmationCoordinator(
+                repository: confirmationRepository,
+                writeGate: PersistenceWriteGate(state: .writable)
+            ),
+            readRepository: repository,
+            conversationRepository: repository,
+            recentWorkoutsProvider: { _, _, _ in
+                try await gate.withAllowedExport { [workout] }
+            },
+            dailyMetricsProvider: { _, _ in
+                try await gate.withAllowedExport { [] }
+            }
+        )
+        let tool = GetRecentWorkoutsTool()
+        let metricsTool = GetMetricsTool()
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let metricsNow = Date()
+        let metricsArguments = """
+        {"startDate":"\(formatter.string(from: metricsNow.addingTimeInterval(-172_800)))","endDate":"\(formatter.string(from: metricsNow))"}
+        """
+
+        do {
+            _ = try await tool.execute(argumentsJSON: "{}", context: session, clientRequestID: UUID())
+            XCTFail("Recent HealthKit workouts must not be read while the export gate is closed")
+        } catch is HealthContextExportGateError {}
+
+        do {
+            _ = try await metricsTool.execute(
+                argumentsJSON: metricsArguments,
+                context: session,
+                clientRequestID: UUID()
+            )
+            XCTFail("Workout-derived daily metrics must not be read while the export gate is closed")
+        } catch is HealthContextExportGateError {}
+
+        let purgeGeneration = gate.closeForSnapshotRebuild()
+        gate.openAfterSuccessfulPurge(generation: purgeGeneration)
+        let output = try await tool.execute(
+            argumentsJSON: "{}",
+            context: session,
+            clientRequestID: UUID()
+        )
+        let object = try jsonObject(output)
+        let results = try XCTUnwrap(object["workouts"] as? [[String: Any]])
+        XCTAssertEqual(results.first?["workoutType"] as? String, "gate-controlled-healthkit-workout")
+        let metricsOutput = try await metricsTool.execute(
+            argumentsJSON: metricsArguments,
+            context: session,
+            clientRequestID: UUID()
+        )
+        XCTAssertEqual(try jsonObject(metricsOutput)["status"] as? String, "insufficient_data")
+    }
+
     func testQueryWindowAndOutputUseLocalDaysSortNewestFirstAndEnforceLimit() throws {
         let calendar = localCalendar()
         let asOf = try date(2026, 10, 16, 0, 30, calendar: calendar)

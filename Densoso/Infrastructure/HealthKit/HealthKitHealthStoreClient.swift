@@ -113,7 +113,10 @@ final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient,
                 limit: request.limit
             ) { _, samples, deletedObjects, newAnchor, error in
                 if let error {
-                    continuation.resume(throwing: Self.mapHealthKitError(error))
+                    continuation.resume(throwing: Self.mapAnchoredQueryError(
+                        error,
+                        hasPersistedAnchor: request.anchorData != nil
+                    ))
                     return
                 }
                 guard let newAnchor, let anchorData = try? Self.encodeAnchor(newAnchor) else {
@@ -150,7 +153,10 @@ final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient,
                 limit: limit
             ) { _, samples, deletedObjects, newAnchor, error in
                 if let error {
-                    continuation.resume(throwing: Self.mapHealthKitError(error))
+                    continuation.resume(throwing: Self.mapAnchoredQueryError(
+                        error,
+                        hasPersistedAnchor: anchorData != nil
+                    ))
                     return
                 }
                 guard let newAnchor, let encoded = try? Self.encodeAnchor(newAnchor) else {
@@ -469,6 +475,19 @@ final class HealthKitHealthStoreClient: HealthStoreClient, HealthObserverClient,
         default:
             error
         }
+    }
+
+    private static func mapAnchoredQueryError(_ error: Error, hasPersistedAnchor: Bool) -> Error {
+        // HealthKit reports a stale/invalid opaque anchor as an invalid query
+        // argument. All other query arguments are built and validated locally,
+        // so classify this error as a recoverable anchor failure only when the
+        // request reused persisted anchor data.
+        if hasPersistedAnchor,
+           let healthError = error as? HKError,
+           healthError.code == .errorInvalidArgument {
+            return HealthStoreClientError.invalidAnchor
+        }
+        return mapHealthKitError(error)
     }
 }
 

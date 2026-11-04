@@ -186,14 +186,24 @@ final class HealthRepository: HealthSyncRepository {
         deletedHealthKitUUIDs: [UUID],
         nextAnchorData: Data,
         lookbackStart: Date? = nil,
-        stream: String = "workouts"
+        stream: String = "workouts",
+        readStateUpdates: [Date: HealthReadState] = [:]
     ) async throws {
         let changedUUIDs = Set(snapshots.map(\.healthKitUUID)).union(deletedHealthKitUUIDs)
+        let calendar = Calendar.current
+        let normalizedReadStateUpdates = Dictionary(
+            readStateUpdates.map { (calendar.startOfDay(for: $0.key), $0.value) },
+            uniquingKeysWith: { _, latest in latest }
+        )
         let operationLease = try await persistenceOperationBarrier.acquireMutationOperation()
         defer { persistenceOperationBarrier.release(operationLease) }
         try await persistenceOperationBarrier.withLease(operationLease) {
             let existingCoordinationDates = try importedWorkoutCoordinationDates(for: changedUUIDs)
-            try await write(affecting: snapshots.map(\.startedAt) + existingCoordinationDates) { affectedDates in
+            try await write(
+                affecting: snapshots.map(\.startedAt)
+                    + existingCoordinationDates
+                    + Array(normalizedReadStateUpdates.keys)
+            ) { affectedDates in
             let importedPredicate = #Predicate<WorkoutRecord> { $0.healthKitUUID != nil }
             var importedDescriptor = FetchDescriptor<WorkoutRecord>(
                 predicate: importedPredicate,
@@ -281,6 +291,15 @@ final class HealthRepository: HealthSyncRepository {
                     lastSuccessfulAt: Date(),
                     lookbackStart: lookbackStart
                 ))
+            }
+
+            for (day, state) in normalizedReadStateUpdates {
+                var snapshot = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
+                var readStates = snapshot.healthReadStates ?? [:]
+                readStates[HealthMetricID.workout.rawValue] = state
+                snapshot = Self.replacing(snapshot, healthReadStates: .some(readStates))
+                try upsertHealthSnapshot(snapshot, for: day)
+                affectedDates.insert(day)
             }
             }
         }

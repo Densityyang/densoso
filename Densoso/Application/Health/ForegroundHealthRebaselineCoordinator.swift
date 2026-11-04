@@ -34,6 +34,7 @@ final class ForegroundHealthRebaselineCoordinator {
 
     private(set) var state: ForegroundHealthRebaselineState = .idle
     private(set) var pendingFailedStreams: Set<HealthMetricID> = []
+    private(set) var foregroundRebaselineAttemptCount = 0
 
     init(
         retryDelayNanoseconds: (@MainActor (Int) -> UInt64)? = nil,
@@ -140,6 +141,31 @@ final class ForegroundHealthRebaselineCoordinator {
 
         let requiresFullRebaseline = fullRebaselineCompletedGeneration != generation
         state = .preparing(generation: generation)
+        let signpostClock = ContinuousClock()
+        let rebaselineAttemptNumber: Int?
+        let rebaselineStartedAt: ContinuousClock.Instant?
+        if requiresFullRebaseline {
+            foregroundRebaselineAttemptCount += 1
+            rebaselineAttemptNumber = foregroundRebaselineAttemptCount
+            rebaselineStartedAt = signpostClock.now
+            PerformanceSignposts.event(
+                "Health.ForegroundRebaselineAttemptStarted",
+                count: foregroundRebaselineAttemptCount
+            )
+        } else {
+            rebaselineAttemptNumber = nil
+            rebaselineStartedAt = nil
+        }
+        defer {
+            if let rebaselineAttemptNumber, let rebaselineStartedAt {
+                PerformanceSignposts.event(
+                    "Health.ForegroundRebaselineAttemptFinished",
+                    count: rebaselineAttemptNumber,
+                    elapsedMillisecondsSince: rebaselineStartedAt,
+                    clock: signpostClock
+                )
+            }
+        }
         do {
             let result = try await operation(requiresFullRebaseline) { [weak self] in
                 guard let self,

@@ -27,16 +27,40 @@ enum PerformanceSignposts {
         signposter.emitEvent(name)
     }
 
+    static func event(_ name: StaticString, count: Int) {
+        signposter.emitEvent(name, "count: \(count, privacy: .public)")
+    }
+
     static func event(
         _ name: StaticString,
         elapsedMillisecondsSince start: ContinuousClock.Instant,
         clock: ContinuousClock
     ) {
+        let elapsedMilliseconds = elapsedMilliseconds(since: start, clock: clock)
+        signposter.emitEvent(name, "elapsed_ms: \(elapsedMilliseconds, privacy: .public)")
+    }
+
+    static func event(
+        _ name: StaticString,
+        count: Int,
+        elapsedMillisecondsSince start: ContinuousClock.Instant,
+        clock: ContinuousClock
+    ) {
+        let elapsedMilliseconds = elapsedMilliseconds(since: start, clock: clock)
+        signposter.emitEvent(
+            name,
+            "count: \(count, privacy: .public), elapsed_ms: \(elapsedMilliseconds, privacy: .public)"
+        )
+    }
+
+    private static func elapsedMilliseconds(
+        since start: ContinuousClock.Instant,
+        clock: ContinuousClock
+    ) -> Int {
         let duration = start.duration(to: clock.now).components
-        let elapsedMilliseconds = max(
+        return max(
             Int(Double(duration.seconds) * 1_000 + Double(duration.attoseconds) / 1_000_000_000_000_000),
             0
         )
-        signposter.emitEvent(name, "elapsed_ms: \(elapsedMilliseconds, privacy: .public)")
     }
 }

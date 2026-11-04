@@ -103,6 +103,16 @@ struct AppRoot: View {
                     }
                 }
                 .onChange(of: scenePhase) { _, phase in
+                    switch phase {
+                    case .active:
+                        PerformanceSignposts.event("App.ScenePhase.Active")
+                    case .inactive:
+                        PerformanceSignposts.event("App.ScenePhase.Inactive")
+                    case .background:
+                        PerformanceSignposts.event("App.ScenePhase.Background")
+                    @unknown default:
+                        break
+                    }
                     if phase == .active {
                         let hasRequestedHealthAuthorization =
                             dependencies.healthKitService.hasRequestedAuthorization
@@ -160,7 +170,8 @@ struct AppRoot: View {
         do {
             _ = try await dependencies.healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(using: repository)
             dependencies.healthContextExportGate.releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(
-                foregroundPurgeHoldToken
+                foregroundPurgeHoldToken,
+                healthKitCacheMayRemain: false
             )
             if dependencies.healthContextExportGate.isOpen {
                 dependencies.healthIntelligenceService.allowBriefRefreshAfterSuccessfulHealthSnapshotPurge()
