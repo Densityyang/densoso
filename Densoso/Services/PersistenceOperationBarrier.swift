@@ -168,10 +168,16 @@ final class PersistenceOperationBarrier {
         switch operation {
         case .restore:
             return state == .quiescing && activeLeases.isEmpty
-        case .outbox, .healthImport:
+        case .outbox:
             return state == .normal
                 && !waiters.contains(where: { $0.operation == .restore })
-                && !activeLeases.values.contains(operation)
+                && !activeLeases.values.contains(.outbox)
+        case .healthImport:
+            // HealthKit reads can be superseded while they are suspended on an
+            // external query. Scan generations fence stale results before they
+            // write, while the restore barrier still waits for every lease.
+            return state == .normal
+                && !waiters.contains(where: { $0.operation == .restore })
         case .agentExecution, .mutation:
             return state == .normal && !waiters.contains(where: { $0.operation == .restore })
         }

@@ -45,6 +45,7 @@ final class HealthIntelligenceRefreshConcurrencyTests: XCTestCase {
             modelContainer: container,
             briefCacheGenerationFence: fence
         )
+        let barrier = PersistenceOperationBarrier()
         let firstDate = Date(timeIntervalSince1970: 1_800_000_000)
         let secondDate = firstDate.addingTimeInterval(1)
         var startedDates: [Date] = []
@@ -59,7 +60,8 @@ final class HealthIntelligenceRefreshConcurrencyTests: XCTestCase {
                     continuations[date] = continuation
                     starts.signal()
                 }
-            }
+            },
+            persistenceOperationBarrier: barrier
         )
 
         let firstRefresh = Task { @MainActor in try await service.refresh(asOf: firstDate) }
@@ -71,7 +73,9 @@ final class HealthIntelligenceRefreshConcurrencyTests: XCTestCase {
         continuations.removeValue(forKey: firstDate)?.resume(returning: Self.snapshot(fingerprint: "old-source"))
         await starts.wait(until: 2)
         XCTAssertNotEqual(service.dailyBriefSourceFingerprint, "old-source")
-        continuations.removeValue(forKey: secondDate)?.resume(returning: Self.snapshot(fingerprint: "new-source"))
+        continuations.removeValue(forKey: secondDate)?.resume(
+            returning: Self.snapshot(fingerprint: "new-source", validatedAt: secondDate)
+        )
         _ = try await firstRefresh.value
         _ = try await latestRefresh.value
 
@@ -88,6 +92,7 @@ final class HealthIntelligenceRefreshConcurrencyTests: XCTestCase {
             modelContainer: container,
             briefCacheGenerationFence: fence
         )
+        let barrier = PersistenceOperationBarrier()
         var refreshCount = 0
         let service = HealthIntelligenceService(
             projectionActor: actor,
@@ -96,18 +101,19 @@ final class HealthIntelligenceRefreshConcurrencyTests: XCTestCase {
                 refreshCount += 1
                 return Self.snapshot(fingerprint: "observer-\(refreshCount)", validatedAt: date)
             },
-            observerRefreshDelay: { _ in }
+            observerRefreshDelay: { _ in },
+            persistenceOperationBarrier: barrier
         )
         var completions = 0
+        let completion = expectation(description: "debounced observer refresh completes")
 
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            service.scheduleRefreshAfterHealthObserverEvent {
-                completions += 1
-                continuation.resume()
-            }
-            service.scheduleRefreshAfterHealthObserverEvent { completions += 1 }
-            service.scheduleRefreshAfterHealthObserverEvent { completions += 1 }
+        service.scheduleRefreshAfterHealthObserverEvent { completions += 1 }
+        service.scheduleRefreshAfterHealthObserverEvent { completions += 1 }
+        service.scheduleRefreshAfterHealthObserverEvent {
+            completions += 1
+            completion.fulfill()
         }
+        await fulfillment(of: [completion], timeout: 5)
 
         XCTAssertEqual(refreshCount, 1)
         XCTAssertEqual(completions, 1)

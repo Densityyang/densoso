@@ -57,7 +57,21 @@ struct HealthKitSnapshotRebuildPreparation: Equatable, Sendable {
     let timeZoneIdentifier: String
 }
 
-struct HealthSyncSupersededError: Error {}
+struct HealthSyncSupersededError: Error, CustomStringConvertible {
+    private let diagnostic: String?
+
+    init(metric: HealthMetricID? = nil, expected: UInt64? = nil, actual: UInt64? = nil) {
+        guard let metric, let expected, let actual else {
+            diagnostic = nil
+            return
+        }
+        diagnostic = "metric=\(metric.rawValue) expectedGeneration=\(expected) actualGeneration=\(actual)"
+    }
+
+    var description: String {
+        "HealthSyncSupersededError(\(diagnostic ?? "unknown generation"))"
+    }
+}
 
 struct HealthSyncFailure: Equatable, Sendable {
     let stream: HealthMetricID
@@ -117,7 +131,8 @@ final class HealthKitSyncCoordinator {
     /// returned token lets the async sync reuse this completed purge.
     func prepareForegroundSnapshotRebuild(
         using repository: any HealthSyncRepository,
-        now: Date = Date()
+        now: Date = Date(),
+        onScanGenerationsAdvanced: (([HealthMetricID: UInt64]) -> Void)? = nil
     ) async throws -> HealthKitSnapshotRebuildPreparation {
         let calendar = Calendar.autoupdatingCurrent
         let timeZoneIdentifier = calendar.timeZone.identifier
@@ -131,7 +146,8 @@ final class HealthKitSyncCoordinator {
             for: Self.aggregateStreams.union(Self.sampleStreams).union([.workout]),
             from: start,
             through: now,
-            using: repository
+            using: repository,
+            onScanGenerationsAdvanced: onScanGenerationsAdvanced
         )
         maskedAuthorizationBoundaryByMetric.removeAll()
         return HealthKitSnapshotRebuildPreparation(
@@ -147,10 +163,12 @@ final class HealthKitSyncCoordinator {
         for metrics: Set<HealthMetricID>,
         from start: Date,
         through end: Date,
-        using repository: any HealthSyncRepository
+        using repository: any HealthSyncRepository,
+        onScanGenerationsAdvanced: (([HealthMetricID: UInt64]) -> Void)? = nil
     ) async throws -> [HealthMetricID: UInt64] {
         let gateGeneration = onHealthCachePurgeWillBegin?()
         let scanGenerations = advanceScanGenerations(for: metrics)
+        onScanGenerationsAdvanced?(scanGenerations)
         try await repository.prepareHealthKitSnapshotRebuild(
             for: metrics,
             from: start,
@@ -173,8 +191,9 @@ final class HealthKitSyncCoordinator {
     }
 
     private func ensureCurrentScanGeneration(_ expected: UInt64, for metric: HealthMetricID) throws {
-        guard scanGenerationByMetric[metric, default: 0] == expected else {
-            throw HealthSyncSupersededError()
+        let actual = scanGenerationByMetric[metric, default: 0]
+        guard actual == expected else {
+            throw HealthSyncSupersededError(metric: metric, expected: expected, actual: actual)
         }
     }
 
@@ -284,7 +303,13 @@ final class HealthKitSyncCoordinator {
                 if preparedSnapshotRebuild == nil {
                     // Hide the prior cache before the first async HealthKit lookup so
                     // callers cannot use stale values while the rebaseline is running.
-                    _ = try await prepareForegroundSnapshotRebuild(using: repository, now: now)
+                    _ = try await prepareForegroundSnapshotRebuild(
+                        using: repository,
+                        now: now,
+                        onScanGenerationsAdvanced: { generations in
+                            scanGenerations.merge(generations, uniquingKeysWith: { _, new in new })
+                        }
+                    )
                 }
                 // A full sync owns the stream generations after the completed
                 // purge and supersedes observer work started in the scheduling gap.
@@ -322,7 +347,8 @@ final class HealthKitSyncCoordinator {
                         for: metric,
                         plan: plan,
                         through: now,
-                        using: repository
+                        using: repository,
+                        onScanGenerationAdvanced: { scanGenerations[metric] = $0 }
                     ) {
                         scanGenerations[metric] = generation
                     }
@@ -386,7 +412,10 @@ final class HealthKitSyncCoordinator {
                     for: snapshotRebuildMetrics,
                     from: start,
                     through: now,
-                    using: repository
+                    using: repository,
+                    onScanGenerationsAdvanced: { generations in
+                        scanGenerations.merge(generations, uniquingKeysWith: { _, new in new })
+                    }
                 )
                 scanGenerations.merge(generations, uniquingKeysWith: { _, new in new })
             } catch {
@@ -501,7 +530,8 @@ final class HealthKitSyncCoordinator {
         for metric: HealthMetricID,
         plan: WindowPlan,
         through date: Date,
-        using repository: any HealthSyncRepository
+        using repository: any HealthSyncRepository,
+        onScanGenerationAdvanced: ((UInt64) -> Void)? = nil
     ) async throws -> UInt64? {
         guard let authorizationStart = plan.authorizationStart else {
             maskedAuthorizationBoundaryByMetric.removeValue(forKey: metric)
@@ -510,6 +540,7 @@ final class HealthKitSyncCoordinator {
         guard maskedAuthorizationBoundaryByMetric[metric] != authorizationStart else { return nil }
         let gateGeneration = onHealthCachePurgeWillBegin?()
         let scanGeneration = advanceScanGenerations(for: [metric])[metric]
+        if let scanGeneration { onScanGenerationAdvanced?(scanGeneration) }
         try await repository.maskCachedHealthDataBeforeAuthorizationBoundary(
             for: metric,
             authorizationStart: authorizationStart,
@@ -588,7 +619,8 @@ final class HealthKitSyncCoordinator {
                     for: metric,
                     plan: plan,
                     through: now,
-                    using: repository
+                    using: repository,
+                    onScanGenerationAdvanced: { scanGeneration = $0 }
                 ) {
                     scanGeneration = generation
                 }
@@ -604,7 +636,10 @@ final class HealthKitSyncCoordinator {
                     for: [metric],
                     from: plan.targetStart,
                     through: now,
-                    using: repository
+                    using: repository,
+                    onScanGenerationsAdvanced: { generations in
+                        if let generation = generations[metric] { scanGeneration = generation }
+                    }
                 )
                 scanGeneration = generations[metric] ?? scanGenerationByMetric[metric, default: 0]
             }
@@ -635,7 +670,8 @@ final class HealthKitSyncCoordinator {
                     for: metric,
                     plan: plan,
                     through: now,
-                    using: repository
+                    using: repository,
+                    onScanGenerationAdvanced: { scanGeneration = $0 }
                 ) {
                     scanGeneration = generation
                 }
@@ -645,7 +681,10 @@ final class HealthKitSyncCoordinator {
                     for: [metric],
                     from: plan.targetStart,
                     through: now,
-                    using: repository
+                    using: repository,
+                    onScanGenerationsAdvanced: { generations in
+                        if let generation = generations[metric] { scanGeneration = generation }
+                    }
                 )
                 scanGeneration = generations[metric] ?? scanGenerationByMetric[metric, default: 0]
             }
@@ -687,7 +726,8 @@ final class HealthKitSyncCoordinator {
                     for: metric,
                     plan: plan,
                     through: now,
-                    using: repository
+                    using: repository,
+                    onScanGenerationAdvanced: { scanGeneration = $0 }
                 ) {
                     scanGeneration = generation
                 }
@@ -703,7 +743,10 @@ final class HealthKitSyncCoordinator {
                     for: [metric],
                     from: plan.targetStart,
                     through: now,
-                    using: repository
+                    using: repository,
+                    onScanGenerationsAdvanced: { generations in
+                        if let generation = generations[metric] { scanGeneration = generation }
+                    }
                 )
                 scanGeneration = generations[metric] ?? scanGenerationByMetric[metric, default: 0]
             }
