@@ -38,6 +38,10 @@ enum DailyMetricsProjectionWriteGate {
     }
 
     private static let storeWideKey = "*"
+    // Keep a store alive for as long as its ObjectIdentifier is present in
+    // the gate. Otherwise Swift may reuse that identifier after a container
+    // is released while stale waiter/lease state still exists.
+    private static var retainedContainers: [ObjectIdentifier: ModelContainer] = [:]
     private static var heldContexts: [ObjectIdentifier: [String: UUID]] = [:]
     private static var waiters: [ObjectIdentifier: [Waiter]] = [:]
     private static var waiterCountObservers: [ObjectIdentifier: [WaiterCountObserver]] = [:]
@@ -55,7 +59,7 @@ enum DailyMetricsProjectionWriteGate {
         dayKeys: Set<String>? = nil,
         operation: @MainActor (Lease) async throws -> T
     ) async throws -> T {
-        let lease = try await acquire(storeID: ObjectIdentifier(modelContext.container), dayKeys: dayKeys)
+        let lease = try await acquire(for: modelContext.container, dayKeys: dayKeys)
         defer { release(lease) }
         try Task.checkCancellation()
         return try await operation(lease)
@@ -63,7 +67,18 @@ enum DailyMetricsProjectionWriteGate {
 
     /// A nil day-key set requests a store-wide lease. Day-scoped leases let
     /// independent daily projections proceed concurrently.
-    static func acquire(storeID key: ObjectIdentifier, dayKeys: Set<String>? = nil) async throws -> Lease {
+    static func acquire(for container: ModelContainer, dayKeys: Set<String>? = nil) async throws -> Lease {
+        let key = ObjectIdentifier(container)
+        retainedContainers[key] = container
+        do {
+            return try await acquire(storeID: key, dayKeys: dayKeys)
+        } catch {
+            releaseRetainedContainerIfIdle(for: key)
+            throw error
+        }
+    }
+
+    private static func acquire(storeID key: ObjectIdentifier, dayKeys: Set<String>? = nil) async throws -> Lease {
         try Task.checkCancellation()
         let requestedKeys = normalizedLockKeys(dayKeys)
         if canGrant(requestedKeys, storeID: key), !hasEarlierConflictingWaiter(requestedKeys, storeID: key) {
@@ -71,6 +86,7 @@ enum DailyMetricsProjectionWriteGate {
             hold(lease)
             return lease
         }
+        print("[DailyMetricsProjectionWriteGate] waiting store=\(key) requested=\(requestedKeys) held=\(heldContexts[key] ?? [:]) queued=\(waiters[key]?.count ?? 0)")
 
         let waiterID = UUID()
         let lease = await withTaskCancellationHandler {
@@ -102,6 +118,7 @@ enum DailyMetricsProjectionWriteGate {
         for lockKey in lease.lockKeys { updated[lockKey] = nil }
         heldContexts[lease.storeKey] = updated.isEmpty ? nil : updated
         grantNextWaiter(for: lease.storeKey)
+        releaseRetainedContainerIfIdle(for: lease.storeKey)
     }
 
     static func validate(_ lease: Lease, storeID: ObjectIdentifier, dayKeys: Set<String>? = nil) throws {
@@ -143,6 +160,7 @@ enum DailyMetricsProjectionWriteGate {
         if heldContexts[key]?.isEmpty != false {
             grantNextWaiter(for: key)
         }
+        releaseRetainedContainerIfIdle(for: key)
     }
 
     private static func grantNextWaiter(for key: ObjectIdentifier) {
@@ -204,6 +222,12 @@ enum DailyMetricsProjectionWriteGate {
             }
         }
         waiterCountObservers[key] = pending.isEmpty ? nil : pending
+    }
+
+    private static func releaseRetainedContainerIfIdle(for key: ObjectIdentifier) {
+        guard heldContexts[key]?.isEmpty != false,
+              waiters[key]?.isEmpty != false else { return }
+        retainedContainers[key] = nil
     }
 }
 

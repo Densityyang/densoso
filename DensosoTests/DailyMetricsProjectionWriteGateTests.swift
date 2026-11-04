@@ -53,7 +53,7 @@ final class DailyMetricsProjectionWriteGateTests: XCTestCase {
     }
 
     func testCancelledGateWaiterIsRemovedBeforeNextWaiterAcquires() async throws {
-        let owner = try await DailyMetricsProjectionWriteGate.acquire(storeID: ObjectIdentifier(container))
+        let owner = try await DailyMetricsProjectionWriteGate.acquire(for: container)
         var cancelledWaiterEntered = false
         var laterWaiterEntered = false
 
@@ -89,7 +89,7 @@ final class DailyMetricsProjectionWriteGateTests: XCTestCase {
 
     func testIndependentContextsForSameStoreShareTheProjectionGate() async throws {
         let secondContext = ModelContext(container)
-        let owner = try await DailyMetricsProjectionWriteGate.acquire(storeID: ObjectIdentifier(container))
+        let owner = try await DailyMetricsProjectionWriteGate.acquire(for: container)
         var secondContextEntered = false
         let secondContextTask = Task {
             try await DailyMetricsProjectionWriteGate.withLock(for: secondContext) {
@@ -108,7 +108,7 @@ final class DailyMetricsProjectionWriteGateTests: XCTestCase {
         let storeID = ObjectIdentifier(container)
         let dayA = "2026-11-03"
         let dayB = "2026-11-04"
-        let owner = try await DailyMetricsProjectionWriteGate.acquire(storeID: storeID, dayKeys: [dayA])
+        let owner = try await DailyMetricsProjectionWriteGate.acquire(for: container, dayKeys: [dayA])
         var sameDayEntered = false
         var otherDayEntered = false
         let sameDayTask = Task {

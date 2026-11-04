@@ -1559,7 +1559,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         operation: () async throws -> T
     ) async throws -> T {
         let lease = try await DailyMetricsProjectionWriteGate.acquire(
-            storeID: ObjectIdentifier(modelContainer),
+            for: modelContainer,
             dayKeys: dayKeys
         )
         do {

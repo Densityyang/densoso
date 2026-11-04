@@ -1010,7 +1010,7 @@ final class ExportService {
 
         print("[ExportService] restore: persistence lease acquired; acquire projection lease")
         let projectionLease = try await DailyMetricsProjectionWriteGate.acquire(
-            storeID: ObjectIdentifier(context.container)
+            for: context.container
         )
         defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
         print("[ExportService] restore: projection lease acquired")
