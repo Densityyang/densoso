@@ -21,17 +21,14 @@ enum DailyMetricsProjectionInputReader {
         let day = calendar.startOfDay(for: date)
         let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
         let meals = try meals(from: day, before: nextDay, in: modelContext)
-        let indexedWorkouts = try workouts(from: day, before: nextDay, in: modelContext)
-        let workoutReadState = indexedWorkouts.contains { $0.healthKitUUID != nil }
-            ? try healthKitWorkoutReadState(on: day, calendar: calendar, in: modelContext)
-            : nil
-        let workouts = indexedWorkouts.filter { workout in
-            workout.healthKitUUID == nil || workoutReadState == .available
-        }
+        // Sync persists HealthKit workouts only after HealthKit returns them
+        // and applies any known per-record authorization-boundary check. Daily
+        // read state describes whole-day coverage and must not hide that evidence.
+        let importedWorkouts = try workouts(from: day, before: nextDay, in: modelContext)
         return DailyMetricsProjectionInputs(
             meals: meals,
-            workouts: workouts,
-            sourceRecordRevisions: sourceRecordRevisions(meals: meals, workouts: workouts)
+            workouts: importedWorkouts,
+            sourceRecordRevisions: sourceRecordRevisions(meals: meals, workouts: importedWorkouts)
         )
     }
 
@@ -109,24 +106,5 @@ enum DailyMetricsProjectionInputReader {
             cursorID = last.id
         }
         return results
-    }
-
-    private static func healthKitWorkoutReadState(
-        on day: Date,
-        calendar: Calendar,
-        in modelContext: ModelContext
-    ) throws -> HealthReadState? {
-        let components = calendar.dateComponents([.year, .month, .day], from: day)
-        let key = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
-        let predicate = #Predicate<DailyHealthSnapshotRecord> { $0.dayKey == key }
-        guard let record = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate)).first else {
-            return nil
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .millisecondsSince1970
-        guard let snapshot = try? decoder.decode(DailyHealthSnapshot.self, from: record.payloadData) else {
-            return nil
-        }
-        return snapshot.healthReadStates?[HealthMetricID.workout.rawValue]
     }
 }

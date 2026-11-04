@@ -65,6 +65,11 @@ struct AppRoot: View {
                     }
                     dependencies.watchConnectivityCoordinator.activate()
                     if dependencies.healthKitService.hasRequestedAuthorization {
+                        dependencies.foregroundHealthRebaselineCoordinator.prepareActivation {
+                            dependencies.healthContextExportGate.closeForForegroundActivation(
+                                hasRequestedAuthorization: true
+                            )
+                        }
                         await dependencies.foregroundHealthRebaselineCoordinator.activate()
                         let healthRepository = HealthRepository(modelContext: modelContext)
                         try? await dependencies.healthKitSyncCoordinator.startBackgroundObservers(using: healthRepository)
@@ -99,9 +104,21 @@ struct AppRoot: View {
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
-                        dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
+                        let hasRequestedHealthAuthorization =
+                            dependencies.healthKitService.hasRequestedAuthorization
+                        if hasRequestedHealthAuthorization {
+                            dependencies.foregroundHealthRebaselineCoordinator.prepareActivation {
+                                dependencies.healthContextExportGate.closeForForegroundActivation(
+                                    hasRequestedAuthorization: true
+                                )
+                            }
+                        } else {
+                            dependencies.healthContextExportGate.closeForForegroundActivation(
+                                hasRequestedAuthorization: false
+                            )
+                        }
                         Task {
-                            if dependencies.healthKitService.hasRequestedAuthorization {
+                            if hasRequestedHealthAuthorization {
                                 await dependencies.foregroundHealthRebaselineCoordinator.activate()
                             } else {
                                 await purgeUnauthorizedHealthSnapshotIfNeeded()
@@ -109,6 +126,7 @@ struct AppRoot: View {
                             AppIntentInbox.receivePendingDrafts(receiveWorkoutPlan: false)
                             await refreshStaleDailyBriefAfterActivation()
                         }
+                        dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
                     } else {
                         dependencies.foregroundHealthRebaselineCoordinator.deactivate()
                     }
@@ -137,8 +155,19 @@ struct AppRoot: View {
         // A restored snapshot can contain HealthKit markers even when its
         // connection preference was intentionally not restored. Purge locally
         // without issuing HealthKit queries.
+        let foregroundPurgeHoldToken = dependencies.healthContextExportGate.ensureForegroundPurgeHold()
         let repository = HealthRepository(modelContext: modelContext)
-        _ = try? await dependencies.healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(using: repository)
+        do {
+            _ = try await dependencies.healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(using: repository)
+            dependencies.healthContextExportGate.releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(
+                foregroundPurgeHoldToken
+            )
+            if dependencies.healthContextExportGate.isOpen {
+                dependencies.healthIntelligenceService.allowBriefRefreshAfterSuccessfulHealthSnapshotPurge()
+            }
+        } catch {
+            // Keep the hold until a later complete local purge succeeds.
+        }
     }
 
     private func refreshStaleDailyBriefAfterActivation() async {

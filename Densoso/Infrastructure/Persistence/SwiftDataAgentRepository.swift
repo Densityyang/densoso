@@ -464,11 +464,10 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
             descriptor.fetchLimit = Self.recentWorkoutFetchBatchSize
             let page = try modelContext.fetch(descriptor)
             guard !page.isEmpty else { break }
-            let readStates = try healthKitWorkoutReadStates(for: page)
-            allowedWorkouts.append(contentsOf: page.filter { workout in
-                guard workout.healthKitUUID != nil else { return true }
-                return readStates[Self.dayKey(for: workout.date)] == .available
-            })
+            // Sync persists HealthKit workouts only after HealthKit returns
+            // them and applies any known per-record authorization-boundary
+            // check. Daily state describes full-day coverage, not record validity.
+            allowedWorkouts.append(contentsOf: page)
             guard page.count == Self.recentWorkoutFetchBatchSize, let last = page.last else { break }
             cursorDate = last.date
             cursorCreatedAt = last.createdAt
@@ -492,36 +491,6 @@ actor SwiftDataAgentRepository: AgentReadRepository, ConversationRepository {
                         : nil
                 )
             }
-    }
-
-    private func healthKitWorkoutReadStates(for workouts: [WorkoutRecord]) throws -> [String: HealthReadState] {
-        let dayKeys = Array(Set(workouts.compactMap { workout in
-            workout.healthKitUUID == nil ? nil : Self.dayKey(for: workout.date)
-        })).sorted()
-        guard !dayKeys.isEmpty else { return [:] }
-        var states: [String: HealthReadState] = [:]
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .millisecondsSince1970
-        var offset = 0
-        while offset < dayKeys.count {
-            let batchEnd = min(offset + Self.recentWorkoutFetchBatchSize, dayKeys.count)
-            let keys = Array(dayKeys[offset..<batchEnd])
-            let predicate = #Predicate<DailyHealthSnapshotRecord> { keys.contains($0.dayKey) }
-            for record in try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate)) {
-                guard let snapshot = try? decoder.decode(DailyHealthSnapshot.self, from: record.payloadData),
-                      let state = snapshot.healthReadStates?[HealthMetricID.workout.rawValue] else {
-                    continue
-                }
-                states[record.dayKey] = state
-            }
-            offset = batchEnd
-        }
-        return states
-    }
-
-    private static func dayKey(for date: Date) -> String {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
     func userPreferences(limit: Int) throws -> [AgentUserPreference] {

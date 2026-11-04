@@ -13,6 +13,8 @@ enum HealthContextExportGateError: Error {
 @MainActor
 final class HealthContextExportGate {
     private var generation: UInt64 = 0
+    private var nextForegroundPurgeHoldToken: UInt64 = 0
+    private(set) var foregroundPurgeHoldToken: UInt64?
     private(set) var isOpen: Bool
 
     init(initiallyOpen: Bool = false) {
@@ -25,8 +27,33 @@ final class HealthContextExportGate {
         return generation
     }
 
+    /// A foreground activation must close exports before its async rebaseline
+    /// task can be scheduled. A never-authorized installation with an open gate
+    /// has no HealthKit cache to purge, so it keeps manual-only context available.
+    func closeForForegroundActivation(hasRequestedAuthorization: Bool) {
+        guard hasRequestedAuthorization || !isOpen else { return }
+        if foregroundPurgeHoldToken != nil {
+            if isOpen { _ = closeForSnapshotRebuild() }
+            return
+        }
+        _ = beginForegroundPurgeHold()
+    }
+
+    @discardableResult
+    func ensureForegroundPurgeHold() -> UInt64 {
+        if let foregroundPurgeHoldToken { return foregroundPurgeHoldToken }
+        return beginForegroundPurgeHold()
+    }
+
+    func releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(_ token: UInt64?) {
+        guard let token, foregroundPurgeHoldToken == token else { return }
+        foregroundPurgeHoldToken = nil
+        isOpen = true
+    }
+
     func openAfterSuccessfulPurge(generation expectedGeneration: UInt64) {
         guard generation == expectedGeneration else { return }
+        guard foregroundPurgeHoldToken == nil else { return }
         isOpen = true
     }
 
@@ -40,6 +67,13 @@ final class HealthContextExportGate {
             throw HealthContextExportGateError.snapshotRebuildInProgress
         }
         return value
+    }
+
+    private func beginForegroundPurgeHold() -> UInt64 {
+        nextForegroundPurgeHoldToken &+= 1
+        foregroundPurgeHoldToken = nextForegroundPurgeHoldToken
+        _ = closeForSnapshotRebuild()
+        return nextForegroundPurgeHoldToken
     }
 }
 
@@ -137,24 +171,44 @@ final class Dependencies {
         }
         self.foregroundHealthRebaselineCoordinator = ForegroundHealthRebaselineCoordinator(
             operation: { requiresFullRebaseline, didBeginSync in
-                let repository = HealthRepository(modelContext: modelContainer.mainContext)
-                if requiresFullRebaseline {
-                    let rebuild = try await healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(
-                        using: repository
-                    )
+                let foregroundPurgeHoldToken = requiresFullRebaseline
+                    ? healthContextExportGate.ensureForegroundPurgeHold()
+                    : nil
+                do {
+                    let repository = HealthRepository(modelContext: modelContainer.mainContext)
+                    if requiresFullRebaseline {
+                        let rebuild = try await healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(
+                            using: repository
+                        )
+                        healthContextExportGate.releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(
+                            foregroundPurgeHoldToken
+                        )
+                        if healthContextExportGate.isOpen {
+                            healthIntelligenceService.allowBriefRefreshAfterSuccessfulHealthSnapshotPurge()
+                        }
+                        didBeginSync()
+                        return try await healthKitSyncCoordinator.syncAvailableData(
+                            using: repository,
+                            now: rebuild.through,
+                            forceRebaseline: true,
+                            preparedSnapshotRebuild: rebuild
+                        )
+                    }
                     didBeginSync()
                     return try await healthKitSyncCoordinator.syncAvailableData(
                         using: repository,
-                        now: rebuild.through,
-                        forceRebaseline: true,
-                        preparedSnapshotRebuild: rebuild
+                        forceRebaseline: false
                     )
+                } catch {
+                    // A full rebaseline can fail after preparation, notably when the
+                    // prepared timezone token is stale. Keep a purge hold through retries.
+                    // Incremental retries use an already-purged scope and do not establish
+                    // a hold that could not be released by another full-purge callback.
+                    if requiresFullRebaseline {
+                        _ = healthContextExportGate.ensureForegroundPurgeHold()
+                    }
+                    throw error
                 }
-                didBeginSync()
-                return try await healthKitSyncCoordinator.syncAvailableData(
-                    using: repository,
-                    forceRebaseline: false
-                )
             }
         )
         self.briefNotificationScheduler = BriefNotificationScheduler()

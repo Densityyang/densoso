@@ -49,12 +49,13 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         XCTAssertEqual(inputs.meals.map(\.totalCaloriesKcal), [200])
     }
 
-    func testProjectionInputReaderFiltersHealthKitWorkoutsByDailyReadState() async throws {
+    func testProjectionInputReaderUsesImportedWorkoutsWithoutChangingDailyCoverage() async throws {
         let (_, context) = try makeContext()
         let calendar = Calendar.current
         let unknownDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20)))
         let availableDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: unknownDay))
         let missingStateDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 2, to: unknownDay))
+        let emptyUnknownDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 3, to: unknownDay))
         let unknownHealthKitID = UUID(uuidString: "00000000-0000-0000-0000-000000000941")!
         let availableHealthKitID = UUID(uuidString: "00000000-0000-0000-0000-000000000942")!
         let missingStateHealthKitID = UUID(uuidString: "00000000-0000-0000-0000-000000000943")!
@@ -94,6 +95,7 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         for (day, readState) in [
             (unknownDay, HealthReadState.dataUnavailableOrReadScopeUnknown),
             (availableDay, .available),
+            (emptyUnknownDay, .dataUnavailableOrReadScopeUnknown),
         ] {
             let snapshot = DailyHealthSnapshot(
                 dayStart: day,
@@ -116,17 +118,37 @@ final class DailyMetricsProjectionFingerprintTests: XCTestCase {
         let unknownInputs = try DailyMetricsProjectionInputReader.read(on: unknownDay, calendar: calendar, in: context)
         let availableInputs = try DailyMetricsProjectionInputReader.read(on: availableDay, calendar: calendar, in: context)
         let missingStateInputs = try DailyMetricsProjectionInputReader.read(on: missingStateDay, calendar: calendar, in: context)
+        let emptyUnknownInputs = try DailyMetricsProjectionInputReader.read(on: emptyUnknownDay, calendar: calendar, in: context)
 
-        XCTAssertEqual(unknownInputs.workouts.map(\.id), [localWorkoutID])
+        XCTAssertEqual(
+            Set(unknownInputs.workouts.map(\.id)),
+            Set([unknownHealthKitWorkout.id, localWorkoutID])
+        )
         XCTAssertEqual(availableInputs.workouts.compactMap(\.healthKitUUID), [availableHealthKitID])
-        XCTAssertTrue(missingStateInputs.workouts.isEmpty)
+        XCTAssertEqual(missingStateInputs.workouts.compactMap(\.healthKitUUID), [missingStateHealthKitID])
+        XCTAssertTrue(emptyUnknownInputs.workouts.isEmpty)
         try await DailyMetricsProjector.reproject(on: unknownDay, in: context)
         try await DailyMetricsProjector.reproject(on: availableDay, in: context)
         try await DailyMetricsProjector.reproject(on: missingStateDay, in: context)
+        try await DailyMetricsProjector.reproject(on: emptyUnknownDay, in: context)
         let projectedMetrics = try context.fetch(FetchDescriptor<DailyMetrics>())
-        XCTAssertEqual(projectedMetrics.first(where: { calendar.isDate($0.date, inSameDayAs: unknownDay) })?.workoutCount, 1)
+        XCTAssertEqual(projectedMetrics.first(where: { calendar.isDate($0.date, inSameDayAs: unknownDay) })?.workoutCount, 2)
         XCTAssertEqual(projectedMetrics.first(where: { calendar.isDate($0.date, inSameDayAs: availableDay) })?.workoutCount, 1)
-        XCTAssertEqual(projectedMetrics.first(where: { calendar.isDate($0.date, inSameDayAs: missingStateDay) })?.workoutCount, 0)
+        XCTAssertEqual(projectedMetrics.first(where: { calendar.isDate($0.date, inSameDayAs: missingStateDay) })?.workoutCount, 1)
+        XCTAssertEqual(projectedMetrics.first(where: { calendar.isDate($0.date, inSameDayAs: emptyUnknownDay) })?.workoutCount, 0)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let persistedSnapshots = try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+        for day in [unknownDay, emptyUnknownDay] {
+            let key = dayKey(day, calendar: calendar)
+            let record = try XCTUnwrap(persistedSnapshots.first { $0.dayKey == key })
+            let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: record.payloadData)
+            XCTAssertEqual(
+                snapshot.healthReadStates?[HealthMetricID.workout.rawValue],
+                .dataUnavailableOrReadScopeUnknown
+            )
+        }
     }
 
     func testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected() async throws {

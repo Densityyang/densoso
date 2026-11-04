@@ -49,14 +49,18 @@ final class ForegroundHealthRebaselineCoordinator {
 
     /// Repeated calls during one active scene join the same run. A new scene
     /// activation gets its own generation and waits for any older run to end.
+    func prepareActivation(onNewGeneration: @MainActor () -> Void = {}) {
+        guard !isForegroundActive else { return }
+        isForegroundActive = true
+        activationGeneration &+= 1
+        completedGeneration = nil
+        fullRebaselineCompletedGeneration = nil
+        pendingFailedStreams = []
+        onNewGeneration()
+    }
+
     func activate() async {
-        if !isForegroundActive {
-            isForegroundActive = true
-            activationGeneration &+= 1
-            completedGeneration = nil
-            fullRebaselineCompletedGeneration = nil
-            pendingFailedStreams = []
-        }
+        prepareActivation()
         await requestCurrentActivation()
     }
 

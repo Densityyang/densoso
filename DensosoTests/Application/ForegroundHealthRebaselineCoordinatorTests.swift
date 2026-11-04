@@ -4,6 +4,68 @@ import XCTest
 
 @MainActor
 final class ForegroundHealthRebaselineCoordinatorTests: XCTestCase {
+    func testRepeatedPrepareAfterCompletedActivationDoesNotRecloseExportGate() async throws {
+        let gate = HealthContextExportGate(initiallyOpen: true)
+        var preparationCount = 0
+        let coordinator = ForegroundHealthRebaselineCoordinator(
+            operation: { _, _ in
+                let holdToken = gate.foregroundPurgeHoldToken
+                let purgeGeneration = gate.closeForSnapshotRebuild()
+                gate.openAfterSuccessfulPurge(generation: purgeGeneration)
+                gate.releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(holdToken)
+                return Self.successfulResult
+            }
+        )
+        let prepareExportGate: @MainActor () -> Void = {
+            preparationCount += 1
+            gate.closeForForegroundActivation(hasRequestedAuthorization: true)
+        }
+
+        coordinator.prepareActivation(onNewGeneration: prepareExportGate)
+        await coordinator.activate()
+        XCTAssertEqual(preparationCount, 1)
+        XCTAssertTrue(gate.isOpen)
+        XCTAssertNil(gate.foregroundPurgeHoldToken)
+
+        coordinator.prepareActivation(onNewGeneration: prepareExportGate)
+        await coordinator.activate()
+
+        XCTAssertEqual(preparationCount, 1)
+        XCTAssertTrue(gate.isOpen)
+        XCTAssertNil(gate.foregroundPurgeHoldToken)
+    }
+
+    func testBackgroundToForegroundPreparationCreatesANewExportGateHold() async throws {
+        let gate = HealthContextExportGate(initiallyOpen: true)
+        let coordinator = ForegroundHealthRebaselineCoordinator(
+            operation: { _, _ in
+                let holdToken = gate.foregroundPurgeHoldToken
+                let purgeGeneration = gate.closeForSnapshotRebuild()
+                gate.openAfterSuccessfulPurge(generation: purgeGeneration)
+                gate.releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(holdToken)
+                return Self.successfulResult
+            }
+        )
+        let prepareExportGate: @MainActor () -> Void = {
+            gate.closeForForegroundActivation(hasRequestedAuthorization: true)
+        }
+
+        coordinator.prepareActivation(onNewGeneration: prepareExportGate)
+        await coordinator.activate()
+        XCTAssertTrue(gate.isOpen)
+        XCTAssertNil(gate.foregroundPurgeHoldToken)
+
+        coordinator.deactivate()
+        coordinator.prepareActivation(onNewGeneration: prepareExportGate)
+
+        XCTAssertFalse(gate.isOpen)
+        let secondHoldToken = try XCTUnwrap(gate.foregroundPurgeHoldToken)
+        await coordinator.activate()
+        XCTAssertTrue(gate.isOpen)
+        XCTAssertNil(gate.foregroundPurgeHoldToken)
+        XCTAssertNotEqual(secondHoldToken, 0)
+    }
+
     func testRepeatedActivationDuringPreparationRunsOneFullRebaseline() async throws {
         var calls = 0
         var releasePreparation: CheckedContinuation<HealthSyncResult, Error>?

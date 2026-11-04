@@ -13,6 +13,7 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     private var authorizedSampleStarts: [HealthMetricID: Date] = [:]
     private var authorizationBoundaryFailures: Set<HealthMetricID> = []
     private var workoutResponses: [HealthChangePage<WorkoutSnapshot>] = []
+    private var workoutPagesBeforeFailure: Int?
     private var observerHandler: HealthObserverClient.UpdateHandler?
     private var observerCompletions = 0
     private var completionWaiters: [CheckedContinuation<Void, Never>] = []
@@ -56,6 +57,9 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     }
     func setWorkoutResponses(_ pages: [HealthChangePage<WorkoutSnapshot>]) {
         workoutResponses = pages
+    }
+    func failWorkoutChanges(afterSuccessfulPageCount count: Int) {
+        workoutPagesBeforeFailure = max(0, count)
     }
     func failNextWrites(_ count: Int) { writeFailuresRemaining = max(0, count) }
     func blockNextHealthWrite() { blockNextWrite = true }
@@ -118,6 +122,13 @@ actor FakeHealthStoreClient: HealthStoreClient, HealthObserverClient, HealthAuth
     func workoutChanges(from startDate: Date, after anchor: Data?) async throws -> HealthChangePage<WorkoutSnapshot> {
         guard available else { throw HealthStoreClientError.unavailable }
         workoutRequestStarts.append(startDate)
+        if let remainingPages = workoutPagesBeforeFailure {
+            if remainingPages == 0 {
+                workoutPagesBeforeFailure = nil
+                throw HealthStoreClientError.queryFailed("fake workout page failure")
+            }
+            workoutPagesBeforeFailure = remainingPages - 1
+        }
         guard !workoutResponses.isEmpty else {
             return HealthChangePage(
                 added: [],

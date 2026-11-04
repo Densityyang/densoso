@@ -375,6 +375,93 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(workoutStarts.first), authorizationStart)
     }
 
+    func testWorkoutStartingAtNoonCanImportWhileBoundaryDayRemainsIncomplete() async throws {
+        try await assertIntradayAuthorizationWorkoutRemainsUnknown(
+            authorizationHour: 12,
+            workoutHour: 13,
+            workoutID: UUID(uuidString: "00000000-0000-0000-0000-000000000783")!,
+            anchor: Data([80])
+        )
+    }
+
+    func testWorkoutStartingAtOnePMCanImportWhileBoundaryDayRemainsIncomplete() async throws {
+        try await assertIntradayAuthorizationWorkoutRemainsUnknown(
+            authorizationHour: 13,
+            workoutHour: 13,
+            workoutID: UUID(uuidString: "00000000-0000-0000-0000-000000000784")!,
+            anchor: Data([81])
+        )
+    }
+
+    private func assertIntradayAuthorizationWorkoutRemainsUnknown(
+        authorizationHour: Int,
+        workoutHour: Int,
+        workoutID: UUID,
+        anchor: Data
+    ) async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        let boundaryDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -30, to: today))
+        let authorizationStart = try XCTUnwrap(calendar.date(
+            bySettingHour: authorizationHour,
+            minute: 0,
+            second: 0,
+            of: boundaryDay
+        ))
+        let workoutStart = try XCTUnwrap(calendar.date(
+            bySettingHour: workoutHour,
+            minute: 0,
+            second: 0,
+            of: boundaryDay
+        ))
+        let workoutEnd = try XCTUnwrap(calendar.date(
+            bySettingHour: 13,
+            minute: 30,
+            second: 0,
+            of: boundaryDay
+        ))
+        let workout = try WorkoutSnapshot(
+            healthKitUUID: workoutID,
+            startedAt: workoutStart,
+            duration: workoutEnd.timeIntervalSince(workoutStart),
+            activityType: "running",
+            energyInput: .init(measuredKilocalories: 120),
+            origin: .externalHealthKit,
+            dataQuality: .complete
+        )
+        let fake = FakeHealthStoreClient()
+        await fake.setEarliestAuthorizedSampleDate(authorizationStart, for: .workout)
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [workout], deletedObjectIDs: [], nextAnchorData: anchor)
+        ])
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+
+        let result = try await coordinator.syncAvailableData(
+            using: HealthRepository(modelContext: context),
+            now: now
+        )
+
+        XCTAssertTrue(result.completedStreams.contains(.workout))
+        XCTAssertNil(result.failedStreams[.workout])
+        let imported = try XCTUnwrap(context.fetch(FetchDescriptor<WorkoutRecord>())
+            .first { $0.healthKitUUID == workoutID })
+        XCTAssertEqual(imported.date, workoutStart)
+        XCTAssertEqual(imported.durationMinutes, Int((workoutEnd.timeIntervalSince(workoutStart) / 60).rounded()))
+        let requests = await fake.workoutRequestStartDates()
+        XCTAssertEqual(try XCTUnwrap(requests.first), authorizationStart)
+
+        let snapshotRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .first { $0.dayKey == Self.dayKey(boundaryDay, calendar: calendar) })
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: snapshotRecord.payloadData)
+        XCTAssertEqual(
+            snapshot.healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown
+        )
+    }
+
     func testUnavailableAuthorizationBoundaryRebuildsWindowAndKeepsEmptyDaysUnknown() async throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let calendar = Calendar.current
@@ -442,6 +529,87 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertTrue(projectedDay.weightSamplesKilograms.isEmpty)
     }
 
+    func testWorkoutWithUnavailableAuthorizationBoundaryRemainsImportedButDayCoverageUnknown() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let day = try XCTUnwrap(calendar.date(byAdding: .day, value: -5, to: calendar.startOfDay(for: now)))
+        let workoutStart = day.addingTimeInterval(13 * 60 * 60)
+        let workout = try WorkoutSnapshot(
+            healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000785")!,
+            startedAt: workoutStart,
+            duration: 1_800,
+            activityType: "running",
+            energyInput: .init(measuredKilocalories: 120),
+            origin: .externalHealthKit,
+            dataQuality: .complete
+        )
+        let fake = FakeHealthStoreClient()
+        await fake.failAuthorizationBoundaryLookup(for: .workout)
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [workout], deletedObjectIDs: [], nextAnchorData: Data([82]))
+        ])
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+
+        let result = try await coordinator.syncAvailableData(
+            using: HealthRepository(modelContext: context),
+            now: now
+        )
+
+        XCTAssertTrue(result.completedStreams.contains(.workout))
+        XCTAssertNotNil(context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+            $0.healthKitUUID == workout.healthKitUUID
+        })
+        let snapshotRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .first { $0.dayKey == Self.dayKey(day, calendar: calendar) })
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: snapshotRecord.payloadData)
+        XCTAssertEqual(
+            snapshot.healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown
+        )
+    }
+
+    func testWorkoutCoverageRemainsUnknownWhenALaterPageFails() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let day = try XCTUnwrap(calendar.date(byAdding: .day, value: -5, to: calendar.startOfDay(for: now)))
+        let workout = try WorkoutSnapshot(
+            healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000786")!,
+            startedAt: day.addingTimeInterval(13 * 60 * 60),
+            duration: 1_800,
+            activityType: "running",
+            energyInput: .init(measuredKilocalories: 120),
+            origin: .externalHealthKit,
+            dataQuality: .complete
+        )
+        let fake = FakeHealthStoreClient()
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [workout], deletedObjectIDs: [], nextAnchorData: Data([83]), hasMore: true)
+        ])
+        await fake.failWorkoutChanges(afterSuccessfulPageCount: 1)
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+        let repository = HealthRepository(modelContext: context)
+
+        let result = try await coordinator.syncAvailableData(using: repository, now: now)
+
+        XCTAssertFalse(result.completedStreams.contains(.workout))
+        XCTAssertNotNil(result.failedStreams[.workout])
+        XCTAssertNotNil(context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+            $0.healthKitUUID == workout.healthKitUUID
+        }, "Successfully committed first-page rows remain available as individual records")
+        let snapshotRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .first { $0.dayKey == Self.dayKey(day, calendar: calendar) })
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let snapshot = try decoder.decode(DailyHealthSnapshot.self, from: snapshotRecord.payloadData)
+        XCTAssertEqual(
+            snapshot.healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown
+        )
+        XCTAssertNil(try repository.cursor(for: "workouts")?.anchorData)
+    }
+
     func testHealthContextExportGateStartsClosedAndOpensAfterSuccessfulPurge() async throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gate = HealthContextExportGate()
@@ -470,9 +638,192 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(exportedValue, "manual-health-context")
     }
 
+    func testForegroundActivationClosesAuthorizedExportGateBeforeSchedulingWork() async throws {
+        let gate = HealthContextExportGate(initiallyOpen: true)
+        var exportAttempt: Task<Bool, Never>?
+        let rebaselineCoordinator = ForegroundHealthRebaselineCoordinator(
+            operation: { _, _ in
+                HealthSyncResult(completedStreams: HealthKitSyncCoordinator.observedStreams, failedStreams: [:])
+            }
+        )
+
+        rebaselineCoordinator.prepareActivation {
+            gate.closeForForegroundActivation(hasRequestedAuthorization: true)
+            XCTAssertFalse(gate.isOpen, "The gate must close synchronously before async work is scheduled")
+            XCTAssertNotNil(gate.foregroundPurgeHoldToken)
+            exportAttempt = Task { @MainActor in
+                do {
+                    _ = try await gate.withAllowedExport { "stale-health-context" }
+                    return false
+                } catch is HealthContextExportGateError {
+                    return true
+                } catch {
+                    return false
+                }
+            }
+        }
+
+        XCTAssertFalse(gate.isOpen)
+        let exportWasRejected = try XCTUnwrap(exportAttempt)
+        let wasRejected = await exportWasRejected.value
+        XCTAssertTrue(wasRejected)
+    }
+
+    func testUnauthenticatedForegroundActivationKeepsOpenManualOnlyGate() async throws {
+        let gate = HealthContextExportGate(initiallyOpen: true)
+        gate.closeForForegroundActivation(hasRequestedAuthorization: false)
+        XCTAssertTrue(gate.isOpen)
+        XCTAssertNil(gate.foregroundPurgeHoldToken)
+        let exportedValue = try await gate.withAllowedExport { "manual-health-context" }
+        XCTAssertEqual(exportedValue, "manual-health-context")
+    }
+
+    func testUnauthenticatedClosedGateOpensAfterLocalSnapshotPurgeSucceeds() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let gate = HealthContextExportGate()
+        gate.closeForForegroundActivation(hasRequestedAuthorization: false)
+        let holdToken = try XCTUnwrap(gate.foregroundPurgeHoldToken)
+
+        let fake = FakeHealthStoreClient()
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+        coordinator.onHealthCachePurgeWillBegin = {
+            gate.closeForSnapshotRebuild()
+        }
+        coordinator.onHealthCachePurgeDidSucceed = { generation in
+            gate.openAfterSuccessfulPurge(generation: generation)
+        }
+        _ = try await coordinator.prepareForegroundSnapshotRebuild(
+            using: HealthRepository(modelContext: context),
+            now: now
+        )
+
+        XCTAssertFalse(gate.isOpen)
+        gate.releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(holdToken)
+        XCTAssertTrue(gate.isOpen)
+        let exportedValue = try await gate.withAllowedExport { "manual-health-context" }
+        XCTAssertEqual(exportedValue, "manual-health-context")
+    }
+
+    func testForegroundActivationInvalidatesAnOlderPurgeReopenToken() {
+        let gate = HealthContextExportGate(initiallyOpen: true)
+        let olderPurgeGeneration = gate.closeForSnapshotRebuild()
+
+        gate.closeForForegroundActivation(hasRequestedAuthorization: true)
+        gate.openAfterSuccessfulPurge(generation: olderPurgeGeneration)
+
+        XCTAssertFalse(gate.isOpen)
+        XCTAssertNotNil(gate.foregroundPurgeHoldToken)
+    }
+
+    func testRepeatedForegroundPreparationPreservesHoldTokenForSuccessfulPurgeRelease() throws {
+        let gate = HealthContextExportGate(initiallyOpen: true)
+        let coordinator = ForegroundHealthRebaselineCoordinator(operation: { _, _ in
+            HealthSyncResult(completedStreams: HealthKitSyncCoordinator.observedStreams, failedStreams: [:])
+        })
+        coordinator.prepareActivation {
+            gate.closeForForegroundActivation(hasRequestedAuthorization: true)
+        }
+        let successfulPurgeToken = try XCTUnwrap(gate.foregroundPurgeHoldToken)
+
+        coordinator.prepareActivation {
+            gate.closeForForegroundActivation(hasRequestedAuthorization: true)
+        }
+
+        XCTAssertEqual(gate.foregroundPurgeHoldToken, successfulPurgeToken)
+        let purgeGeneration = gate.closeForSnapshotRebuild()
+        gate.openAfterSuccessfulPurge(generation: purgeGeneration)
+        XCTAssertFalse(gate.isOpen)
+
+        gate.releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(successfulPurgeToken)
+
+        XCTAssertNil(gate.foregroundPurgeHoldToken)
+        XCTAssertTrue(gate.isOpen)
+    }
+
+    func testForegroundPurgeHoldBlocksObserverPurgeUntilWholeSnapshotPurgeSucceeds() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let gate = HealthContextExportGate(initiallyOpen: true)
+        let foregroundCoordinator = ForegroundHealthRebaselineCoordinator(operation: { _, _ in
+            HealthSyncResult(completedStreams: HealthKitSyncCoordinator.observedStreams, failedStreams: [:])
+        })
+        foregroundCoordinator.prepareActivation {
+            gate.closeForForegroundActivation(hasRequestedAuthorization: true)
+        }
+        let holdToken = try XCTUnwrap(gate.foregroundPurgeHoldToken)
+
+        let fake = FakeHealthStoreClient()
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+        coordinator.onHealthCachePurgeWillBegin = {
+            gate.closeForSnapshotRebuild()
+        }
+        coordinator.onHealthCachePurgeDidSucceed = { generation in
+            gate.openAfterSuccessfulPurge(generation: generation)
+        }
+
+        // Model an independent observer's scoped purge committing before the
+        // foreground full-window purge has started.
+        let observerPurgeGeneration = try XCTUnwrap(coordinator.onHealthCachePurgeWillBegin?())
+        coordinator.onHealthCachePurgeDidSucceed?(observerPurgeGeneration)
+        XCTAssertFalse(gate.isOpen)
+        XCTAssertEqual(gate.foregroundPurgeHoldToken, holdToken)
+
+        _ = try await coordinator.prepareForegroundSnapshotRebuild(
+            using: HealthRepository(modelContext: context),
+            now: now
+        )
+        XCTAssertFalse(gate.isOpen, "The full purge callback remains held until its preparation returns")
+        XCTAssertEqual(gate.foregroundPurgeHoldToken, holdToken)
+
+        gate.releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(holdToken)
+        XCTAssertNil(gate.foregroundPurgeHoldToken)
+        XCTAssertTrue(gate.isOpen)
+    }
+
+    func testPreparedTimezoneMismatchReclosesGateAfterPurgeCallback() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let gate = HealthContextExportGate()
+        let fake = FakeHealthStoreClient()
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+        coordinator.onHealthCachePurgeWillBegin = {
+            gate.closeForSnapshotRebuild()
+        }
+        coordinator.onHealthCachePurgeDidSucceed = { generation in
+            gate.openAfterSuccessfulPurge(generation: generation)
+        }
+        let repository = HealthRepository(modelContext: context)
+        gate.closeForForegroundActivation(hasRequestedAuthorization: true)
+        let holdToken = try XCTUnwrap(gate.foregroundPurgeHoldToken)
+        let prepared = try await coordinator.prepareForegroundSnapshotRebuild(using: repository, now: now)
+        XCTAssertFalse(gate.isOpen, "The purge callback is held until the full preparation succeeds")
+        gate.releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(holdToken)
+        XCTAssertTrue(gate.isOpen)
+
+        let stalePreparation = HealthKitSnapshotRebuildPreparation(
+            windowStart: prepared.windowStart,
+            through: prepared.through,
+            timeZoneIdentifier: "\(prepared.timeZoneIdentifier).previous"
+        )
+        do {
+            _ = try await coordinator.syncAvailableData(
+                using: repository,
+                now: stalePreparation.through,
+                forceRebaseline: true,
+                preparedSnapshotRebuild: stalePreparation
+            )
+            XCTFail("A prepared snapshot token from another time zone must fail closed")
+        } catch {
+            _ = gate.ensureForegroundPurgeHold()
+        }
+
+        XCTAssertFalse(gate.isOpen)
+        XCTAssertNotNil(gate.foregroundPurgeHoldToken)
+    }
+
     func testHealthContextExportGateStaysClosedWhenForegroundPurgeFails() async throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gate = HealthContextExportGate()
+        gate.closeForForegroundActivation(hasRequestedAuthorization: true)
+        let holdToken = try XCTUnwrap(gate.foregroundPurgeHoldToken)
         let fake = FakeHealthStoreClient()
         let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
         coordinator.onHealthCachePurgeWillBegin = {
@@ -490,6 +841,10 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             XCTFail("Expected the injected save failure")
         } catch {}
         XCTAssertFalse(gate.isOpen)
+        XCTAssertEqual(gate.foregroundPurgeHoldToken, holdToken)
+        let unrelatedPurgeGeneration = gate.closeForSnapshotRebuild()
+        gate.openAfterSuccessfulPurge(generation: unrelatedPurgeGeneration)
+        XCTAssertFalse(gate.isOpen, "An unrelated purge success must not release a failed full-purge hold")
         var exportWasRejected = false
         do {
             _ = try await gate.withAllowedExport { "stale-health-context" }

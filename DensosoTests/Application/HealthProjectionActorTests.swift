@@ -346,6 +346,77 @@ final class HealthProjectionActorTests: XCTestCase {
         XCTAssertEqual(summary.sevenDay.averageProteinGrams, mealProtein)
     }
 
+    func testReadModelKeepsImportedWorkoutWhenDailyAuthorizationCoverageIsUnknown() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 23)))
+        let authorizationBoundary = try XCTUnwrap(
+            calendar.date(bySettingHour: 12, minute: 0, second: 0, of: day)
+        )
+        let workoutStart = authorizationBoundary.addingTimeInterval(60 * 60)
+        let asOf = day.addingTimeInterval(23 * 60 * 60)
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let workoutID = UUID(uuidString: "00000000-0000-0000-0000-00000000A041")!
+        context.insert(WorkoutRecord(
+            date: workoutStart,
+            type: "running",
+            durationMinutes: 30,
+            intensity: "moderate",
+            estimatedCaloriesBurned: 150,
+            healthKitUUID: workoutID,
+            workoutOrigin: WorkoutOrigin.externalHealthKit.rawValue,
+            energySource: WorkoutEnergySource.measured.rawValue
+        ))
+
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            healthReadStates: [
+                HealthMetricID.workout.rawValue: .dataUnavailableOrReadScopeUnknown,
+                HealthMetricID.workoutEffort.rawValue: .dataUnavailableOrReadScopeUnknown,
+            ],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey(day, calendar: calendar),
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "unknown-workout-coverage-with-imported-record",
+            algorithmVersion: snapshot.algorithmVersion
+        ))
+        context.insert(HealthKitImportCursor(
+            stream: "workouts",
+            anchorData: Data([1]),
+            lastSuccessfulAt: asOf,
+            lookbackStart: authorizationBoundary
+        ))
+        try context.save()
+
+        let readModel = HealthIntelligenceReadModel(calendar: calendar)
+        let days = try readModel.loadDays(through: asOf, in: context)
+        let projectedDay = try XCTUnwrap(days.first(where: { $0.dayStart == day }))
+        XCTAssertEqual(projectedDay.workouts.count, 1)
+        XCTAssertEqual(projectedDay.workouts.first?.startedAt, workoutStart)
+        XCTAssertEqual(try XCTUnwrap(projectedDay.workouts.first).durationMinutes, 30, accuracy: 0.001)
+        XCTAssertEqual(
+            projectedDay.healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown
+        )
+        XCTAssertEqual(projectedDay.healthQueryStartByMetric?[HealthMetricID.workout.rawValue], authorizationBoundary)
+
+        let state = try XCTUnwrap(readModel.todayHealthState(asOf: asOf, in: context))
+        XCTAssertEqual(state.trainingLoad.dataCoverage, .partial)
+        XCTAssertEqual(state.trainingLoad.recentSevenDayLoad, 150, accuracy: 0.001)
+        XCTAssertEqual(state.trainingLoad.estimatedWorkoutCount, 1)
+    }
+
     func testLoadDaysIncludesAllWorkoutsAcrossStableFetchPages() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current

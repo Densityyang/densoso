@@ -149,11 +149,12 @@ final class GetRecentWorkoutsToolTests: XCTestCase {
         XCTAssertFalse(response.contains("notes"))
     }
 
-    func testRepositoryOmitsHealthKitWorkoutsWithUnknownOrMissingReadState() async throws {
+    func testRepositoryIncludesPersistedHealthKitWorkoutsWithUnknownOrMissingReadState() async throws {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
         let unknownDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -2, to: today))
         let missingStateDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        let emptyUnknownDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -3, to: today))
         let availableDay = today
         let schema = Schema(versionedSchema: DensosoSchemaV4.self)
         let container = try ModelContainer(
@@ -190,15 +191,48 @@ final class GetRecentWorkoutsToolTests: XCTestCase {
         context.insert(localWorkout)
         try insertWorkoutReadState(.dataUnavailableOrReadScopeUnknown, on: unknownDay, calendar: calendar, in: context)
         try insertWorkoutReadState(.available, on: availableDay, calendar: calendar, in: context)
+        try insertWorkoutReadState(.dataUnavailableOrReadScopeUnknown, on: emptyUnknownDay, calendar: calendar, in: context)
         try context.save()
 
-        let summaries = try await SwiftDataAgentRepository(modelContainer: container).recentWorkouts(
+        let repository = SwiftDataAgentRepository(modelContainer: container)
+        let summaries = try await repository.recentWorkouts(
             from: unknownDay,
             through: today.addingTimeInterval(86_399),
             limit: 10
         )
+        let emptySummaries = try await repository.recentWorkouts(
+            from: emptyUnknownDay,
+            through: emptyUnknownDay.addingTimeInterval(86_399),
+            limit: 10
+        )
 
-        XCTAssertEqual(summaries.map(\.workoutType), ["available-healthkit", "local-workout"])
+        XCTAssertEqual(
+            summaries.map(\.workoutType),
+            ["available-healthkit", "missing-state-healthkit", "local-workout", "unknown-healthkit"]
+        )
+        XCTAssertTrue(emptySummaries.isEmpty)
+        let unknownComponents = calendar.dateComponents([.year, .month, .day], from: unknownDay)
+        let unknownDayKey = String(format: "%04d-%02d-%02d", unknownComponents.year ?? 0,
+                                   unknownComponents.month ?? 0, unknownComponents.day ?? 0)
+        let persistedUnknown = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .first { $0.dayKey == unknownDayKey })
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        let unknownSnapshot = try decoder.decode(DailyHealthSnapshot.self, from: persistedUnknown.payloadData)
+        XCTAssertEqual(
+            unknownSnapshot.healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown
+        )
+        let emptyComponents = calendar.dateComponents([.year, .month, .day], from: emptyUnknownDay)
+        let emptyDayKey = String(format: "%04d-%02d-%02d", emptyComponents.year ?? 0,
+                                 emptyComponents.month ?? 0, emptyComponents.day ?? 0)
+        let persistedEmptyUnknown = try XCTUnwrap(context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>())
+            .first { $0.dayKey == emptyDayKey })
+        let emptySnapshot = try decoder.decode(DailyHealthSnapshot.self, from: persistedEmptyUnknown.payloadData)
+        XCTAssertEqual(
+            emptySnapshot.healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown
+        )
     }
 
     private func insertWorkoutReadState(

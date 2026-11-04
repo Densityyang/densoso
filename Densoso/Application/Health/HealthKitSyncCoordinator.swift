@@ -169,11 +169,13 @@ final class HealthKitSyncCoordinator {
         let gateGeneration = onHealthCachePurgeWillBegin?()
         let scanGenerations = advanceScanGenerations(for: metrics)
         onScanGenerationsAdvanced?(scanGenerations)
-        try await repository.prepareHealthKitSnapshotRebuild(
-            for: metrics,
-            from: start,
-            through: end
-        )
+        try await PerformanceSignposts.measureAsync("Health.SnapshotRebuild") {
+            try await repository.prepareHealthKitSnapshotRebuild(
+                for: metrics,
+                from: start,
+                through: end
+            )
+        }
         if let gateGeneration {
             onHealthCachePurgeDidSucceed?(gateGeneration)
         }
@@ -217,12 +219,14 @@ final class HealthKitSyncCoordinator {
                 defer { completion.call() }
                 guard let self else { return }
                 guard let repository = self.observationRepository else { return }
-                do {
-                    let scanGeneration = try await self.syncObservedStream(metric, using: repository, now: Date())
-                    try self.ensureCurrentScanGeneration(scanGeneration, for: metric)
-                    await self.onObserverSyncCompleted?(metric, scanGeneration)
+                await PerformanceSignposts.measureAsync("Health.ObserverSync") {
+                    do {
+                        let scanGeneration = try await self.syncObservedStream(metric, using: repository, now: Date())
+                        try self.ensureCurrentScanGeneration(scanGeneration, for: metric)
+                        await self.onObserverSyncCompleted?(metric, scanGeneration)
+                    }
+                    catch { /* The unchanged cursor makes the stream retryable on the next wakeup. */ }
                 }
-                catch { /* The unchanged cursor makes the stream retryable on the next wakeup. */ }
             }
         }
         do {
@@ -781,6 +785,7 @@ final class HealthKitSyncCoordinator {
                 // Keep the difference between “no limited window” and “the API is
                 // unavailable on this OS.” Rebuild the bounded cache from a current
                 // HealthKit snapshot rather than treating unavailable as no boundary.
+                PerformanceSignposts.event("Health.AuthorizationBoundaryUnavailable")
                 authorizationStart = nil
                 authorizationBoundaryUnavailable = true
             }
@@ -859,39 +864,70 @@ final class HealthKitSyncCoordinator {
         let cursor = try repository.cursorSnapshot(for: "workouts")
         let start = min(cursor?.lookbackStart ?? plan.queryStart, plan.queryStart)
         var anchor = cursor?.anchorData
-        while true {
-            let page = try await healthStore.workoutChanges(from: start, after: anchor)
-            try ensureCurrentScanGeneration(scanGeneration, for: .workout)
-            guard let nextAnchor = page.nextAnchorData else { throw HealthStoreClientError.invalidAnchor }
-            let allowedStart = HealthDataWindowPolicy.effectiveStart(
-                policyStart: start,
-                authorizationStart: plan.authorizationStart
+        let calendar = Calendar.autoupdatingCurrent
+        let allowedStart = HealthDataWindowPolicy.effectiveStart(
+            policyStart: start,
+            authorizationStart: plan.authorizationStart
+        )
+        let firstFullyAuthorizedDay = plan.authorizationStart.map {
+            HealthDataWindowPolicy.firstFullyAuthorizedDay(
+                for: .workout,
+                authorizationStart: $0,
+                calendar: calendar
             )
-            // HealthKit evaluates limited-history authorization at the sample's
-            // end date, so a workout may start before the boundary and still be
-            // readable when its end date is within the authorized range.
-            let allowedWorkouts = page.added.filter {
-                $0.startedAt.addingTimeInterval($0.duration) >= allowedStart
-            }
-            try await repository.applyImportedWorkouts(
-                allowedWorkouts,
-                deletedHealthKitUUIDs: page.deletedObjectIDs,
-                nextAnchorData: nextAnchor,
-                lookbackStart: start,
-                stream: "workouts"
-            )
-            try await repository.setHealthReadState(
-                .available,
-                metric: .workout,
-                days: allowedWorkouts.compactMap { workout in
-                    let day = Calendar.autoupdatingCurrent.startOfDay(for: workout.startedAt)
-                    guard plan.authorizationStart.map({ day >= $0 }) ?? true else { return nil }
-                    return day
+        }
+        var availableDays = Set<Date>()
+
+        do {
+            while true {
+                let page = try await healthStore.workoutChanges(from: start, after: anchor)
+                try ensureCurrentScanGeneration(scanGeneration, for: .workout)
+                guard let nextAnchor = page.nextAnchorData else { throw HealthStoreClientError.invalidAnchor }
+                // HealthKit evaluates limited-history authorization at the sample's
+                // end date, so a workout may start before the boundary and still be
+                // readable when its end date is within the authorized range.
+                let allowedWorkouts = page.added.filter {
+                    $0.startedAt.addingTimeInterval($0.duration) >= allowedStart
                 }
+                try await repository.applyImportedWorkouts(
+                    allowedWorkouts,
+                    deletedHealthKitUUIDs: page.deletedObjectIDs,
+                    nextAnchorData: nextAnchor,
+                    lookbackStart: start,
+                    stream: "workouts"
+                )
+                for workout in allowedWorkouts {
+                    let day = calendar.startOfDay(for: workout.startedAt)
+                    // An imported record can be known while the full day remains
+                    // incomplete, including when this OS cannot report the boundary.
+                    guard !plan.authorizationBoundaryUnavailable,
+                          firstFullyAuthorizedDay.map({ day >= $0 }) ?? true else { continue }
+                    availableDays.insert(day)
+                }
+                if !page.hasMore {
+                    // Coverage is upgraded only after every page and its anchor have
+                    // committed successfully; a later-page failure leaves the window unknown.
+                    try await repository.setHealthReadState(
+                        .available,
+                        metric: .workout,
+                        days: Array(availableDays)
+                    )
+                    return
+                }
+                guard nextAnchor != anchor else { throw HealthStoreClientError.invalidAnchor }
+                anchor = nextAnchor
+            }
+        } catch let error as HealthSyncSupersededError {
+            throw error
+        } catch {
+            try? await markHealthWindowUnknown(
+                .workout,
+                from: plan.targetStart,
+                through: now,
+                using: repository
             )
-            if !page.hasMore { return }
-            guard nextAnchor != anchor else { throw HealthStoreClientError.invalidAnchor }
-            anchor = nextAnchor
+            try? await repository.resetHealthKitCursor(for: "workouts")
+            throw error
         }
     }
 

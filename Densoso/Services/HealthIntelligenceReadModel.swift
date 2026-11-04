@@ -358,7 +358,10 @@ struct HealthIntelligenceReadModel: Sendable {
         var queryStartByMetric: [String: Date] = [:]
         for cursor in try context.fetch(FetchDescriptor<HealthKitImportCursor>()) {
             if let lookbackStart = cursor.lookbackStart {
-                queryStartByMetric[cursor.stream] = lookbackStart
+                let metricKey = cursor.stream == "workouts"
+                    ? HealthMetricID.workout.rawValue
+                    : cursor.stream
+                queryStartByMetric[metricKey] = lookbackStart
             }
         }
         var days: [HealthIntelligenceDay] = []
@@ -404,10 +407,11 @@ struct HealthIntelligenceReadModel: Sendable {
                 weightPoints = [(date: dayStart, value: fallbackWeight)]
             }
             let weightSamples = weightPoints.sorted { $0.date < $1.date }.map { $0.value }
-            let workoutReadState = projectionReadStates[HealthMetricID.workout.rawValue]
-            let workoutRecordsForDay = (workoutsByDay[dayStart] ?? []).filter {
-                $0.healthKitUUID == nil || workoutReadState == .available
-            }
+            // Import-boundary validation is performed before an individual
+            // HealthKit workout is persisted. The daily read state describes
+            // completeness of the whole day's query; an unknown or partial
+            // query must not hide a workout whose individual record is known.
+            let workoutRecordsForDay = workoutsByDay[dayStart] ?? []
             let workouts = workoutRecordsForDay.map { record in
                 let effort = availableAggregate(.workoutEffort) != nil
                     ? sampleSummary?.effortScore(for: record.id)
