@@ -280,7 +280,8 @@ def main() -> int:
         [
             "case .localReview(let review)",
             "prepareForAgent(originalData: originalData)",
-            "stageLocalReview(localReview)",
+            "stageLocalReview(localReview, operationID: operationID)",
+            "guard activeStagingID == operationID,",
             "onLocalPendingAction(action)",
             "Picker(\"选择最接近的候选\"",
             "TextField(portionAnswerPrompt, text: $portionAnswerText)",

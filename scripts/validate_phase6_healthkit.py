@@ -570,7 +570,7 @@ def main() -> int:
             ".confirmedWeight(kilograms:",
             "deleteOwnSample(receipt:",
             "syncVersion: entry.syncVersion",
-            "let targetState = externalOperationCompleted",
+            "let targetState = superseded || externalOperationCompleted",
             "terminal ? \"terminal\" : \"retryable\"",
         ),
         errors,
