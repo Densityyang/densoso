@@ -670,28 +670,26 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
 
     /// Acquire the lifecycle lease before the store-wide projection lock, matching
     /// confirmation's lock order while excluding its day-scoped meal writes.
-    private func withPriorMutation<T>(operation: () throws -> T) async throws -> T {
+    /// The explicit mutation lease protects the ModelActor write for its full
+    /// duration while keeping the context-bound closure on this actor.
+    private func withPriorMutation(operation: () throws -> Void) async throws {
         let barrier = await PersistenceOperationBarrier.shared
         let operationLease = try await barrier.acquireMutationOperation()
         do {
-            let result = try await barrier.withLease(operationLease) {
-                try await withProjectionStoreLock {
-                    do {
-                        let value = try operation()
-                        if shouldFailNextSaveForTesting {
-                            shouldFailNextSaveForTesting = false
-                            throw MealPortionPriorInjectedFailure.beforeSave
-                        }
-                        try modelContext.save()
-                        return value
-                    } catch {
-                        modelContext.rollback()
-                        throw error
+            try await withProjectionStoreLock {
+                do {
+                    try operation()
+                    if shouldFailNextSaveForTesting {
+                        shouldFailNextSaveForTesting = false
+                        throw MealPortionPriorInjectedFailure.beforeSave
                     }
+                    try modelContext.save()
+                } catch {
+                    modelContext.rollback()
+                    throw error
                 }
             }
             await barrier.release(operationLease)
-            return result
         } catch {
             await barrier.release(operationLease)
             throw error
