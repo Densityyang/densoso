@@ -1157,10 +1157,15 @@ public struct HealthIntelligenceEngine: Sendable {
         from segments: [(start: Date, end: Date, stage: SleepStage)],
         maximumAwakeGap: TimeInterval
     ) -> [SleepEpisode] {
-        let asleep = segments
-            .filter { $0.stage.isAsleep && $0.end > $0.start }
-            .map { ResolvedSleepSegment(start: $0.start, end: $0.end, stage: $0.stage) }
-            .sorted { $0.start == $1.start ? $0.end < $1.end : $0.start < $1.start }
+        var asleep: [ResolvedSleepSegment] = []
+        asleep.reserveCapacity(segments.count)
+        for segment in segments where segment.stage.isAsleep && segment.end > segment.start {
+            asleep.append(ResolvedSleepSegment(start: segment.start, end: segment.end, stage: segment.stage))
+        }
+        asleep.sort { lhs, rhs in
+            if lhs.start != rhs.start { return lhs.start < rhs.start }
+            return lhs.end < rhs.end
+        }
         guard let first = asleep.first else { return [] }
 
         var result: [SleepEpisode] = []
