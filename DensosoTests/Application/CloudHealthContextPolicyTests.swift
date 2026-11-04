@@ -370,6 +370,67 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         XCTAssertEqual(reconfirmed.allowedClasses, initial.allowedClasses)
     }
 
+    func testImageConsentReconfirmationAdvancesTheFinalSendPolicyRevision() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .mealImage,
+            granted: true,
+            policyVersion: "deepseek-sanitized-meal-image-v1"
+        )
+        let expectedSendPolicy = try await CloudHealthContextPolicy.load(
+            from: repository,
+            provider: .deepSeek
+        )
+
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .mealImage,
+            granted: false,
+            policyVersion: "deepseek-sanitized-meal-image-v1"
+        )
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .mealImage,
+            granted: true,
+            policyVersion: "deepseek-sanitized-meal-image-v1"
+        )
+
+        let currentSendPolicy = try await CloudHealthContextPolicy.load(
+            from: repository,
+            provider: .deepSeek
+        )
+        XCTAssertEqual(currentSendPolicy.snapshot.revision, expectedSendPolicy.snapshot.revision)
+        XCTAssertNotEqual(
+            currentSendPolicy.sendConsentRevisions[.mealImage],
+            expectedSendPolicy.sendConsentRevisions[.mealImage]
+        )
+
+        do {
+            _ = try await CloudHealthContextPolicy.withCurrentSendConsent(
+                from: repository,
+                provider: .deepSeek,
+                expectedHealthPolicy: expectedSendPolicy,
+                includesImage: true,
+                operation: { true }
+            )
+            XCTFail("A previously captured image request must be rejected after consent revocation and reconfirmation")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .deepSeek))
+        }
+    }
+
     func testRepeatedHealthDenialDoesNotAdvancePolicyRevisionOrInvalidateRequest() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV11.self)
         let container = try ModelContainer(

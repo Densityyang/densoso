@@ -218,7 +218,7 @@ final class HealthIntelligenceServiceTests: XCTestCase {
                         ? .available
                         : .dataUnavailableOrReadScopeUnknown,
                 ],
-                algorithmVersion: "metric-coverage-fixture"
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
             )
             context.insert(DailyHealthSnapshotRecord(
                 dayKey: dayKey(day),

@@ -1368,7 +1368,7 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
     }
 
     func testObserverRecoversInvalidWorkoutAnchorAndNextWakeupUsesNewCursor() async throws {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let now = Date()
         let calendar = Calendar.current
         let targetStart = try XCTUnwrap(HealthDataWindowPolicy.initialBackfillStart(through: now, calendar: calendar))
         let badAnchor = Data([0xF1])

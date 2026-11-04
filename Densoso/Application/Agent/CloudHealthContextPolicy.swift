@@ -182,9 +182,11 @@ actor CloudHealthPolicySendAttempt {
 
 protocol CloudHealthContextPolicySnapshotRepository: Sendable {
     func currentCloudHealthContextPolicySnapshot(provider: ProviderID) async throws -> CloudHealthContextPolicySnapshot
+    func currentSendConsentRevisions(provider: ProviderID) async throws -> [ProviderDataClass: String]
     func withCurrentSendAuthorization<Result: Sendable>(
         provider: ProviderID,
         expectedSnapshot: CloudHealthContextPolicySnapshot,
+        expectedConsentRevisions: [ProviderDataClass: String],
         requiredClasses: Set<ProviderDataClass>,
         operation: @Sendable () throws -> Result
     ) async throws -> Result
@@ -218,6 +220,7 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
     let allowedClasses: Set<ProviderDataClass>
     let allowsConversationHistory: Bool
     let snapshot: CloudHealthContextPolicySnapshot
+    let sendConsentRevisions: [ProviderDataClass: String]
 
     var revision: String {
         "\(provider.rawValue):\(snapshot.revision):\(snapshot.policyHash)"
@@ -235,18 +238,21 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         self.allowsConversationHistory = allowsConversationHistory
         let effectiveClasses = allowedClasses.intersection(Set(Self.dataClasses))
         self.snapshot = Self.snapshotForRead(provider: provider, allowedClasses: effectiveClasses)
+        self.sendConsentRevisions = [:]
     }
 
     private init(
         provider: ProviderID,
         allowedClasses: Set<ProviderDataClass>,
         allowsConversationHistory: Bool,
-        snapshot: CloudHealthContextPolicySnapshot
+        snapshot: CloudHealthContextPolicySnapshot,
+        sendConsentRevisions: [ProviderDataClass: String]
     ) {
         self.provider = provider
         self.allowedClasses = allowedClasses.intersection(Set(Self.dataClasses))
         self.allowsConversationHistory = allowsConversationHistory
         self.snapshot = snapshot
+        self.sendConsentRevisions = sendConsentRevisions
     }
 
     func allows(_ dataClass: ProviderDataClass) -> Bool {
@@ -271,6 +277,18 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         let secondSnapshot = try await consentSnapshot(from: repository, provider: provider, classes: dataClasses)
         let firstHistoryConsent = try await repository.isConsentGranted(provider: provider, dataClass: .conversationHistory)
         let secondHistoryConsent = try await repository.isConsentGranted(provider: provider, dataClass: .conversationHistory)
+        let sendConsentRevisions: [ProviderDataClass: String]
+        if let policyRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
+            let firstRevisions = try await policyRepository.currentSendConsentRevisions(provider: provider)
+            let secondRevisions = try await policyRepository.currentSendConsentRevisions(provider: provider)
+            sendConsentRevisions = Dictionary(uniqueKeysWithValues: ProviderDataClass.allCases.map { dataClass in
+                let first = firstRevisions[dataClass]
+                let second = secondRevisions[dataClass]
+                return (dataClass, first == second ? (second ?? "<unavailable>") : "<unstable>")
+            })
+        } else {
+            sendConsentRevisions = [:]
+        }
         // If consent changes during the asynchronous reads, prefer the class that was denied in either pass.
         let persistedClasses: Set<ProviderDataClass>?
         if firstPolicySnapshot?.state == .active, secondPolicySnapshot?.state == .active {
@@ -300,7 +318,8 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
             allowsConversationHistory: firstHistoryConsent
                 && secondHistoryConsent
                 && snapshotAllowsConversationHistory,
-            snapshot: snapshot
+            snapshot: snapshot,
+            sendConsentRevisions: sendConsentRevisions
         )
     }
 
@@ -577,15 +596,20 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
                   expectedHealthPolicy.snapshot.provider == provider else {
                 throw ProviderError.consentPolicyChanged(provider: provider)
             }
+            let requiredClasses = currentSendRequiredClasses(
+                expectedHealthPolicy: expectedHealthPolicy,
+                includesImage: includesImage,
+                requiresHealthText: requiresHealthText,
+                additionalRequiredClasses: additionalRequiredClasses
+            )
+            guard requiredClasses.allSatisfy({ expectedHealthPolicy.sendConsentRevisions[$0] != nil }) else {
+                throw ProviderError.consentPolicyChanged(provider: provider)
+            }
             return try await snapshotRepository.withCurrentSendAuthorization(
                 provider: provider,
                 expectedSnapshot: expectedHealthPolicy.snapshot,
-                requiredClasses: currentSendRequiredClasses(
-                    expectedHealthPolicy: expectedHealthPolicy,
-                    includesImage: includesImage,
-                    requiresHealthText: requiresHealthText,
-                    additionalRequiredClasses: additionalRequiredClasses
-                ),
+                expectedConsentRevisions: expectedHealthPolicy.sendConsentRevisions,
+                requiredClasses: requiredClasses,
                 operation: operation
             )
         }
@@ -616,14 +640,19 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
                   expectedHealthPolicy.snapshot.provider == provider else {
                 throw ProviderError.consentPolicyChanged(provider: provider)
             }
+            let requiredClasses = currentSendRequiredClasses(
+                expectedHealthPolicy: expectedHealthPolicy,
+                includesImage: includesImage,
+                requiresHealthText: requiresHealthText
+            )
+            guard requiredClasses.allSatisfy({ expectedHealthPolicy.sendConsentRevisions[$0] != nil }) else {
+                throw ProviderError.consentPolicyChanged(provider: provider)
+            }
             return try await snapshotRepository.withCurrentSendAuthorization(
                 provider: provider,
                 expectedSnapshot: expectedHealthPolicy.snapshot,
-                requiredClasses: currentSendRequiredClasses(
-                    expectedHealthPolicy: expectedHealthPolicy,
-                    includesImage: includesImage,
-                    requiresHealthText: requiresHealthText
-                ),
+                expectedConsentRevisions: expectedHealthPolicy.sendConsentRevisions,
+                requiredClasses: requiredClasses,
                 operation: operation
             )
         }

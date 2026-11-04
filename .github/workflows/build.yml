@@ -2301,8 +2301,8 @@ jobs:
               -derivedDataPath "$GATE19_DERIVED_DATA_PATH" \
               -only-testing:DensosoTests/CloudHealthContextPolicyTests \
               -only-testing:DensosoTests/HealthKitSyncCoordinatorTests \
-              -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testProjectionInputReaderFiltersHealthKitWorkoutsByDailyReadState \
-              -only-testing:DensosoTests/GetRecentWorkoutsToolTests/testRepositoryOmitsHealthKitWorkoutsWithUnknownOrMissingReadState \
+              -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testProjectionInputReaderUsesImportedWorkoutsWithoutChangingDailyCoverage \
+              -only-testing:DensosoTests/GetRecentWorkoutsToolTests/testRepositoryIncludesPersistedHealthKitWorkoutsWithUnknownOrMissingReadState \
               -only-testing:DensosoTests/HealthRepositoryTests/testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue \
               -only-testing:DensosoTests/AgentProviderContextPolicyTests/testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies \
               -only-testing:DensosoTests/DeepSeekProviderContractTests/testPreSerializationConsentCheckStopsBeforeDeepSeekRequestIsSent \

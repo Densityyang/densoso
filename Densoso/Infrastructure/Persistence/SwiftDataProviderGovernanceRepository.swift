@@ -30,7 +30,6 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
            try isConsentGranted(provider: provider, dataClass: dataClass) == false {
             throw CloudHealthContextPolicyError.expansionRequiresConfirmation
         }
-        let now = Date()
         let previousPolicy = try currentCloudHealthContextPolicySnapshot(provider: provider)
         let key = consentKey(provider: provider, dataClass: dataClass)
         var descriptor = FetchDescriptor<ConsentRecord>(
@@ -39,6 +38,10 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
         descriptor.fetchLimit = 1
         do {
             let existingRecord = try modelContext.fetch(descriptor).first
+            let now = max(
+                Date(),
+                (existingRecord?.decidedAt ?? .distantPast).addingTimeInterval(0.001)
+            )
             let previousGranted = existingRecord?.granted ?? false
             let changesHealthPolicy = (dataClass.isHealthContextClass || dataClass.isConversationHistoryClass)
                 && (previousGranted != granted
@@ -120,9 +123,35 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
         return legacy
     }
 
+    func currentSendConsentRevisions(
+        provider: ProviderID
+    ) throws -> [ProviderDataClass: String] {
+        let providerPrefix = "provider|\(provider.rawValue)|"
+        var revisions = Dictionary(uniqueKeysWithValues: ProviderDataClass.allCases.map {
+            ($0, "absent")
+        })
+        for record in try modelContext.fetch(FetchDescriptor<ConsentRecord>())
+        where record.consentKey.hasPrefix(providerPrefix) {
+            guard let dataClass = ProviderDataClass(rawValue: record.kind) else { continue }
+            let decidedAt = String(format: "%.9f", record.decidedAt.timeIntervalSince1970)
+            let revokedAt = record.revokedAt.map {
+                String(format: "%.9f", $0.timeIntervalSince1970)
+            } ?? "none"
+            revisions[dataClass] = [
+                record.id.uuidString.lowercased(),
+                record.policyVersion,
+                record.granted ? "granted" : "denied",
+                decidedAt,
+                revokedAt,
+            ].joined(separator: "|")
+        }
+        return revisions
+    }
+
     func withCurrentSendAuthorization<Result: Sendable>(
         provider: ProviderID,
         expectedSnapshot: CloudHealthContextPolicySnapshot,
+        expectedConsentRevisions: [ProviderDataClass: String],
         requiredClasses: Set<ProviderDataClass>,
         operation: @Sendable () throws -> Result
     ) async throws -> Result {
@@ -130,7 +159,12 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
         guard expectedSnapshot.provider == provider, currentSnapshot == expectedSnapshot else {
             throw ProviderError.consentPolicyChanged(provider: provider)
         }
+        let currentConsentRevisions = try currentSendConsentRevisions(provider: provider)
         for dataClass in requiredClasses.sorted(by: { $0.rawValue < $1.rawValue }) {
+            guard let expectedRevision = expectedConsentRevisions[dataClass],
+                  currentConsentRevisions[dataClass] == expectedRevision else {
+                throw ProviderError.consentPolicyChanged(provider: provider)
+            }
             guard try isConsentGranted(provider: provider, dataClass: dataClass) else {
                 throw ProviderError.consentRequired(provider: provider, dataClass: dataClass)
             }
