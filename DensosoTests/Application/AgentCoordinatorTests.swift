@@ -25,7 +25,13 @@ final class AgentCoordinatorTests: XCTestCase {
         XCTAssertEqual(harness.session.pendingActions.count, 1)
         let context = ModelContext(harness.container)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeightRecord>()), 0)
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<PendingActionRecord>()), 0)
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<PendingActionRecord>())
+                .filter { $0.stateRaw == PendingActionState.pending.rawValue }
+                .count,
+            1,
+            "A draft awaiting confirmation must remain durable until the user decides"
+        )
         XCTAssertEqual(
             try context.fetch(FetchDescriptor<MessageRecord>())
                 .filter { $0.toolSummaryData != nil }
@@ -70,7 +76,9 @@ final class AgentCoordinatorTests: XCTestCase {
         XCTAssertFalse(persistedText.contains("same-process-private-reasoning"))
 
         _ = try await harness.session.send(userText: "继续刚才的话题")
-        let independentRequest = try XCTUnwrap(provider.recordedRequests().last)
+        let recordedRequests = provider.recordedRequests()
+        XCTAssertEqual(recordedRequests.count, 3, "Each user turn must create its own provider request")
+        let independentRequest = try XCTUnwrap(recordedRequests.last)
         XCTAssertFalse(independentRequest.messages.contains { message in
             message.content.contains { content in
                 if case .reasoning(let item) = content {

@@ -1221,18 +1221,23 @@ final class AgentSession {
         baselineIDs: Set<UUID>,
         errorCode: String = "request_cancelled"
     ) async {
-        guard let currentActions = try? await confirmationCoordinator.activeActions(
-            conversationID: conversationID
-        ) else { return }
-        for action in currentActions
-        where action.clientRequestID == requestID && !baselineIDs.contains(action.id) {
-            try? await confirmationCoordinator.reject(id: action.id, conversationID: conversationID)
-            await confirmationCoordinator.failToolExecutions(
-                pendingActionID: action.id,
-                resultData: Data(encodedToolError(code: errorCode).utf8)
-            )
+        // Request cancellation must stop provider/tool work, but it must not
+        // cancel the cleanup that rejects drafts already staged by this request.
+        let cleanupTask = Task { @MainActor [self] in
+            guard let currentActions = try? await confirmationCoordinator.activeActions(
+                conversationID: conversationID
+            ) else { return }
+            for action in currentActions
+            where action.clientRequestID == requestID && !baselineIDs.contains(action.id) {
+                try? await confirmationCoordinator.reject(id: action.id, conversationID: conversationID)
+                await confirmationCoordinator.failToolExecutions(
+                    pendingActionID: action.id,
+                    resultData: Data(encodedToolError(code: errorCode).utf8)
+                )
+            }
+            pendingActions = (try? await confirmationCoordinator.activeActions(conversationID: conversationID)) ?? []
         }
-        pendingActions = (try? await confirmationCoordinator.activeActions(conversationID: conversationID)) ?? []
+        await cleanupTask.value
     }
 
     private func executeTool(
@@ -1632,8 +1637,14 @@ final class AgentSession {
         guard let userIndex = conversationHistory.lastIndex(where: { $0.role == .user }) else {
             throw AgentError.contextWindowExceeded
         }
+        // Provider reasoning and transient images may remain in memory only for
+        // continuation rounds of the same user turn. Never carry them into an
+        // independent turn, even when conversation-history consent is enabled.
+        let safeConversationHistory = conversationHistory.enumerated().map { index, message in
+            index < userIndex ? Self.withoutSensitiveTransientContent(message) : message
+        }
         var providerMessages = CloudRequestPolicyGuard.filterConversationHistory(
-            conversationHistory,
+            safeConversationHistory,
             currentTurnStartIndex: userIndex,
             by: cloudHealthPolicy
         )
