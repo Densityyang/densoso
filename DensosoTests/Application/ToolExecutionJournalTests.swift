@@ -510,8 +510,13 @@ final class ToolExecutionJournalTests: XCTestCase {
         XCTAssertEqual(journal.count, 1)
         XCTAssertEqual(journal.first?.state, .completed)
         XCTAssertEqual(journal.first?.pendingActionID, action.id)
-        let expectedPayloadData = try ToolExecutionPayloadCodec.encode(action.payload)
-        XCTAssertEqual(journal.first?.preparedPayloadData, expectedPayloadData)
+        let preparedPayloadData = try XCTUnwrap(journal.first?.preparedPayloadData)
+        let preparedPayload = try ToolExecutionPayloadCodec.decode(preparedPayloadData)
+        XCTAssertEqual(
+            try preparedPayload.canonicalData(),
+            try action.payload.canonicalData(),
+            "The replayed draft must preserve every canonical business field across persistence."
+        )
 
         _ = try await harness.session.confirmPendingAction(action)
         XCTAssertEqual(try ModelContext(harness.container).fetchCount(FetchDescriptor<MealRecord>()), 1)
