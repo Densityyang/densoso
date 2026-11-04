@@ -111,7 +111,7 @@ final class HealthIntelligenceService {
     func refresh(asOf date: Date = Date()) async throws -> DailyHealthBrief? {
         try await PerformanceSignposts.measureAsync("Health.StateRefresh") {
             let waiterID = UUID()
-            try await withTaskCancellationHandler {
+            return try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<DailyHealthBrief?, Error>) in
                     guard !Task.isCancelled else {
                         continuation.resume(throwing: CancellationError())
