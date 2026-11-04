@@ -596,6 +596,7 @@ final class ExportService {
 
     /// Validates the entire file before replacing local data, then reprojects derived metrics.
     func restoreJSON(url: URL, context: ModelContext) async throws -> ImportSummary {
+        print("[ExportService] restore: read backup")
         let data = try Data(contentsOf: url)
         let document = try JSONDecoder().decode(BackupDocument.self, from: data)
         guard Self.supportedFormatVersions.contains(document.formatVersion) else {
@@ -1003,13 +1004,16 @@ final class ExportService {
             return try? JSONDecoder().decode([UserProfile.WeightEntry].self, from: data)
         } ?? []
 
+        print("[ExportService] restore: validation complete; acquire persistence lease")
         let restoreLease = try await persistenceOperationBarrier.acquireRestoreOperation()
         defer { persistenceOperationBarrier.release(restoreLease) }
 
+        print("[ExportService] restore: persistence lease acquired; acquire projection lease")
         let projectionLease = try await DailyMetricsProjectionWriteGate.acquire(
             storeID: ObjectIdentifier(context.container)
         )
         defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
+        print("[ExportService] restore: projection lease acquired")
         do {
             try Task.checkCancellation()
             // Transcripts are deliberately not part of backups. Remove unfinished
@@ -1463,17 +1467,21 @@ final class ExportService {
             for date in affectedDays {
                 try DailyMetricsProjector.markPendingForReprojectionWhileGateHeld(on: date, in: context)
             }
+            print("[ExportService] restore: replacement data prepared; save")
             try context.save()
+            print("[ExportService] restore: save complete; reproject \(affectedDays.count) days")
             for date in affectedDays {
                 // The replacement data and every retry marker are already durable.
                 // A derived projection error must not report the restore as rolled back.
                 if Task.isCancelled { break }
                 do {
+                    print("[ExportService] restore: reproject \(date.timeIntervalSince1970)")
                     try await DailyMetricsProjector.reprojectAndCommitWhileGateHeld(
                         on: date,
                         in: context,
                         willSaveProjection: willSaveProjection
                     )
+                    print("[ExportService] restore: reproject complete \(date.timeIntervalSince1970)")
                 } catch let projectionError {
                     context.rollback()
                     do {
@@ -1499,6 +1507,7 @@ final class ExportService {
                 }
             }
 
+            print("[ExportService] restore: complete")
             return ImportSummary(
                 meals: document.payload.mealRecords.count,
                 workouts: restoredWorkoutRecords.count,
