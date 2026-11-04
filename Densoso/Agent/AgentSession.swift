@@ -1294,6 +1294,11 @@ final class AgentSession {
             throw error
         } catch ConfirmationError.requestDeadlineExceeded {
             throw ProviderError.timeout
+        } catch let error as ToolExecutionJournalError {
+            // Journal identity/state violations are persistence invariants, not
+            // user-facing tool errors. Propagate them so a journaled invocation
+            // cannot be recorded as completed after its action link was rejected.
+            throw error
         } catch {
             let descriptor = SharedErrorDescriptor.mapped(from: error, fallback: .actionConflictFallback)
             return encodedToolError(descriptor: descriptor)

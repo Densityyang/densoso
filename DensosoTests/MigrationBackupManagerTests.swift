@@ -216,7 +216,7 @@ final class MigrationBackupManagerTests: XCTestCase {
     }
 }
 
-private enum InjectedMoveFailure: Error, CustomStringConvertible {
+private enum InjectedMoveFailure: Error, LocalizedError, CustomStringConvertible {
     case install
     case rollback
 
@@ -226,4 +226,6 @@ private enum InjectedMoveFailure: Error, CustomStringConvertible {
         case .rollback: "injected rollback failure"
         }
     }
+
+    var errorDescription: String? { description }
 }

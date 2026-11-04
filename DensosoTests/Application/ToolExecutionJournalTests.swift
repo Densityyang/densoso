@@ -760,6 +760,16 @@ final class ToolExecutionJournalTests: XCTestCase {
         mealPortionPriorRepository: (any MealPortionPriorRepository)? = nil,
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget(deadline: .distantFuture) }
     ) -> JournalHarness {
+        // Journal tests exercise idempotency and recovery, not meal ambiguity.
+        // Supply a narrow local bowl prior so the standard meal energy policy
+        // can stage the fixture instead of correctly asking for clarification.
+        let effectiveMealPortionPriorRepository: (any MealPortionPriorRepository)?
+        if needsFoodDatabase {
+            effectiveMealPortionPriorRepository = mealPortionPriorRepository
+                ?? SlowMealPortionPriorRepository(delayNanoseconds: 0)
+        } else {
+            effectiveMealPortionPriorRepository = mealPortionPriorRepository
+        }
         let confirmation = ConfirmationCoordinator(
             repository: SwiftDataConfirmationRepository(modelContainer: container),
             writeGate: PersistenceWriteGate(state: .writable)
@@ -776,7 +786,7 @@ final class ToolExecutionJournalTests: XCTestCase {
                 repository: governance,
                 pricingDescriptorSource: TestPricingDescriptorCatalog.source
             ),
-            registry: ToolRegistry(mealPortionPriorRepository: mealPortionPriorRepository),
+            registry: ToolRegistry(mealPortionPriorRepository: effectiveMealPortionPriorRepository),
             confirmationCoordinator: confirmation,
             readRepository: repository,
             conversationRepository: repository,
@@ -939,7 +949,16 @@ private actor SlowMealPortionPriorRepository: MealPortionPriorRepository {
     }
 
     func all() async throws -> [PersonalMealPortionPrior] { [] }
-    func prior(foodID: String?, foodName: String, unit: String) async throws -> HouseholdPortionPrior? { nil }
+    func prior(foodID: String?, foodName: String, unit: String) async throws -> HouseholdPortionPrior? {
+        guard MealPortionPriorCorrection.normalizeSupportedUnit(unit) == "bowl" else { return nil }
+        return HouseholdPortionPrior(
+            unit: "bowl",
+            p10Grams: 145,
+            p50Grams: 150,
+            p90Grams: 155,
+            version: PortionEstimator.algorithmVersion
+        )
+    }
     func save(_ edit: PersonalMealPortionPriorEdit) async throws {}
     func delete(id: UUID) async throws {}
     func allDishPriors() async throws -> [PersonalMealDishPrior] { [] }
