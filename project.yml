@@ -153,6 +153,14 @@ schemes:
         - name: DensosoTests
         - name: DensosoUITests
 
+  DensosoUnitTests:
+    build:
+      targets:
+        Densoso: all
+    test:
+      targets:
+        - name: DensosoTests
+
   DensosoWatch:
     build:
       targets:
