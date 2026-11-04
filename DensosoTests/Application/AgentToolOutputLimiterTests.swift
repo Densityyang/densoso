@@ -15,7 +15,7 @@ final class AgentToolOutputLimiterTests: XCTestCase {
         XCTAssertEqual(AgentToolOutputLimiter.limit(output), output)
     }
 
-    func testOutputOneByteOverUTF8BudgetReturnsValidStructuredJSON() throws {
+    func testOversizedOutputReturnsValidStructuredJSONInsteadOfCharacterTruncation() throws {
         let output = outputAtUTF8Budget() + "x"
         XCTAssertEqual(output.utf8.count, AgentToolOutputLimiter.maximumUTF8Bytes + 1)
 
