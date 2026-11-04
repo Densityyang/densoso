@@ -61,6 +61,22 @@ enum DailyMetricsProjectionWriteGate {
         return try await operation(lease)
     }
 
+    static func withStoreLock<T: Sendable>(
+        storeID: ObjectIdentifier,
+        dayKeys: Set<String>? = nil,
+        operation: @isolated(any) @Sendable () async throws -> T
+    ) async throws -> T {
+        let lease = try await acquire(storeID: storeID, dayKeys: dayKeys)
+        do {
+            let result = try await operation()
+            release(lease)
+            return result
+        } catch {
+            release(lease)
+            throw error
+        }
+    }
+
     /// A nil day-key set requests a store-wide lease. Day-scoped leases let
     /// independent daily projections proceed concurrently.
     static func acquire(storeID key: ObjectIdentifier, dayKeys: Set<String>? = nil) async throws -> Lease {
@@ -115,7 +131,7 @@ enum DailyMetricsProjectionWriteGate {
         }
     }
 
-    static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
+    nonisolated static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
         let components = calendar.dateComponents([.year, .month, .day], from: date)
         return "\(calendar.timeZone.identifier)|\(String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0))"
     }

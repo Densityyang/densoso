@@ -55,6 +55,22 @@ final class PersistenceOperationBarrier {
     func acquireMutationOperation() async throws -> Lease { try await acquire(.mutation) }
     func acquireRestoreOperation() async throws -> Lease { try await acquire(.restore) }
 
+    func withMutationOperation<T: Sendable>(
+        operation: @isolated(any) @Sendable () async throws -> T
+    ) async throws -> T {
+        let lease = try await acquireMutationOperation()
+        do {
+            let result = try await Self.$currentLease.withValue(lease) {
+                try await operation()
+            }
+            release(lease)
+            return result
+        } catch {
+            release(lease)
+            throw error
+        }
+    }
+
     func withLease<T>(_ lease: Lease, operation: () async throws -> T) async rethrows -> T {
         try await Self.$currentLease.withValue(lease) {
             try await operation()

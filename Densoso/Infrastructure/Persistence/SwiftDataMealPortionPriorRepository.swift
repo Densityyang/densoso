@@ -578,7 +578,7 @@ actor SwiftDataMealPortionPriorRepository: MealPortionPriorRepository {
                     dishName: payload.dishName,
                     cookingMethod: payload.cookingMethod,
                     ingredients: payload.ingredients
-                  ), expectedKey == priorKey else { throw MealPortionPriorRepositoryError.invalidValue }
+                  ), expectedKey.priorKey == priorKey else { throw MealPortionPriorRepositoryError.invalidValue }
             aggregate = averagedDishIngredients(
                 previous: aggregate,
                 incoming: payload.ingredients,

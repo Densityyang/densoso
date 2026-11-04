@@ -642,7 +642,7 @@ struct ChatScreen: View {
 
     private func refreshCommittedHealthSyncStatus(from notification: Notification) {
         guard let status = dependencies.agentSession.lastConfirmationStatus else { return }
-        if notification.userInfo?[.invalidatedAllIdentifiers] != nil {
+        if notification.userInfo?[ModelContext.NotificationKey.invalidatedAllIdentifiers] != nil {
             Task { await reloadCommittedHealthSyncStatus() }
             return
         }

@@ -236,9 +236,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         invocationID: String?,
         requestDeadline: Date? = nil
     ) async throws -> PendingAction {
-        let operationBarrier = PersistenceOperationBarrier.shared
-        let operationLease = try await operationBarrier.acquireMutationOperation()
-        defer { operationBarrier.release(operationLease) }
+        let operationBarrier = await PersistenceOperationBarrier.shared
+        return try await operationBarrier.withMutationOperation {
         guard ActionPayload.supportedSchemaVersions.contains(ActionPayload.currentSchemaVersion),
               Self.sha256(canonicalPayloadData) == canonicalPayloadHash,
               try payload.canonicalData(schemaVersion: ActionPayload.currentSchemaVersion) == canonicalPayloadData,
@@ -343,12 +342,12 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             conversationID: conversationID,
             canonicalPayloadHash: canonicalPayloadHash
         )
+        }
     }
 
     func activeActions(conversationID: UUID, now: Date) async throws -> [PendingAction] {
-        let operationBarrier = PersistenceOperationBarrier.shared
-        let operationLease = try await operationBarrier.acquireMutationOperation()
-        defer { operationBarrier.release(operationLease) }
+        let operationBarrier = await PersistenceOperationBarrier.shared
+        return try await operationBarrier.withMutationOperation {
         let pendingState = PendingActionState.pending.rawValue
         let committingState = PendingActionState.committing.rawValue
         let expiredState = PendingActionState.expired.rawValue
@@ -454,16 +453,15 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             if page.count < Self.activeActionBatchSize { break }
         }
         return actions
+        }
     }
 
     func reject(id: UUID, conversationID: UUID, now: Date) async throws {
-        let operationBarrier = PersistenceOperationBarrier.shared
-        let operationLease = try await operationBarrier.acquireMutationOperation()
-        defer { operationBarrier.release(operationLease) }
-        let projectionLease = try await DailyMetricsProjectionWriteGate.acquire(
-            storeID: ObjectIdentifier(modelContainer)
-        )
-        defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
+        let operationBarrier = await PersistenceOperationBarrier.shared
+        try await operationBarrier.withMutationOperation {
+            try await DailyMetricsProjectionWriteGate.withStoreLock(
+                storeID: ObjectIdentifier(modelContainer)
+            ) {
         guard let action = try pendingAction(id: id) else { throw ConfirmationError.notFound }
         let presentedAction = try map(action)
         guard presentedAction.conversationID == conversationID else { throw ConfirmationError.notFound }
@@ -494,6 +492,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         case .committing: throw ConfirmationError.alreadyCommitting
         case .committed, .failed: throw ConfirmationError.invariantViolation("cannot reject \(state.rawValue)")
         }
+            }
+        }
     }
 
     func confirm(
@@ -502,9 +502,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         expectedPayloadHash: String,
         now: Date
     ) async throws -> CommitReceipt {
-        let operationBarrier = PersistenceOperationBarrier.shared
-        let operationLease = try await operationBarrier.acquireMutationOperation()
-        defer { operationBarrier.release(operationLease) }
+        let operationBarrier = await PersistenceOperationBarrier.shared
+        return try await operationBarrier.withMutationOperation {
         guard let action = try pendingAction(id: id) else { throw ConfirmationError.notFound }
         guard ActionPayload.supportedSchemaVersions.contains(action.schemaVersion) else {
             throw ConfirmationError.unsupportedAction
@@ -522,11 +521,10 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
               try payload.canonicalPayloadHash(schemaVersion: action.schemaVersion) == storedPayloadHash else {
             throw ConfirmationError.payloadCorrupt
         }
-        let projectionLease = try await DailyMetricsProjectionWriteGate.acquire(
+        return try await DailyMetricsProjectionWriteGate.withStoreLock(
             storeID: ObjectIdentifier(modelContainer),
             dayKeys: projectionDayKeys(for: payload)
-        )
-        defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
+        ) {
         if let receipt = try receipt(actionID: id) {
             let mappedReceipt = try map(receipt)
             try validate(
@@ -760,16 +758,16 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
             modelContext.rollback()
             throw error
         }
+        }
+        }
     }
 
     func recoverInterruptedCommits(now: Date) async throws {
-        let operationBarrier = PersistenceOperationBarrier.shared
-        let operationLease = try await operationBarrier.acquireMutationOperation()
-        defer { operationBarrier.release(operationLease) }
-        let projectionLease = try await DailyMetricsProjectionWriteGate.acquire(
-            storeID: ObjectIdentifier(modelContainer)
-        )
-        defer { DailyMetricsProjectionWriteGate.release(projectionLease) }
+        let operationBarrier = await PersistenceOperationBarrier.shared
+        try await operationBarrier.withMutationOperation {
+            try await DailyMetricsProjectionWriteGate.withStoreLock(
+                storeID: ObjectIdentifier(modelContainer)
+            ) {
         let committingState = PendingActionState.committing.rawValue
         var changed = false
         let committingSort = [
@@ -890,6 +888,8 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                 try modelContext.save()
             }
             catch { modelContext.rollback(); throw error }
+        }
+            }
         }
     }
 

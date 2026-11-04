@@ -354,7 +354,7 @@ struct DashboardScreen: View {
     }
 
     static func containsDashboardProjectionChanges(_ notification: Notification) -> Bool {
-        if notification.userInfo?[.invalidatedAllIdentifiers] != nil { return true }
+        if notification.userInfo?[ModelContext.NotificationKey.invalidatedAllIdentifiers] != nil { return true }
         let keys: [ModelContext.NotificationKey] = [
             .insertedIdentifiers,
             .updatedIdentifiers,
