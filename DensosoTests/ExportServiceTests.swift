@@ -135,7 +135,9 @@ final class ExportServiceTests: XCTestCase {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         source.insert(MealRecord(date: date, totalCaloriesKcal: 510))
         try source.save()
-        let service = ExportService()
+        // Restore uses a process-wide persistence barrier in production. Keep
+        // this restore test independent from unrelated test activity.
+        let service = ExportService(persistenceOperationBarrier: PersistenceOperationBarrier())
         let backupURL = try await service.exportJSON(context: source)
         defer { try? FileManager.default.removeItem(at: backupURL) }
 
@@ -228,7 +230,7 @@ final class ExportServiceTests: XCTestCase {
             }
         }
 
-        let service = ExportService()
+        let service = ExportService(persistenceOperationBarrier: PersistenceOperationBarrier())
         let backupURL = try await service.exportJSON(context: source)
         defer { try? FileManager.default.removeItem(at: backupURL) }
         let backupText = String(decoding: try Data(contentsOf: backupURL), as: UTF8.self)
@@ -256,7 +258,7 @@ final class ExportServiceTests: XCTestCase {
     func testRestoreInvalidatesCloudHealthAuthorizationAlreadyPresentInTargetStore() async throws {
         let (sourceContainer, source) = try makeContext()
         _ = sourceContainer
-        let service = ExportService()
+        let service = ExportService(persistenceOperationBarrier: PersistenceOperationBarrier())
         let backupURL = try await service.exportJSON(context: source)
         defer { try? FileManager.default.removeItem(at: backupURL) }
 

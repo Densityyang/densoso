@@ -377,6 +377,12 @@ final class CloudHealthContextPolicyTests: XCTestCase {
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
         )
         let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
         let expectedSnapshot = try await CloudHealthContextPolicy.confirmExpandedPolicy(
             provider: .deepSeek,
             allowedClasses: [.healthSleep],
