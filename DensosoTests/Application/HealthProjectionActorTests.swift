@@ -366,8 +366,8 @@ final class HealthProjectionActorTests: XCTestCase {
             date: workoutStart,
             type: "running",
             durationMinutes: 30,
-            intensity: "moderate",
             estimatedCaloriesBurned: 150,
+            intensity: "moderate",
             healthKitUUID: workoutID,
             workoutOrigin: WorkoutOrigin.externalHealthKit.rawValue,
             energySource: WorkoutEnergySource.measured.rawValue
@@ -507,7 +507,6 @@ final class HealthProjectionActorTests: XCTestCase {
         try context.save()
 
         let days = try HealthIntelligenceReadModel(calendar: currentCalendar).loadDays(
-            from: firstDay,
             through: thirdDay,
             in: context
         )
@@ -588,7 +587,6 @@ final class HealthProjectionActorTests: XCTestCase {
         try context.save()
 
         let days = try HealthIntelligenceReadModel(calendar: calendar).loadDays(
-            from: firstDay,
             through: secondDay,
             in: context
         )
@@ -775,7 +773,6 @@ final class HealthProjectionActorTests: XCTestCase {
         try context.save()
 
         let days = try HealthIntelligenceReadModel(calendar: calendar).loadDays(
-            from: day,
             through: day,
             in: context
         )

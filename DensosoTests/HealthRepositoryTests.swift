@@ -288,7 +288,6 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(sampleIndex.endDate, sampleEnd)
         XCTAssertEqual(sampleIndex.dayKey, currentDayKey)
         let projectedDays = try HealthIntelligenceReadModel(calendar: currentCalendar).loadDays(
-            from: day,
             through: day,
             in: context
         )
