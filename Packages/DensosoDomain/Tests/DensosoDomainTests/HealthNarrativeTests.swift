@@ -291,13 +291,6 @@ final class HealthNarrativeTests: XCTestCase {
         let encoded = try JSONEncoder().encode(context)
         let decoded = try JSONDecoder().decode(HealthNarrativeContext.self, from: encoded)
         XCTAssertEqual(decoded, context)
-        var forgedObject = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
-        var forgedTrends = try XCTUnwrap(forgedObject["activityTrends"] as? [[String: Any]])
-        forgedTrends[0]["unit"] = "kcal"
-        forgedObject["activityTrends"] = forgedTrends
-        let mismatchedUnit = try JSONSerialization.data(withJSONObject: forgedObject)
-        XCTAssertThrowsError(try JSONDecoder().decode(HealthNarrativeContext.self, from: mismatchedUnit))
-
         let legacy = #"{"healthState":null,"evidence":[],"recommendationCandidates":[],"aggregateSummary":null}"#.data(using: .utf8)!
         XCTAssertNil(try JSONDecoder().decode(HealthNarrativeContext.self, from: legacy).subjectiveContext)
     }
@@ -347,6 +340,13 @@ final class HealthNarrativeTests: XCTestCase {
         let encoded = try JSONEncoder().encode(context)
         let decoded = try JSONDecoder().decode(HealthNarrativeContext.self, from: encoded)
         XCTAssertEqual(decoded, context)
+
+        var forgedObject = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var forgedTrends = try XCTUnwrap(forgedObject["activityTrends"] as? [[String: Any]])
+        forgedTrends[0]["unit"] = "kcal"
+        forgedObject["activityTrends"] = forgedTrends
+        let mismatchedUnit = try JSONSerialization.data(withJSONObject: forgedObject)
+        XCTAssertThrowsError(try JSONDecoder().decode(HealthNarrativeContext.self, from: mismatchedUnit))
 
         let legacy = #"{"healthState":null,"evidence":[],"recommendationCandidates":[],"aggregateSummary":null}"#.data(using: .utf8)!
         XCTAssertTrue(try JSONDecoder().decode(HealthNarrativeContext.self, from: legacy).activityTrends.isEmpty)

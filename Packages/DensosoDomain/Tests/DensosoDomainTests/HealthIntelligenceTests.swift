@@ -907,7 +907,7 @@ final class HealthIntelligenceTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(summary.sevenDay.averageEnergyIntakeKcal), 1_900, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(summary.sevenDay.averageProteinGrams), 100, accuracy: 0.001)
         XCTAssertEqual(summary.sevenDay.coverageDays["energyIntake"], 7)
-        XCTAssertEqual(summary.sevenDay.coverageDays["dailyDeficitKcal"], 2)
+        XCTAssertEqual(summary.sevenDay.coverageDays["dailyDeficitKcal"], 1)
         XCTAssertEqual(summary.sevenDay.coverageDays["proteinGrams"], 7)
         XCTAssertEqual(summary.sevenDay.metricWindowCoverage["energyIntake"]?.validCalendarDays, 7)
         XCTAssertEqual(summary.sevenDay.metricWindowCoverage["energyIntake"]?.completeRecordDays, 2)
@@ -918,8 +918,10 @@ final class HealthIntelligenceTests: XCTestCase {
         let surplusOnly = HealthIntelligenceEngine(calendar: calendar).makeContextSummary(
             days: [HealthIntelligenceDay(
                 dayStart: today,
+                energyIntakeKcal: 1_800,
                 dailyDeficitKcal: -250,
-                nutritionRecordStatus: .complete
+                nutritionRecordStatus: .complete,
+                nutritionIntakeAvailability: .estimated
             )],
             asOf: today,
             goals: nil,

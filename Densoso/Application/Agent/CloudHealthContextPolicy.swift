@@ -1371,7 +1371,7 @@ enum CloudRequestPolicyGuard {
                 if case .toolCall(let call) = item { namesByCallID[call.id] = call.name }
             }
         }
-        return messages.compactMap { message in
+        return messages.compactMap { message -> ModelMessage? in
             var filteredToolDataClasses = Set<ProviderDataClass>()
             var hasUnclassifiedToolContent = false
             let content = message.content.compactMap { item -> ModelContent? in

@@ -71,13 +71,13 @@ final class DailyHealthSampleSummaryTests: XCTestCase {
         XCTAssertEqual(summary.sleep?.selectedSourceBundleIdentifier, "com.example.watchhealth")
         XCTAssertEqual(
             summary.sleep?.selectedSourceIdentifier,
-            "bundle:18:com.example.watchhealth|device:8:Watch6,1"
+            "bundle:23:com.example.watchhealth|device:8:Watch6,1"
         )
         XCTAssertTrue(summary.sleep?.hasConflictingSourceStages == true)
         XCTAssertTrue(summary.sleep?.supplementalSourceIdentifiers.isEmpty == true)
         XCTAssertEqual(summary.sleep?.sourceCoverage, [
             SleepSourceCoverage(
-                sourceIdentifier: "bundle:18:com.example.watchhealth|device:8:Watch6,1",
+                sourceIdentifier: "bundle:23:com.example.watchhealth|device:8:Watch6,1",
                 asleepMinutes: 480
             ),
         ])
