@@ -374,6 +374,7 @@ final class DailyLoopBackgroundSchedulerTests: XCTestCase {
         )
     }
 
+    @MainActor
     private static var successfulSyncResult: HealthSyncResult {
         HealthSyncResult(completedStreams: HealthKitSyncCoordinator.observedStreams, failedStreams: [:])
     }
