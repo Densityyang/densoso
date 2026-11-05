@@ -1230,6 +1230,7 @@ private struct CapabilityRow: View {
 private struct ProfileEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(Dependencies.self) private var dependencies
 
     let profile: UserProfile
 
