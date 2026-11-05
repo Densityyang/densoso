@@ -332,7 +332,7 @@ final class DailyLoopBackgroundSchedulerTests: XCTestCase {
     @MainActor
     private func makeOperations(
         syncHealth: @escaping @MainActor (HealthRepository) async throws -> HealthSyncResult = { _ in
-            HealthSyncResult(completedStreams: HealthKitSyncCoordinator.observedStreams, failedStreams: [:])
+            HealthSyncResult(completedStreams: [], failedStreams: [:])
         },
         prepareLocalHealthCache: @escaping @MainActor (HealthRepository) async throws -> Void = { _ in },
         recomputeMetrics: @escaping DailyLoopBackgroundRefreshOperations.Recompute = { _, _, _ in
