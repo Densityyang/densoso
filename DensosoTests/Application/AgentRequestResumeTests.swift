@@ -135,14 +135,6 @@ final class AgentRequestResumeTests: XCTestCase {
             granted: true,
             policyVersion: "cloud-health-text-v1"
         )
-        for dataClass in [ProviderDataClass.healthSleep, .healthActivity] {
-            try await governance.setConsent(
-                provider: .deepSeek,
-                dataClass: dataClass,
-                granted: true,
-                policyVersion: "cloud-health-context-v1"
-            )
-        }
         _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
             provider: .deepSeek,
             allowedClasses: [.healthSleep, .healthActivity],

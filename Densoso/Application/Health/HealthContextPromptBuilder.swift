@@ -192,7 +192,7 @@ enum HealthContextPromptBuilder {
     }
 
     static func requiresHealthContext(for userText: String, priorHealthContext: Bool = false) -> Bool {
-        shouldIncludeSummary(for: userText, priorHealthContext: priorHealthContext)
+        requiresNarrative(for: userText, priorHealthContext: priorHealthContext)
             || requiresMealEstimationContext(for: userText)
     }
 

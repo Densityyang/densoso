@@ -740,12 +740,17 @@ final class AgentSession {
             } else {
                 var userContent: [ModelContent] = [.text(userText)]
                 if let image = multimodalRequest.image { userContent.append(.image(image)) }
+                let healthContentClassification = HealthContentProvenanceClassifier.classify(userText)
                 try await append(
                     ModelMessage(
                         role: .user,
                         content: userContent,
                         inputEnvelope: multimodalRequest.inputEnvelope,
-                        healthContextPolicyProvenance: Self.healthContextProvenance(for: initialCloudHealthPolicy)
+                        healthContextPolicyProvenance: Self.healthContextProvenance(
+                            for: initialCloudHealthPolicy,
+                            contentClasses: healthContentClassification.dataClasses,
+                            hasUnclassifiedHealthContent: healthContentClassification.hasUnclassifiedHealthContent
+                        )
                     ),
                     requestID: requestID
                 )

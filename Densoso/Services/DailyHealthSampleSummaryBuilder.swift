@@ -105,7 +105,7 @@ enum DailyHealthSampleSummaryBuilder {
                 }
             }
 
-            let assignment = minimumCostAssignment(costs)
+            let assignment = minimumCostAssignment(costs, realColumnCount: componentWorkoutCount)
             for (localRow, localColumn) in assignment
             where localColumn < componentWorkoutCount && weights[localRow][localColumn] != nil {
                 result[workouts[columns[localColumn]].id] = samples[rows[localRow]]
@@ -131,7 +131,10 @@ enum DailyHealthSampleSummaryBuilder {
     /// Hungarian assignment with lexicographic additive costs. A valid edge
     /// costs (-1 match, -overlap), so no amount of overlap can outweigh an
     /// additional match. Zero-cost dummy columns represent unmatched samples.
-    private static func minimumCostAssignment(_ costs: [[MatchingCost]]) -> [Int: Int] {
+    private static func minimumCostAssignment(
+        _ costs: [[MatchingCost]],
+        realColumnCount: Int
+    ) -> [Int: Int] {
         let rowCount = costs.count
         guard rowCount > 0 else { return [:] }
         let columnCount = costs[0].count
@@ -162,10 +165,19 @@ enum DailyHealthSampleSummaryBuilder {
                         minimumReducedCost[column] = reducedCost
                         previousColumn[column] = currentColumn
                     }
-                    if let candidate = minimumReducedCost[column],
-                       delta.map({ candidate < $0 }) ?? true {
-                        delta = candidate
-                        nextColumn = column
+                    if let candidate = minimumReducedCost[column] {
+                        let isLowerCost = delta.map { candidate < $0 } ?? true
+                        let isStableTie = delta == candidate
+                            && prefersStableColumn(
+                                column,
+                                over: nextColumn,
+                                realColumnCount: realColumnCount,
+                                rowByColumn: rowByColumn
+                            )
+                        if isLowerCost || isStableTie {
+                            delta = candidate
+                            nextColumn = column
+                        }
                     }
                 }
 
@@ -195,6 +207,22 @@ enum DailyHealthSampleSummaryBuilder {
             result[row - 1] = column - 1
         }
         return result
+    }
+
+    private static func prefersStableColumn(
+        _ candidate: Int,
+        over current: Int,
+        realColumnCount: Int,
+        rowByColumn: [Int]
+    ) -> Bool {
+        guard current > 0 else { return true }
+        let candidateIsReal = candidate <= realColumnCount
+        let currentIsReal = current <= realColumnCount
+        if candidateIsReal != currentIsReal { return candidateIsReal }
+        let candidateIsFree = rowByColumn[candidate] == 0
+        let currentIsFree = rowByColumn[current] == 0
+        if candidateIsFree != currentIsFree { return candidateIsFree }
+        return candidate < current
     }
 
     private struct MatchingCost: Comparable {
