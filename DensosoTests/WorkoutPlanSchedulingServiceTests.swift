@@ -334,7 +334,7 @@ final class WorkoutPlanSchedulingServiceTests: XCTestCase {
     }
 
     private func makeService() throws -> (ModelContainer, WorkoutPlanSchedulingService, FakeWorkoutPlanScheduler) {
-        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(
             for: schema,

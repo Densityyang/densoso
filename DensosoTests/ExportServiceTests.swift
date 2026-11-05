@@ -1575,7 +1575,7 @@ final class ExportServiceTests: XCTestCase {
     }
 
     private func makeContext() throws -> (ModelContainer, ModelContext) {
-        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -1584,7 +1584,7 @@ final class ExportServiceTests: XCTestCase {
     }
 
     private func makeFullV14Context() throws -> (ModelContainer, ModelContext) {
-        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         return (container, ModelContext(container))

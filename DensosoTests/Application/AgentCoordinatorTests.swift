@@ -241,6 +241,7 @@ final class AgentCoordinatorTests: XCTestCase {
                         validCalendarDays: 6,
                         missingCalendarDays: 1,
                         completeRecordDays: 6,
+                        completeValidDays: 6,
                         authorizationLimited: false,
                         dataAvailabilityLimited: false
                     ),
@@ -252,6 +253,7 @@ final class AgentCoordinatorTests: XCTestCase {
                         validCalendarDays: 5,
                         missingCalendarDays: 2,
                         completeRecordDays: 5,
+                        completeValidDays: 5,
                         authorizationLimited: false,
                         dataAvailabilityLimited: false
                     ),
@@ -277,6 +279,7 @@ final class AgentCoordinatorTests: XCTestCase {
                         validCalendarDays: 22,
                         missingCalendarDays: 6,
                         completeRecordDays: 22,
+                        completeValidDays: 22,
                         authorizationLimited: false,
                         dataAvailabilityLimited: false
                     ),
@@ -288,6 +291,7 @@ final class AgentCoordinatorTests: XCTestCase {
                         validCalendarDays: 20,
                         missingCalendarDays: 8,
                         completeRecordDays: 20,
+                        completeValidDays: 20,
                         authorizationLimited: false,
                         dataAvailabilityLimited: false
                     ),
@@ -1129,7 +1133,7 @@ final class AgentCoordinatorTests: XCTestCase {
     }
 
     func testCloudProviderRequiresExplicitConsent() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -1593,7 +1597,7 @@ private struct Harness {
         dailyMetricsProvider: (@Sendable (Date, Date) async throws -> [AgentDailyMetric])? = nil,
         toolRegistry: ToolRegistry? = nil
     ) async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: modelContainer)

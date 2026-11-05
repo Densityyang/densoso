@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class ConfirmationCoordinatorTests: XCTestCase {
     func testLocalConfirmationReturnsBeforeHealthOutboxProcessing() async throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
         let repository = SwiftDataConfirmationRepository(modelContainer: container)
@@ -1410,7 +1410,7 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         for day in days {
             context.insert(DailyMetrics(
                 date: day,
-                weightKg: 60,
+                weightKg: day >= days[4] ? 75 : 60,
                 sourceFingerprint: "before-confirmed-weight",
                 requiresRecompute: false
             ))
@@ -2118,7 +2118,7 @@ private struct Harness {
     let coordinator: ConfirmationCoordinator
 
     init(timeToLive: TimeInterval = 24 * 60 * 60) throws {
-        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         container = try ModelContainer(for: schema, configurations: [configuration])
         repository = SwiftDataConfirmationRepository(modelContainer: container)

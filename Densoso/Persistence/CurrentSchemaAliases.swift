@@ -31,3 +31,4 @@ typealias CloudHealthContextPolicyRecord = DensosoSchemaV11.CloudHealthContextPo
 typealias PersonalMealDishPriorRecord = DensosoSchemaV12.PersonalMealDishPriorRecord
 typealias ToolExecutionJournalRecord = DensosoSchemaV13.ToolExecutionJournalRecord
 typealias MealPriorContributionRecord = DensosoSchemaV14.MealPriorContributionRecord
+typealias ConfirmedPlanSessionIndexRecord = DensosoSchemaV15.ConfirmedPlanSessionIndexRecord

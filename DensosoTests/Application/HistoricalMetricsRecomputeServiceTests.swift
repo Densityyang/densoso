@@ -187,6 +187,98 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         XCTAssertTrue(try fetchMetrics(in: container).allSatisfy { !$0.requiresRecompute && !$0.sourceFingerprint.isEmpty })
     }
 
+    func testFortyTwoPendingDaysConvergeAcrossScheduledBackgroundRuns() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let calendar = Calendar.current
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 12)))
+        let today = calendar.startOfDay(for: now)
+        try insertValidProfileAndWeight(in: context, effectiveAt: today)
+        let firstDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -42, to: today))
+        for offset in 0..<42 {
+            context.insert(DailyMetrics(
+                date: try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: firstDay)),
+                requiresRecompute: true
+            ))
+        }
+        try context.save()
+
+        let recomputer = HistoricalMetricsRecomputeService(modelContainer: container)
+        var batchResults: [HistoricalMetricsRecomputeResult] = []
+        let operations = DailyLoopBackgroundRefreshOperations(
+            syncHealth: { _ in
+                XCTFail("Health sync must not run without HealthKit authorization")
+                return HealthSyncResult(completedStreams: [], failedStreams: [:])
+            },
+            prepareLocalHealthCache: { _ in },
+            recomputeMetrics: { batchNow, batchSize, shouldStop in
+                let result = try await recomputer.recomputePendingMetrics(
+                    now: batchNow,
+                    batchSize: batchSize,
+                    shouldStop: shouldStop
+                )
+                batchResults.append(result)
+                return result
+            },
+            refreshHealthBrief: {},
+            makeSnapshot: {
+                DailyLoopSnapshot(
+                    dayStart: today,
+                    timezoneIdentifier: calendar.timeZone.identifier,
+                    phase: .daytime
+                )
+            },
+            updateNotifications: { _ in },
+            refreshWatchContext: {}
+        )
+        let backgroundScheduler = FakeBackgroundTaskScheduler()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "HistoricalMetricsRecomputeScheduled.\(UUID().uuidString)"))
+        let scheduler = DailyLoopBackgroundScheduler(
+            modelContainer: container,
+            operations: operations,
+            isHealthAuthorized: { false },
+            backgroundTaskScheduler: backgroundScheduler,
+            scheduleDefaults: defaults,
+            initiallyRegistered: true
+        )
+
+        var runDurationsMilliseconds: [Double] = []
+        var totalProcessedCount = 0
+        for batchIndex in 0..<5 {
+            // The OS consumes a submitted request before invoking its handler.
+            backgroundScheduler.pendingRequest = nil
+            var completionResults: [Bool] = []
+            let taskBox = BackgroundRefreshTaskBox(completion: { completionResults.append($0) })
+            let startedAt = DispatchTime.now().uptimeNanoseconds
+            await scheduler.runScheduledRefresh(taskBox: taskBox, now: now)
+            runDurationsMilliseconds.append(
+                Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
+            )
+
+            let result = try XCTUnwrap(batchResults.last)
+            XCTAssertEqual(result.processedCount, min(10, 42 - totalProcessedCount))
+            totalProcessedCount += result.processedCount
+            XCTAssertEqual(completionResults, [true])
+            if batchIndex < 4 {
+                XCTAssertTrue(result.hasMoreEligibleWork)
+                XCTAssertEqual(scheduler.nextRefreshReason, .historicalRecompute)
+                XCTAssertEqual(backgroundScheduler.pendingRequest?.reason, .historicalRecompute)
+            } else {
+                XCTAssertFalse(result.hasMoreEligibleWork)
+                XCTAssertEqual(scheduler.nextRefreshReason, .regular)
+                XCTAssertEqual(backgroundScheduler.pendingRequest?.reason, .regular)
+            }
+        }
+
+        let sortedDurations = runDurationsMilliseconds.sorted()
+        let p50 = sortedDurations[sortedDurations.count / 2]
+        let p95 = sortedDurations[min(sortedDurations.count - 1, Int(Double(sortedDurations.count - 1) * 0.95))]
+        print("DENSOSO_PERF scenario=scheduled_historical_recompute_42_days runs=5 batchSize=10 p50_ms=\(p50) p95_ms=\(p95)")
+        XCTAssertEqual(totalProcessedCount, 42)
+        XCTAssertEqual(batchResults.count, 5)
+        XCTAssertTrue(try fetchMetrics(in: container).allSatisfy { !$0.requiresRecompute && !$0.sourceFingerprint.isEmpty })
+    }
+
     func testHistoricalRecomputeProcessesMetricsInvalidatedByLocalWeightChange() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
@@ -213,6 +305,7 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         for day in days {
             context.insert(DailyMetrics(
                 date: day,
+                projectionVersion: AlgorithmVersions.dailyMetricsProjection,
                 energyQuality: "stale-weight-projection",
                 sourceFingerprint: "stale-weight-fingerprint",
                 requiresRecompute: false
@@ -509,9 +602,18 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         XCTAssertEqual(result.processedCount, 1)
         XCTAssertTrue(result.hasMoreEligibleWork)
         XCTAssertTrue(result.stoppedEarly)
-        let metrics = try fetchMetrics(in: container)
+        var metrics = try fetchMetrics(in: container)
         XCTAssertFalse(try XCTUnwrap(metrics.first { Calendar.current.isDate($0.date, inSameDayAs: earlierDay) }).requiresRecompute)
         XCTAssertTrue(try XCTUnwrap(metrics.first { Calendar.current.isDate($0.date, inSameDayAs: laterDay) }).requiresRecompute)
+
+        let retry = try await HistoricalMetricsRecomputeService(modelContainer: container)
+            .recomputePendingMetrics(now: now, batchSize: 10, shouldStop: { false })
+
+        XCTAssertEqual(retry.processedCount, 1)
+        XCTAssertFalse(retry.hasMoreEligibleWork)
+        XCTAssertFalse(retry.stoppedEarly)
+        metrics = try fetchMetrics(in: container)
+        XCTAssertTrue(metrics.allSatisfy { !$0.requiresRecompute && !$0.sourceFingerprint.isEmpty })
     }
 
     private func makeContainer() throws -> ModelContainer {

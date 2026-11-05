@@ -22,6 +22,7 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
             DensosoSchemaV12.self,
             DensosoSchemaV13.self,
             DensosoSchemaV14.self,
+            DensosoSchemaV15.self,
         ]
     }
 
@@ -396,6 +397,14 @@ enum DensosoMigrationPlan: SchemaMigrationPlan {
             .lightweight(fromVersion: DensosoSchemaV11.self, toVersion: DensosoSchemaV12.self),
             .lightweight(fromVersion: DensosoSchemaV12.self, toVersion: DensosoSchemaV13.self),
             .lightweight(fromVersion: DensosoSchemaV13.self, toVersion: DensosoSchemaV14.self),
+            .custom(
+                fromVersion: DensosoSchemaV14.self,
+                toVersion: DensosoSchemaV15.self,
+                willMigrate: nil,
+                didMigrate: { context in
+                    try ConfirmedPlanSessionIndexRepository.rebuild(in: context)
+                }
+            ),
         ]
     }
 

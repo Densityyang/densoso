@@ -395,21 +395,21 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "if recomputeResult.hasMoreEligibleWork",
                 "reason: .historicalRecompute",
                 "DailyLoopBackgroundSchedulePolicy.shouldReplace(",
-                "scheduleDefaults.set(requestedEarliestAt",
+                "defaults.set(request.earliestBeginDate, forKey: earliestDateKey)",
                 "private static let nextRefreshReasonDefaultsKey = \"dailyLoop.nextRefreshReason\"",
-                "nextRefreshReason = scheduleDefaults.string(forKey: Self.nextRefreshReasonDefaultsKey)",
-                "scheduleDefaults.set(reason.rawValue, forKey: Self.nextRefreshReasonDefaultsKey)",
-                "scheduleDefaults.removeObject(forKey: Self.nextRefreshReasonDefaultsKey)",
-                "prepareLocalHealthCacheIfNeeded(repository)",
+                "nextRefreshReason = defaults.string(forKey: reasonKey)",
+                "defaults.set(request.reason.rawValue, forKey: reasonKey)",
+                "defaults.removeObject(forKey: reasonKey)",
+                "operations.prepareLocalHealthCache(repository)",
                 "forceRebaseline: false",
                 "aggregateIncrementalLookbackDays: 3",
                 "private static let projectionFailureFallback = SharedErrorDescriptor(",
-                "self.lastError = SharedErrorDescriptor.mapped(",
+                "lastError = SharedErrorDescriptor.mapped(",
                 "fallback: Self.projectionFailureFallback",
                 ".diagnosticSafeDetail",
                 "guard !Task.isCancelled, !taskBox.isExpired else {",
-                "await self.notificationScheduler.updateSnapshot(snapshot)",
-                "self.watchConnectivityCoordinator.refreshApplicationContext()",
+                "await operations.updateNotifications(snapshot)",
+                "operations.refreshWatchContext()",
                 "taskBox.complete(success: succeeded)",
                 "private var expired = false",
                 "private var completed = false",
@@ -428,11 +428,11 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         if background_scheduler.count(cancellation_guard) < 6:
             errors.append("Background refresh must recheck cancellation before work and after each awaited stage")
         for await_step in (
-            "let syncResult = try await self.healthSyncCoordinator.syncAvailableData(",
-            "let recomputeResult = try await self.historicalMetricsRecomputer.recomputePendingMetrics(",
-            "_ = try await self.healthIntelligenceService.refresh()",
-            "let snapshot = try await self.dailyLoopSnapshotService.snapshot()",
-            "await self.notificationScheduler.updateSnapshot(snapshot)",
+            "let syncResult = try await operations.syncHealth(repository)",
+            "let recomputeResult = try await operations.recomputeMetrics(",
+            "try await operations.refreshHealthBrief()",
+            "let snapshot = try await operations.makeSnapshot()",
+            "await operations.updateNotifications(snapshot)",
         ):
             step_start = background_scheduler.find(await_step)
             check_start = background_scheduler.find(cancellation_guard, step_start + len(await_step))
@@ -452,10 +452,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "backgroundTask.expirationHandler ="
         ):
             errors.append("The expiration handler must capture the exact refresh operation before it can expire")
-        watch_refresh = background_scheduler.find("self.watchConnectivityCoordinator.refreshApplicationContext()")
+        watch_refresh = background_scheduler.find("operations.refreshWatchContext()")
         completion_report = background_scheduler.find("taskBox.complete(success: succeeded)")
         if watch_refresh < 0 or completion_report < watch_refresh or cancellation_guard not in background_scheduler[
-            watch_refresh + len("self.watchConnectivityCoordinator.refreshApplicationContext()"):completion_report
+            watch_refresh + len("operations.refreshWatchContext()"):completion_report
         ]:
             errors.append("Background refresh must report completion only after the Watch update and cancellation check")
         require(
@@ -471,6 +471,14 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "XCTAssertEqual(scheduledCancellations, 1)",
                 "XCTAssertEqual(completedFirstResults, [true])",
                 "XCTAssertEqual(lateCancellations, 0)",
+                "testNoHealthAuthorizationRunsLocalRecomputeAndPublishesSnapshot",
+                "testPartialHealthSyncFailureSchedulesRecoveryAfterSuccessfulWork",
+                "testRemainingHistoricalWorkSchedulesAnotherBackgroundRun",
+                "testHealthBriefRefreshFailureSchedulesProjectionRecovery",
+                "testTaskExpirationCancelsRecomputeAndStopsLaterRefreshStages",
+                "testFailedRecoveryReschedulePreservesPreviousRegularTask",
+                "testFailedRegularReschedulePreservesPreviousRecoveryTask",
+                "testSuccessfulReplacementUpdatesPersistedScheduleAtomically",
             ),
             errors,
         )
@@ -874,6 +882,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             (
                 "testRecomputesOnlyExistingEligiblePendingMetricsWithinBatch",
                 "testDetachedProjectionCalculationMatchesSynchronousProjection",
+                "testFortyTwoPendingDaysConvergeAcrossScheduledBackgroundRuns",
+                "DENSOSO_PERF scenario=scheduled_historical_recompute_42_days",
                 "testMissingDOBDoesNotLetObservedEnergyClearRecomputeFlag",
                 "testOrdinaryHistoricalReprojectKeepsPendingFlagWhenDOBMissingWithObservedEnergy",
                 "testCurrentDayReprojectRetainsObservedEnergyBehaviorWithoutProfileOrWeight",
@@ -1659,6 +1669,16 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             errors,
         )
         require(
+            "Densoso/Persistence/Schemas/DensosoSchemaV15.swift",
+            (
+                "enum DensosoSchemaV15: VersionedSchema",
+                "DensosoSchemaV14.models + [ConfirmedPlanSessionIndexRecord.self]",
+                "var actionID: UUID",
+                "var scheduledAt: Date",
+            ),
+            errors,
+        )
+        require(
             "Densoso/Persistence/DensosoMigrationPlan.swift",
             (
                 "DensosoSchemaV7.self",
@@ -1677,12 +1697,16 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 ".lightweight(fromVersion: DensosoSchemaV12.self, toVersion: DensosoSchemaV13.self)",
                 "DensosoSchemaV14.self",
                 ".lightweight(fromVersion: DensosoSchemaV13.self, toVersion: DensosoSchemaV14.self)",
+                "DensosoSchemaV15.self",
+                "fromVersion: DensosoSchemaV14.self",
+                "toVersion: DensosoSchemaV15.self",
+                "ConfirmedPlanSessionIndexRepository.rebuild(in: context)",
             ),
             errors,
         )
         require(
             "Densoso/Infrastructure/Persistence/PersistenceBootstrap.swift",
-            ("Schema(versionedSchema: DensosoSchemaV14.self)",),
+            ("Schema(versionedSchema: DensosoSchemaV15.self)",),
             errors,
         )
         require(

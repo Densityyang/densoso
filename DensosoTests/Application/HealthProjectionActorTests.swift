@@ -950,7 +950,7 @@ final class HealthProjectionActorTests: XCTestCase {
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 16)))
         let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: today))
-        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -1013,24 +1013,28 @@ final class HealthProjectionActorTests: XCTestCase {
             notes: try olderTrainingPlan.encodedNotes(),
             startTime: today
         ))
+        try ConfirmedPlanSessionIndexRepository.replace(trainingPlan: olderTrainingPlan, in: context)
         context.insert(ScheduleEvent(
             date: tomorrow,
             title: tomorrowWorkout.draft.name,
             notes: try tomorrowWorkout.encodedNotes(),
             startTime: tomorrow
         ))
+        try ConfirmedPlanSessionIndexRepository.replace(workoutPlan: tomorrowWorkout, in: context)
         context.insert(ScheduleEvent(
             date: today,
             title: todayWorkout.draft.name,
             notes: try todayWorkout.encodedNotes(),
             startTime: today
         ))
+        try ConfirmedPlanSessionIndexRepository.replace(workoutPlan: todayWorkout, in: context)
         context.insert(ScheduleEvent(
             date: today,
             title: newerTrainingPlan.draft.name,
             notes: try newerTrainingPlan.encodedNotes(),
             startTime: today
         ))
+        try ConfirmedPlanSessionIndexRepository.replace(trainingPlan: newerTrainingPlan, in: context)
         try context.save()
         let countBefore = try context.fetchCount(FetchDescriptor<ScheduleEvent>())
 
@@ -1090,7 +1094,7 @@ final class HealthProjectionActorTests: XCTestCase {
         let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 16)))
         let tomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: today))
         let afterTomorrow = try XCTUnwrap(calendar.date(byAdding: .day, value: 2, to: today))
-        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -1115,6 +1119,7 @@ final class HealthProjectionActorTests: XCTestCase {
                 notes: try entry.encodedNotes(),
                 startTime: scheduledAt
             ))
+            try ConfirmedPlanSessionIndexRepository.replace(workoutPlan: entry, in: context)
         }
 
         let todaySessionID = UUID(uuidString: "00000000-0000-0000-0000-00000000B001")!
@@ -1142,6 +1147,7 @@ final class HealthProjectionActorTests: XCTestCase {
             notes: try trainingEntry.encodedNotes(),
             startTime: todaySessionDate
         ))
+        try ConfirmedPlanSessionIndexRepository.replace(trainingPlan: trainingEntry, in: context)
         try context.save()
         let eventCountBefore = try context.fetchCount(FetchDescriptor<ScheduleEvent>())
 
@@ -1152,6 +1158,15 @@ final class HealthProjectionActorTests: XCTestCase {
         XCTAssertEqual(allPlans.workoutPlans.last?.actionID, historicalActionIDs.first)
         XCTAssertEqual(allPlans.trainingPlans.map(\.actionID), [trainingEntry.actionID])
         XCTAssertEqual(allPlans.trainingPlans.first?.draft.sessions.count, 3)
+        XCTAssertEqual(
+            try ConfirmedPlanSessionIndexRepository.fetchCandidates(
+                from: today,
+                through: afterTomorrow,
+                limit: 10,
+                in: context
+            ).count,
+            1
+        )
 
         let snapshot = try await actor.dailyLoopSnapshot(
             asOf: today.addingTimeInterval(10 * 60 * 60),
@@ -1168,7 +1183,7 @@ final class HealthProjectionActorTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 16)))
-        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let container = try ModelContainer(
             for: schema,
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
@@ -1192,6 +1207,7 @@ final class HealthProjectionActorTests: XCTestCase {
                 notes: try entry.encodedNotes(),
                 startTime: scheduledAt
             ))
+            try ConfirmedPlanSessionIndexRepository.replace(workoutPlan: entry, in: context)
         }
 
         let trainingActionID = UUID(uuidString: "00000000-0000-0000-0000-00000000B001")!
@@ -1222,6 +1238,7 @@ final class HealthProjectionActorTests: XCTestCase {
             notes: try trainingEntry.encodedNotes(),
             startTime: today
         ))
+        try ConfirmedPlanSessionIndexRepository.replace(trainingPlan: trainingEntry, in: context)
 
         let terminalActionID = UUID(uuidString: "00000000-0000-0000-0000-00000000B002")!
         let terminalTime = today.addingTimeInterval(9 * 60 * 60)
@@ -1237,6 +1254,7 @@ final class HealthProjectionActorTests: XCTestCase {
             notes: try terminalEntry.encodedNotes(),
             startTime: terminalTime
         ))
+        try ConfirmedPlanSessionIndexRepository.replace(workoutPlan: terminalEntry, in: context)
         context.insert(ScheduleEvent(
             date: terminalTime,
             title: "普通日程",

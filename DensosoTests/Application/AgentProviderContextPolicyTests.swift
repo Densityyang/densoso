@@ -1330,16 +1330,22 @@ final class AgentProviderContextPolicyTests: XCTestCase {
     }
 
     func testAuthorizedHistoricalHealthFactSurvivesAndAddsItsActualConsentDependency() throws {
-        let provenance = Self.historyProvenance()
-        let history = [
-            ModelMessage(role: .user, text: "HRV 45", healthContextPolicyProvenance: provenance),
-            ModelMessage(role: .assistant, text: "收到。", healthContextPolicyProvenance: provenance),
-        ]
         let policy = CloudHealthContextPolicy(
             provider: .deepSeek,
             allowedClasses: [.healthBody],
             allowsConversationHistory: true
         )
+        let provenance = HealthContextPolicyProvenance(
+            provider: policy.provider,
+            policyRevision: policy.revision,
+            allowedClasses: policy.allowedClasses,
+            contentClasses: [.healthBody],
+            hasUnclassifiedHealthContent: false
+        )
+        let history = [
+            ModelMessage(role: .user, text: "HRV 45", healthContextPolicyProvenance: provenance),
+            ModelMessage(role: .assistant, text: "收到。", healthContextPolicyProvenance: provenance),
+        ]
         let messages = CloudRequestPolicyGuard.filterConversationHistory(
             history + [ModelMessage(role: .user, text: "请继续。")],
             currentTurnStartIndex: history.count,
@@ -1359,6 +1365,27 @@ final class AgentProviderContextPolicyTests: XCTestCase {
         )
         XCTAssertTrue(dependencies.contains(.healthBody))
         XCTAssertTrue(dependencies.contains(.conversationHistory))
+    }
+
+    func testSystemPromptHealthVocabularyDoesNotCreateRequestConsentDependencies() {
+        let policy = CloudHealthContextPolicy(
+            provider: .deepSeek,
+            allowedClasses: [],
+            allowsConversationHistory: false
+        )
+        let dependencies = AgentSession.outboundConsentDependencies(
+            messages: [
+                ModelMessage(role: .system, text: "健康安全说明：血糖、药物、心率、饮食、睡眠和运动"),
+                ModelMessage(role: .user, text: "你好"),
+            ],
+            includesImage: false,
+            includesConversationHistory: false,
+            summary: nil,
+            structuredContext: nil,
+            policy: policy
+        )
+
+        XCTAssertEqual(dependencies, [.healthText])
     }
 
     func testUnclassifiedHistoricalHealthFactFailsClosedWithPartialCategoryConsent() {

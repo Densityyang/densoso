@@ -59,6 +59,7 @@ def main() -> int:
         "DensosoSchemaV12.swift",
         "DensosoSchemaV13.swift",
         "DensosoSchemaV14.swift",
+        "DensosoSchemaV15.swift",
     ):
         if not (schemas / name).is_file():
             errors.append(f"missing Densoso/Persistence/Schemas/{name}")
@@ -79,6 +80,8 @@ def main() -> int:
             "DensosoSchemaV12.self",
             "DensosoSchemaV13.self",
             "DensosoSchemaV14.self",
+            "DensosoSchemaV15.self",
+            "ConfirmedPlanSessionIndexRepository.rebuild(in: context)",
             "let sampleBucketKey = Self.snapshotBucketKey(dayKey: sampleDayKey, calendar: located.calendar)",
             "var sleepSamplesByWakeDay: [String: (date: Date, dayKey: String, calendar: Calendar, samples: [HealthSampleSnapshot])] = [:]",
             "for wakeDay in Self.sleepWakeDays(",
@@ -92,6 +95,8 @@ def main() -> int:
             ".lightweight(fromVersion: DensosoSchemaV11.self, toVersion: DensosoSchemaV12.self)",
             ".lightweight(fromVersion: DensosoSchemaV12.self, toVersion: DensosoSchemaV13.self)",
             ".lightweight(fromVersion: DensosoSchemaV13.self, toVersion: DensosoSchemaV14.self)",
+            "fromVersion: DensosoSchemaV14.self",
+            "toVersion: DensosoSchemaV15.self",
         ],
         errors,
     )
@@ -186,7 +191,7 @@ def main() -> int:
             "backupProvider",
             "DensosoDiagnostic",
             "isStoredInMemoryOnly: true",
-            "Schema(versionedSchema: DensosoSchemaV14.self)",
+            "Schema(versionedSchema: DensosoSchemaV15.self)",
         ],
         errors,
     )
@@ -210,6 +215,7 @@ def main() -> int:
             "DensosoSchemaV12.self",
             "DensosoSchemaV13.self",
             "DensosoSchemaV14.self",
+            "DensosoSchemaV15.self",
             "DensosoSchemaV2.self",
         ],
         errors,
@@ -273,8 +279,8 @@ def main() -> int:
             "testV5MigrationIndexesSleepSamplesAcrossMidnightAndAdjacentWindows",
             "testV7ToV9PreservesHealthKitSampleIndexState",
             "testV9StoreMigratesToV10WithPreMigrationBackupAndRetrySafeOpen",
-            "testV11DiskStoreMigratesToV14WithDishPriorTableAndPreservedPolicy",
-            "testV12DiskStoreMigratesToV14WithEmptyToolExecutionJournalAndContributionLedger",
+            "testV11DiskStoreMigratesToV15WithDishPriorTableAndPreservedPolicy",
+            "testV12DiskStoreMigratesToV15WithEmptyToolExecutionJournalAndContributionLedger",
             "testV13DiskStoreAddsEmptyMealPriorContributionLedger",
             "testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity",
             "existingDaySnapshot.healthKitSampleSummary?.workoutEffort.first?.score",

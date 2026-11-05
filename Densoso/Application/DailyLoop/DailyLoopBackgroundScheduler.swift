@@ -124,6 +124,20 @@ protocol HistoricalMetricsRecomputing {
     ) async throws -> HistoricalMetricsRecomputeResult
 }
 
+@MainActor
+struct DailyLoopBackgroundRefreshOperations {
+    typealias StopCheck = @MainActor () -> Bool
+    typealias Recompute = @MainActor (Date, Int, StopCheck) async throws -> HistoricalMetricsRecomputeResult
+
+    let syncHealth: @MainActor (HealthRepository) async throws -> HealthSyncResult
+    let prepareLocalHealthCache: @MainActor (HealthRepository) async throws -> Void
+    let recomputeMetrics: Recompute
+    let refreshHealthBrief: @MainActor () async throws -> Void
+    let makeSnapshot: @MainActor () async throws -> DailyLoopSnapshot
+    let updateNotifications: @MainActor (DailyLoopSnapshot) async -> Void
+    let refreshWatchContext: @MainActor () -> Void
+}
+
 /// Schedules opportunistic local convergence of HealthKit projections and the daily loop.
 /// HealthKit observer delivery remains the primary change signal; this refresh is a retry path.
 @MainActor
@@ -141,15 +155,9 @@ final class DailyLoopBackgroundScheduler {
     )
 
     private let modelContainer: ModelContainer
-    private let healthSyncCoordinator: HealthKitSyncCoordinator
-    private let historicalMetricsRecomputer: any HistoricalMetricsRecomputing
-    private let healthIntelligenceService: HealthIntelligenceService
-    private let dailyLoopSnapshotService: DailyLoopSnapshotService
-    private let notificationScheduler: BriefNotificationScheduler
-    private let watchConnectivityCoordinator: PhoneWatchConnectivityCoordinator
+    private let operations: DailyLoopBackgroundRefreshOperations
     private let isHealthAuthorized: @MainActor () -> Bool
     private let scheduleController: DailyLoopBackgroundScheduleController
-    private let prepareLocalHealthCacheIfNeeded: @MainActor (HealthRepository) async throws -> Void
 
     private(set) var isRegistered = false
     private(set) var lastError: String?
@@ -159,6 +167,27 @@ final class DailyLoopBackgroundScheduler {
     var nextRefreshReason: DailyLoopBackgroundRefreshReason? { scheduleController.nextRefreshReason }
 
     init(
+        modelContainer: ModelContainer,
+        operations: DailyLoopBackgroundRefreshOperations,
+        isHealthAuthorized: @escaping @MainActor () -> Bool,
+        backgroundTaskScheduler: any DailyLoopBackgroundTaskScheduling = SystemDailyLoopBackgroundTaskScheduler(),
+        scheduleDefaults: UserDefaults = .standard,
+        initiallyRegistered: Bool = false
+    ) {
+        self.modelContainer = modelContainer
+        self.operations = operations
+        self.isHealthAuthorized = isHealthAuthorized
+        scheduleController = DailyLoopBackgroundScheduleController(
+            client: backgroundTaskScheduler,
+            defaults: scheduleDefaults,
+            taskIdentifier: Self.taskIdentifier,
+            earliestDateKey: Self.nextRefreshDefaultsKey,
+            reasonKey: Self.nextRefreshReasonDefaultsKey
+        )
+        isRegistered = initiallyRegistered
+    }
+
+    convenience init(
         modelContainer: ModelContainer,
         healthSyncCoordinator: HealthKitSyncCoordinator,
         historicalMetricsRecomputer: any HistoricalMetricsRecomputing,
@@ -171,22 +200,34 @@ final class DailyLoopBackgroundScheduler {
         scheduleDefaults: UserDefaults = .standard,
         prepareLocalHealthCacheIfNeeded: @escaping @MainActor (HealthRepository) async throws -> Void = { _ in }
     ) {
-        self.modelContainer = modelContainer
-        self.healthSyncCoordinator = healthSyncCoordinator
-        self.historicalMetricsRecomputer = historicalMetricsRecomputer
-        self.healthIntelligenceService = healthIntelligenceService
-        self.dailyLoopSnapshotService = dailyLoopSnapshotService
-        self.notificationScheduler = notificationScheduler
-        self.watchConnectivityCoordinator = watchConnectivityCoordinator
-        self.isHealthAuthorized = isHealthAuthorized
-        scheduleController = DailyLoopBackgroundScheduleController(
-            client: backgroundTaskScheduler,
-            defaults: scheduleDefaults,
-            taskIdentifier: Self.taskIdentifier,
-            earliestDateKey: Self.nextRefreshDefaultsKey,
-            reasonKey: Self.nextRefreshReasonDefaultsKey
+        let operations = DailyLoopBackgroundRefreshOperations(
+            syncHealth: { repository in
+                try await healthSyncCoordinator.syncAvailableData(
+                    using: repository,
+                    forceRebaseline: false,
+                    aggregateIncrementalLookbackDays: 3
+                )
+            },
+            prepareLocalHealthCache: prepareLocalHealthCacheIfNeeded,
+            recomputeMetrics: { now, batchSize, shouldStop in
+                try await historicalMetricsRecomputer.recomputePendingMetrics(
+                    now: now,
+                    batchSize: batchSize,
+                    shouldStop: shouldStop
+                )
+            },
+            refreshHealthBrief: { _ = try await healthIntelligenceService.refresh() },
+            makeSnapshot: { try await dailyLoopSnapshotService.snapshot() },
+            updateNotifications: { await notificationScheduler.updateSnapshot($0) },
+            refreshWatchContext: { watchConnectivityCoordinator.refreshApplicationContext() }
         )
-        self.prepareLocalHealthCacheIfNeeded = prepareLocalHealthCacheIfNeeded
+        self.init(
+            modelContainer: modelContainer,
+            operations: operations,
+            isHealthAuthorized: isHealthAuthorized,
+            backgroundTaskScheduler: backgroundTaskScheduler,
+            scheduleDefaults: scheduleDefaults
+        )
     }
 
     /// Must run during application launch, before the system delivers a pending refresh.
@@ -255,10 +296,6 @@ final class DailyLoopBackgroundScheduler {
     }
 
     private func handle(_ taskBox: BackgroundRefreshTaskBox) {
-        // The delivered request is no longer pending; clear its persisted time
-        // before scheduling the next normal wakeup.
-        clearScheduledRefresh()
-        let didScheduleNextRefresh = scheduleNextRefresh()
         guard let backgroundTask = taskBox.task else {
             taskBox.complete(success: false)
             return
@@ -269,131 +306,7 @@ final class DailyLoopBackgroundScheduler {
                 return
             }
             defer { self.activeRefreshTask = nil }
-
-            do {
-                guard !Task.isCancelled, !taskBox.isExpired else {
-                    taskBox.complete(success: false)
-                    return
-                }
-                let repository = HealthRepository(modelContext: self.modelContainer.mainContext)
-                var succeeded = didScheduleNextRefresh
-                if self.isHealthAuthorized() {
-                    do {
-                        let syncResult = try await self.healthSyncCoordinator.syncAvailableData(
-                            using: repository,
-                            forceRebaseline: false,
-                            aggregateIncrementalLookbackDays: 3
-                        )
-                        guard !Task.isCancelled, !taskBox.isExpired else {
-                            taskBox.complete(success: false)
-                            return
-                        }
-                        if syncResult.hasFailures {
-                            succeeded = false
-                            self.lastError = "部分 HealthKit 数据将在后续刷新时重试。"
-                            _ = self.scheduleNextRefresh(reason: .healthSyncRecovery)
-                        }
-                    } catch {
-                        guard !Task.isCancelled, !taskBox.isExpired else {
-                            taskBox.complete(success: false)
-                            return
-                        }
-                        succeeded = false
-                        self.lastError = SharedErrorDescriptor.mapped(
-                            from: error,
-                            fallback: Self.projectionFailureFallback
-                        ).diagnosticSafeDetail
-                        _ = self.scheduleNextRefresh(reason: .healthSyncRecovery)
-                    }
-                } else {
-                    do {
-                        try await self.prepareLocalHealthCacheIfNeeded(repository)
-                        guard !Task.isCancelled, !taskBox.isExpired else {
-                            taskBox.complete(success: false)
-                            return
-                        }
-                    } catch {
-                        guard !Task.isCancelled, !taskBox.isExpired else {
-                            taskBox.complete(success: false)
-                            return
-                        }
-                        succeeded = false
-                        self.lastError = SharedErrorDescriptor.mapped(
-                            from: error,
-                            fallback: Self.projectionFailureFallback
-                        ).diagnosticSafeDetail
-                        _ = self.scheduleNextRefresh(reason: .healthSyncRecovery)
-                    }
-                }
-                guard !Task.isCancelled, !taskBox.isExpired else {
-                    taskBox.complete(success: false)
-                    return
-                }
-                let recomputeResult = try await self.historicalMetricsRecomputer.recomputePendingMetrics(
-                    now: Date(),
-                    batchSize: Self.historicalRecomputeBatchSize,
-                    shouldStop: { Task.isCancelled || taskBox.isExpired }
-                )
-                if recomputeResult.hasMoreEligibleWork {
-                    if !self.scheduleNextRefresh(
-                        reason: .historicalRecompute
-                    ) { succeeded = false }
-                }
-                guard !Task.isCancelled, !taskBox.isExpired else {
-                    taskBox.complete(success: false)
-                    return
-                }
-                do {
-                    _ = try await self.healthIntelligenceService.refresh()
-                    guard !Task.isCancelled, !taskBox.isExpired else {
-                        taskBox.complete(success: false)
-                        return
-                    }
-                } catch {
-                    guard !Task.isCancelled, !taskBox.isExpired else {
-                        taskBox.complete(success: false)
-                        return
-                    }
-                    succeeded = false
-                    self.lastError = SharedErrorDescriptor.mapped(
-                        from: error,
-                        fallback: Self.projectionFailureFallback
-                    ).diagnosticSafeDetail
-                    _ = self.scheduleNextRefresh(reason: .projectionRecovery)
-                }
-                guard !Task.isCancelled, !taskBox.isExpired else {
-                    taskBox.complete(success: false)
-                    return
-                }
-                let snapshot = try await self.dailyLoopSnapshotService.snapshot()
-                guard !Task.isCancelled, !taskBox.isExpired else {
-                    taskBox.complete(success: false)
-                    return
-                }
-                await self.notificationScheduler.updateSnapshot(snapshot)
-                guard !Task.isCancelled, !taskBox.isExpired else {
-                    taskBox.complete(success: false)
-                    return
-                }
-                self.watchConnectivityCoordinator.refreshApplicationContext()
-                guard !Task.isCancelled, !taskBox.isExpired else {
-                    taskBox.complete(success: false)
-                    return
-                }
-                if succeeded { self.lastError = nil }
-                taskBox.complete(success: succeeded)
-            } catch {
-                guard !Task.isCancelled, !taskBox.isExpired else {
-                    taskBox.complete(success: false)
-                    return
-                }
-                self.lastError = SharedErrorDescriptor.mapped(
-                    from: error,
-                    fallback: Self.projectionFailureFallback
-                ).diagnosticSafeDetail
-                _ = self.scheduleNextRefresh(reason: .projectionRecovery)
-                taskBox.complete(success: false)
-            }
+            await self.runScheduledRefresh(taskBox: taskBox)
         }
         activeRefreshTask = refreshOperation
         backgroundTask.expirationHandler = { [weak self, taskBox, refreshOperation] in
@@ -410,6 +323,148 @@ final class DailyLoopBackgroundScheduler {
 
     private func clearScheduledRefresh() {
         scheduleController.clearPersistedSchedule()
+    }
+
+    func runScheduledRefresh(taskBox: BackgroundRefreshTaskBox, now: Date = Date()) async {
+        guard !Task.isCancelled, !taskBox.isExpired else {
+            taskBox.complete(success: false)
+            return
+        }
+        // The delivered request is no longer pending. Store the next regular
+        // wakeup before work begins; recovery requests can replace it later.
+        clearScheduledRefresh()
+        let didScheduleNextRefresh = scheduleNextRefresh()
+        await runRefresh(
+            taskBox: taskBox,
+            didScheduleNextRefresh: didScheduleNextRefresh,
+            now: now
+        )
+    }
+
+    func runRefresh(
+        taskBox: BackgroundRefreshTaskBox,
+        didScheduleNextRefresh: Bool,
+        now: Date = Date()
+    ) async {
+        do {
+            guard !Task.isCancelled, !taskBox.isExpired else {
+                taskBox.complete(success: false)
+                return
+            }
+            let repository = HealthRepository(modelContext: modelContainer.mainContext)
+            var succeeded = didScheduleNextRefresh
+            if isHealthAuthorized() {
+                do {
+                    let syncResult = try await operations.syncHealth(repository)
+                    guard !Task.isCancelled, !taskBox.isExpired else {
+                        taskBox.complete(success: false)
+                        return
+                    }
+                    if syncResult.hasFailures {
+                        succeeded = false
+                        lastError = "部分 HealthKit 数据将在后续刷新时重试。"
+                        _ = scheduleNextRefresh(reason: .healthSyncRecovery)
+                    }
+                } catch {
+                    guard !Task.isCancelled, !taskBox.isExpired else {
+                        taskBox.complete(success: false)
+                        return
+                    }
+                    succeeded = false
+                    lastError = SharedErrorDescriptor.mapped(
+                        from: error,
+                        fallback: Self.projectionFailureFallback
+                    ).diagnosticSafeDetail
+                    _ = scheduleNextRefresh(reason: .healthSyncRecovery)
+                }
+            } else {
+                do {
+                    try await operations.prepareLocalHealthCache(repository)
+                    guard !Task.isCancelled, !taskBox.isExpired else {
+                        taskBox.complete(success: false)
+                        return
+                    }
+                } catch {
+                    guard !Task.isCancelled, !taskBox.isExpired else {
+                        taskBox.complete(success: false)
+                        return
+                    }
+                    succeeded = false
+                    lastError = SharedErrorDescriptor.mapped(
+                        from: error,
+                        fallback: Self.projectionFailureFallback
+                    ).diagnosticSafeDetail
+                    _ = scheduleNextRefresh(reason: .healthSyncRecovery)
+                }
+            }
+            guard !Task.isCancelled, !taskBox.isExpired else {
+                taskBox.complete(success: false)
+                return
+            }
+            let recomputeResult = try await operations.recomputeMetrics(
+                now,
+                Self.historicalRecomputeBatchSize,
+                { Task.isCancelled || taskBox.isExpired }
+            )
+            if recomputeResult.hasMoreEligibleWork,
+               !scheduleNextRefresh(reason: .historicalRecompute) {
+                succeeded = false
+            }
+            guard !Task.isCancelled, !taskBox.isExpired else {
+                taskBox.complete(success: false)
+                return
+            }
+            do {
+                try await operations.refreshHealthBrief()
+                guard !Task.isCancelled, !taskBox.isExpired else {
+                    taskBox.complete(success: false)
+                    return
+                }
+            } catch {
+                guard !Task.isCancelled, !taskBox.isExpired else {
+                    taskBox.complete(success: false)
+                    return
+                }
+                succeeded = false
+                lastError = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: Self.projectionFailureFallback
+                ).diagnosticSafeDetail
+                _ = scheduleNextRefresh(reason: .projectionRecovery)
+            }
+            guard !Task.isCancelled, !taskBox.isExpired else {
+                taskBox.complete(success: false)
+                return
+            }
+            let snapshot = try await operations.makeSnapshot()
+            guard !Task.isCancelled, !taskBox.isExpired else {
+                taskBox.complete(success: false)
+                return
+            }
+            await operations.updateNotifications(snapshot)
+            guard !Task.isCancelled, !taskBox.isExpired else {
+                taskBox.complete(success: false)
+                return
+            }
+            operations.refreshWatchContext()
+            guard !Task.isCancelled, !taskBox.isExpired else {
+                taskBox.complete(success: false)
+                return
+            }
+            if succeeded { lastError = nil }
+            taskBox.complete(success: succeeded)
+        } catch {
+            guard !Task.isCancelled, !taskBox.isExpired else {
+                taskBox.complete(success: false)
+                return
+            }
+            lastError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: Self.projectionFailureFallback
+            ).diagnosticSafeDetail
+            _ = scheduleNextRefresh(reason: .projectionRecovery)
+            taskBox.complete(success: false)
+        }
     }
 }
 

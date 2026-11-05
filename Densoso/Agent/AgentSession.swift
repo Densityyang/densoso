@@ -1989,7 +1989,7 @@ final class AgentSession {
         if let summary { required.formUnion(healthDataClasses(in: summary)) }
         if let structuredContext { required.formUnion(healthDataClasses(in: structuredContext)) }
 
-        for message in messages {
+        for message in messages where message.role != .system {
             let provenance = message.healthContextPolicyProvenance
             if let contentClasses = provenance?.contentClasses {
                 required.formUnion(contentClasses)

@@ -971,6 +971,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                         startTime: scheduledAt,
                         endTime: estimatedEnd
                     ))
+                    try ConfirmedPlanSessionIndexRepository.replace(workoutPlan: entry, in: modelContext)
                     // A plan receipt refers to its action; it is not a completed Workout record.
                     localRecordID = action.id
                     affectedDate = nil
@@ -991,6 +992,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                         startTime: firstSession.date,
                         endTime: nil
                     ))
+                    try ConfirmedPlanSessionIndexRepository.replace(trainingPlan: entry, in: modelContext)
                     // One app-owned plan record represents all sessions; none is a completed Workout.
                     localRecordID = action.id
                     affectedDate = nil

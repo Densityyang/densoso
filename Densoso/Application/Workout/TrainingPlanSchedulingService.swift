@@ -279,6 +279,7 @@ final class TrainingPlanSchedulingService {
                 fallback: .workoutKitUnavailableFallback
             ).userMessage
             event.notes = try entry.encodedNotes()
+            try ConfirmedPlanSessionIndexRepository.replace(trainingPlan: entry, in: context)
             try context.save()
             throw error
         }
@@ -305,12 +306,14 @@ final class TrainingPlanSchedulingService {
                 }
                 entry.lastError = nil
                 event.notes = try entry.encodedNotes()
+                try ConfirmedPlanSessionIndexRepository.replace(trainingPlan: entry, in: context)
                 try context.save()
             }
 
             entry.state = .scheduled
             entry.lastError = nil
             event.notes = try entry.encodedNotes()
+            try ConfirmedPlanSessionIndexRepository.replace(trainingPlan: entry, in: context)
             try context.save()
         } catch {
             entry.state = .retryable
@@ -319,6 +322,7 @@ final class TrainingPlanSchedulingService {
                 fallback: .workoutKitUnavailableFallback
             ).userMessage
             event.notes = try entry.encodedNotes()
+            try ConfirmedPlanSessionIndexRepository.replace(trainingPlan: entry, in: context)
             try? context.save()
             throw error
         }

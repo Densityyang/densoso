@@ -414,7 +414,7 @@ def main() -> int:
             "struct DiagnosticsProviderPolicyRevision",
             "struct DiagnosticsHealthCoverage",
             "enum DiagnosticsCoverageStatus",
-            "DensosoSchemaV14.versionIdentifier",
+            "DensosoSchemaV15.versionIdentifier",
             "makeCloudPolicyRevisions(context: context)",
             "makeHealthCoverage(context: context, asOf: now)",
             "cloudPolicyRevisions: cloudPolicyRevisions",

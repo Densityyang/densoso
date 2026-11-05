@@ -234,7 +234,7 @@ final class HealthNarrativePolicyTests: XCTestCase {
             narrativeContext: context,
             structuredNarrative: true
         )
-        XCTAssertTrue(recoveryPrompt.contains("本地健康汇总"))
+        XCTAssertFalse(recoveryPrompt.contains("本地健康汇总"))
         XCTAssertTrue(recoveryPrompt.contains("健康解读结构（强制）"))
         XCTAssertTrue(recoveryPrompt.contains("sleep.consistency"))
     }

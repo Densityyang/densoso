@@ -145,7 +145,7 @@ final class CaloricEnergySemanticsTests: XCTestCase {
     }
 
     func testResolvedBreakfastEstimateSurvivesAnUnresolvedLunchAsPartialIntake() throws {
-        let day = Date(timeIntervalSince1970: 1_700_000_000)
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
         let breakfast = MealRecord(
             date: day.addingTimeInterval(8 * 60 * 60),
             totalCaloriesKcal: 420,
@@ -189,7 +189,7 @@ final class CaloricEnergySemanticsTests: XCTestCase {
     }
 
     func testFullyEstimatedMealsStillNeedExplicitDayCompletion() throws {
-        let day = Date(timeIntervalSince1970: 1_700_000_000)
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
         let breakfast = MealRecord(
             date: day.addingTimeInterval(8 * 60 * 60),
             totalCaloriesKcal: 420,

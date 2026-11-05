@@ -191,6 +191,9 @@ actor HealthProjectionActor {
     }
 
     private func loadConfirmedPlanEntries(asOf date: Date?) throws -> ConfirmedDailyLoopPlans {
+        if let date {
+            return try loadConfirmedPlanEntriesFromIndex(asOf: date)
+        }
         let workoutPlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix
         let trainingPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
         let predicate = #Predicate<ScheduleEvent> {
@@ -309,6 +312,47 @@ actor HealthProjectionActor {
                 return lhs.draft.id.uuidString < rhs.draft.id.uuidString
             }
         return ConfirmedDailyLoopPlans(workoutPlans: sortedWorkoutPlans, trainingPlans: sortedTrainingPlans)
+    }
+
+    private func loadConfirmedPlanEntriesFromIndex(asOf date: Date) throws -> ConfirmedDailyLoopPlans {
+        let dayStart = calendar.startOfDay(for: date)
+        guard let end = calendar.date(byAdding: .day, value: 2, to: dayStart) else {
+            return ConfirmedDailyLoopPlans(workoutPlans: [], trainingPlans: [])
+        }
+        let records = try ConfirmedPlanSessionIndexRepository.fetchCandidates(
+            from: dayStart,
+            through: end,
+            limit: Self.watchPlanSummaryLimit,
+            in: modelContext
+        )
+        var workoutPlansByID: [UUID: ConfirmedWorkoutPlanEntry] = [:]
+        var trainingPlansByID: [UUID: ConfirmedTrainingPlanEntry] = [:]
+
+        for record in records {
+            switch record.planKindRaw {
+            case "workout":
+                guard let entry = ConfirmedWorkoutPlanEntry.decode(notes: record.notes),
+                      entry.actionID == record.actionID,
+                      entry.state != .terminal,
+                      entry.draft.scheduledAt == record.scheduledAt else { continue }
+                workoutPlansByID[entry.actionID] = entry
+            case "training":
+                guard let entry = ConfirmedTrainingPlanEntry.decode(notes: record.notes),
+                      entry.actionID == record.actionID,
+                      entry.state != .terminal,
+                      entry.draft.sessions.contains(where: {
+                          $0.id == record.sessionID && $0.date == record.scheduledAt && !$0.isRestDay
+                      }) else { continue }
+                trainingPlansByID[entry.actionID] = entry
+            default:
+                continue
+            }
+        }
+
+        return ConfirmedDailyLoopPlans(
+            workoutPlans: Array(workoutPlansByID.values),
+            trainingPlans: Array(trainingPlansByID.values)
+        )
     }
 
     private static func retainEarliestWatchPlanCandidates(_ candidates: inout [WatchPlanCandidate]) {

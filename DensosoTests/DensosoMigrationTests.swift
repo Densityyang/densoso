@@ -403,7 +403,7 @@ final class DensosoMigrationTests: XCTestCase {
         )
         XCTAssertTrue(sampleIndex.needsRequery)
         XCTAssertFalse(sampleIndex.isTombstoned)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "15.0.0")
     }
 
     func testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity() async throws {
@@ -445,7 +445,7 @@ final class DensosoMigrationTests: XCTestCase {
         XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "8.0.0")
 
         container = try openCurrentStore(at: location.storeURL)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "15.0.0")
         let migratedUsage = try XCTUnwrap(
             container!.mainContext.fetch(FetchDescriptor<ProviderUsageRecord>()).first
         )
@@ -1150,7 +1150,7 @@ final class DensosoMigrationTests: XCTestCase {
     }
 
     private func openCurrentStore(at url: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let configuration = ModelConfiguration("Densoso", schema: schema, url: url)
         return try ModelContainer(
             for: schema,
@@ -1159,7 +1159,7 @@ final class DensosoMigrationTests: XCTestCase {
         )
     }
 
-    func testV11DiskStoreMigratesToV14WithDishPriorTableAndPreservedPolicy() throws {
+    func testV11DiskStoreMigratesToV15WithDishPriorTableAndPreservedPolicy() throws {
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
         let date = Date(timeIntervalSince1970: 1_750_000_000)
@@ -1194,10 +1194,10 @@ final class DensosoMigrationTests: XCTestCase {
         let policy = try XCTUnwrap(context.fetch(FetchDescriptor<CloudHealthContextPolicyRecord>()).first)
         XCTAssertEqual(policy.policyHash, "v11-policy-hash")
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<PersonalMealDishPriorRecord>()), 0)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "15.0.0")
     }
 
-    func testV12DiskStoreMigratesToV14WithEmptyToolExecutionJournalAndContributionLedger() throws {
+    func testV12DiskStoreMigratesToV15WithEmptyToolExecutionJournalAndContributionLedger() throws {
         let location = try TemporaryStoreLocation()
         defer { location.remove() }
         var source: ModelContainer? = try makeContainer(
@@ -1215,7 +1215,7 @@ final class DensosoMigrationTests: XCTestCase {
             0
         )
         XCTAssertEqual(try migrated.mainContext.fetchCount(FetchDescriptor<MealPriorContributionRecord>()), 0)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "15.0.0")
     }
 
     func testV13DiskStoreAddsEmptyMealPriorContributionLedger() throws {
@@ -1234,7 +1234,60 @@ final class DensosoMigrationTests: XCTestCase {
         let migrated = try openCurrentStore(at: location.storeURL)
         XCTAssertEqual(try migrated.mainContext.fetchCount(FetchDescriptor<MealRecord>()), 1)
         XCTAssertEqual(try migrated.mainContext.fetchCount(FetchDescriptor<MealPriorContributionRecord>()), 0)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "15.0.0")
+    }
+
+    func testV14MigrationBuildsConfirmedPlanSessionIndex() throws {
+        let location = try TemporaryStoreLocation()
+        defer { location.remove() }
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let configuration = ModelConfiguration("Densoso", schema: schema, url: location.storeURL)
+        var source: ModelContainer? = try ModelContainer(for: schema, configurations: [configuration])
+        var sourceContext: ModelContext? = ModelContext(source!)
+        let day = Date(timeIntervalSince1970: 1_800_000_000)
+        let workout = ConfirmedWorkoutPlanEntry(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-00000000F001")!,
+            idempotencyKey: "migration-workout-plan",
+            draft: WorkoutPlanDraft(name: "迁移单日计划", activity: .walking, scheduledAt: day)
+        )
+        let trainingSessionID = UUID(uuidString: "00000000-0000-0000-0000-00000000F002")!
+        let training = ConfirmedTrainingPlanEntry(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-00000000F003")!,
+            idempotencyKey: "migration-training-plan",
+            draft: TrainingPlanDraft(
+                name: "迁移多日计划",
+                createdAt: day.addingTimeInterval(-86_400),
+                sessions: [
+                    TrainingSessionDraft(id: trainingSessionID, date: day.addingTimeInterval(3_600), activity: .cycling, reason: "训练"),
+                    TrainingSessionDraft(date: day.addingTimeInterval(86_400), activity: nil, reason: "休息"),
+                ]
+            )
+        )
+        sourceContext!.insert(ScheduleEvent(
+            date: day,
+            title: workout.draft.name,
+            notes: try workout.encodedNotes(),
+            startTime: day
+        ))
+        sourceContext!.insert(ScheduleEvent(
+            date: day,
+            title: training.draft.name,
+            notes: try training.encodedNotes(),
+            startTime: day
+        ))
+        sourceContext!.insert(ScheduleEvent(date: day, title: "普通日程", notes: "ordinary", startTime: day))
+        try sourceContext!.save()
+        sourceContext = nil
+        source = nil
+
+        let migrated = try openCurrentStore(at: location.storeURL)
+        let migratedContext = migrated.mainContext
+        let index = try migratedContext.fetch(FetchDescriptor<ConfirmedPlanSessionIndexRecord>())
+        XCTAssertEqual(index.count, 2)
+        XCTAssertEqual(Set(index.map(\.actionID)), [workout.actionID, training.actionID])
+        XCTAssertTrue(index.contains { $0.actionID == workout.actionID && $0.sessionID == workout.actionID })
+        XCTAssertTrue(index.contains { $0.actionID == training.actionID && $0.sessionID == trainingSessionID })
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "15.0.0")
     }
 
     func testV9StoreMigratesToV10WithPreMigrationBackupAndRetrySafeOpen() throws {

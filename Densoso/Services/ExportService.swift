@@ -1069,6 +1069,7 @@ final class ExportService {
             try context.delete(model: DailyBriefRecord.self)
             try context.delete(model: WeeklyBriefRecord.self)
             try context.delete(model: ScheduleEvent.self)
+            try context.delete(model: ConfirmedPlanSessionIndexRecord.self)
             try context.delete(model: DailyMetrics.self)
             try context.delete(model: WeeklyReport.self)
             try context.delete(model: HealthSyncOutboxEntry.self)
@@ -1379,6 +1380,7 @@ final class ExportService {
                 event.createdAt = source.createdAt
                 context.insert(event)
             }
+            try ConfirmedPlanSessionIndexRepository.rebuild(in: context, saveChanges: false)
 
             for source in document.payload.dailyBriefs ?? [] {
                 let brief = DailyBriefRecord(

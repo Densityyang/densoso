@@ -249,6 +249,7 @@ final class WorkoutPlanSchedulingService {
                 fallback: .workoutKitUnavailableFallback
             ).userMessage
             event.notes = try entry.encodedNotes()
+            try ConfirmedPlanSessionIndexRepository.replace(workoutPlan: entry, in: context)
             try context.save()
             lastError = SharedErrorDescriptor.mapped(
                 from: error,
@@ -262,6 +263,7 @@ final class WorkoutPlanSchedulingService {
             entry.state = .scheduled
             entry.lastError = nil
             event.notes = try entry.encodedNotes()
+            try ConfirmedPlanSessionIndexRepository.replace(workoutPlan: entry, in: context)
             try context.save()
             lastError = nil
         } catch {
@@ -271,6 +273,7 @@ final class WorkoutPlanSchedulingService {
                 fallback: .workoutKitUnavailableFallback
             ).userMessage
             event.notes = try entry.encodedNotes()
+            try ConfirmedPlanSessionIndexRepository.replace(workoutPlan: entry, in: context)
             try context.save()
             lastError = SharedErrorDescriptor.mapped(
                 from: error,
