@@ -115,6 +115,7 @@ final class HealthContextPromptBuilderTests: XCTestCase {
         XCTAssertTrue(HealthContextPromptBuilder.shouldIncludeSummary(for: request))
         XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: request))
         XCTAssertTrue(HealthContextPromptBuilder.requiresHealthContext(for: request))
+        XCTAssertFalse(HealthContextPromptBuilder.requiresHealthContext(for: "记录体重 62.5 公斤"))
         XCTAssertFalse(HealthContextPromptBuilder.requiresHealthContext(for: "今天天气怎么样？"))
     }
 

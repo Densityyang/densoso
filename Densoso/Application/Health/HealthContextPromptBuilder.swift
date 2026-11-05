@@ -159,6 +159,13 @@ enum HealthContextPromptBuilder {
         "what about", "and then", "that", "this", "those", "continue", "it ",
     ]
     private static let healthRetrievalIntentTerms = analysisIntentTerms + ["什么"]
+    private static let personalRecordReferenceTerms = [
+        "记录", "日志", "历史", "record", "records", "log", "logs", "history",
+    ]
+    private static let explicitHealthWriteTerms = [
+        "帮我记录", "帮忙记录", "请记录", "我要记录", "我记录", "记录一下", "记一下",
+        "保存", "打卡", "log my", "log ",
+    ]
     // "状态" alone is too broad to identify a health request. These phrases
     // make common personal check-ins explicit without matching app/system state.
     private static let personalWellbeingEntityTerms = [
@@ -194,6 +201,8 @@ enum HealthContextPromptBuilder {
     static func requiresHealthContext(for userText: String, priorHealthContext: Bool = false) -> Bool {
         requiresNarrative(for: userText, priorHealthContext: priorHealthContext)
             || requiresMealEstimationContext(for: userText)
+            || (isPersonalHealthRecordLookup(userText.lowercased())
+                && shouldIncludeSummary(for: userText, priorHealthContext: priorHealthContext))
     }
 
     static func requiresMealEstimationContext(for userText: String) -> Bool {
@@ -321,6 +330,16 @@ enum HealthContextPromptBuilder {
 
     private static func isCaptureIntent(_ normalized: String) -> Bool {
         captureIntentTerms.contains(where: { normalized.contains($0) })
+    }
+
+    private static func isPersonalHealthRecordLookup(_ normalized: String) -> Bool {
+        guard !explicitHealthWriteTerms.contains(where: normalized.contains),
+              personalRecordReferenceTerms.contains(where: normalized.contains),
+              healthEntityTerms.contains(where: normalized.contains) else {
+            return false
+        }
+        return personalContextTerms.contains(where: normalized.contains)
+            || ["查看", "查询", "看看", "回顾", "show", "view", "check"].contains(where: normalized.contains)
     }
 
     private static func encoded(_ summary: HealthContextSummary) throws -> Data {
