@@ -78,9 +78,11 @@ final class SpeechCaptureStateMachineTests: XCTestCase {
         harness.streamer.emit(frame)
         await drainTasks()
 
+        XCTAssertEqual(harness.service.runtime, .speechAnalyzer(localeIdentifier: "zh-CN"))
         harness.factory.modern.fail()
-        await drainTasks(iterations: 20)
+        let didFallBack = await waitForLegacySpeechFallback(harness)
 
+        XCTAssertTrue(didFallBack, "The failed modern transcriber should fall back while capture remains active")
         XCTAssertEqual(harness.factory.legacyMakeCalls, 1)
         XCTAssertEqual(harness.factory.legacy.appendedFrames, [frame])
         XCTAssertEqual(harness.service.runtime, .legacySpeech)
@@ -449,4 +451,22 @@ private struct SpeechHarness {
 @MainActor
 private func drainTasks(iterations: Int = 8) async {
     for _ in 0..<iterations { await Task.yield() }
+}
+
+@MainActor
+private func waitForLegacySpeechFallback(
+    _ harness: SpeechHarness,
+    timeout: Duration = .seconds(3)
+) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while clock.now < deadline {
+        if harness.factory.legacyMakeCalls > 0,
+           harness.service.runtime == .legacySpeech {
+            return true
+        }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return harness.factory.legacyMakeCalls > 0
+        && harness.service.runtime == .legacySpeech
 }
