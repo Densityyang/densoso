@@ -1451,6 +1451,12 @@ private struct ProfileEditorSheet: View {
                 }
             }
             if projectionPending {
+                do {
+                    _ = try await dependencies.healthIntelligenceService.refresh()
+                } catch {
+                    validationError = "资料已保存，但每日指标仍待更新；健康摘要也暂时无法刷新：\(safeErrorMessage(error))"
+                    return
+                }
                 validationError = "资料已保存，但每日指标仍待更新；系统已保留重试标记。"
                 return
             }
