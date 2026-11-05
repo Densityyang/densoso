@@ -1392,7 +1392,7 @@ final class AgentProviderContextPolicyTests: XCTestCase {
     func testFinalSendGatesRequireDependenciesFromEveryOutboundHealthSource() async throws {
         let historyProvenance = HealthContextPolicyProvenance(
             provider: .deepSeek,
-            policyRevision: 7,
+            policyRevision: "7",
             allowedClasses: [],
             contentClasses: [.healthActivity],
             hasUnclassifiedHealthContent: false
