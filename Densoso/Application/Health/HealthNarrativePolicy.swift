@@ -74,7 +74,8 @@ enum HealthNarrativePolicy {
             return "目前没有可用的本地健康数据；数据空缺不代表零，我不会据此猜测。"
         }
         let subjectiveSummary = context.subjectiveContext?.entries.first.map(renderSubjectiveSummary)
-        guard context.aggregateSummary != nil, let state = context.healthState else {
+        let stateIsAvailable = context.healthState != nil || context.cloudHealthState != nil
+        guard context.aggregateSummary != nil, stateIsAvailable else {
             guard let subjectiveSummary else {
                 return "目前没有可用的本地健康数据；数据空缺不代表零，我不会据此猜测。"
             }
@@ -84,7 +85,7 @@ enum HealthNarrativePolicy {
             return "目前缺少可引用的健康证据，暂不生成个性化解读；数据空缺不代表零。"
         }
         let summary: String
-        switch state.recovery.status {
+        switch context.cloudHealthState?.recovery?.status ?? context.healthState?.recovery.status ?? .insufficientEvidence {
         case .insufficientEvidence:
             summary = "目前可用的健康证据不足以判断恢复情况；数据空缺不代表零。"
         case .withinTypicalRange:

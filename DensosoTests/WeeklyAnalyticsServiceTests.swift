@@ -130,7 +130,7 @@ final class WeeklyAnalyticsServiceTests: XCTestCase {
             mealCount: meals,
             workoutCount: workouts,
             energyQuality: "observed",
-            dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true}"#,
+            dataCoverageJSON: #"{"intake":true,"allRecordedMealsHaveEvidence":true,"protein":true,"proteinComplete":true,"fat":true,"fatComplete":true,"carbs":true,"carbsComplete":true,"nutritionRecordStatus":"complete","nutritionMealFingerprint":"weekly-meal-set","nutritionCompletionMealFingerprint":"weekly-meal-set"}"#,
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
             sourceFingerprint: "weekly-test-\(date.timeIntervalSince1970)"
         )

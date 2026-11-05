@@ -320,17 +320,16 @@ enum CaloricEngine {
                 high: meal.energyHighKcal
             )
         }
-        let intakeComplete = !dayMeals.isEmpty
+        let allRecordedMealsHaveEvidence = !dayMeals.isEmpty
             && evidenceBackedMeals.count == dayMeals.count
             && intakeRanges.count == dayMeals.count
-        // DailyMetrics still has required scalar/range columns for compatibility.
-        // Keep their sentinel at zero when any meal lacks usable evidence; the
-        // coverage bit is the canonical signal consumed by read models.
-        let intake = intakeComplete
+        let intakeEstimateAvailable = !intakeRanges.isEmpty
+        // Preserve evidence-backed estimates even while another recorded meal is
+        // unresolved. `allRecordedMealsHaveEvidence` separately says whether the
+        // estimate covers every meal recorded for the day.
+        let intake = intakeEstimateAvailable
             ? ((try? EstimateRange.sum(intakeRanges)) ?? (try! EstimateRange.point(0)))
             : (try! EstimateRange.point(0))
-        // Compatibility scalar fields are only populated from complete nutrient
-        // evidence. A legacy zero mirror can mean unknown, not a measured zero.
         let proteinRanges = evidenceBackedMeals.compactMap { nutrientRange(
             low: $0.proteinLowG, likely: $0.proteinLikelyG, high: $0.proteinHighG
         ) }
@@ -349,9 +348,9 @@ enum CaloricEngine {
         let carbsComplete = !dayMeals.isEmpty
             && evidenceBackedMeals.count == dayMeals.count
             && carbRanges.count == dayMeals.count
-        let totalProtein = proteinComplete ? proteinRanges.reduce(0) { $0 + $1.likely } : 0
-        let totalFat = fatComplete ? fatRanges.reduce(0) { $0 + $1.likely } : 0
-        let totalCarbs = carbsComplete ? carbRanges.reduce(0) { $0 + $1.likely } : 0
+        let totalProtein = proteinRanges.isEmpty ? 0 : proteinRanges.reduce(0) { $0 + $1.likely }
+        let totalFat = fatRanges.isEmpty ? 0 : fatRanges.reduce(0) { $0 + $1.likely }
+        let totalCarbs = carbRanges.isEmpty ? 0 : carbRanges.reduce(0) { $0 + $1.likely }
 
         let energyAccounting = EnergyAccounting.calculate(
             observedBasalEnergyKcal: input.healthKitRestingEnergyKcal,
@@ -372,8 +371,10 @@ enum CaloricEngine {
         let balanceLow = expenditure.map { $0.low - intake.high } ?? 0
         let balanceLikely = expenditure.map { $0.likely - intake.likely } ?? 0
         let balanceHigh = expenditure.map { $0.high - intake.low } ?? 0
+        let mealFingerprint = nutritionMealFingerprint(for: dayMeals)
         let coverageJSON = makeCoverageJSON(
-            intakePresent: intakeComplete,
+            intakePresent: intakeEstimateAvailable,
+            allRecordedMealsHaveEvidence: allRecordedMealsHaveEvidence,
             profileAvailable: input.effectiveProfile != nil,
             weightAvailable: input.effectiveWeight != nil,
             basalObserved: validEnergy(input.healthKitRestingEnergyKcal) != nil,
@@ -382,9 +383,15 @@ enum CaloricEngine {
             activeEstimated: energyAccounting.activeComponent?.source == .estimated,
             stepsObserved: validEnergy(input.healthKitSteps) != nil,
             exerciseObserved: validEnergy(input.healthKitExerciseMinutes) != nil,
-            proteinPresent: proteinComplete,
-            fatPresent: fatComplete,
-            carbsPresent: carbsComplete
+            proteinPresent: !proteinRanges.isEmpty,
+            proteinComplete: proteinComplete,
+            fatPresent: !fatRanges.isEmpty,
+            fatComplete: fatComplete,
+            carbsPresent: !carbRanges.isEmpty,
+            carbsComplete: carbsComplete,
+            nutritionRecordStatus: dayMeals.isEmpty ? .unknown : .inProgress,
+            nutritionMealFingerprint: mealFingerprint,
+            lastMealRecordedAt: dayMeals.map(\.date).max()
         )
         return DailyMetricsCalculationResult(
             date: input.date,
@@ -494,6 +501,7 @@ enum CaloricEngine {
 
     private static func makeCoverageJSON(
         intakePresent: Bool,
+        allRecordedMealsHaveEvidence: Bool,
         profileAvailable: Bool,
         weightAvailable: Bool,
         basalObserved: Bool,
@@ -503,11 +511,18 @@ enum CaloricEngine {
         stepsObserved: Bool,
         exerciseObserved: Bool,
         proteinPresent: Bool,
+        proteinComplete: Bool,
         fatPresent: Bool,
-        carbsPresent: Bool
+        fatComplete: Bool,
+        carbsPresent: Bool,
+        carbsComplete: Bool,
+        nutritionRecordStatus: NutritionDayRecordStatus,
+        nutritionMealFingerprint: String,
+        lastMealRecordedAt: Date?
     ) -> String {
-        let values = [
+        var values: [String: Any] = [
             "intake": intakePresent,
+            "allRecordedMealsHaveEvidence": allRecordedMealsHaveEvidence,
             "profile": profileAvailable,
             "weight": weightAvailable,
             "basalEnergy": basalObserved,
@@ -517,15 +532,34 @@ enum CaloricEngine {
             "steps": stepsObserved,
             "exerciseMinutes": exerciseObserved,
             "protein": proteinPresent,
+            "proteinComplete": proteinComplete,
             "fat": fatPresent,
+            "fatComplete": fatComplete,
             "carbs": carbsPresent,
+            "carbsComplete": carbsComplete,
+            "nutritionRecordStatus": nutritionRecordStatus.rawValue,
+            "nutritionMealFingerprint": nutritionMealFingerprint,
         ]
+        if let lastMealRecordedAt {
+            values["nutritionLastMealRecordedAt"] = lastMealRecordedAt.timeIntervalSince1970
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]),
               let value = String(data: data, encoding: .utf8)
         else {
             return "{}"
         }
         return value
+    }
+
+    private static func nutritionMealFingerprint(for meals: [DailyMetricsCalculationMeal]) -> String {
+        let mealComponents = meals.map { meal in
+            let evidenceDigest = meal.evidenceData.map { digestData($0) } ?? "none"
+            return "meal:\(meal.id.uuidString.lowercased()):date:\(meal.date.timeIntervalSince1970):calories:\(meal.totalCaloriesKcal):energy:\(meal.energyLowKcal):\(meal.energyLikelyKcal):\(meal.energyHighKcal):protein:\(meal.proteinLowG ?? -1):\(meal.proteinLikelyG ?? -1):\(meal.proteinHighG ?? -1):legacy-protein:\(meal.proteinG):fat:\(meal.fatLowG ?? -1):\(meal.fatLikelyG ?? -1):\(meal.fatHighG ?? -1):legacy-fat:\(meal.fatG):carbs:\(meal.carbsLowG ?? -1):\(meal.carbsLikelyG ?? -1):\(meal.carbsHighG ?? -1):legacy-carbs:\(meal.carbsG):evidence:\(evidenceDigest)"
+        }.sorted()
+        let material = (["nutrition-meal-set-v1"] + mealComponents).joined(separator: "\n")
+        return SHA256.hash(data: Data(material.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     private static func sourceFingerprint(

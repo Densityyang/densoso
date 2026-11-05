@@ -32,14 +32,10 @@ public struct HealthMetricSampleAggregate: Codable, Equatable, Sendable {
                   value.isFinite,
                   sample.startDate.timeIntervalSince1970.isFinite,
                   sample.endDate.timeIntervalSince1970.isFinite else { return nil }
-            let sourceIdentifier: String
-            if let bundle = sample.sourceBundleIdentifier, !bundle.isEmpty {
-                sourceIdentifier = bundle
-            } else if let device = sample.deviceModel, !device.isEmpty {
-                sourceIdentifier = "device:\(device)"
-            } else {
-                sourceIdentifier = "unknown"
-            }
+            let sourceIdentifier = HealthSourceIdentity.key(
+                bundleIdentifier: sample.sourceBundleIdentifier,
+                deviceModel: sample.deviceModel
+            )
             return ValidMetricSample(
                 startDate: sample.startDate,
                 endDate: sample.endDate,

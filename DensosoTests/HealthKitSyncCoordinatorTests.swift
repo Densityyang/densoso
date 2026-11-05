@@ -776,6 +776,12 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
             snapshot.healthReadStates?[HealthMetricID.workout.rawValue],
             .dataUnavailableOrReadScopeUnknown
         )
+        let noRecordDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: day))
+        XCTAssertEqual(
+            try healthSnapshot(on: noRecordDay).healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown,
+            "A partial paginated result cannot establish rest-day coverage"
+        )
         XCTAssertNil(try repository.cursor(for: "workouts")?.anchorData)
     }
 
@@ -918,6 +924,398 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             try healthSnapshot(on: day).healthReadStates?[HealthMetricID.workout.rawValue],
             .dataUnavailableOrReadScopeUnknown
+        )
+    }
+
+    func testEmptyFullWorkoutBackfillRemainsUnknownWithoutScopeEvidence() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        let closedDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -4, to: today))
+        let fake = FakeHealthStoreClient()
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+
+        let result = try await coordinator.syncAvailableData(
+            using: HealthRepository(modelContext: context),
+            now: now
+        )
+
+        XCTAssertTrue(result.completedStreams.contains(.workout))
+        XCTAssertNil(result.failedStreams[.workout])
+        XCTAssertEqual(
+            try healthSnapshot(on: closedDay).healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown,
+            "A successful but empty full query cannot distinguish no workouts from an unreadable scope"
+        )
+        XCTAssertEqual(
+            try healthSnapshot(on: today).healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown
+        )
+    }
+
+    func testFullWorkoutBackfillVerifiesAuthorizedCoverageThroughAsOfDayAfterEvidence() async throws {
+        let calendar = Calendar.current
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2024,
+            month: 6,
+            day: 20,
+            hour: 12
+        )))
+        let today = calendar.startOfDay(for: now)
+        let boundaryDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -8, to: today))
+        let authorizationStart = try XCTUnwrap(calendar.date(
+            bySettingHour: 12,
+            minute: 0,
+            second: 0,
+            of: boundaryDay
+        ))
+        let boundaryDayAfter = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: boundaryDay))
+        let emptyAuthorizedDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -5, to: today))
+        let evidenceDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -3, to: today))
+        let beforeBoundaryDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: boundaryDay))
+        let witness = try makeWorkoutSnapshot(
+            id: "00000000-0000-0000-0000-0000000007A1",
+            startedAt: evidenceDay.addingTimeInterval(14 * 60 * 60)
+        )
+        let fake = FakeHealthStoreClient()
+        await fake.setEarliestAuthorizedSampleDate(authorizationStart, for: .workout)
+        await fake.setWorkoutResponses([
+            HealthChangePage(
+                added: [witness],
+                deletedObjectIDs: [],
+                nextAnchorData: Data([0xA1]),
+                hasMore: true
+            ),
+            HealthChangePage(added: [], deletedObjectIDs: [], nextAnchorData: Data([0xA2])),
+        ])
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+
+        let result = try await coordinator.syncAvailableData(
+            using: HealthRepository(modelContext: context),
+            now: now
+        )
+
+        XCTAssertTrue(result.completedStreams.contains(.workout))
+        XCTAssertNotNil(try context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+            $0.healthKitUUID == witness.healthKitUUID
+        }, "Scope evidence must be persisted in the same commit as coverage")
+        XCTAssertEqual(
+            try healthSnapshot(on: emptyAuthorizedDay).healthReadStates?[HealthMetricID.workout.rawValue],
+            .available,
+            "A closed no-record day is verified after the same full query returns authorized scope evidence"
+        )
+        XCTAssertEqual(
+            try healthSnapshot(on: boundaryDay).healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown,
+            "An intraday authorization boundary does not certify its partial day"
+        )
+        XCTAssertEqual(
+            try healthSnapshot(on: boundaryDayAfter).healthReadStates?[HealthMetricID.workout.rawValue],
+            .available
+        )
+        XCTAssertEqual(
+            try healthSnapshot(on: beforeBoundaryDay).healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown
+        )
+        XCTAssertEqual(
+            try healthSnapshot(on: today).healthReadStates?[HealthMetricID.workout.rawValue],
+            .available,
+            "The current day is readable through the query time, without claiming the remaining day is complete"
+        )
+    }
+
+    func testVerifiedWorkoutCoverageFromSyncReachesTrainingReadModelWindow() async throws {
+        let calendar = Calendar.current
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2024,
+            month: 6,
+            day: 20,
+            hour: 12
+        )))
+        let today = calendar.startOfDay(for: now)
+        let witnessDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -2, to: today))
+        let witness = try makeWorkoutSnapshot(
+            id: "00000000-0000-0000-0000-0000000007A4",
+            startedAt: witnessDay.addingTimeInterval(10 * 60 * 60)
+        )
+        let fake = FakeHealthStoreClient()
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [witness], deletedObjectIDs: [], nextAnchorData: Data([0xAB]))
+        ])
+        let result = try await HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+            .syncAvailableData(using: HealthRepository(modelContext: context), now: now)
+
+        XCTAssertTrue(result.completedStreams.contains(.workout))
+        let readModel = HealthIntelligenceReadModel(calendar: calendar)
+        let days = try readModel.loadDays(through: now, in: context)
+        let trainingWindowStart = try XCTUnwrap(calendar.date(byAdding: .day, value: -34, to: today))
+        let trainingWindow = days.filter {
+            let day = calendar.startOfDay(for: $0.dayStart)
+            return day >= trainingWindowStart && day <= today
+        }
+
+        XCTAssertEqual(trainingWindow.count, 35)
+        XCTAssertTrue(trainingWindow.allSatisfy {
+            $0.healthReadStates?[HealthMetricID.workout.rawValue] == .available
+        }, "The complete training-load history and as-of day must reach ReadModel with coverage")
+        let witnessReadModelDay = try XCTUnwrap(trainingWindow.first(where: {
+            calendar.isDate($0.dayStart, inSameDayAs: witnessDay)
+        }))
+        XCTAssertEqual(
+            witnessReadModelDay.workouts.count,
+            1
+        )
+        let currentReadModelDay = try XCTUnwrap(trainingWindow.first(where: {
+            calendar.isDate($0.dayStart, inSameDayAs: today)
+        }))
+        XCTAssertEqual(
+            currentReadModelDay.healthReadStates?[HealthMetricID.workout.rawValue],
+            .available,
+            "The as-of day is available through sync time while later hours remain unobserved"
+        )
+    }
+
+    func testFullWorkoutSyncProducesMatureTrainingLoadAndRecoveryEvidence() async throws {
+        let calendar = Calendar.current
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2024,
+            month: 7,
+            day: 1,
+            hour: 12
+        )))
+        let today = calendar.startOfDay(for: now)
+        let priorOffsets = Array(-14 ... -8)
+        let workouts = try priorOffsets.enumerated().map { index, offset in
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: today))
+            let start = try XCTUnwrap(calendar.date(bySettingHour: 12, minute: 0, second: 0, of: day))
+            let workoutID = String(format: "00000000-0000-0000-0000-%012X", index + 0xB00)
+            return try makeWorkoutSnapshot(id: workoutID, startedAt: start)
+        }
+        let effortSamples = workouts.enumerated().map { index, workout in
+            HealthSampleSnapshot(
+                id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012X", index + 0xC00))!,
+                metric: .workoutEffort,
+                startDate: workout.startedAt.addingTimeInterval(5 * 60),
+                endDate: workout.startedAt.addingTimeInterval(15 * 60),
+                value: 7.5
+            )
+        }
+        let fake = FakeHealthStoreClient()
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: workouts, deletedObjectIDs: [], nextAnchorData: Data([0xB0]))
+        ])
+        let effortDayRequeries = effortSamples.enumerated().map { index, sample in
+            HealthSamplePage(
+                samples: [sample],
+                nextAnchorData: Data([UInt8(0xC0 + index)]),
+                readState: .available
+            )
+        }
+        await fake.setSampleResponses([
+            HealthSamplePage(
+                samples: effortSamples,
+                nextAnchorData: Data([0xB1]),
+                readState: .available
+            ),
+        ] + effortDayRequeries, for: .workoutEffort)
+        let repository = HealthRepository(modelContext: context)
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+
+        let syncResult = try await coordinator.syncAvailableData(using: repository, now: now)
+
+        XCTAssertTrue(syncResult.completedStreams.contains(.workout))
+        XCTAssertNil(syncResult.failedStreams[.workout])
+        XCTAssertNil(syncResult.failedStreams[.workoutEffort])
+        let readModelDays = try HealthIntelligenceReadModel(calendar: calendar).loadDays(
+            through: now,
+            in: context
+        )
+        let result = try XCTUnwrap(HealthIntelligenceEngine(calendar: calendar).makeDailyBrief(days: readModelDays))
+        let load = result.dailyBrief.trainingLoad
+        XCTAssertEqual(load.dataCoverage, .complete)
+        XCTAssertEqual(load.readiness, .mature)
+        XCTAssertNotNil(load.ratio)
+        let synchronizedTrainingWorkouts = readModelDays.flatMap(\.workouts).filter {
+            priorOffsets.contains(calendar.dateComponents([.day], from: today, to: calendar.startOfDay(for: $0.startedAt)).day ?? 0)
+        }
+        XCTAssertEqual(synchronizedTrainingWorkouts.count, 7)
+        XCTAssertTrue(synchronizedTrainingWorkouts.allSatisfy { $0.effortScore == 7.5 })
+        XCTAssertTrue(
+            result.dailyBrief.healthState?.recovery.evidence.contains {
+                $0.key == "trainingLoad.ratio" && $0.source == "trainingLoad"
+            } == true,
+            "Recovery must consume the mature load derived from synchronized HealthKit workouts and effort samples"
+        )
+        XCTAssertEqual(
+            result.dailyBrief.healthState?.recovery.status,
+            .insufficientEvidence,
+            "Training load is available, while missing sleep and vital evidence still keeps recovery fail-closed"
+        )
+    }
+
+    func testIncrementalWorkoutQueryPreservesVerifiedRestAfterEmptyPageAndDeletion() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        let witnessDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -5, to: today))
+        let verifiedRestDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -4, to: today))
+        let witness = try makeWorkoutSnapshot(
+            id: "00000000-0000-0000-0000-0000000007A2",
+            startedAt: witnessDay.addingTimeInterval(10 * 60 * 60)
+        )
+        let fake = FakeHealthStoreClient()
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [witness], deletedObjectIDs: [], nextAnchorData: Data([0xA3]))
+        ])
+        let repository = HealthRepository(modelContext: context)
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+
+        let fullResult = try await coordinator.syncAvailableData(using: repository, now: now)
+        XCTAssertTrue(fullResult.completedStreams.contains(.workout))
+        XCTAssertEqual(
+            try healthSnapshot(on: verifiedRestDay).healthReadStates?[HealthMetricID.workout.rawValue],
+            .available
+        )
+        XCTAssertEqual(
+            try healthSnapshot(on: today).healthReadStates?[HealthMetricID.workout.rawValue],
+            .available,
+            "A witnessed full query covers the current day only as of sync time"
+        )
+
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [], deletedObjectIDs: [], nextAnchorData: Data([0xA4]))
+        ])
+        let nextDayNow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: now))
+        let emptyIncrementalResult = try await coordinator.syncAvailableData(using: repository, now: nextDayNow)
+        XCTAssertTrue(emptyIncrementalResult.completedStreams.contains(.workout))
+        let secondDayRequestAnchors = await fake.workoutRequestAnchors()
+        XCTAssertEqual(
+            secondDayRequestAnchors,
+            [nil, Data([0xA3])],
+            "The second-day sync must extend the verified marker through its anchor, without a nil-anchor full query"
+        )
+        XCTAssertEqual(
+            try healthSnapshot(on: verifiedRestDay).healthReadStates?[HealthMetricID.workout.rawValue],
+            .available,
+            "An empty incremental page preserves previously verified coverage"
+        )
+        XCTAssertEqual(
+            try healthSnapshot(on: today).healthReadStates?[HealthMetricID.workout.rawValue],
+            .available,
+            "The prior as-of day remains covered after a complete next-day incremental query"
+        )
+        let nextDay = calendar.startOfDay(for: nextDayNow)
+        XCTAssertEqual(
+            try healthSnapshot(on: nextDay).healthReadStates?[HealthMetricID.workout.rawValue],
+            .available,
+            "The current day is covered as of the complete incremental query time"
+        )
+
+        await fake.setWorkoutResponses([
+            HealthChangePage(
+                added: [],
+                deletedObjectIDs: [witness.healthKitUUID],
+                nextAnchorData: Data([0xA5])
+            )
+        ])
+        let deletionResult = try await coordinator.syncAvailableData(using: repository, now: nextDayNow)
+        XCTAssertTrue(deletionResult.completedStreams.contains(.workout))
+        XCTAssertNil(try context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+            $0.healthKitUUID == witness.healthKitUUID
+        })
+        XCTAssertEqual(
+            try healthSnapshot(on: witnessDay).healthReadStates?[HealthMetricID.workout.rawValue],
+            .available,
+            "Deleting the last workout after a verified full scan leaves the re-queried day as verified rest"
+        )
+    }
+
+    func testIncrementalWorkoutEvidenceTriggersOneFullRequeryBeforeCoverage() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let targetStart = try XCTUnwrap(HealthDataWindowPolicy.initialBackfillStart(
+            through: now,
+            calendar: calendar
+        ))
+        let day = try XCTUnwrap(calendar.date(byAdding: .day, value: -4, to: calendar.startOfDay(for: now)))
+        let workout = try makeWorkoutSnapshot(
+            id: "00000000-0000-0000-0000-0000000007A3",
+            startedAt: day.addingTimeInterval(11 * 60 * 60)
+        )
+        context.insert(HealthKitImportCursor(
+            stream: "workouts",
+            anchorData: Data([0xA6]),
+            lastSuccessfulAt: now,
+            lookbackStart: targetStart
+        ))
+        try insertHealthSnapshot(
+            on: day,
+            readStates: [HealthMetricID.workout.rawValue: .dataUnavailableOrReadScopeUnknown]
+        )
+        try context.save()
+        let fake = FakeHealthStoreClient()
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [workout], deletedObjectIDs: [], nextAnchorData: Data([0xA7])),
+            HealthChangePage(added: [workout], deletedObjectIDs: [], nextAnchorData: Data([0xAA])),
+        ])
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+
+        let result = try await coordinator.syncAvailableData(
+            using: HealthRepository(modelContext: context),
+            now: now
+        )
+
+        XCTAssertTrue(result.completedStreams.contains(.workout))
+        XCTAssertNotNil(try context.fetch(FetchDescriptor<WorkoutRecord>()).first {
+            $0.healthKitUUID == workout.healthKitUUID
+        }, "The targeted full query persists its read-scope witness")
+        XCTAssertEqual(
+            try healthSnapshot(on: day).healthReadStates?[HealthMetricID.workout.rawValue],
+            .available,
+            "Coverage is promoted only after the nil-anchor full query completes with the witness"
+        )
+        let requestAnchors = await fake.workoutRequestAnchors()
+        XCTAssertEqual(requestAnchors, [Data([0xA6]), nil])
+    }
+
+    func testManualWorkoutCannotWitnessHealthKitScopeForIncrementalRestDay() async throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let calendar = Calendar.current
+        let targetStart = try XCTUnwrap(HealthDataWindowPolicy.initialBackfillStart(
+            through: now,
+            calendar: calendar
+        ))
+        let today = calendar.startOfDay(for: now)
+        let priorDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -2, to: today))
+        context.insert(HealthKitImportCursor(
+            stream: "workouts",
+            anchorData: Data([0xA8]),
+            lastSuccessfulAt: now,
+            lookbackStart: targetStart
+        ))
+        context.insert(WorkoutRecord(date: priorDay.addingTimeInterval(12 * 60 * 60), type: "manual"))
+        try insertHealthSnapshot(
+            on: priorDay,
+            readStates: [HealthMetricID.workout.rawValue: .available]
+        )
+        try context.save()
+        let fake = FakeHealthStoreClient()
+        await fake.setWorkoutResponses([
+            HealthChangePage(added: [], deletedObjectIDs: [], nextAnchorData: Data([0xA9]))
+        ])
+        let coordinator = HealthKitSyncCoordinator(healthStore: fake, observer: fake)
+        let nextDayNow = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: now))
+
+        let result = try await coordinator.syncAvailableData(
+            using: HealthRepository(modelContext: context),
+            now: nextDayNow
+        )
+
+        XCTAssertTrue(result.completedStreams.contains(.workout))
+        XCTAssertEqual(
+            try healthSnapshot(on: today).healthReadStates?[HealthMetricID.workout.rawValue],
+            .dataUnavailableOrReadScopeUnknown,
+            "A user-entered workout cannot serve as HealthKit authorization scope evidence"
         )
     }
 

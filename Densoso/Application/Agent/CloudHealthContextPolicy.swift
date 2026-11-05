@@ -195,6 +195,15 @@ protocol CloudHealthContextPolicySnapshotRepository: Sendable {
         allowedClasses: Set<ProviderDataClass>,
         changeSource: CloudHealthPolicyChangeSource
     ) async throws -> CloudHealthContextPolicySnapshot
+    func confirmCloudHealthContextPolicyDraft(
+        expectedPolicyID: UUID,
+        expectedRevision: Int,
+        expectedState: CloudHealthPolicyState,
+        expectedAllowedClasses: Set<ProviderDataClass>,
+        provider: ProviderID,
+        confirmedAt: Date,
+        changeSource: CloudHealthPolicyChangeSource
+    ) async throws -> CloudHealthContextPolicySnapshot
     func updateConversationHistoryConsent(
         provider: ProviderID,
         allowed: Bool,
@@ -498,10 +507,12 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         guard draft.state == .draft else {
             throw CloudHealthContextPolicyError.noPendingExpansion
         }
-        return try await confirmExpandedPolicy(
+        return try await snapshotRepository.confirmCloudHealthContextPolicyDraft(
+            expectedPolicyID: draft.policyID,
+            expectedRevision: draft.revision,
+            expectedState: .draft,
+            expectedAllowedClasses: draft.allowedClasses,
             provider: provider,
-            allowedClasses: draft.allowedClasses,
-            repository: repository,
             confirmedAt: confirmedAt,
             changeSource: .agentConversation
         )
@@ -760,49 +771,153 @@ enum CloudRequestPolicyGuard {
         guard let context else { return nil }
         guard !policy.allowedClasses.isEmpty else { return nil }
 
-        let filteredState: HealthStateV2?
-        if policy.allows(.healthActivity), let state = context.healthState {
-            let domains = state.domains.filter { policy.allows($0.domain) }
-            let recovery = policy.allowsDerivedRecovery
-                ? state.recovery
-                : RecoveryAssessment(
-                    status: .insufficientEvidence,
-                    confidence: .low,
-                    evidence: [],
-                    recommendedAction: .collectData
+        let numericVitalEvidence = Set(context.vitalTrends.compactMap { trend -> String? in
+            guard trend.latestMedian != nil else { return nil }
+            return trend.evidenceKey
+        })
+        let numericActivityEvidence = Set(context.activityTrends.compactMap { trend -> String? in
+            guard trend.unit == trend.metric.unit,
+                  trend.evidenceKey == trend.metric.evidenceKey,
+                  let value = trend.currentValue, value.isFinite, value >= 0,
+                  trend.dataCoverage != .unknown,
+                  trend.status != .unknown, trend.status != .noData else { return nil }
+            return trend.metric.evidenceKey
+        })
+        let filteredActivityTrends = policy.allows(.healthActivity) ? context.activityTrends : []
+        let sourceDomains = context.healthState?.domains ?? context.cloudHealthState?.domains ?? []
+        let sourceRecovery = context.healthState?.recovery ?? context.cloudHealthState?.recovery
+        let sourceTrainingLoad = context.healthState.map { HealthTrainingLoadContext(summary: $0.trainingLoad) }
+            ?? context.cloudHealthState?.trainingLoad
+        let sourceTomorrowGuidance = context.healthState?.tomorrowGuidance
+            ?? context.cloudHealthState?.tomorrowGuidance
+        let filteredDomains = sourceDomains.compactMap { domain -> HealthDomainResult? in
+            guard policy.allows(domain.domain) else { return nil }
+            if domain.domain == .activity {
+                let trend = context.activityTrends.first { candidate in
+                    domain.evidenceKeys.contains(candidate.metric.evidenceKey)
+                        && numericActivityEvidence.contains(candidate.metric.evidenceKey)
+                }
+                return HealthDomainResult(
+                    domain: domain.domain,
+                    status: trend?.status ?? .unknown,
+                    currentValue: trend?.currentValue,
+                    baseline: trend?.baseline ?? HealthBaseline(
+                        readiness: .noData,
+                        validDays: 0,
+                        median: nil,
+                        p10: nil,
+                        p90: nil,
+                        mad: nil
+                    ),
+                    evidenceKeys: trend.map { [$0.metric.evidenceKey] } ?? [],
+                    dataCoverage: trend?.dataCoverage ?? .unknown
                 )
-            filteredState = HealthStateV2(
-                domains: domains,
-                recovery: recovery,
-                trainingLoad: state.trainingLoad,
-                tomorrowGuidance: policy.allowsDerivedRecovery ? state.tomorrowGuidance : nil
+            }
+            return HealthDomainResult(
+                domain: domain.domain,
+                status: domain.status,
+                currentValue: domain.currentValue,
+                baseline: domain.baseline,
+                evidenceKeys: domain.evidenceKeys.filter { key in
+                    policy.allows(source: domain.domain.rawValue)
+                        && policy.allows(evidenceKey: key)
+                        && (!key.lowercased().hasPrefix("vitals.") || numericVitalEvidence.contains(key))
+                        && !key.lowercased().hasPrefix("activity.")
+                }
             )
-        } else {
-            // HealthStateV2 requires a numeric TrainingLoadSummary. Do not serialize
-            // placeholder zeros when activity is not authorized; summary fields
-            // and individually sourced evidence below still carry allowed classes.
-            filteredState = nil
         }
+        let filteredVitals = policy.allows(.healthBody) ? context.vitalTrends : []
+        let filteredRecovery = policy.allowsDerivedRecovery
+            ? sourceRecovery.map { recovery in
+                RecoveryAssessment(
+                    status: recovery.status,
+                    confidence: recovery.confidence,
+                    evidence: filteredEvidence(
+                        recovery.evidence,
+                        by: policy,
+                        numericVitalEvidence: numericVitalEvidence,
+                        numericActivityEvidence: numericActivityEvidence
+                    ),
+                    recommendedAction: recovery.recommendedAction,
+                    missingEvidenceKeys: recovery.missingEvidenceKeys?.filter {
+                        policy.allows(evidenceKey: $0)
+                    }
+                )
+            }
+            : nil
+        let filteredGuidance = policy.allowsDerivedRecovery
+            ? sourceTomorrowGuidance.map { guidance in
+                NextDayGuidance(
+                    expectedState: guidance.expectedState,
+                    confidence: guidance.confidence,
+                    reasons: filteredEvidence(
+                        guidance.reasons,
+                        by: policy,
+                        numericVitalEvidence: numericVitalEvidence,
+                        numericActivityEvidence: numericActivityEvidence
+                    ),
+                    recommendedAction: guidance.recommendedAction,
+                    conditionalNote: guidance.conditionalNote
+                )
+            }
+            : nil
+        let filteredCloudState: CloudHealthStateContext? = {
+            guard !filteredDomains.isEmpty || !filteredVitals.isEmpty
+                    || filteredRecovery != nil
+                    || (policy.allows(.healthActivity) && sourceTrainingLoad != nil) else {
+                return nil
+            }
+            return CloudHealthStateContext(
+                domains: filteredDomains,
+                recovery: filteredRecovery,
+                trainingLoad: policy.allows(.healthActivity)
+                    ? sourceTrainingLoad.map(filteredTrainingLoad)
+                    : nil,
+                tomorrowGuidance: filteredGuidance
+            )
+        }()
 
-        let evidence = context.evidence.filter { policy.allows(source: $0.source) }
+        let evidence = context.evidence.filter { item in
+            guard policy.allows(source: item.source), policy.allows(evidenceKey: item.key) else { return false }
+            if isVitalEvidenceSource(item.source) || item.key.lowercased().hasPrefix("vitals.") {
+                return numericVitalEvidence.contains(item.key)
+            }
+            if item.source == HealthDomain.activity.rawValue || item.key.lowercased().hasPrefix("activity.") {
+                return item.source == HealthDomain.activity.rawValue
+                    && item.key.lowercased().hasPrefix("activity.")
+                    && numericActivityEvidence.contains(item.key)
+            }
+            return true
+        }
         let recommendations = context.recommendationCandidates.filter { recommendation in
             guard policy.allows(recommendation.domain),
                   policy.allows(evidenceKey: recommendation.evidenceKey) else { return false }
+            if recommendation.evidenceKey.lowercased().hasPrefix("vitals.") {
+                guard numericVitalEvidence.contains(recommendation.evidenceKey) else { return false }
+            }
+            if recommendation.evidenceKey.lowercased().hasPrefix("activity.") {
+                guard recommendation.domain == .activity,
+                      numericActivityEvidence.contains(recommendation.evidenceKey) else { return false }
+            }
             if recommendation.id.hasPrefix("recovery.") { return policy.allowsDerivedRecovery }
             if recommendation.domain == .nutrition { return policy.allows(.healthActivity) }
             return true
         }
         let subjective = policy.allows(.healthSubjective) ? context.subjectiveContext : nil
         let summary = context.aggregateSummary.map { filtered($0, by: policy) }
-        guard filteredState != nil || summary != nil || subjective != nil || !recommendations.isEmpty else {
+        guard filteredCloudState != nil || summary != nil || subjective != nil
+                || !filteredActivityTrends.isEmpty || !recommendations.isEmpty else {
             return nil
         }
         return HealthNarrativeContext(
-            healthState: filteredState,
+            healthState: nil,
             evidence: evidence,
             recommendationCandidates: recommendations,
             aggregateSummary: summary,
-            subjectiveContext: subjective
+            subjectiveContext: subjective,
+            safeVitalTrends: filteredVitals,
+            safeActivityTrends: filteredActivityTrends,
+            cloudHealthState: filteredCloudState
         )
     }
 
@@ -968,13 +1083,22 @@ enum CloudRequestPolicyGuard {
                 if case .toolCall(let call) = item { namesByCallID[call.id] = call.name }
             }
         }
-        return messages.map { message in
-            let content = message.content.map { item -> ModelContent in
-                guard case .toolResult(let callID, let result) = item,
-                      let name = namesByCallID[callID],
-                      let filtered = filterToolResult(name: name, result: result, by: policy) else { return item }
+        return messages.compactMap { message in
+            let content = message.content.compactMap { item -> ModelContent? in
+                guard case .toolResult(let callID, let result) = item else { return item }
+                // A tool result without a matching assistant call cannot be
+                // attributed to a tool policy. Drop it instead of forwarding
+                // potentially sensitive data from a truncated or corrupt turn.
+                guard let name = namesByCallID[callID] else { return nil }
+                guard let filtered = filterToolResult(
+                    name: name,
+                    result: result,
+                    by: policy,
+                    provenance: message.healthContextPolicyProvenance
+                ) else { return item }
                 return .toolResult(toolCallID: callID, content: filtered)
             }
+            guard message.role != .tool || !content.isEmpty else { return nil }
             return ModelMessage(
                 role: message.role,
                 content: content,
@@ -988,7 +1112,12 @@ enum CloudRequestPolicyGuard {
         healthToolNames.contains(name)
     }
 
-    private static func filterToolResult(name: String, result: String, by policy: CloudHealthContextPolicy) -> String? {
+    private static func filterToolResult(
+        name: String,
+        result: String,
+        by policy: CloudHealthContextPolicy,
+        provenance: HealthContextPolicyProvenance?
+    ) -> String? {
         switch name {
         case "get_today_health_state":
             return filterTodayHealthState(result, by: policy)
@@ -996,77 +1125,586 @@ enum CloudRequestPolicyGuard {
             return filterHealthHistory(result, by: policy)
         case "get_recent_meals":
             return policy.allows(.healthNutrition) ? nil : restrictedResult
-        case "get_metrics", "get_weekly_deficit":
+        case "get_metrics":
+            return filterMetrics(result, by: policy)
+        case "get_weekly_deficit":
             return policy.allows(.healthNutrition) && policy.allows(.healthActivity) ? nil : restrictedResult
         case "get_recent_workouts", "get_schedule", "get_today_plan":
             return policy.allows(.healthActivity) ? nil : restrictedResult
         case "get_goal":
             return filterGoalResult(result, by: policy)
+        case "get_pending_actions":
+            return filterPendingActionsResult(result, by: policy, provenance: provenance)
         default:
             return nil
         }
+    }
+
+    private static func filterPendingActionsResult(
+        _ text: String,
+        by policy: CloudHealthContextPolicy,
+        provenance: HealthContextPolicyProvenance?
+    ) -> String {
+        guard let data = text.data(using: .utf8),
+              let root = try? JSONDecoder().decode(JSONValue.self, from: data).objectValue,
+              let actions = root["actions"]?.arrayValue else {
+            return restrictedResult
+        }
+        let oversizedActions = root["oversizedActions"]?.arrayValue ?? []
+        let safeActions = actions.compactMap { action in
+            PendingActionConsentPolicy.filteredSummary(action, allowedClasses: policy.allowedClasses)
+        }
+        let safeOversizedActions = oversizedActions.compactMap { action in
+            PendingActionConsentPolicy.filteredOversizedReference(
+                action,
+                allowedClasses: policy.allowedClasses
+            )
+        }
+
+        // Preserve pagination only for a result produced under this exact
+        // policy revision where every action passed the per-item check. A
+        // stale or legacy result must not reveal how many newly hidden actions
+        // remain beyond its page boundary.
+        let paginationIsCurrent = provenance?.provider == policy.provider
+            && provenance?.policyRevision == policy.revision
+            && provenance?.allowedClasses.isSubset(of: policy.allowedClasses) == true
+            && safeActions.count == actions.count
+            && safeOversizedActions.count == oversizedActions.count
+        let hasMore = paginationIsCurrent && root["hasMore"]?.boolValue == true
+        let status: String
+        if !safeActions.isEmpty {
+            status = "available"
+        } else if !safeOversizedActions.isEmpty {
+            status = "requiresLocalReview"
+        } else {
+            status = "noAuthorizedActions"
+        }
+        let safeRoot: [String: JSONValue] = [
+            "status": .string(status),
+            "count": .integer(safeActions.count),
+            "hasMore": .boolean(hasMore),
+            "nextOffset": hasMore ? (root["nextOffset"] ?? .null) : .null,
+            "actions": .array(safeActions),
+            "oversizedActions": .array(safeOversizedActions),
+        ]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let safeData = try? encoder.encode(JSONValue.object(safeRoot)) else {
+            return restrictedResult
+        }
+        return String(decoding: safeData, as: UTF8.self)
     }
 
     private static let restrictedResult = #"{"status":"not_authorized","message":"这些健康数据类别尚未获准用于云端上下文。"}"#
     private static let healthToolNames: Set<String> = [
         "get_today_health_state", "get_health_history", "get_recent_meals", "get_metrics",
         "get_weekly_deficit", "get_recent_workouts", "get_schedule", "get_today_plan", "get_goal",
+        "get_pending_actions",
     ]
 
     private static func filterTodayHealthState(_ text: String, by policy: CloudHealthContextPolicy) -> String {
         guard let data = text.data(using: .utf8),
               let decoded = try? JSONDecoder().decode(JSONValue.self, from: data),
-              var root = decoded.objectValue else {
+              let root = decoded.objectValue else {
             return restrictedResult
         }
         var safeRoot: [String: JSONValue] = [:]
         safeRoot["asOf"] = root["asOf"]
-        if var state = root["healthState"]?.objectValue {
+        let activityTrends = policy.allows(.healthActivity)
+            ? uniqueActivityTrends(root["activityTrends"]?.arrayValue ?? [], by: policy)
+            : []
+        let validActivityEvidenceKeys = numericActivityEvidenceKeys(in: activityTrends)
+        let vitalTrends = (root["vitalTrends"]?.arrayValue ?? []).compactMap {
+            filteredVitalTrend($0, by: policy)
+        }
+        let validVitalEvidenceKeys = Set(vitalTrends.compactMap { trend in
+            trend.objectValue?["evidenceKey"]?.stringValue
+        })
+        var safeState: [String: JSONValue] = [:]
+        if let state = root["healthState"]?.objectValue {
             if case .array(let domains)? = state["domains"] {
-                safeRoot["healthState"] = .object([
-                    "domains": .array(domains.filter { item in
-                    guard let domain = item.objectValue?["domain"]?.stringValue,
-                          let dataClass = classForDomain(domain) else { return false }
-                    return policy.allows(dataClass)
-                    }),
-                ])
+                safeState["domains"] = .array(domains.compactMap { item in
+                    guard var fields = item.objectValue,
+                          let domain = fields["domain"]?.stringValue,
+                          let dataClass = classForDomain(domain),
+                          policy.allows(dataClass) else { return nil }
+                    if domain == HealthDomain.activity.rawValue {
+                        let activityKey = fields["evidenceKeys"]?.arrayValue?.compactMap(\.stringValue)
+                            .first(where: { validActivityEvidenceKeys.contains($0) })
+                        if let activityKey,
+                           let activityTrend = activityTrends.first(where: {
+                               $0.objectValue?["evidenceKey"]?.stringValue == activityKey
+                           })?.objectValue {
+                            fields["currentValue"] = activityTrend["currentValue"]
+                            fields["baseline"] = activityTrend["baseline"]
+                            fields["evidenceKeys"] = .array([.string(activityKey)])
+                            if activityTrend["status"]?.stringValue == HealthDomainStatus.partial.rawValue {
+                                fields["status"] = .string(HealthDomainStatus.partial.rawValue)
+                            }
+                        } else {
+                            fields["currentValue"] = .null
+                            fields["baseline"] = .null
+                            fields["evidenceKeys"] = .array([])
+                            fields["status"] = .string(HealthDomainStatus.unknown.rawValue)
+                        }
+                    } else if let keys = fields["evidenceKeys"]?.arrayValue {
+                        fields["evidenceKeys"] = .array(keys.filter { key in
+                            guard let value = key.stringValue else { return false }
+                            return policy.allows(evidenceKey: value)
+                                && (!value.lowercased().hasPrefix("vitals.") || validVitalEvidenceKeys.contains(value))
+                                && !value.lowercased().hasPrefix("activity.")
+                        })
+                    }
+                    return .object(fields)
+                })
             } else {
-                safeRoot["healthState"] = .object(["domains": .array([])])
+                safeState["domains"] = .array([])
             }
-            var safeState = safeRoot["healthState"]?.objectValue ?? [:]
             if policy.allowsDerivedRecovery, let recovery = state["recovery"] {
-                safeState["recovery"] = recovery
-            } else {
-                safeState["recovery"] = .object([
-                    "status": .string("insufficientEvidence"),
-                    "confidence": .string("low"),
-                    "evidence": .array([]),
-                    "recommendedAction": .string("collectData"),
-                ])
+                safeState["recovery"] = filteredEvidenceReferences(
+                    in: recovery,
+                    key: "evidence",
+                    by: policy,
+                    validVitalEvidenceKeys: validVitalEvidenceKeys,
+                    validActivityEvidenceKeys: validActivityEvidenceKeys
+                )
             }
             if policy.allows(.healthActivity), let trainingLoad = state["trainingLoad"] {
-                safeState["trainingLoad"] = trainingLoad
+                safeState["trainingLoad"] = filteredTrainingLoad(trainingLoad)
             }
-            safeState["tomorrowGuidance"] = policy.allowsDerivedRecovery
-                ? state["tomorrowGuidance"] ?? .null
-                : .null
-            safeRoot["healthState"] = .object(safeState)
-        } else {
-            safeRoot["healthState"] = .null
+            if policy.allowsDerivedRecovery, let tomorrowGuidance = state["tomorrowGuidance"] {
+                safeState["tomorrowGuidance"] = filteredEvidenceReferences(
+                    in: tomorrowGuidance,
+                    key: "reasons",
+                    by: policy,
+                    validVitalEvidenceKeys: validVitalEvidenceKeys,
+                    validActivityEvidenceKeys: validActivityEvidenceKeys
+                )
+            }
         }
+        if !vitalTrends.isEmpty { safeRoot["vitalTrends"] = .array(vitalTrends) }
+        if !activityTrends.isEmpty { safeRoot["activityTrends"] = .array(activityTrends) }
+        let hasVisibleState = !safeState.isEmpty
+        safeRoot["healthState"] = hasVisibleState ? .object(safeState) : .null
         var safeReferences: [JSONValue] = []
         if case .array(let references)? = root["evidenceReferences"] {
             safeReferences = references.filter { item in
-                guard let source = item.objectValue?["source"]?.stringValue else { return false }
+                guard let source = item.objectValue?["source"]?.stringValue,
+                      let key = item.objectValue?["key"]?.stringValue else { return false }
                 return policy.allows(source: source)
+                    && policy.allows(evidenceKey: key)
+                    && (!(isVitalEvidenceSource(source) || key.lowercased().hasPrefix("vitals."))
+                        || validVitalEvidenceKeys.contains(key))
+                    && (!(source == HealthDomain.activity.rawValue || key.lowercased().hasPrefix("activity."))
+                        || (source == HealthDomain.activity.rawValue
+                            && key.lowercased().hasPrefix("activity.")
+                            && validActivityEvidenceKeys.contains(key)))
             }
         }
         safeRoot["evidenceReferences"] = .array(safeReferences)
-        safeRoot["status"] = .string("policyFiltered")
-        safeRoot["message"] = .string(policy.allowedClasses.isEmpty
-            ? "没有获准用于云端的健康数据类别。"
-            : "只包含已授权的健康数据类别；未展示类别不代表没有记录。")
+        let isPartial = vitalTrends.contains { trend in
+            let coverage = trend.objectValue?["dataCoverage"]?.stringValue
+            return coverage == HealthDataCoverage.unknown.rawValue || coverage == HealthDataCoverage.partial.rawValue
+        } || activityTrends.contains { trend in
+            let coverage = trend.objectValue?["dataCoverage"]?.stringValue
+            return coverage == HealthDataCoverage.unknown.rawValue || coverage == HealthDataCoverage.partial.rawValue
+        } || safeState["trainingLoad"]?.objectValue?["dataCoverage"]?.stringValue.map {
+            $0 != HealthDataCoverage.complete.rawValue
+        } == true || (safeState["domains"]?.arrayValue ?? []).contains { domain in
+            guard let status = domain.objectValue?["status"]?.stringValue else { return true }
+            return ["unknown", "partial", "learning"].contains(status)
+        }
+        let hasAnyVisibleEvidence = vitalTrends.contains { $0.objectValue?["latestMedian"]?.doubleValue != nil }
+            || activityTrends.contains { $0.objectValue?["currentValue"]?.doubleValue != nil }
+            || (safeState["domains"]?.arrayValue ?? []).contains {
+                $0.objectValue?["currentValue"]?.doubleValue != nil
+            }
+            || safeState["trainingLoad"]?.objectValue?["ratio"]?.doubleValue != nil
+        let status: String
+        if policy.allowedClasses.isEmpty {
+            status = "notAuthorized"
+        } else if hasAnyVisibleEvidence, !isPartial {
+            status = "available"
+        } else if hasAnyVisibleEvidence || isPartial {
+            status = "partial"
+        } else {
+            status = "noData"
+        }
+        safeRoot["status"] = .string(status)
+        safeRoot["message"] = .string(status == "available"
+            ? "仅包含已授权类别的健康数据；未展示类别不代表没有记录。"
+            : "已授权类别当前数据不足或覆盖不完整；数据空缺不代表零。")
         return encode(.object(safeRoot)) ?? restrictedResult
+    }
+
+    private static func filteredEvidence(
+        _ references: [EvidenceReference],
+        by policy: CloudHealthContextPolicy,
+        numericVitalEvidence: Set<String>,
+        numericActivityEvidence: Set<String>
+    ) -> [EvidenceReference] {
+        references.filter { reference in
+            guard policy.allows(source: reference.source), policy.allows(evidenceKey: reference.key) else { return false }
+            if isVitalEvidenceSource(reference.source) || reference.key.lowercased().hasPrefix("vitals.") {
+                return numericVitalEvidence.contains(reference.key)
+            }
+            if reference.source == HealthDomain.activity.rawValue
+                || reference.key.lowercased().hasPrefix("activity.") {
+                return reference.source == HealthDomain.activity.rawValue
+                    && reference.key.lowercased().hasPrefix("activity.")
+                    && numericActivityEvidence.contains(reference.key)
+            }
+            return true
+        }
+    }
+
+    private static func filteredTrainingLoad(_ value: JSONValue) -> JSONValue {
+        guard var load = value.objectValue else { return value }
+        let coverage = load["dataCoverage"]?.stringValue
+            .flatMap { HealthDataCoverage(rawValue: $0)?.rawValue }
+            ?? HealthDataCoverage.unknown.rawValue
+        load["dataCoverage"] = .string(coverage)
+        let readiness = load["readiness"]?.stringValue
+        let band = load["band"]?.stringValue
+        let hasMeasuredLoad = coverage == HealthDataCoverage.complete.rawValue
+            && readiness != BaselineReadiness.noData.rawValue
+            && band != TrainingLoadBand.unavailable.rawValue
+        guard hasMeasuredLoad else {
+            for key in [
+                "recentSevenDayLoad", "priorTwentyEightDayAverage", "ratio", "band",
+                "estimatedWorkoutCount", "unavailableEffortCount",
+            ] {
+                if key == "band", coverage == HealthDataCoverage.complete.rawValue,
+                   band == TrainingLoadBand.unavailable.rawValue {
+                    continue
+                }
+                load.removeValue(forKey: key)
+            }
+            return .object(load)
+        }
+        return .object(load)
+    }
+
+    private static func filteredTrainingLoad(_ value: HealthTrainingLoadContext) -> HealthTrainingLoadContext {
+        HealthTrainingLoadContext(
+            recentSevenDayLoad: value.recentSevenDayLoad,
+            priorTwentyEightDayAverage: value.priorTwentyEightDayAverage,
+            ratio: value.ratio,
+            readiness: value.readiness,
+            band: value.band,
+            dataCoverage: value.dataCoverage,
+            estimatedWorkoutCount: value.estimatedWorkoutCount,
+            unavailableEffortCount: value.unavailableEffortCount
+        )
+    }
+
+    private static func filteredEvidenceReferences(
+        in value: JSONValue,
+        key: String,
+        by policy: CloudHealthContextPolicy,
+        validVitalEvidenceKeys: Set<String>,
+        validActivityEvidenceKeys: Set<String>
+    ) -> JSONValue {
+        guard var object = value.objectValue,
+              let references = object[key]?.arrayValue else { return value }
+        object[key] = .array(references.filter { reference in
+            guard let source = reference.objectValue?["source"]?.stringValue,
+                  let evidenceKey = reference.objectValue?["key"]?.stringValue else { return false }
+            return policy.allows(source: source)
+                && policy.allows(evidenceKey: evidenceKey)
+                && (!(isVitalEvidenceSource(source) || evidenceKey.lowercased().hasPrefix("vitals."))
+                    || validVitalEvidenceKeys.contains(evidenceKey))
+                && (!(source == HealthDomain.activity.rawValue || evidenceKey.lowercased().hasPrefix("activity."))
+                    || (source == HealthDomain.activity.rawValue
+                        && evidenceKey.lowercased().hasPrefix("activity.")
+                        && validActivityEvidenceKeys.contains(evidenceKey)))
+        })
+        return .object(object)
+    }
+
+    private static func filteredVitalTrend(_ value: JSONValue, by policy: CloudHealthContextPolicy) -> JSONValue? {
+        guard policy.allows(.healthBody),
+              let trend = value.objectValue,
+              let metricRaw = trend["metric"]?.stringValue,
+              let metric = HealthVitalMetric(rawValue: metricRaw) else { return nil }
+        let decodedCoverage = trend["dataCoverage"]?.stringValue.flatMap { HealthDataCoverage(rawValue: $0) } ?? .unknown
+        let sourceStatus = trend["status"]?.stringValue.flatMap { HealthDomainStatus(rawValue: $0) } ?? .unknown
+        let coverage: HealthDataCoverage
+        if decodedCoverage == .unknown || sourceStatus == .unknown {
+            coverage = .unknown
+        } else if decodedCoverage == .partial || sourceStatus == .partial {
+            coverage = .partial
+        } else {
+            coverage = .complete
+        }
+        let measurement = trend["latestMedian"]?.doubleValue
+        let hasMeasurement = measurement?.isFinite == true
+        let expectedEvidenceKey = "vitals.\(metric.rawValue).median"
+        let hasAuthorizedEvidence = trend["evidenceKey"]?.stringValue == expectedEvidenceKey
+            && policy.allows(evidenceKey: expectedEvidenceKey)
+        let canUseMeasurement = coverage != .unknown
+            && sourceStatus != .unknown && sourceStatus != .noData
+            && hasMeasurement && hasAuthorizedEvidence
+
+        var safe: [String: JSONValue] = [
+            "metric": .string(metric.rawValue),
+            "unit": .string(unit(for: metric)),
+            "sourceProvenance": .string(provenance(for: metric).rawValue),
+            "dataCoverage": .string(coverage.rawValue),
+            "currentWindowDays": .integer(1),
+            "baselineWindowDays": .integer(max(HealthDataWindowContract.analysisLookbackDays - 1, 0)),
+            "status": .string(coverage == .unknown
+                ? HealthDomainStatus.unknown.rawValue
+                : (coverage == .partial
+                    ? HealthDomainStatus.partial.rawValue
+                    : sourceStatus.rawValue)),
+        ]
+        if coverage != .unknown,
+           let baseline = trend["baseline"]?.objectValue {
+            let allowedBaselineFields: Set<String> = ["readiness", "validDays", "median", "p10", "p90", "mad"]
+            safe["baseline"] = .object(baseline.filter { allowedBaselineFields.contains($0.key) })
+        }
+        if canUseMeasurement, let measurement {
+            safe["latestMedian"] = .number(measurement)
+            if let count = trend["currentSampleCount"]?.intValue, count > 0 {
+                safe["currentSampleCount"] = .integer(count)
+            }
+            if let baseline = trend["baseline"]?.objectValue,
+               let median = baseline["median"]?.doubleValue,
+               let mad = baseline["mad"]?.doubleValue,
+               mad.isFinite, mad > 1e-9 {
+                let robustZ = 0.6745 * (measurement - median) / mad
+                if robustZ.isFinite { safe["robustZScore"] = .number(robustZ) }
+            }
+            safe["evidenceKey"] = .string(expectedEvidenceKey)
+        } else if coverage == .complete {
+            safe["status"] = .string(HealthDomainStatus.noData.rawValue)
+        }
+        return .object(safe)
+    }
+
+    private static func uniqueActivityTrends(_ values: [JSONValue], by policy: CloudHealthContextPolicy) -> [JSONValue] {
+        var seen = Set<HealthActivityMetric>()
+        return Array(values.compactMap { filteredActivityTrend($0, by: policy) }.filter { value in
+            guard let rawMetric = value.objectValue?["metric"]?.stringValue,
+                  let metric = HealthActivityMetric(rawValue: rawMetric) else { return false }
+            return seen.insert(metric).inserted
+        }.prefix(HealthActivityMetric.allCases.count))
+    }
+
+    private static func numericActivityEvidenceKeys(in trends: [JSONValue]) -> Set<String> {
+        Set(trends.compactMap { value -> String? in
+            guard let trend = value.objectValue,
+                  let rawMetric = trend["metric"]?.stringValue,
+                  let metric = HealthActivityMetric(rawValue: rawMetric),
+                  trend["unit"]?.stringValue == metric.unit,
+                  trend["evidenceKey"]?.stringValue == metric.evidenceKey,
+                  let currentValue = trend["currentValue"]?.doubleValue,
+                  currentValue.isFinite, currentValue >= 0,
+                  trend["dataCoverage"]?.stringValue != HealthDataCoverage.unknown.rawValue,
+                  trend["status"]?.stringValue != HealthDomainStatus.unknown.rawValue,
+                  trend["status"]?.stringValue != HealthDomainStatus.noData.rawValue else { return nil }
+            return metric.evidenceKey
+        })
+    }
+
+    private static func filteredActivityTrend(_ value: JSONValue, by policy: CloudHealthContextPolicy) -> JSONValue? {
+        guard policy.allows(.healthActivity),
+              let trend = value.objectValue,
+              let metricRaw = trend["metric"]?.stringValue,
+              let metric = HealthActivityMetric(rawValue: metricRaw),
+              trend["unit"]?.stringValue == metric.unit,
+              let baselineWindowDays = trend["baselineWindowDays"]?.intValue,
+              (0...28).contains(baselineWindowDays) else { return nil }
+
+        let suppliedEvidenceKey = trend["evidenceKey"]?.stringValue
+        if let suppliedEvidenceKey, suppliedEvidenceKey != metric.evidenceKey { return nil }
+
+        let decodedCoverage = trend["dataCoverage"]?.stringValue
+            .flatMap { HealthDataCoverage(rawValue: $0) } ?? .unknown
+        let sourceStatus = trend["status"]?.stringValue
+            .flatMap { HealthDomainStatus(rawValue: $0) } ?? .unknown
+        let coverage: HealthDataCoverage
+        if decodedCoverage == .unknown || sourceStatus == .unknown {
+            coverage = .unknown
+        } else if decodedCoverage == .partial || sourceStatus == .partial {
+            coverage = .partial
+        } else {
+            coverage = .complete
+        }
+        let rawValue: Double?
+        if let encodedValue = trend["currentValue"], encodedValue != .null {
+            guard let parsedValue = encodedValue.doubleValue,
+                  parsedValue.isFinite,
+                  parsedValue >= 0 else { return nil }
+            rawValue = parsedValue
+        } else {
+            rawValue = nil
+        }
+        if rawValue != nil, suppliedEvidenceKey != metric.evidenceKey { return nil }
+        let canUseValue = coverage != .unknown
+            && sourceStatus != .unknown && sourceStatus != .noData
+            && suppliedEvidenceKey == metric.evidenceKey
+            && rawValue != nil
+
+        var safe: [String: JSONValue] = [
+            "metric": .string(metric.rawValue),
+            "unit": .string(metric.unit),
+            "baselineWindowDays": .integer(baselineWindowDays),
+            "status": .string(coverage == .unknown
+                ? HealthDomainStatus.unknown.rawValue
+                : (coverage == .partial
+                    ? HealthDomainStatus.partial.rawValue
+                    : (canUseValue ? sourceStatus.rawValue : HealthDomainStatus.noData.rawValue))),
+            "dataCoverage": .string(coverage.rawValue),
+        ]
+        if coverage != .unknown, let baseline = trend["baseline"]?.objectValue {
+            var safeBaseline: [String: JSONValue] = [:]
+            if let readiness = baseline["readiness"]?.stringValue,
+               BaselineReadiness(rawValue: readiness) != nil {
+                safeBaseline["readiness"] = .string(readiness)
+            }
+            if let validDays = baseline["validDays"]?.intValue, (0...28).contains(validDays) {
+                safeBaseline["validDays"] = .integer(validDays)
+            }
+            for key in ["median", "p10", "p90", "mad"] {
+                if let number = baseline[key]?.doubleValue, number.isFinite, number >= 0 {
+                    safeBaseline[key] = .number(number)
+                }
+            }
+            if !safeBaseline.isEmpty { safe["baseline"] = .object(safeBaseline) }
+        }
+        if canUseValue, let rawValue {
+            safe["currentValue"] = .number(rawValue)
+            safe["evidenceKey"] = .string(metric.evidenceKey)
+        }
+        return .object(safe)
+    }
+
+    private static func unit(for metric: HealthVitalMetric) -> String {
+        switch metric {
+        case .restingHeartRate: "bpm"
+        case .heartRateVariability: "ms"
+        case .respiratoryRate: "breaths/min"
+        case .wristTemperature: "°C"
+        case .bodyWeight: "kg"
+        }
+    }
+
+    private static func provenance(for metric: HealthVitalMetric) -> HealthVitalAggregateProvenance {
+        switch metric {
+        case .restingHeartRate, .heartRateVariability, .respiratoryRate, .wristTemperature:
+            .healthKitAggregate
+        case .bodyWeight:
+            .localOrHealthKitAggregate
+        }
+    }
+
+    private static func filterMetrics(_ text: String, by policy: CloudHealthContextPolicy) -> String? {
+        guard let data = text.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(JSONValue.self, from: data),
+              let root = decoded.objectValue else { return restrictedResult }
+        let allowsNutrition = policy.allows(.healthNutrition)
+        let allowsActivity = policy.allows(.healthActivity)
+        guard allowsNutrition || allowsActivity else { return restrictedResult }
+        let allowsCrossDomain = allowsNutrition && allowsActivity
+
+        var safeRoot: [String: JSONValue] = [:]
+        for key in ["startDate", "endDate", "timeZone", "requestedDays", "truncated", "nextStartDate"] {
+            if let value = root[key] { safeRoot[key] = value }
+        }
+        for key in ["intake", "proteinG", "fatG", "carbsG"] where allowsNutrition {
+            if let value = root[key] { safeRoot[key] = filteredMetricValue(value) }
+        }
+        if allowsActivity, let expenditure = root["expenditure"] {
+            safeRoot["expenditure"] = filteredMetricValue(expenditure)
+        }
+        if allowsCrossDomain {
+            for key in ["deficit", "averageDailyDeficit", "projectedWeightLossKg", "projectedWeightLossNote"] {
+                if let value = root[key] { safeRoot[key] = filteredMetricValue(value) }
+            }
+        }
+        if allowsNutrition, let quality = root["energyQuality"] { safeRoot["energyQuality"] = quality }
+        if let breakdown = root["dailyBreakdown"]?.arrayValue {
+            safeRoot["dailyBreakdown"] = .array(breakdown.compactMap { filterDailyMetricsBreakdown($0, policy: policy) })
+        }
+
+        let primaryCoverageKey = allowsCrossDomain ? "deficit" : (allowsNutrition ? "intake" : "expenditure")
+        let coverage = root[primaryCoverageKey]?.objectValue?["coverage"]?.objectValue ?? [:]
+        let requestedDays = root["requestedDays"]?.intValue ?? coverage["expectedDays"]?.intValue ?? 0
+        let availableDays = coverage["availableDays"]?.intValue ?? 0
+        let missingDays = max(requestedDays - availableDays, 0)
+        if allowsNutrition {
+            for key in [
+                "daysWithRecordedMeals", "daysWithValidIntakeEstimate",
+                "daysWithValidProteinEstimate", "completeRecordDays",
+            ] {
+                if let value = root[key] { safeRoot[key] = value }
+            }
+        }
+        // These legacy fields are produced from deficit coverage, which depends
+        // on both intake and expenditure. Do not reinterpret them as nutrition
+        // coverage when only one domain is authorized.
+        if allowsCrossDomain {
+            safeRoot["validEnergyDays"] = .integer(availableDays)
+            safeRoot["missingEnergyDays"] = .integer(missingDays)
+        }
+        let hasIncompleteCoverage = missingDays > 0
+            || (coverage["partialDays"]?.intValue ?? 0) > 0
+            || (coverage["unavailableDays"]?.intValue ?? 0) > 0
+            || (coverage["pendingRecomputeDays"]?.intValue ?? 0) > 0
+        safeRoot["status"] = .string(availableDays == 0
+            ? "insufficient_data"
+            : (hasIncompleteCoverage ? "partial" : "available"))
+        return encode(.object(safeRoot)) ?? restrictedResult
+    }
+
+    private static func filteredMetricValue(_ value: JSONValue) -> JSONValue {
+        guard let object = value.objectValue else { return value }
+        var filtered: [String: JSONValue] = [:]
+        for key in ["total", "average"] {
+            if let item = object[key] { filtered[key] = filteredMetricValue(item) }
+        }
+        for key in ["value", "availability", "sourceReferences", "sourceReferencesTruncated", "coverage"] {
+            if let item = object[key] { filtered[key] = item }
+        }
+        return .object(filtered)
+    }
+
+    private static func filterDailyMetricsBreakdown(
+        _ value: JSONValue,
+        policy: CloudHealthContextPolicy
+    ) -> JSONValue? {
+        guard let day = value.objectValue else { return nil }
+        let allowsNutrition = policy.allows(.healthNutrition)
+        let allowsActivity = policy.allows(.healthActivity)
+        let allowsCrossDomain = allowsNutrition && allowsActivity
+        var safeDay: [String: JSONValue] = [:]
+        if let date = day["date"] { safeDay["date"] = date }
+        for key in ["intake", "proteinG", "fatG", "carbsG"] where allowsNutrition {
+            if let value = day[key] { safeDay[key] = value }
+        }
+        if allowsActivity, let expenditure = day["expenditure"] { safeDay["expenditure"] = expenditure }
+        if allowsCrossDomain, let deficit = day["deficit"] { safeDay["deficit"] = deficit }
+        if allowsNutrition, let energyQuality = day["energyQuality"] { safeDay["energyQuality"] = energyQuality }
+        if allowsNutrition {
+            for key in ["nutritionRecordStatus", "lastMealRecordedAt"] {
+                if let value = day[key] { safeDay[key] = value }
+            }
+        }
+        if let coverage = day["coverage"]?.objectValue {
+            let allowedKeys = Set([
+                allowsNutrition ? "intake" : nil,
+                allowsActivity ? "expenditure" : nil,
+                allowsCrossDomain ? "deficit" : nil,
+                allowsNutrition ? "proteinG" : nil,
+                allowsNutrition ? "fatG" : nil,
+                allowsNutrition ? "carbsG" : nil,
+            ].compactMap { $0 })
+            safeDay["coverage"] = .object(coverage.filter { allowedKeys.contains($0.key) })
+        }
+        guard safeDay.keys.contains(where: { $0 != "date" }) else { return nil }
+        return .object(safeDay)
     }
 
     private static func filterGoalResult(_ text: String, by policy: CloudHealthContextPolicy) -> String {
@@ -1124,9 +1762,30 @@ enum CloudRequestPolicyGuard {
                 } else {
                     statuses = [:]
                 }
+                let vitalTrends = policy.allows(.healthBody)
+                    ? (day["vitalTrends"]?.arrayValue ?? []).compactMap { trend in
+                        filteredVitalTrend(trend, by: policy)
+                    }
+                    : []
+                let validVitalEvidenceKeys = Set(vitalTrends.compactMap { trend in
+                    trend.objectValue?["evidenceKey"]?.stringValue
+                })
+                let activityTrends = policy.allows(.healthActivity)
+                    ? uniqueActivityTrends(day["activityTrends"]?.arrayValue ?? [], by: policy)
+                    : []
+                let validActivityEvidenceKeys = numericActivityEvidenceKeys(in: activityTrends)
                 let observations: [String: JSONValue]
                 if case .object(let source)? = day["observations"] {
-                    observations = source.filter { key, _ in policy.allows(evidenceKey: key) }
+                    observations = source.filter { key, _ in
+                        guard policy.allows(evidenceKey: key) else { return false }
+                        if key.lowercased().hasPrefix("vitals.") {
+                            return validVitalEvidenceKeys.contains(key)
+                        }
+                        if key.lowercased().hasPrefix("activity.") {
+                            return validActivityEvidenceKeys.contains(key)
+                        }
+                        return true
+                    }
                 } else {
                     observations = [:]
                 }
@@ -1134,17 +1793,31 @@ enum CloudRequestPolicyGuard {
                 safeDay["date"] = day["date"]
                 safeDay["domainStatuses"] = .object(statuses)
                 safeDay["observations"] = .object(observations)
+                if !vitalTrends.isEmpty { safeDay["vitalTrends"] = .array(vitalTrends) }
+                if !activityTrends.isEmpty { safeDay["activityTrends"] = .array(activityTrends) }
                 if policy.allowsDerivedRecovery, let recovery = day["recoveryStatus"] {
                     safeDay["recoveryStatus"] = recovery
                 }
-                if policy.allows(.healthActivity), let trainingLoad = day["trainingLoadBand"] {
-                    safeDay["trainingLoadBand"] = trainingLoad
+                let sourceTrainingLoadCoverage = day["trainingLoadCoverage"]?.stringValue
+                    ?? ((day["trainingLoadBand"] != nil || statuses[HealthDomain.activity.rawValue] != nil)
+                        ? HealthDataCoverage.unknown.rawValue
+                        : nil)
+                let trainingLoadCoverage = sourceTrainingLoadCoverage.map {
+                    HealthDataCoverage(rawValue: $0)?.rawValue ?? HealthDataCoverage.unknown.rawValue
+                }
+                if policy.allows(.healthActivity), let trainingLoadCoverage {
+                    safeDay["trainingLoadCoverage"] = .string(trainingLoadCoverage)
+                    if trainingLoadCoverage == HealthDataCoverage.complete.rawValue,
+                       let trainingLoad = day["trainingLoadBand"] {
+                        safeDay["trainingLoadBand"] = trainingLoad
+                    }
                 }
 
                 // A date with only forbidden-class fields is itself a side channel.
                 // Keep a day only when at least one authorized class contributed a field.
                 guard !statuses.isEmpty || !observations.isEmpty
-                    || safeDay["recoveryStatus"] != nil || safeDay["trainingLoadBand"] != nil else { continue }
+                    || safeDay["recoveryStatus"] != nil || safeDay["trainingLoadCoverage"] != nil
+                    || safeDay["vitalTrends"] != nil || safeDay["activityTrends"] != nil else { continue }
                 filteredDays.append(safeDay)
             }
         }
@@ -1155,11 +1828,29 @@ enum CloudRequestPolicyGuard {
 
         let hasObservations = filteredDays.contains { day in
             day["observations"]?.objectValue.map { !$0.isEmpty } == true
+                || (day["activityTrends"]?.arrayValue ?? []).contains {
+                    $0.objectValue?["currentValue"]?.doubleValue?.isFinite == true
+                }
         }
         let hasUnknownOrPartialCoverage = filteredDays.contains { day in
-            day["domainStatuses"]?.objectValue?.values.contains { value in
+            let hasDomainCoverageGap = day["domainStatuses"]?.objectValue?.values.contains { value in
                 value.stringValue == "unknown" || value.stringValue == "partial"
             } == true
+            let trainingLoadCoverage = day["trainingLoadCoverage"]?.stringValue
+            let hasTrainingLoadCoverageGap = policy.allows(.healthActivity)
+                && (trainingLoadCoverage == HealthDataCoverage.unknown.rawValue
+                    || trainingLoadCoverage == HealthDataCoverage.partial.rawValue)
+            let hasVitalCoverageGap = (day["vitalTrends"]?.arrayValue ?? []).contains { trend in
+                let coverage = trend.objectValue?["dataCoverage"]?.stringValue
+                return coverage == HealthDataCoverage.unknown.rawValue
+                    || coverage == HealthDataCoverage.partial.rawValue
+            }
+            let hasActivityCoverageGap = (day["activityTrends"]?.arrayValue ?? []).contains { trend in
+                let coverage = trend.objectValue?["dataCoverage"]?.stringValue
+                return coverage == HealthDataCoverage.unknown.rawValue
+                    || coverage == HealthDataCoverage.partial.rawValue
+            }
+            return hasDomainCoverageGap || hasTrainingLoadCoverageGap || hasVitalCoverageGap || hasActivityCoverageGap
         }
         let hasGaps = filteredDays.contains { day in
             let hasDomainGap = day["domainStatuses"]?.objectValue?.values.contains { value in
@@ -1169,7 +1860,26 @@ enum CloudRequestPolicyGuard {
                     || value.stringValue == "partial"
             } == true
             let hasRecoveryGap = day["recoveryStatus"]?.stringValue == "insufficientEvidence"
-            return hasDomainGap || hasRecoveryGap
+            let hasTrainingLoadGap = policy.allows(.healthActivity)
+                && day["trainingLoadCoverage"]?.stringValue != HealthDataCoverage.complete.rawValue
+            let hasVitalGap = (day["vitalTrends"]?.arrayValue ?? []).contains { trend in
+                let coverage = trend.objectValue?["dataCoverage"]?.stringValue
+                let status = trend.objectValue?["status"]?.stringValue
+                return coverage != HealthDataCoverage.complete.rawValue
+                    || status == HealthDomainStatus.unknown.rawValue
+                    || status == HealthDomainStatus.partial.rawValue
+                    || status == HealthDomainStatus.noData.rawValue
+            }
+            let hasActivityGap = (day["activityTrends"]?.arrayValue ?? []).contains { trend in
+                let coverage = trend.objectValue?["dataCoverage"]?.stringValue
+                let status = trend.objectValue?["status"]?.stringValue
+                return coverage != HealthDataCoverage.complete.rawValue
+                    || status == HealthDomainStatus.unknown.rawValue
+                    || status == HealthDomainStatus.partial.rawValue
+                    || status == HealthDomainStatus.noData.rawValue
+                    || status == HealthDomainStatus.learning.rawValue
+            }
+            return hasDomainGap || hasRecoveryGap || hasTrainingLoadGap || hasVitalGap || hasActivityGap
         }
         let status: String
         let message: String
@@ -1218,6 +1928,10 @@ enum CloudRequestPolicyGuard {
         case "body": .healthBody
         default: nil
         }
+    }
+
+    private static func isVitalEvidenceSource(_ source: String) -> Bool {
+        HealthVitalMetric(rawValue: source) != nil
     }
 
 }

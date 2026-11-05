@@ -84,9 +84,32 @@ struct GetHealthHistoryTool: AgentTool {
                 let domainKey = domain.domain.rawValue
                 guard domainStatuses[domainKey] == nil else { continue }
                 domainStatuses[domainKey] = domain.status.rawValue
+                guard domain.domain != .activity else { continue }
                 guard let value = domain.currentValue,
                       let evidenceKey = domain.evidenceKeys.first,
                       value.isFinite,
+                      Self.evidenceKey(evidenceKey, matches: domain.domain),
+                      observations[evidenceKey] == nil else { continue }
+                observations[evidenceKey] = value
+            }
+            let vitalTrends = point.vitalTrends
+            for trend in vitalTrends {
+                guard let evidenceKey = trend.evidenceKey,
+                      let value = trend.latestMedian,
+                      value.isFinite,
+                      observations[evidenceKey] == nil else { continue }
+                observations[evidenceKey] = value
+            }
+            let activityTrends = point.activityTrends
+            for trend in activityTrends {
+                guard let evidenceKey = trend.evidenceKey,
+                      evidenceKey == trend.metric.evidenceKey,
+                      trend.unit == trend.metric.unit,
+                      trend.dataCoverage != .unknown,
+                      trend.status != .unknown,
+                      let value = trend.currentValue,
+                      value.isFinite,
+                      value >= 0,
                       observations[evidenceKey] == nil else { continue }
                 observations[evidenceKey] = value
             }
@@ -100,6 +123,8 @@ struct GetHealthHistoryTool: AgentTool {
                 date: formatter.string(from: pointDay),
                 domainStatuses: domainStatuses,
                 observations: observations,
+                vitalTrends: vitalTrends,
+                activityTrends: activityTrends,
                 recoveryStatus: point.state.recovery.status.rawValue,
                 trainingLoadCoverage: loadCoverage.rawValue,
                 trainingLoadBand: loadCoverage == .complete ? point.state.trainingLoad.band.rawValue : nil
@@ -124,6 +149,20 @@ struct GetHealthHistoryTool: AgentTool {
                 || summary.domainStatuses.values.contains(HealthDomainStatus.unknown.rawValue)
                 || summary.domainStatuses.values.contains(HealthDomainStatus.partial.rawValue)
                 || summary.domainStatuses.values.contains("learning")
+                || summary.vitalTrends.contains {
+                    $0.dataCoverage != .complete
+                        || $0.status == .unknown
+                        || $0.status == .partial
+                        || $0.status == .learning
+                        || $0.status == .noData
+                }
+                || summary.activityTrends.contains {
+                    $0.dataCoverage != .complete
+                        || $0.status == .unknown
+                        || $0.status == .partial
+                        || $0.status == .learning
+                        || $0.status == .noData
+                }
                 || summary.recoveryStatus == RecoveryStatus.insufficientEvidence.rawValue
                 || summary.trainingLoadCoverage != HealthDataCoverage.complete.rawValue
         }
@@ -165,6 +204,16 @@ struct GetHealthHistoryTool: AgentTool {
             .joined(separator: "\u{1f}")
     }
 
+    private static func evidenceKey(_ key: String, matches domain: HealthDomain) -> Bool {
+        let normalized = key.lowercased()
+        switch domain {
+        case .nutrition: normalized.hasPrefix("nutrition.")
+        case .sleep: normalized.hasPrefix("sleep.")
+        case .activity: normalized.hasPrefix("activity.") || normalized.hasPrefix("trainingload.")
+        case .body: normalized.hasPrefix("body.") || normalized.hasPrefix("vitals.")
+        }
+    }
+
     private static func parseDate(_ value: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         if let date = formatter.date(from: value) { return date }
@@ -203,6 +252,8 @@ private struct HealthHistoryDayOutput: Encodable {
     let domainStatuses: [String: String]
     /// Values are keyed by evidence metric so their units remain unambiguous.
     let observations: [String: Double]
+    let vitalTrends: [HealthVitalTrendContext]
+    let activityTrends: [HealthActivityTrendContext]
     let recoveryStatus: String
     let trainingLoadCoverage: String
     let trainingLoadBand: String?

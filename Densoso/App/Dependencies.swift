@@ -254,7 +254,7 @@ final class Dependencies {
         let toolRegistry = ToolRegistry(
             todayHealthStateProvider: { date in
                 try await healthContextExportGate.withAllowedExport {
-                    try await healthProjectionActor.todayHealthState(asOf: date)
+                    try await healthProjectionActor.healthNarrativeContext(asOf: date)
                 }
             },
             healthHistoryProvider: { start, end in

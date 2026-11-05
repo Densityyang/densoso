@@ -209,7 +209,11 @@ final class ToolSchemaTests: XCTestCase {
             state: .committed
         )
 
-        let response = try tool.response(actions: [pending, expired, committed, committing], asOf: now)
+        let response = try tool.response(
+            actions: [pending, expired, committed, committing],
+            asOf: now,
+            allowedClasses: [.healthBody]
+        )
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
         let actions = try XCTUnwrap(object["actions"] as? [[String: Any]])
 
@@ -238,7 +242,11 @@ final class ToolSchemaTests: XCTestCase {
             state: .pending
         )
 
-        let response = try GetPendingActionsTool().response(actions: [action], asOf: now)
+        let response = try GetPendingActionsTool().response(
+            actions: [action],
+            asOf: now,
+            allowedClasses: [.healthBody]
+        )
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
         let item = try XCTUnwrap((object["actions"] as? [[String: Any]])?.first)
 
@@ -262,7 +270,7 @@ final class ToolSchemaTests: XCTestCase {
             )
         }
 
-        let response = try tool.response(actions: actions, asOf: now)
+        let response = try tool.response(actions: actions, asOf: now, allowedClasses: [.healthBody])
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
 
         XCTAssertLessThan(response.count, 8_192)
@@ -270,7 +278,7 @@ final class ToolSchemaTests: XCTestCase {
         XCTAssertEqual(object["hasMore"] as? Bool, true)
         XCTAssertEqual(object["nextOffset"] as? Int, 20)
 
-        let nextPage = try tool.response(actions: actions, asOf: now, offset: 20)
+        let nextPage = try tool.response(actions: actions, asOf: now, offset: 20, allowedClasses: [.healthBody])
         let nextObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(nextPage.utf8)) as? [String: Any])
         XCTAssertEqual(nextObject["count"] as? Int, 5)
         XCTAssertEqual(nextObject["hasMore"] as? Bool, false)
@@ -308,7 +316,11 @@ final class ToolSchemaTests: XCTestCase {
         )
         let tool = GetPendingActionsTool()
 
-        let response = try tool.response(actions: [next, oversized], asOf: now)
+        let response = try tool.response(
+            actions: [next, oversized],
+            asOf: now,
+            allowedClasses: [.healthNutrition, .healthBody]
+        )
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
         let reviewItems = try XCTUnwrap(object["oversizedActions"] as? [[String: Any]])
 
@@ -320,7 +332,12 @@ final class ToolSchemaTests: XCTestCase {
         XCTAssertEqual(reviewItems.first?["requiresLocalReview"] as? Bool, true)
         XCTAssertLessThan(response.utf8.count, 8_192)
 
-        let nextPage = try tool.response(actions: [next, oversized], asOf: now, offset: 1)
+        let nextPage = try tool.response(
+            actions: [next, oversized],
+            asOf: now,
+            offset: 1,
+            allowedClasses: [.healthNutrition, .healthBody]
+        )
         let nextObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(nextPage.utf8)) as? [String: Any])
         let actions = try XCTUnwrap(nextObject["actions"] as? [[String: Any]])
         XCTAssertEqual(nextObject["count"] as? Int, 1)
@@ -345,6 +362,145 @@ final class ToolSchemaTests: XCTestCase {
             .object(["confirm": .boolean(true)]),
             against: definition.parameters
         ))
+    }
+
+    func testPendingActionsToolFiltersByConsentClassBeforePaging() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let actions: [PendingAction] = [
+            makePendingAction(payload: .meal(MealDraft(
+                occurredAt: now,
+                mealType: "lunch",
+                dishes: [],
+                note: "nutrition-sentinel"
+            )), id: 101, now: now),
+            makePendingAction(payload: .weight(WeightDraft(
+                measuredAt: now,
+                kilograms: 72.5,
+                source: "body-sentinel"
+            )), id: 102, now: now),
+            makePendingAction(payload: .dailyCheckIn(DailyCheckIn(
+                occurredAt: now,
+                energy: .low,
+                stress: .elevated,
+                subjectiveSleep: .poor,
+                note: "subjective-sentinel"
+            )), id: 103, now: now),
+            makePendingAction(payload: .workoutPlan(WorkoutPlanDraft(
+                name: "workout-activity-sentinel",
+                activity: .walking
+            )), id: 104, now: now),
+            makePendingAction(payload: .trainingPlan(TrainingPlanDraft(
+                name: "training-activity-sentinel",
+                sessions: [TrainingSessionDraft(
+                    date: now,
+                    activity: .running,
+                    goal: .timeMinutes(30),
+                    location: .outdoor,
+                    recommendedIntensity: .moderate,
+                    reason: "activity-reason"
+                )]
+            )), id: 105, now: now),
+            makePendingAction(payload: .userPreference(UserPreference(
+                category: .food,
+                statement: "food-preference-sentinel"
+            )), id: 106, now: now),
+            makePendingAction(payload: .userPreference(UserPreference(
+                category: .exercise,
+                statement: "exercise-preference-sentinel"
+            )), id: 107, now: now),
+            makePendingAction(payload: .userPreference(UserPreference(
+                category: .communication,
+                statement: "communication-preference-sentinel"
+            )), id: 108, now: now),
+        ]
+        let tool = GetPendingActionsTool()
+
+        let nutritionOnly = try tool.response(
+            actions: actions,
+            asOf: now,
+            allowedClasses: [.healthNutrition]
+        )
+        let nutritionObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(nutritionOnly.utf8)) as? [String: Any])
+        XCTAssertEqual(nutritionObject["count"] as? Int, 2)
+        XCTAssertEqual(nutritionObject["hasMore"] as? Bool, false)
+        XCTAssertNil(nutritionObject["nextOffset"] as? Int)
+        XCTAssertTrue(nutritionOnly.contains("nutrition-sentinel"))
+        XCTAssertTrue(nutritionOnly.contains("food-preference-sentinel"))
+        XCTAssertFalse(nutritionOnly.contains("body-sentinel"))
+        XCTAssertFalse(nutritionOnly.contains("subjective-sentinel"))
+        XCTAssertFalse(nutritionOnly.contains("activity-sentinel"))
+        XCTAssertFalse(nutritionOnly.contains("exercise-preference-sentinel"))
+        XCTAssertFalse(nutritionOnly.contains("communication-preference-sentinel"))
+
+        let healthTextOnly = try tool.response(actions: actions, asOf: now, allowedClasses: [])
+        let healthTextObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(healthTextOnly.utf8)) as? [String: Any])
+        XCTAssertEqual(healthTextObject["status"] as? String, "noAuthorizedActions")
+        XCTAssertEqual(healthTextObject["count"] as? Int, 0)
+        XCTAssertEqual(healthTextObject["hasMore"] as? Bool, false)
+        XCTAssertNil(healthTextObject["nextOffset"] as? Int)
+        for sentinel in [
+            "nutrition-sentinel", "body-sentinel", "subjective-sentinel", "activity-sentinel",
+            "food-preference-sentinel", "exercise-preference-sentinel", "communication-preference-sentinel",
+        ] {
+            XCTAssertFalse(healthTextOnly.contains(sentinel))
+        }
+
+        let bodyOnly = try tool.response(actions: actions, asOf: now, allowedClasses: [.healthBody])
+        XCTAssertTrue(bodyOnly.contains("body-sentinel"))
+        XCTAssertFalse(bodyOnly.contains("nutrition-sentinel"))
+        XCTAssertFalse(bodyOnly.contains("subjective-sentinel"))
+
+        let subjectiveOnly = try tool.response(actions: actions, asOf: now, allowedClasses: [.healthSubjective])
+        XCTAssertTrue(subjectiveOnly.contains("subjective-sentinel"))
+        XCTAssertFalse(subjectiveOnly.contains("body-sentinel"))
+        XCTAssertFalse(subjectiveOnly.contains("nutrition-sentinel"))
+
+        let activityOnly = try tool.response(
+            actions: actions,
+            asOf: now,
+            allowedClasses: [.healthActivity]
+        )
+        XCTAssertEqual(
+            (try XCTUnwrap(JSONSerialization.jsonObject(with: Data(activityOnly.utf8)) as? [String: Any])["count"] as? Int),
+            3
+        )
+        XCTAssertTrue(activityOnly.contains("workout-activity-sentinel"))
+        XCTAssertTrue(activityOnly.contains("training-activity-sentinel"))
+        XCTAssertTrue(activityOnly.contains("exercise-preference-sentinel"))
+        XCTAssertFalse(activityOnly.contains("communication-preference-sentinel"))
+
+        let nutritionAndBody = try tool.response(
+            actions: actions,
+            asOf: now,
+            allowedClasses: [.healthNutrition, .healthBody]
+        )
+        let nutritionAndBodyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(nutritionAndBody.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(nutritionAndBodyObject["count"] as? Int, 3)
+        XCTAssertTrue(nutritionAndBody.contains("nutrition-sentinel"))
+        XCTAssertTrue(nutritionAndBody.contains("body-sentinel"))
+        XCTAssertTrue(nutritionAndBody.contains("food-preference-sentinel"))
+        XCTAssertFalse(nutritionAndBody.contains("subjective-sentinel"))
+        XCTAssertFalse(nutritionAndBody.contains("activity-sentinel"))
+        XCTAssertFalse(nutritionAndBody.contains("exercise-preference-sentinel"))
+        XCTAssertFalse(nutritionAndBody.contains("communication-preference-sentinel"))
+
+        let allHealthClasses = Set(ProviderDataClass.allCases.filter(\.isHealthContextClass))
+        let allAllowed = try tool.response(actions: actions, asOf: now, allowedClasses: allHealthClasses)
+        XCTAssertFalse(allAllowed.contains("communication-preference-sentinel"))
+    }
+
+    private func makePendingAction(payload: ActionPayload, id: Int, now: Date) -> PendingAction {
+        PendingAction(
+            id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", id))!,
+            idempotencyKey: "test-action-\(id)",
+            clientRequestID: UUID(),
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(3_600),
+            payload: payload,
+            state: .pending
+        )
     }
 
     func testLogMealRequiresRealNestedArrays() throws {

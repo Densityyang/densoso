@@ -1,6 +1,135 @@
 import DensosoDomain
 import Foundation
 
+struct MealEstimationNutritionContext: Codable, Equatable, Sendable {
+    struct Today: Codable, Equatable, Sendable {
+        let recordedEnergyIntakeKcal: EstimateRange?
+        let recordedProteinGrams: Double?
+        let intakeAvailability: MetricAvailability?
+        let proteinAvailability: MetricAvailability?
+        let intakeCoverage: MetricCoverage?
+        let proteinCoverage: MetricCoverage?
+        let nutritionRecordStatus: NutritionDayRecordStatus
+        let allRecordedMealsHaveEvidence: Bool?
+        let mealCount: Int
+        let recordedThroughLocalTime: String?
+        let mayCompareWithCompleteDayHistory: Bool
+    }
+
+    let today: Today?
+    let sevenDay: HealthContextWindowSummary?
+    let twentyEightDay: HealthContextWindowSummary?
+    let analysisWindowCoverage: [String: HealthMetricWindowCoverage]
+    let dailyProteinGoalGrams: Double?
+    let evidenceKeys: [String]
+
+    static func make(
+        today metric: DailyMetricsReadResult?,
+        summary: HealthContextSummary?
+    ) -> MealEstimationNutritionContext? {
+        let projectionRequiresRecompute = metric?.requiresRecompute ?? false
+        let intake = usable(metric?.intake, projectionRequiresRecompute: projectionRequiresRecompute)
+        let protein = usable(metric?.proteinG, projectionRequiresRecompute: projectionRequiresRecompute)
+        let status = metric?.nutritionRecordStatus ?? .unknown
+        let allAvailableTodayEstimatesAreComplete =
+            (intake.value == nil || intake.availability == .estimated || intake.availability == .observed)
+                && (protein.value == nil || protein.availability == .estimated || protein.availability == .observed)
+        let mayCompareWithCompleteDayHistory = status == .complete
+            && allAvailableTodayEstimatesAreComplete
+            && (intake.value != nil || protein.value != nil)
+        let today = metric != nil
+            && (intake.value != nil || protein.value != nil || (metric?.mealCount ?? 0) > 0 || status == .complete)
+            ? Today(
+                recordedEnergyIntakeKcal: intake.value,
+                recordedProteinGrams: protein.value,
+                intakeAvailability: metric?.intake.availability,
+                proteinAvailability: metric?.proteinG.availability,
+                intakeCoverage: metric?.coverage.intake,
+                proteinCoverage: metric?.coverage.proteinG,
+                nutritionRecordStatus: status,
+                allRecordedMealsHaveEvidence: metric?.allRecordedMealsHaveEvidence,
+                mealCount: metric?.mealCount ?? 0,
+                recordedThroughLocalTime: metric?.lastMealRecordedAt.map(localTimestamp),
+                mayCompareWithCompleteDayHistory: mayCompareWithCompleteDayHistory
+            )
+            : nil
+        let sevenDay = summary.map { nutritionOnly($0.sevenDay) }
+        let twentyEightDay = summary.map { nutritionOnly($0.twentyEightDay) }
+        let analysisCoverage = summary?.analysisWindowCoverage.filter { isNutritionKey($0.key) } ?? [:]
+        let goal = summary?.dailyProteinGoalGrams
+        guard today != nil || sevenDay != nil || twentyEightDay != nil || goal != nil else { return nil }
+        var evidenceKeys: [String] = []
+        if today?.recordedEnergyIntakeKcal != nil { evidenceKeys.append("nutrition.energyIntake.kcal") }
+        if today?.recordedProteinGrams != nil { evidenceKeys.append("nutrition.protein.grams") }
+        return MealEstimationNutritionContext(
+            today: today,
+            sevenDay: sevenDay,
+            twentyEightDay: twentyEightDay,
+            analysisWindowCoverage: analysisCoverage,
+            dailyProteinGoalGrams: goal,
+            evidenceKeys: evidenceKeys
+        )
+    }
+
+    static func nutritionOnlySummary(from summary: HealthContextSummary?) -> HealthContextSummary? {
+        guard let summary else { return nil }
+        return HealthContextSummary(
+            sevenDay: nutritionOnly(summary.sevenDay),
+            twentyEightDay: nutritionOnly(summary.twentyEightDay),
+            targetWeightKilograms: nil,
+            dailyDeficitGoalKcal: nil,
+            dailyProteinGoalGrams: summary.dailyProteinGoalGrams,
+            recommendationReferences: [],
+            analysisWindowCoverage: summary.analysisWindowCoverage.filter { isNutritionKey($0.key) }
+        )
+    }
+
+    private static func nutritionOnly(_ window: HealthContextWindowSummary) -> HealthContextWindowSummary {
+        let keys = Set(["energyIntake", "proteinGrams"])
+        return HealthContextWindowSummary(
+            windowDays: window.windowDays,
+            coverageDays: window.coverageDays.filter { keys.contains($0.key) },
+            averageSleepMinutes: nil,
+            averageStepCount: nil,
+            averageActiveEnergyKcal: nil,
+            averageEnergyIntakeKcal: window.averageEnergyIntakeKcal,
+            averageDailyDeficitKcal: nil,
+            averageProteinGrams: window.averageProteinGrams,
+            medianWeightKilograms: nil,
+            dataCoverage: window.dataCoverage.filter { keys.contains($0.key) },
+            metricWindowCoverage: window.metricWindowCoverage.filter { keys.contains($0.key) }
+        )
+    }
+
+    private static func usable<Value: Codable & Equatable & Sendable>(
+        _ value: MetricValue<Value>?,
+        projectionRequiresRecompute: Bool
+    ) -> (value: Value?, availability: MetricAvailability?) {
+        guard !projectionRequiresRecompute else { return (nil, .pendingRecompute) }
+        guard let value,
+              value.availability == .observed
+                || value.availability == .estimated
+                || value.availability == .partial else {
+            return (nil, value?.availability)
+        }
+        return (value.value, value.availability)
+    }
+
+    private static func isNutritionKey(_ key: String) -> Bool {
+        let normalized = key.lowercased()
+        return normalized == "energyintake" || normalized == "proteingrams"
+    }
+
+    private static func localTimestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar.current
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = Calendar.current.timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss zzz"
+        return formatter.string(from: date)
+    }
+}
+
 enum HealthContextPromptBuilder {
     static let promptVersion = NarrativePromptVersion.current
 
@@ -9,8 +138,9 @@ enum HealthContextPromptBuilder {
         "sleep", "slept", "sleeping", "insomnia",
         "饮食", "吃了", "吃什么", "进食", "早餐", "午餐", "晚餐", "食材", "营养", "蛋白质", "碳水",
         "热量", "卡路里", "摄入", "meal", "food", "nutrition", "protein", "carbohydrate", "calorie", "intake",
-        "体重", "身高", "体脂", "腰围", "血压", "心率", "心率变异", "血糖", "体温", "身体指标",
-        "weight", "body mass", "body fat", "blood pressure", "heart rate", "hrv", "blood sugar", "bmi",
+        "体重", "静息心率", "心率变异", "呼吸频率", "腕温", "手腕温度",
+        "weight", "body mass", "resting heart rate", "heart rate variability", "hrv",
+        "respiratory rate", "wrist temperature",
         "运动", "训练", "锻炼", "跑步", "步数", "活动量", "运动负荷", "恢复", "疲劳", "酸痛",
         "workout", "exercise", "training", "running", "steps", "activity", "recovery", "fatigue", "soreness",
     ]
@@ -61,6 +191,22 @@ enum HealthContextPromptBuilder {
         return priorHealthContext && isContextualFollowUp(normalized)
     }
 
+    static func requiresMealEstimationContext(for userText: String) -> Bool {
+        let normalized = userText.lowercased()
+        let asksForEstimate = ["估算", "估计", "估一估", "算一下", "calculate", "estimate"]
+            .contains(where: normalized.contains)
+        guard asksForEstimate else { return false }
+        let mealTerms = [
+            "午餐", "早餐", "晚餐", "加餐", "这顿", "这餐", "餐食", "食物",
+            "meal", "lunch", "breakfast", "dinner", "snack", "food",
+        ]
+        if mealTerms.contains(where: normalized.contains) { return true }
+        let nutritionTerms = ["蛋白质", "碳水", "脂肪", "营养", "protein", "carbohydrate", "nutrition", "macros"]
+        let activityTerms = ["运动", "训练", "跑步", "锻炼", "消耗", "workout", "exercise", "run", "training", "expenditure"]
+        return nutritionTerms.contains(where: normalized.contains)
+            && !activityTerms.contains(where: normalized.contains)
+    }
+
     static func hasPriorHealthContext(in priorUserMessages: [String]) -> Bool {
         for message in priorUserMessages.reversed() {
             let normalized = message.lowercased()
@@ -88,13 +234,28 @@ enum HealthContextPromptBuilder {
         userText: String,
         summary: HealthContextSummary?,
         narrativeContext: HealthNarrativeContext? = nil,
+        mealEstimationNutritionContext: MealEstimationNutritionContext? = nil,
         structuredNarrative: Bool = false,
         cloudHealthPolicy: CloudHealthContextPolicy? = nil,
         priorHealthContext: Bool = false
     ) -> String {
-        guard shouldIncludeSummary(for: userText, priorHealthContext: priorHealthContext) else { return basePrompt }
+        guard shouldIncludeSummary(for: userText, priorHealthContext: priorHealthContext)
+                || requiresMealEstimationContext(for: userText) else { return basePrompt }
         var prompt = basePrompt
-        if let summary,
+        if requiresMealEstimationContext(for: userText) {
+            if let mealEstimationNutritionContext,
+               let data = try? encoded(mealEstimationNutritionContext),
+               let json = String(data: data, encoding: .utf8) {
+                prompt += """
+
+
+                ## 餐食估算的本地营养参考
+                以下只包含当天已记录营养估值、所有已记录餐食是否都有估值、饮食记录完成状态、最后一笔餐食的本地时间、营养目标和历史完整记录日聚合，不包含原始餐食记录或其他健康领域。allRecordedMealsHaveEvidence 只说明估值是否覆盖每笔已记录餐食，nutritionRecordStatus 只说明用户是否确认当天记录完整；两者不能互相推断。若任一状态不足，当天数值只覆盖有估值的已记录餐食；不得称为全天摄入，也不得与历史完整日均值直接比较。只有 mayCompareWithCompleteDayHistory 为 true 且 intakeAvailability 为 estimated 时才允许比较。不要把缺失值当成零，也不要据此给出健康诊断：
+                \(json)
+                """
+            }
+        } else if !structuredNarrative,
+           let summary,
            let data = try? encoded(summary),
            let json = String(data: data, encoding: .utf8) {
             prompt += """
@@ -105,7 +266,7 @@ enum HealthContextPromptBuilder {
             \(json)
             """
         }
-        if let cloudHealthPolicy {
+        if let cloudHealthPolicy, !requiresMealEstimationContext(for: userText) {
             let restrictedClasses = CloudHealthContextPolicy.dataClasses
                 .filter { !cloudHealthPolicy.allows($0) }
                 .compactMap(\.healthContextTitle)
@@ -129,7 +290,7 @@ enum HealthContextPromptBuilder {
         \(prompt)
 
         ## 健康解读结构（强制）
-        只返回符合 response schema 的 JSON。使用 healthState、subjectiveContext、evidence 和 recommendationCandidates 中可验证的信息；subjectiveContext 只代表用户本人报告的主观感受，不是 HealthKit 测量，不得混入 HealthState。引用时必须明确标为用户自述。evidenceKeys 必须引用由本机状态、自述或推荐候选组成的 allowedEvidenceKeys，不得引用 recommendation ID。只保留能由引用支撑的判断；无证据支撑的领域应明确说明不足，不作推断。
+        只返回符合 response schema 的 JSON。使用 cloudHealthState、vitalTrends、activityTrends、aggregateSummary、subjectiveContext、evidence 和 recommendationCandidates 中可验证的信息；subjectiveContext 只代表用户本人报告的主观感受，不是 HealthKit 测量，不得混入客观健康状态。引用时必须明确标为用户自述。evidenceKeys 必须引用由本机状态、自述或推荐候选组成的 allowedEvidenceKeys，不得引用 recommendation ID。只保留能由引用支撑的判断；无证据支撑的领域应明确说明不足，不作推断。
         文本字段只写不含数值的自然语言，不得写数字、百分比、具体指标值或单位；数值和指标由界面从本机确定性 HealthState 渲染。不得诊断或猜测缺失数据。
         \(contextJSON)
         """
@@ -164,6 +325,12 @@ enum HealthContextPromptBuilder {
     }
 
     private static func encoded(_ context: HealthNarrativeContext) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(context)
+    }
+
+    private static func encoded(_ context: MealEstimationNutritionContext) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(context)

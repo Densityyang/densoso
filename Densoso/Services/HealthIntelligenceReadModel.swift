@@ -52,15 +52,25 @@ struct HealthIntelligenceReadModel: Sendable {
             domain.evidenceKeys.map { EvidenceReference(key: $0, source: domain.domain.rawValue) }
         } + (state?.recovery.evidence ?? [])
             + (state?.tomorrowGuidance?.reasons ?? [])
-            + brief.vitalTrends.map {
+            + brief.vitalTrends.filter { $0.latestMedian != nil }.map {
                 EvidenceReference(key: $0.evidenceKey, source: $0.metric.rawValue)
+            }
+            + brief.activityTrends.compactMap { trend in
+                guard let value = trend.currentValue, value.isFinite,
+                      trend.dataCoverage != .unknown,
+                      trend.status != .unknown, trend.status != .noData,
+                      trend.evidenceKey == trend.metric.evidenceKey,
+                      trend.unit == trend.metric.unit else { return nil }
+                return EvidenceReference(key: trend.evidenceKey, source: HealthDomain.activity.rawValue)
             }
         return HealthNarrativeContext(
             healthState: state,
             evidence: stateEvidence,
             recommendationCandidates: brief.recommendations,
             aggregateSummary: brief.contextSummary,
-            subjectiveContext: subjective
+            subjectiveContext: subjective,
+            vitalTrends: brief.vitalTrends,
+            activityTrends: brief.activityTrends
         )
     }
 
@@ -149,10 +159,11 @@ struct HealthIntelligenceReadModel: Sendable {
         for offset in 0...dayCount {
             guard let targetDay = calendar.date(byAdding: .day, value: offset, to: startDay) else { continue }
             let inputs = days.filter { calendar.startOfDay(for: $0.dayStart) <= targetDay }
-            guard let state = engine.makeDailyBrief(
+            guard let brief = engine.makeDailyBrief(
                 days: inputs,
                 goals: try goalProfile(asOf: targetDay, in: context)
-            )?.dailyBrief.healthState else { continue }
+            )?.dailyBrief,
+                  let state = brief.healthState else { continue }
             points.append(HealthStateHistoryPoint(
                 date: targetDay,
                 state: HealthStateV2(
@@ -160,7 +171,9 @@ struct HealthIntelligenceReadModel: Sendable {
                     recovery: state.recovery,
                     trainingLoad: state.trainingLoad,
                     tomorrowGuidance: nil
-                )
+                ),
+                vitalTrends: brief.vitalTrends.map { HealthVitalTrendContext($0) },
+                activityTrends: brief.activityTrends.map { HealthActivityTrendContext($0) }
             ))
         }
         return points
@@ -444,7 +457,9 @@ struct HealthIntelligenceReadModel: Sendable {
             let metricReadResult = metric.map(DailyMetricsReadModelMapper.make)
             let proteinGrams = metricReadResult?.proteinG.value
             let energyIntake = metricReadResult?.intake.value?.likely
-            let dailyDeficit = projectionReadStates[HealthMetricID.activeEnergy.rawValue] == .available
+            let nutritionRecordStatus = metricReadResult?.nutritionRecordStatus ?? .unknown
+            let dailyDeficit = nutritionRecordStatus == .complete
+                && projectionReadStates[HealthMetricID.activeEnergy.rawValue] == .available
                 ? metricReadResult?.deficit.value?.likely
                 : nil
             days.append(HealthIntelligenceDay(
@@ -474,7 +489,11 @@ struct HealthIntelligenceReadModel: Sendable {
                 wristTemperatureSamples: dailyRepresentative(.wristTemperature),
                 workouts: workouts,
                 healthReadStates: projectionReadStates,
-                healthQueryStartByMetric: queryStartByMetric
+                healthQueryStartByMetric: queryStartByMetric,
+                nutritionRecordStatus: nutritionRecordStatus,
+                nutritionIntakeAvailability: metricReadResult?.intake.availability ?? .unavailable,
+                nutritionProteinAvailability: metricReadResult?.proteinG.availability ?? .unavailable,
+                allRecordedMealsHaveEvidence: metricReadResult?.allRecordedMealsHaveEvidence
             ))
         }
         return days
@@ -634,6 +653,20 @@ private struct WeightCursor {
 struct HealthStateHistoryPoint: Equatable, Sendable {
     let date: Date
     let state: HealthStateV2
+    let vitalTrends: [HealthVitalTrendContext]
+    let activityTrends: [HealthActivityTrendContext]
+
+    init(
+        date: Date,
+        state: HealthStateV2,
+        vitalTrends: [HealthVitalTrendContext] = [],
+        activityTrends: [HealthActivityTrendContext] = []
+    ) {
+        self.date = date
+        self.state = state
+        self.vitalTrends = vitalTrends
+        self.activityTrends = activityTrends
+    }
 }
 
 enum HealthHistoryQueryError: Error, LocalizedError, Equatable {

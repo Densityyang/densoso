@@ -144,6 +144,77 @@ final class CaloricEnergySemanticsTests: XCTestCase {
         XCTAssertFalse(try intakeIsPresent(in: legacy))
     }
 
+    func testResolvedBreakfastEstimateSurvivesAnUnresolvedLunchAsPartialIntake() throws {
+        let day = Date(timeIntervalSince1970: 1_700_000_000)
+        let breakfast = MealRecord(
+            date: day.addingTimeInterval(8 * 60 * 60),
+            totalCaloriesKcal: 420,
+            proteinG: 24,
+            fatG: 14,
+            carbsG: 48,
+            evidenceData: currentMealEvidenceData()
+        )
+        let unresolvedLunch = MealRecord(
+            date: day.addingTimeInterval(12 * 60 * 60),
+            totalCaloriesKcal: 0,
+            evidenceData: try JSONEncoder().encode([
+                EvidenceSnapshot(
+                    grade: .unresolved,
+                    sourceID: "unresolved-lunch",
+                    summary: "Lunch estimate is still missing."
+                ),
+            ])
+        )
+        let projection = CaloricEngine.computeDailyMetrics(
+            date: day,
+            calendar: .current,
+            meals: [breakfast, unresolvedLunch],
+            workouts: [],
+            effectiveProfile: effectiveProfile(at: day, activityLevel: .moderate),
+            effectiveWeight: effectiveWeight(at: day, kilograms: 60)
+        )
+        let coverage = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(projection.dataCoverageJSON.utf8)) as? [String: Any]
+        )
+        let readResult = DailyMetricsReadModelMapper.make(projection)
+
+        XCTAssertEqual(projection.mealCount, 2)
+        XCTAssertEqual(projection.totalIntakeKcal, 420)
+        XCTAssertEqual(coverage["intake"] as? Bool, true)
+        XCTAssertEqual(coverage["allRecordedMealsHaveEvidence"] as? Bool, false)
+        XCTAssertEqual(readResult.intake.value?.likely, 420)
+        XCTAssertEqual(readResult.intake.availability, .partial)
+        XCTAssertEqual(readResult.nutritionRecordStatus, .inProgress)
+        XCTAssertNil(readResult.deficit.value)
+    }
+
+    func testFullyEstimatedMealsStillNeedExplicitDayCompletion() throws {
+        let day = Date(timeIntervalSince1970: 1_700_000_000)
+        let breakfast = MealRecord(
+            date: day.addingTimeInterval(8 * 60 * 60),
+            totalCaloriesKcal: 420,
+            evidenceData: currentMealEvidenceData()
+        )
+        let projection = CaloricEngine.computeDailyMetrics(
+            date: day,
+            calendar: .current,
+            meals: [breakfast],
+            workouts: [],
+            effectiveProfile: effectiveProfile(at: day, activityLevel: .moderate),
+            effectiveWeight: effectiveWeight(at: day, kilograms: 60)
+        )
+        let coverage = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(projection.dataCoverageJSON.utf8)) as? [String: Any]
+        )
+        let readResult = DailyMetricsReadModelMapper.make(projection)
+
+        XCTAssertEqual(coverage["allRecordedMealsHaveEvidence"] as? Bool, true)
+        XCTAssertEqual(readResult.intake.value?.likely, 420)
+        XCTAssertEqual(readResult.intake.availability, .partial)
+        XCTAssertEqual(readResult.nutritionRecordStatus, .inProgress)
+        XCTAssertNil(readResult.deficit.value)
+    }
+
     func testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics() {
         let day = Date(timeIntervalSince1970: 1_700_000_000)
         let profile = effectiveProfile(at: day, activityLevel: .moderate)

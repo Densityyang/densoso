@@ -17,7 +17,7 @@ final class GetWeeklyDeficitToolTests: XCTestCase {
             deficitKcal: 250,
             mealCount: 1,
             energyQuality: EnergyQuality.observed.rawValue,
-            dataCoverageJSON: #"{"intake":true,"protein":false,"fat":false,"carbs":false}"#,
+            dataCoverageJSON: completeNutritionCoverage("weekly-deficit-meals"),
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
             sourceFingerprint: "weekly-deficit-test"
         ))
@@ -60,7 +60,7 @@ final class GetWeeklyDeficitToolTests: XCTestCase {
             deficitKcal: 250,
             mealCount: 1,
             energyQuality: EnergyQuality.observed.rawValue,
-            dataCoverageJSON: #"{"intake":true,"protein":false,"fat":false,"carbs":false}"#,
+            dataCoverageJSON: completeNutritionCoverage("weekly-deficit-current-version"),
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
             sourceFingerprint: "weekly-deficit-current-version"
         ))
@@ -112,5 +112,40 @@ final class GetWeeklyDeficitToolTests: XCTestCase {
         XCTAssertEqual(response["projectionVersion"] as? String, "unavailable")
         XCTAssertEqual(response["projectionVersions"] as? [String], [])
         XCTAssertTrue(total["value"] is NSNull)
+    }
+
+    func testPartialDayIntakeDoesNotContributeToWeeklyDeficit() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let weekStart = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let weekEnd = try XCTUnwrap(calendar.date(byAdding: .day, value: 6, to: weekStart))
+        let partial = DailyMetricsReadModelMapper.make(DailyMetrics(
+            date: weekStart,
+            totalExpenditureKcal: 2_000,
+            totalIntakeKcal: 1_000,
+            deficitKcal: 1_000,
+            mealCount: 1,
+            energyQuality: EnergyQuality.observed.rawValue,
+            dataCoverageJSON: #"{"intake":true,"nutritionRecordStatus":"inProgress","nutritionMealFingerprint":"partial-meal-set"}"#,
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "partial-weekly-deficit"
+        ))
+        let output = GetWeeklyDeficitTool.responseJSON(
+            [partial],
+            weekStart: weekStart,
+            weekEnd: weekEnd,
+            expectedDays: 7,
+            calendar: calendar
+        )
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+        let total = try XCTUnwrap(response["totalDeficitKcal"] as? [String: Any])
+
+        XCTAssertEqual(response["status"] as? String, "insufficient_data")
+        XCTAssertEqual(response["daysWithData"] as? Int, 0)
+        XCTAssertTrue(total["value"] is NSNull)
+    }
+
+    private func completeNutritionCoverage(_ fingerprint: String) -> String {
+        #"{"intake":true,"allRecordedMealsHaveEvidence":true,"protein":false,"proteinComplete":false,"fat":false,"fatComplete":false,"carbs":false,"carbsComplete":false,"nutritionRecordStatus":"complete","nutritionMealFingerprint":"\#(fingerprint)","nutritionCompletionMealFingerprint":"\#(fingerprint)"}"#
     }
 }

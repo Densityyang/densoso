@@ -1,7 +1,7 @@
 import DensosoDomain
 import Foundation
 
-typealias TodayHealthStateProvider = @Sendable (Date) async throws -> HealthStateV2?
+typealias TodayHealthStateProvider = @Sendable (Date) async throws -> HealthNarrativeContext?
 
 @MainActor
 struct GetTodayHealthStateTool: AgentTool {
@@ -29,17 +29,43 @@ struct GetTodayHealthStateTool: AgentTool {
     }
 
     func response(asOf date: Date) async throws -> String {
-        let state = try await stateProvider(date)
-        return try response(asOf: date, state: state)
+        let context = try await stateProvider(date)
+        return try response(asOf: date, context: context)
     }
 
     func response(asOf date: Date, state: HealthStateV2?) throws -> String {
-        let output = TodayHealthStateToolOutput(
-            status: Self.status(for: state),
+        try response(asOf: date, cloudState: state.map(Self.cloudState), vitalTrends: [], activityTrends: [])
+    }
+
+    func response(asOf date: Date, context: HealthNarrativeContext?) throws -> String {
+        let cloudState = context?.cloudHealthState
+            ?? context?.healthState.map(Self.cloudState)
+        try response(
             asOf: date,
-            healthState: state.map { TodayHealthStatePayload(state: $0) },
-            evidenceReferences: Self.evidenceReferences(in: state),
-            message: Self.message(for: state)
+            cloudState: cloudState,
+            vitalTrends: context?.vitalTrends ?? [],
+            activityTrends: context?.activityTrends ?? []
+        )
+    }
+
+    private func response(
+        asOf date: Date,
+        cloudState: CloudHealthStateContext?,
+        vitalTrends: [HealthVitalTrendContext],
+        activityTrends: [HealthActivityTrendContext]
+    ) throws -> String {
+        let output = TodayHealthStateToolOutput(
+            status: Self.status(for: cloudState, vitalTrends: vitalTrends, activityTrends: activityTrends),
+            asOf: date,
+            healthState: cloudState,
+            vitalTrends: vitalTrends,
+            activityTrends: activityTrends,
+            evidenceReferences: Self.evidenceReferences(
+                in: cloudState,
+                vitalTrends: vitalTrends,
+                activityTrends: activityTrends
+            ),
+            message: Self.message(for: cloudState, vitalTrends: vitalTrends, activityTrends: activityTrends)
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -48,39 +74,112 @@ struct GetTodayHealthStateTool: AgentTool {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private static func status(for state: HealthStateV2?) -> TodayHealthStateToolStatus {
-        guard let state, !state.domains.isEmpty else { return .unavailable }
-        if hasNoEvidence(state) { return .noData }
-        if state.recovery.status == .insufficientEvidence { return .insufficientEvidence }
-        return .available
+    private static func status(
+        for state: CloudHealthStateContext?,
+        vitalTrends: [HealthVitalTrendContext],
+        activityTrends: [HealthActivityTrendContext]
+    ) -> TodayHealthStateToolStatus {
+        guard state != nil || !vitalTrends.isEmpty || !activityTrends.isEmpty else { return .unavailable }
+        guard hasCurrentEvidence(state, vitalTrends: vitalTrends, activityTrends: activityTrends) else {
+            return hasCoverageGaps(state, vitalTrends: vitalTrends, activityTrends: activityTrends)
+                ? .insufficientEvidence
+                : .noData
+        }
+        let hasIncompleteVital = vitalTrends.contains {
+            $0.latestMedian != nil && ($0.dataCoverage != .complete || $0.status == .partial || $0.status == .unknown)
+        }
+        let hasIncompleteDomain = (state?.domains ?? []).contains {
+            $0.currentValue != nil && ($0.status == .partial || $0.status == .unknown)
+        }
+        let hasIncompleteActivity = activityTrends.contains {
+            $0.currentValue != nil && ($0.dataCoverage != .complete || $0.status == .partial || $0.status == .unknown)
+        }
+        let hasIncompleteTrainingLoad = state?.trainingLoad.map { $0.dataCoverage != .complete } ?? false
+        return hasIncompleteVital || hasIncompleteDomain || hasIncompleteActivity || hasIncompleteTrainingLoad
+            ? .insufficientEvidence
+            : .available
     }
 
-    private static func evidenceReferences(in state: HealthStateV2?) -> [EvidenceReference] {
-        guard let state else { return [] }
-        let references = state.domains.flatMap { domain in
+    private static func evidenceReferences(
+        in state: CloudHealthStateContext?,
+        vitalTrends: [HealthVitalTrendContext],
+        activityTrends: [HealthActivityTrendContext]
+    ) -> [EvidenceReference] {
+        let references = (state?.domains ?? []).flatMap { domain in
             domain.evidenceKeys.map { EvidenceReference(key: $0, source: domain.domain.rawValue) }
-        } + state.recovery.evidence + (state.tomorrowGuidance?.reasons ?? [])
+        } + (state?.recovery?.evidence ?? []) + (state?.tomorrowGuidance?.reasons ?? [])
+            + vitalTrends.compactMap { trend in
+                guard trend.latestMedian != nil, let evidenceKey = trend.evidenceKey else { return nil }
+                return EvidenceReference(key: evidenceKey, source: trend.metric.rawValue)
+            }
+            + activityTrends.compactMap { trend in
+                guard trend.currentValue != nil,
+                      let evidenceKey = trend.evidenceKey,
+                      evidenceKey == trend.metric.evidenceKey else { return nil }
+                return EvidenceReference(key: evidenceKey, source: HealthDomain.activity.rawValue)
+            }
         var seen = Set<String>()
         return references.filter { seen.insert("\($0.source):\($0.key)").inserted }
     }
 
-    private static func message(for state: HealthStateV2?) -> String? {
-        guard let state, !state.domains.isEmpty else {
+    private static func message(
+        for state: CloudHealthStateContext?,
+        vitalTrends: [HealthVitalTrendContext],
+        activityTrends: [HealthActivityTrendContext]
+    ) -> String? {
+        guard state != nil || !vitalTrends.isEmpty || !activityTrends.isEmpty else {
             return "今天的健康状态暂时不可用。"
         }
-        if hasNoEvidence(state) {
+        if !hasCurrentEvidence(state, vitalTrends: vitalTrends, activityTrends: activityTrends) {
+            if hasCoverageGaps(state, vitalTrends: vitalTrends, activityTrends: activityTrends) {
+                return "部分已授权数据覆盖未知或不完整；数据空缺不代表零。"
+            }
             return "目前没有记录到今天的健康数据；数据空缺不代表零。"
         }
-        if state.recovery.status == .insufficientEvidence {
-            return "目前证据不足以可靠判断恢复状态；我不会据此猜测。"
+        let hasPartialCurrentData = vitalTrends.contains {
+            $0.latestMedian != nil && ($0.dataCoverage != .complete || $0.status == .partial || $0.status == .unknown)
+        } || (state?.domains ?? []).contains {
+            $0.currentValue != nil && ($0.status == .partial || $0.status == .unknown)
+        } || activityTrends.contains {
+            $0.currentValue != nil && ($0.dataCoverage != .complete || $0.status == .partial || $0.status == .unknown)
+        } || (state?.trainingLoad.map { $0.dataCoverage != .complete } ?? false)
+
+        if hasPartialCurrentData {
+            return "部分已授权数据覆盖不完整；数据空缺不代表零。"
         }
         return nil
     }
 
-    private static func hasNoEvidence(_ state: HealthStateV2) -> Bool {
-        state.domains.allSatisfy({ $0.status == .noData })
-            && state.trainingLoad.band == .unavailable
-            && state.trainingLoad.dataCoverage == .complete
+    private static func hasCurrentEvidence(
+        _ state: CloudHealthStateContext?,
+        vitalTrends: [HealthVitalTrendContext],
+        activityTrends: [HealthActivityTrendContext]
+    ) -> Bool {
+        (state?.domains ?? []).contains { $0.currentValue != nil }
+            || vitalTrends.contains { $0.latestMedian != nil }
+            || activityTrends.contains { $0.currentValue != nil }
+            || state?.trainingLoad?.ratio != nil
+    }
+
+    private static func hasCoverageGaps(
+        _ state: CloudHealthStateContext?,
+        vitalTrends: [HealthVitalTrendContext],
+        activityTrends: [HealthActivityTrendContext]
+    ) -> Bool {
+        vitalTrends.contains { $0.dataCoverage != .complete }
+            || activityTrends.contains { $0.dataCoverage != .complete }
+            || (state?.domains ?? []).contains { $0.status == .unknown || $0.status == .partial }
+            || state?.trainingLoad?.dataCoverage == .unknown
+            || state?.trainingLoad?.dataCoverage == .partial
+    }
+
+    private static func cloudState(_ state: HealthStateV2) -> CloudHealthStateContext {
+        CloudHealthStateContext(
+            domains: state.domains,
+            recovery: state.recovery,
+            trainingLoad: HealthTrainingLoadContext(summary: state.trainingLoad),
+            tomorrowGuidance: state.tomorrowGuidance
+        )
     }
 }
 
@@ -94,47 +193,9 @@ private enum TodayHealthStateToolStatus: String, Encodable {
 private struct TodayHealthStateToolOutput: Encodable {
     let status: TodayHealthStateToolStatus
     let asOf: Date
-    let healthState: TodayHealthStatePayload?
+    let healthState: CloudHealthStateContext?
+    let vitalTrends: [HealthVitalTrendContext]
+    let activityTrends: [HealthActivityTrendContext]
     let evidenceReferences: [EvidenceReference]
     let message: String?
-}
-
-private struct TodayHealthStatePayload: Encodable {
-    let domains: [HealthDomainResult]
-    let recovery: RecoveryAssessment
-    let trainingLoad: TodayTrainingLoadPayload
-    let tomorrowGuidance: NextDayGuidance?
-
-    init(state: HealthStateV2) {
-        domains = state.domains
-        recovery = state.recovery
-        trainingLoad = TodayTrainingLoadPayload(summary: state.trainingLoad)
-        tomorrowGuidance = state.tomorrowGuidance
-    }
-}
-
-private struct TodayTrainingLoadPayload: Encodable {
-    let recentSevenDayLoad: Double?
-    let priorTwentyEightDayAverage: Double?
-    let ratio: Double?
-    let readiness: BaselineReadiness
-    let band: TrainingLoadBand
-    let dataCoverage: HealthDataCoverage
-    let estimatedWorkoutCount: Int?
-    let unavailableEffortCount: Int?
-
-    init(summary: TrainingLoadSummary) {
-        // The domain model uses zero as its required placeholder when no load
-        // could be observed. Keep that sentinel from becoming an agent-facing
-        // claim that the user's actual recent load was zero.
-        let isComplete = summary.dataCoverage == .complete
-        recentSevenDayLoad = isComplete && summary.readiness != .noData ? summary.recentSevenDayLoad : nil
-        priorTwentyEightDayAverage = isComplete ? summary.priorTwentyEightDayAverage : nil
-        ratio = isComplete ? summary.ratio : nil
-        readiness = summary.readiness
-        band = summary.band
-        dataCoverage = summary.dataCoverage
-        estimatedWorkoutCount = isComplete ? summary.estimatedWorkoutCount : nil
-        unavailableEffortCount = isComplete ? summary.unavailableEffortCount : nil
-    }
 }

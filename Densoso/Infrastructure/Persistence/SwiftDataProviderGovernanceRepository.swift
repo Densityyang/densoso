@@ -5,6 +5,10 @@ import SwiftData
 actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, CloudHealthContextPolicySnapshotRepository {
     static let monthlyUsageBatchSize = 64
 
+    #if DEBUG
+    private var shouldFailNextPolicySnapshotSaveForTesting = false
+    #endif
+
     private struct UsageCursor {
         let createdAt: Date
         let usageKey: String
@@ -148,6 +152,62 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
         return revisions
     }
 
+    func confirmCloudHealthContextPolicyDraft(
+        expectedPolicyID: UUID,
+        expectedRevision: Int,
+        expectedState: CloudHealthPolicyState,
+        expectedAllowedClasses: Set<ProviderDataClass>,
+        provider: ProviderID,
+        confirmedAt: Date,
+        changeSource: CloudHealthPolicyChangeSource
+    ) throws -> CloudHealthContextPolicySnapshot {
+        let current = try currentCloudHealthContextPolicySnapshot(provider: provider)
+        guard current.policyID == expectedPolicyID,
+              current.revision == expectedRevision,
+              current.state == expectedState,
+              expectedState == .draft,
+              current.allowedClasses == expectedAllowedClasses else {
+            throw CloudHealthContextPolicyError.noPendingExpansion
+        }
+
+        let allowed = expectedAllowedClasses.intersection(Set(CloudHealthContextPolicy.dataClasses))
+        let now = max(Date(), current.updatedAt.addingTimeInterval(0.001))
+        do {
+            for dataClass in CloudHealthContextPolicy.dataClasses {
+                try upsertConsentRecord(
+                    provider: provider,
+                    dataClass: dataClass,
+                    granted: allowed.contains(dataClass),
+                    policyVersion: "cloud-health-context-v1",
+                    decidedAt: now
+                )
+            }
+            var snapshotClasses = allowed
+            if try isConsentGranted(provider: provider, dataClass: .conversationHistory) {
+                snapshotClasses.insert(.conversationHistory)
+            }
+            let confirmed = CloudHealthContextPolicySnapshot.make(
+                provider: provider,
+                policyID: current.policyID,
+                revision: current.revision + 1,
+                state: snapshotClasses.isEmpty ? .revoked : .active,
+                allowedClasses: snapshotClasses,
+                createdAt: current.createdAt,
+                updatedAt: now,
+                confirmedAt: confirmedAt,
+                changeSource: changeSource
+            )
+            guard upsertPolicySnapshot(confirmed) else {
+                throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+            }
+            try savePolicySnapshotChanges()
+            return confirmed
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
     func withCurrentSendAuthorization<Result: Sendable>(
         provider: ProviderID,
         expectedSnapshot: CloudHealthContextPolicySnapshot,
@@ -244,12 +304,23 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
             confirmedAt: prior.confirmedAt,
             changeSource: changeSource
         )
-        guard upsertPolicySnapshot(snapshot) else {
-            throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+        do {
+            guard upsertPolicySnapshot(snapshot) else {
+                throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+            }
+            try savePolicySnapshotChanges()
+            return snapshot
+        } catch {
+            modelContext.rollback()
+            throw error
         }
-        try modelContext.save()
-        return snapshot
     }
+
+    #if DEBUG
+    func failNextPolicySnapshotSaveForTesting() {
+        shouldFailNextPolicySnapshotSaveForTesting = true
+    }
+    #endif
 
     func updateConversationHistoryConsent(
         provider: ProviderID,
@@ -448,6 +519,19 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
 
     private func policyKey(provider: ProviderID) -> String {
         "cloud-health-context-policy|\(provider.rawValue)"
+    }
+
+    private func savePolicySnapshotChanges() throws {
+        #if DEBUG
+        if shouldFailNextPolicySnapshotSaveForTesting {
+            shouldFailNextPolicySnapshotSaveForTesting = false
+            throw NSError(
+                domain: "SwiftDataProviderGovernanceRepository.PolicySnapshotSave",
+                code: 1
+            )
+        }
+        #endif
+        try modelContext.save()
     }
 
     private func currentGrantedHealthContextClasses(for provider: ProviderID) throws -> Set<ProviderDataClass> {

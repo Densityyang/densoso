@@ -1377,6 +1377,7 @@ final class HealthRepositoryTests: XCTestCase {
 
     func testImportedWorkoutAndAnchorRollbackTogetherWhenSaveFails() async throws {
         let repository = HealthRepository(modelContext: context, willSave: { throw TestSaveError.injected })
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
         let snapshot = try WorkoutSnapshot(
             healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000023")!,
             logicalSessionID: UUID(uuidString: "00000000-0000-0000-0000-000000000024")!,
@@ -1391,12 +1392,16 @@ final class HealthRepositoryTests: XCTestCase {
 
         do {
             try await repository.applyImportedWorkouts(
-                [snapshot], deletedHealthKitUUIDs: [], nextAnchorData: Data([7])
+                [snapshot],
+                deletedHealthKitUUIDs: [],
+                nextAnchorData: Data([7]),
+                readStateUpdates: [day: .available]
             )
             XCTFail("Expected the injected save failure")
         } catch {}
         XCTAssertTrue(try context.fetch(FetchDescriptor<WorkoutRecord>()).isEmpty)
         XCTAssertNil(try repository.cursor(for: "workouts"))
+        XCTAssertTrue(try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()).isEmpty)
         XCTAssertTrue(try context.fetch(FetchDescriptor<DailyMetrics>()).isEmpty)
     }
 
@@ -2047,6 +2052,143 @@ final class HealthRepositoryTests: XCTestCase {
         let metric = try XCTUnwrap(context.fetch(FetchDescriptor<DailyMetrics>()).first)
         XCTAssertEqual(metric.activeCaloriesKcal, 0)
         XCTAssertEqual(metric.energyQuality, "unavailable")
+    }
+
+    func testAvailableWorkoutScopeRejectsStaleSnapshotMetadata() throws {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let staleAlgorithmDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -3, to: today))
+        let staleTimezoneDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -2, to: today))
+        let mismatchedSnapshotDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        let snapshotDateForMismatch = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: mismatchedSnapshotDay))
+        let timezoneIdentifier = calendar.timeZone.identifier
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+
+        let staleFixtures: [(recordDay: Date, snapshotDay: Date, snapshotTimezone: String, snapshotVersion: String,
+                             recordTimezone: String, recordVersion: String)] = [
+            (
+                staleAlgorithmDay,
+                staleAlgorithmDay,
+                timezoneIdentifier,
+                "daily-health-snapshot-legacy",
+                timezoneIdentifier,
+                "daily-health-snapshot-legacy"
+            ),
+            (
+                staleTimezoneDay,
+                staleTimezoneDay,
+                "Test/Previous-Timezone",
+                DailyHealthSnapshot.currentAlgorithmVersion,
+                "Test/Previous-Timezone",
+                DailyHealthSnapshot.currentAlgorithmVersion
+            ),
+            (
+                mismatchedSnapshotDay,
+                snapshotDateForMismatch,
+                timezoneIdentifier,
+                DailyHealthSnapshot.currentAlgorithmVersion,
+                timezoneIdentifier,
+                DailyHealthSnapshot.currentAlgorithmVersion
+            ),
+        ]
+        for fixture in staleFixtures {
+            let snapshot = DailyHealthSnapshot(
+                dayStart: fixture.snapshotDay,
+                timezoneIdentifier: fixture.snapshotTimezone,
+                healthReadStates: [HealthMetricID.workout.rawValue: .available],
+                algorithmVersion: fixture.snapshotVersion
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: Self.dayKey(fixture.recordDay),
+                timezoneID: fixture.recordTimezone,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "stale-scope-fixture",
+                algorithmVersion: fixture.recordVersion
+            ))
+        }
+        try context.save()
+
+        let repository = HealthRepository(modelContext: context)
+        XCTAssertFalse(try repository.hasAvailableHealthReadState(
+            for: .workout,
+            from: staleAlgorithmDay,
+            through: mismatchedSnapshotDay
+        ))
+
+        for record in try context.fetch(FetchDescriptor<DailyHealthSnapshotRecord>()) {
+            context.delete(record)
+        }
+        for day in HealthDataWindowPolicy.days(
+            from: staleAlgorithmDay,
+            through: mismatchedSnapshotDay,
+            calendar: calendar
+        ) {
+            let validSnapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: timezoneIdentifier,
+                healthReadStates: [HealthMetricID.workout.rawValue: .available],
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: Self.dayKey(day),
+                timezoneID: timezoneIdentifier,
+                payloadData: try encoder.encode(validSnapshot),
+                snapshotHash: "current-scope-fixture",
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            ))
+        }
+        try context.save()
+        XCTAssertTrue(try repository.hasAvailableHealthReadState(
+            for: .workout,
+            from: staleAlgorithmDay,
+            through: mismatchedSnapshotDay
+        ))
+    }
+
+    func testSparseMigratedWorkoutAvailabilityCannotEstablishFullScopeMarker() throws {
+        let calendar = Calendar.current
+        let endDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let startDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -3, to: endDay))
+        let days = HealthDataWindowPolicy.days(from: startDay, through: endDay, calendar: calendar)
+        let timezoneIdentifier = calendar.timeZone.identifier
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+
+        func insertAvailableSnapshot(on day: Date, hash: String) throws {
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: timezoneIdentifier,
+                healthReadStates: [HealthMetricID.workout.rawValue: .available],
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: Self.dayKey(day),
+                timezoneID: timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: hash,
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            ))
+        }
+
+        insertAvailableSnapshot(on: days[0], hash: "legacy-workout-day-1")
+        insertAvailableSnapshot(on: days[3], hash: "legacy-workout-day-4")
+        try context.save()
+        let repository = HealthRepository(modelContext: context)
+        XCTAssertFalse(try repository.hasAvailableHealthReadState(
+            for: .workout,
+            from: startDay,
+            through: endDay
+        ), "Migrated sparse workout-day states do not prove full daily coverage")
+
+        insertAvailableSnapshot(on: days[1], hash: "full-workout-day-2")
+        insertAvailableSnapshot(on: days[2], hash: "full-workout-day-3")
+        try context.save()
+        XCTAssertTrue(try repository.hasAvailableHealthReadState(
+            for: .workout,
+            from: startDay,
+            through: endDay
+        ), "A current, contiguous daily coverage span can serve as a verified scope marker")
     }
 
     func testDuplicateHealthAggregateBucketsKeepLastBucketPerDay() async throws {

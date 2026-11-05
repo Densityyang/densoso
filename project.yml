@@ -149,6 +149,7 @@ schemes:
       targets:
         Densoso: all
     test:
+      config: Debug
       targets:
         - name: DensosoTests
         - name: DensosoUITests
@@ -158,6 +159,7 @@ schemes:
       targets:
         Densoso: all
     test:
+      config: Debug
       targets:
         - name: DensosoTests
 

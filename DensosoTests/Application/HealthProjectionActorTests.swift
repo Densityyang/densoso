@@ -324,7 +324,7 @@ final class HealthProjectionActorTests: XCTestCase {
             date: today,
             proteinG: mealProtein,
             mealCount: 12,
-            dataCoverageJSON: #"{"protein":true}"#,
+            dataCoverageJSON: #"{"protein":true,"proteinComplete":true,"allRecordedMealsHaveEvidence":true,"nutritionRecordStatus":"complete","nutritionMealFingerprint":"protein-meal-set","nutritionCompletionMealFingerprint":"protein-meal-set"}"#,
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
             sourceFingerprint: "canonical-protein-available"
         ))
@@ -1253,7 +1253,7 @@ final class HealthProjectionActorTests: XCTestCase {
             carbsG: 60,
             mealCount: 1,
             energyQuality: "observed",
-            dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true}"#,
+            dataCoverageJSON: #"{"intake":true,"allRecordedMealsHaveEvidence":true,"protein":true,"proteinComplete":true,"fat":true,"fatComplete":true,"carbs":true,"carbsComplete":true,"nutritionRecordStatus":"complete","nutritionMealFingerprint":"fixture-meal-set","nutritionCompletionMealFingerprint":"fixture-meal-set"}"#,
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
             sourceFingerprint: "daily-loop-coverage-fixture"
         ))

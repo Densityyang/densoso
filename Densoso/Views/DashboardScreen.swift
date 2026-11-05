@@ -14,6 +14,7 @@ struct DashboardScreen: View {
     @State private var healthSnapshotStatus: String?
     @State private var healthRefreshError: String?
     @State private var projectionReadError: String?
+    @State private var nutritionRecordActionError: String?
     @State private var isLoadingProjection = true
     @State private var projectionLoadGeneration = 0
 
@@ -173,7 +174,10 @@ struct DashboardScreen: View {
         let intakeValue = intake.map { "\(intakePrefix)\(String(format: "%.0f", $0))" }
             ?? (metrics.mealCount == 0 ? "未记录" : "暂无")
         let expenditureValue = expenditure.map { "\(expenditurePrefix)\(String(format: "%.0f", $0))" } ?? "暂无"
-        let balanceValue = deficit.map { "\(deficitPrefix)\(String(format: "%.0f", $0))" } ?? "暂无"
+        let hasCompleteIntake = result.hasCompleteDailyIntakeEstimate
+        let balanceValue = hasCompleteIntake
+            ? (deficit.map { "\(deficitPrefix)\(String(format: "%.0f", $0))" } ?? "暂无")
+            : (result.nutritionRecordStatus == .complete ? "待估算" : "待确认")
         return VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Text("今日热量")
@@ -183,24 +187,63 @@ struct DashboardScreen: View {
             }
 
             HStack(spacing: 12) {
-                OrbitMetric(value: intakeValue, label: "摄入 kcal")
+                OrbitMetric(
+                    value: intakeValue,
+                    label: hasCompleteIntake
+                        ? "全天摄入 kcal"
+                        : (intake == nil ? "已记录 kcal" : "已估算摄入 kcal")
+                )
                 OrbitMetric(value: expenditureValue, label: "消耗 kcal")
                 OrbitMetric(
                     value: balanceValue,
-                    label: "缺口 kcal",
+                    label: hasCompleteIntake
+                        ? "全天缺口 kcal"
+                        : (result.nutritionRecordStatus == .complete ? "缺口待估算" : "缺口待确认"),
                     tint: deficit != nil
                         ? ((deficit ?? 0) >= 0 ? OrbitPalette.green : OrbitPalette.coral)
                         : Color.gray
                 )
             }
 
-            if let expenditure, let intake, expenditure > 0 {
+            if hasCompleteIntake,
+               let expenditure, let intake, expenditure > 0 {
                 ProgressView(
                     value: max(intake, 0),
                     total: expenditure
                 )
                 .tint(OrbitPalette.blue)
                 .accessibilityLabel("今日摄入占总消耗")
+            }
+            Text(nutritionRecordStatusDescription(result.nutritionRecordStatus))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Button {
+                updateNutritionRecordStatus(
+                    result.nutritionRecordStatus == .complete
+                        ? (metrics.mealCount == 0 ? .unknown : .inProgress)
+                        : .complete,
+                    for: metrics
+                )
+            } label: {
+                Label(
+                    result.nutritionRecordStatus == .complete
+                        ? "撤销完整确认"
+                        : "确认今天饮食记录完整",
+                    systemImage: result.nutritionRecordStatus == .complete
+                        ? "arrow.uturn.backward"
+                        : "checkmark.circle"
+                )
+            }
+            .disabled(
+                metrics.requiresRecompute
+                    || (result.nutritionRecordStatus != .complete
+                        && !DailyMetricsReadModelMapper.hasNutritionMealFingerprint(for: metrics))
+            )
+            .font(.subheadline)
+            if let nutritionRecordActionError {
+                Text(nutritionRecordActionError)
+                    .font(.footnote)
+                    .foregroundStyle(OrbitPalette.coral)
             }
             if !hasEnergyEstimate {
                 Text("个人资料或健康数据还不完整，暂时无法估算今日消耗。")
@@ -213,6 +256,42 @@ struct DashboardScreen: View {
             }
         }
         .orbitCard(emphasized: true)
+    }
+
+    private func updateNutritionRecordStatus(
+        _ status: NutritionDayRecordStatus,
+        for metric: DailyMetrics
+    ) {
+        guard !metric.requiresRecompute else {
+            nutritionRecordActionError = "今日投影正在刷新，完成后再更新饮食记录状态。"
+            return
+        }
+        guard DailyMetricsReadModelMapper.setNutritionDayRecordStatus(status, for: metric) else {
+            nutritionRecordActionError = "今日饮食记录尚未完成投影，请刷新后重试。"
+            return
+        }
+        do {
+            try modelContext.save()
+            nutritionRecordActionError = nil
+            Task { await loadData() }
+        } catch {
+            modelContext.rollback()
+            nutritionRecordActionError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
+        }
+    }
+
+    private func nutritionRecordStatusDescription(_ status: NutritionDayRecordStatus) -> String {
+        switch status {
+        case .complete:
+            "你已确认当天饮食记录完整。"
+        case .inProgress:
+            "当前摄入只是已记录餐食的汇总；当天记录尚未确认完整。"
+        case .unknown:
+            "当天饮食记录完整度未知；现有估值只代表已记录内容。"
+        }
     }
 
     private func weeklyCard(_ weekly: WeeklyAnalyticsSnapshot) -> some View {

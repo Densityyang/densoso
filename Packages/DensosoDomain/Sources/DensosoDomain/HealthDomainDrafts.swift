@@ -256,7 +256,7 @@ public struct GoalProfile: Codable, Equatable, Sendable {
 }
 
 public struct DailyHealthSnapshot: Codable, Equatable, Sendable {
-    public static let currentAlgorithmVersion = "daily-health-snapshot-v3"
+    public static let currentAlgorithmVersion = "daily-health-snapshot-v4"
 
     public let dayStart: Date
     public let timezoneIdentifier: String

@@ -7,7 +7,7 @@ struct GetMetricsTool: AgentTool {
 
     var definition: ToolSchema { .strictObject(
         name: "get_metrics",
-        description: "获取最多 90 天的热量与营养汇总；每项结果包含可用状态和覆盖率。日期按用户本地日历日闭区间处理。dailyBreakdown 最多返回 4 天，并包含每日覆盖率、能量质量、待重算状态和投影版本；为控制输出大小，必要时会缩小当前页，truncated=true 时可从 nextStartDate 继续查询。projectedWeightLossKg 仅为粗略能量折算，并附非体重预测说明。",
+        description: "获取最多 90 天的热量与营养汇总；历史总量和均值只使用用户明确标记完整的饮食日，dailyBreakdown 可显示已记录的部分摄入并带完整度状态。输出分别报告有餐食记录日、有效营养估值日和完整记录日。日期按用户本地日历日闭区间处理。dailyBreakdown 最多返回 4 天，并包含每日覆盖率、能量质量、待重算状态和投影版本；为控制输出大小，必要时会缩小当前页，truncated=true 时可从 nextStartDate 继续查询。projectedWeightLossKg 仅为粗略能量折算，并附非体重预测说明。",
         properties: [
             "startDate": .string(format: "date-time", description: "开始日期 ISO8601，按本地日历日包含"),
             "endDate": .string(format: "date-time", description: "结束日期 ISO8601，按本地日历日包含"),
@@ -49,22 +49,37 @@ struct GetMetricsTool: AgentTool {
     ) -> String {
         let dayDifference = calendar.dateComponents([.day], from: startDay, to: endDay).day ?? Int.max
         let requestedDays = dayDifference == Int.max ? Int.max : dayDifference + 1
-        let intake = DailyMetricsUsabilityPolicy.aggregateRanges(metrics.map(\.intake), expectedDays: requestedDays)
+        let completeNutrition = metrics.map { metric in
+            (
+                intake: Self.completeOnly(metric.intake, status: metric.nutritionRecordStatus),
+                protein: Self.completeOnly(metric.proteinG, status: metric.nutritionRecordStatus),
+                fat: Self.completeOnly(metric.fatG, status: metric.nutritionRecordStatus),
+                carbs: Self.completeOnly(metric.carbsG, status: metric.nutritionRecordStatus)
+            )
+        }
+        let intake = DailyMetricsUsabilityPolicy.aggregateRanges(
+            completeNutrition.map(\.intake),
+            expectedDays: requestedDays
+        )
         let expenditure = DailyMetricsUsabilityPolicy.aggregateRanges(metrics.map(\.expenditure), expectedDays: requestedDays)
         let deficit = DailyMetricsUsabilityPolicy.aggregateSignedRanges(metrics.map(\.deficit), expectedDays: requestedDays)
         let proteinTotal = DailyMetricsUsabilityPolicy.aggregateNumbers(
-            metrics.map(\.proteinG), expectedDays: requestedDays
+            completeNutrition.map(\.protein), expectedDays: requestedDays
         )
         let proteinAverage = DailyMetricsUsabilityPolicy.aggregateNumbers(
-            metrics.map(\.proteinG), expectedDays: requestedDays, average: true
+            completeNutrition.map(\.protein), expectedDays: requestedDays, average: true
         )
-        let fatTotal = DailyMetricsUsabilityPolicy.aggregateNumbers(metrics.map(\.fatG), expectedDays: requestedDays)
+        let fatTotal = DailyMetricsUsabilityPolicy.aggregateNumbers(
+            completeNutrition.map(\.fat), expectedDays: requestedDays
+        )
         let fatAverage = DailyMetricsUsabilityPolicy.aggregateNumbers(
-            metrics.map(\.fatG), expectedDays: requestedDays, average: true
+            completeNutrition.map(\.fat), expectedDays: requestedDays, average: true
         )
-        let carbsTotal = DailyMetricsUsabilityPolicy.aggregateNumbers(metrics.map(\.carbsG), expectedDays: requestedDays)
+        let carbsTotal = DailyMetricsUsabilityPolicy.aggregateNumbers(
+            completeNutrition.map(\.carbs), expectedDays: requestedDays
+        )
         let carbsAverage = DailyMetricsUsabilityPolicy.aggregateNumbers(
-            metrics.map(\.carbsG), expectedDays: requestedDays, average: true
+            completeNutrition.map(\.carbs), expectedDays: requestedDays, average: true
         )
         let averageDeficit = Self.average(deficit)
         let projectedWeightLoss = Self.projectedWeightLoss(from: deficit.total)
@@ -80,6 +95,10 @@ struct GetMetricsTool: AgentTool {
                 requestedDays: requestedDays,
                 validEnergyDays: deficit.coverage.availableDays,
                 missingEnergyDays: max(requestedDays - deficit.coverage.availableDays, 0),
+                daysWithRecordedMeals: metrics.filter { $0.mealCount > 0 }.count,
+                daysWithValidIntakeEstimate: metrics.filter { $0.intake.value != nil }.count,
+                daysWithValidProteinEstimate: metrics.filter { $0.proteinG.value != nil }.count,
+                completeRecordDays: metrics.filter { $0.nutritionRecordStatus == .complete }.count,
                 intake: intake,
                 expenditure: expenditure,
                 deficit: deficit,
@@ -104,6 +123,20 @@ struct GetMetricsTool: AgentTool {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
+    private static func completeOnly<Value: Codable & Equatable & Sendable>(
+        _ value: MetricValue<Value>,
+        status: NutritionDayRecordStatus
+    ) -> MetricValue<Value> {
+        guard status == .complete,
+              value.availability == .observed || value.availability == .estimated else {
+            return MetricValue(
+                value: nil,
+                availability: value.availability == .pendingRecompute ? .pendingRecompute : .unavailable
+            )
+        }
+        return value
     }
 
     private static func average(_ aggregate: MetricAggregate<SignedEstimateRange>) -> MetricValue<SignedEstimateRange> {
@@ -168,6 +201,9 @@ private struct DailyMetricBreakdown: Encodable {
     let coverage: DailyMetricCoverage
     let energyQuality: EnergyQuality
     let requiresRecompute: Bool
+    let nutritionRecordStatus: NutritionDayRecordStatus
+    let lastMealRecordedAt: Date?
+    let allRecordedMealsHaveEvidence: Bool?
     let projectionVersion: String
 
     init(_ result: DailyMetricsReadResult) {
@@ -181,6 +217,9 @@ private struct DailyMetricBreakdown: Encodable {
         coverage = result.coverage
         energyQuality = result.energyQuality
         requiresRecompute = result.requiresRecompute
+        nutritionRecordStatus = result.nutritionRecordStatus
+        lastMealRecordedAt = result.lastMealRecordedAt
+        allRecordedMealsHaveEvidence = result.allRecordedMealsHaveEvidence
         projectionVersion = result.projectionVersion
     }
 }
@@ -193,6 +232,10 @@ private struct GetMetricsToolResponse: Encodable {
     let requestedDays: Int
     let validEnergyDays: Int
     let missingEnergyDays: Int
+    let daysWithRecordedMeals: Int
+    let daysWithValidIntakeEstimate: Int
+    let daysWithValidProteinEstimate: Int
+    let completeRecordDays: Int
     let intake: MetricAggregate<EstimateRange>
     let expenditure: MetricAggregate<EstimateRange>
     let deficit: MetricAggregate<SignedEstimateRange>

@@ -4,6 +4,12 @@ import DensosoDomain
 @MainActor
 protocol HealthSyncRepository {
     func cursorSnapshot(for stream: String) throws -> HealthKitCursorSnapshot?
+    func hasAvailableHealthReadState(
+        for metric: HealthMetricID,
+        from start: Date,
+        through end: Date
+    ) throws -> Bool
+    func hasImportedHealthKitWorkout(from start: Date, through end: Date) throws -> Bool
     func resetHealthKitCursors() async throws
     func resetHealthKitCursor(for stream: String) async throws
     func setHealthReadState(_ state: HealthReadState, metric: HealthMetricID, days: [Date]) async throws
@@ -989,15 +995,38 @@ final class HealthKitSyncCoordinator {
     ) async throws -> WorkoutSyncOutcome {
         var currentGeneration = scanGeneration
         var didRecoverInvalidAnchor = false
+        var didRebaselineUnverifiedScope = false
+        var hasChangesAcrossScans = false
         while true {
             do {
                 let hasChanges = try await syncWorkoutPages(
                     repository: repository,
+                    now: now,
                     plan: plan,
                     scanGeneration: currentGeneration,
                     readRecordCounter: readRecordCounter
                 )
-                return WorkoutSyncOutcome(generation: currentGeneration, hasChanges: hasChanges)
+                hasChangesAcrossScans = hasChangesAcrossScans || hasChanges
+                if !didRebaselineUnverifiedScope,
+                   try requiresFullWorkoutScopeRebaseline(
+                       repository: repository,
+                       plan: plan,
+                       through: now
+                   ) {
+                    didRebaselineUnverifiedScope = true
+                    currentGeneration = try await prepareTargetedStreamRebuild(
+                        .workout,
+                        from: plan.queryStart,
+                        through: now,
+                        using: repository,
+                        onScanGenerationAdvanced: onScanGenerationAdvanced
+                    )
+                    continue
+                }
+                return WorkoutSyncOutcome(
+                    generation: currentGeneration,
+                    hasChanges: hasChangesAcrossScans
+                )
             } catch let error as HealthSyncSupersededError {
                 throw error
             } catch let error as HealthStoreClientError where error == .invalidAnchor && !didRecoverInvalidAnchor {
@@ -1034,8 +1063,52 @@ final class HealthKitSyncCoordinator {
         }
     }
 
+    private func requiresFullWorkoutScopeRebaseline(
+        repository: any HealthSyncRepository,
+        plan: WindowPlan,
+        through now: Date
+    ) throws -> Bool {
+        guard !plan.authorizationBoundaryUnavailable,
+              let cursor = try repository.cursorSnapshot(for: "workouts"),
+              cursor.anchorData != nil else { return false }
+        let start = min(cursor.lookbackStart ?? plan.queryStart, plan.queryStart)
+        let calendar = Calendar.autoupdatingCurrent
+        let firstFullyAuthorizedDay = plan.authorizationStart.map {
+            HealthDataWindowPolicy.firstFullyAuthorizedDay(
+                for: .workout,
+                authorizationStart: $0,
+                calendar: calendar
+            )
+        }
+        let queryStartDay = calendar.startOfDay(for: start)
+        let firstFullyQueriedDay = start == queryStartDay
+            ? queryStartDay
+            : (calendar.date(byAdding: .day, value: 1, to: queryStartDay) ?? queryStartDay)
+        let coverageStart = max(
+            firstFullyQueriedDay,
+            firstFullyAuthorizedDay ?? firstFullyQueriedDay
+        )
+        let throughDay = calendar.startOfDay(for: now)
+        guard coverageStart <= throughDay else { return false }
+        let hasVerifiedCoverage = try repository.hasAvailableHealthReadState(
+            for: .workout,
+            from: coverageStart,
+            through: throughDay
+        )
+        guard !hasVerifiedCoverage else { return false }
+        let persistedEvidenceStart = max(
+            queryStartDay,
+            calendar.startOfDay(for: plan.authorizationStart ?? start)
+        )
+        return try repository.hasImportedHealthKitWorkout(
+            from: persistedEvidenceStart,
+            through: now
+        )
+    }
+
     private func syncWorkoutPages(
         repository: any HealthSyncRepository,
+        now: Date,
         plan: WindowPlan,
         scanGeneration: UInt64,
         readRecordCounter: HealthSyncReadRecordCounter?
@@ -1043,6 +1116,7 @@ final class HealthKitSyncCoordinator {
         let cursor = try repository.cursorSnapshot(for: "workouts")
         let start = min(cursor?.lookbackStart ?? plan.queryStart, plan.queryStart)
         var anchor = cursor?.anchorData
+        let isFullHistoryQuery = anchor == nil
         let calendar = Calendar.autoupdatingCurrent
         let allowedStart = HealthDataWindowPolicy.effectiveStart(
             policyStart: start,
@@ -1083,14 +1157,77 @@ final class HealthKitSyncCoordinator {
             }
             if !page.hasMore {
                 var availableDays = Set<Date>()
-                if !plan.authorizationBoundaryUnavailable {
-                    for workout in latestWorkoutsByUUID.values {
-                        let day = calendar.startOfDay(for: workout.startedAt)
-                        // An imported record can be known while the full day remains
-                        // incomplete, including when this OS cannot report the boundary.
-                        guard firstFullyAuthorizedDay.map({ day >= $0 }) ?? true else { continue }
-                        availableDays.insert(day)
+                let authorizedScopeEvidence = latestWorkoutsByUUID.values.filter {
+                    $0.startedAt <= now
+                }
+                let queryStartDay = calendar.startOfDay(for: start)
+                let firstFullyQueriedDay = start == queryStartDay
+                    ? queryStartDay
+                    : (calendar.date(byAdding: .day, value: 1, to: queryStartDay) ?? queryStartDay)
+                let coverageStart = max(
+                    firstFullyQueriedDay,
+                    firstFullyAuthorizedDay ?? firstFullyQueriedDay
+                )
+                let throughDay = calendar.startOfDay(for: now)
+                var previouslyVerifiedScope = false
+                if !isFullHistoryQuery,
+                   !plan.authorizationBoundaryUnavailable,
+                   coverageStart <= throughDay {
+                    let lastClosedDay = calendar.date(
+                        byAdding: .day,
+                        value: -1,
+                        to: throughDay
+                    ) ?? throughDay
+                    // Check only the range that was already closed before this
+                    // incremental query. Including the new as-of day would
+                    // reject a valid prior marker and force a full rebaseline
+                    // every day. If the scope starts today, there is no closed
+                    // prior range to extend; keep the pre-existing as-of state.
+                    let previouslyCoveredThroughDay = coverageStart <= lastClosedDay
+                        ? lastClosedDay
+                        : nil
+                    let persistedEvidenceStart = max(
+                        calendar.startOfDay(for: start),
+                        calendar.startOfDay(for: plan.authorizationStart ?? start)
+                    )
+                    let hasPreviouslyVerifiedCoverage: Bool
+                    if let previouslyCoveredThroughDay {
+                        hasPreviouslyVerifiedCoverage = try repository.hasAvailableHealthReadState(
+                            for: .workout,
+                            from: coverageStart,
+                            through: previouslyCoveredThroughDay
+                        )
+                    } else {
+                        hasPreviouslyVerifiedCoverage = false
                     }
+                    if hasPreviouslyVerifiedCoverage {
+                        previouslyVerifiedScope = try repository.hasImportedHealthKitWorkout(
+                            from: persistedEvidenceStart,
+                            through: now
+                        )
+                    }
+                }
+
+                let canVerifyThroughNow = !plan.authorizationBoundaryUnavailable && (
+                    isFullHistoryQuery
+                        ? !authorizedScopeEvidence.isEmpty
+                        : previouslyVerifiedScope
+                )
+                if canVerifyThroughNow, coverageStart <= throughDay {
+                    // A non-empty full query establishes a durable scope marker
+                    // in the same transaction as its anchor and imported records.
+                    // Later complete incremental pages can extend that verified
+                    // scope through their sync time only while both the marker and
+                    // a persisted imported HealthKit workout remain in range.
+                    // The current day is available only as of `now`; that does not
+                    // claim its remaining hours are complete or mean the user rested.
+                    // An empty full query has no marker and stays unknown because
+                    // HealthKit cannot distinguish no data from denied access.
+                    availableDays.formUnion(HealthDataWindowPolicy.days(
+                        from: coverageStart,
+                        through: throughDay,
+                        calendar: calendar
+                    ))
                 }
                 let readStateUpdates = Dictionary(
                     uniqueKeysWithValues: availableDays.map { ($0, HealthReadState.available) }

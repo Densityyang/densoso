@@ -113,6 +113,209 @@ final class GetTodayHealthStateToolTests: XCTestCase {
         XCTAssertNil(trainingLoad["unavailableEffortCount"])
     }
 
+    func testPartialEffortCoverageOmitsPlaceholderLoadFromToolJSON() throws {
+        let partialLoad = TrainingLoadSummary(
+            recentSevenDayLoad: 0,
+            priorTwentyEightDayAverage: 525,
+            ratio: nil,
+            readiness: .mature,
+            band: .unavailable,
+            estimatedWorkoutCount: 7,
+            unavailableEffortCount: 1,
+            dataCoverage: .partial
+        )
+        let response = try GetTodayHealthStateTool().response(
+            asOf: Date(timeIntervalSince1970: 1_800_000_000),
+            state: makeState(trainingLoad: partialLoad)
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let healthState = try XCTUnwrap(object["healthState"] as? [String: Any])
+        let trainingLoad = try XCTUnwrap(healthState["trainingLoad"] as? [String: Any])
+
+        XCTAssertEqual(object["status"] as? String, "insufficientEvidence")
+        XCTAssertTrue((object["message"] as? String)?.contains("覆盖不完整") == true)
+        XCTAssertEqual(trainingLoad["dataCoverage"] as? String, HealthDataCoverage.partial.rawValue)
+        XCTAssertNil(trainingLoad["recentSevenDayLoad"])
+        XCTAssertNil(trainingLoad["priorTwentyEightDayAverage"])
+        XCTAssertNil(trainingLoad["ratio"])
+        XCTAssertNil(trainingLoad["estimatedWorkoutCount"])
+        XCTAssertNil(trainingLoad["unavailableEffortCount"])
+    }
+
+    func testBodyOnlyTrendIncludesAggregateAndCitationButNotMissingMetricCitation() throws {
+        let baseline = HealthBaseline(
+            readiness: .mature,
+            validDays: 28,
+            median: 61,
+            p10: 58,
+            p90: 64,
+            mad: 2
+        )
+        let current = HealthVitalTrend(
+            metric: .restingHeartRate,
+            latestMedian: 66,
+            currentSampleCount: 3,
+            baseline: baseline,
+            status: .changed,
+            evidenceKey: "vitals.restingHeartRate.median"
+        )
+        let missing = HealthVitalTrend(
+            metric: .wristTemperature,
+            latestMedian: nil,
+            baseline: baseline,
+            status: .noData,
+            evidenceKey: "vitals.wristTemperature.median"
+        )
+        let context = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [],
+            recommendationCandidates: [],
+            aggregateSummary: nil,
+            vitalTrends: [current, missing]
+        )
+
+        let response = try GetTodayHealthStateTool().response(
+            asOf: Date(timeIntervalSince1970: 1_800_000_000),
+            context: context
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let trends = try XCTUnwrap(object["vitalTrends"] as? [[String: Any]])
+        let references = try XCTUnwrap(object["evidenceReferences"] as? [[String: Any]])
+
+        XCTAssertEqual(object["status"] as? String, "available")
+        XCTAssertEqual(trends.count, 2)
+        XCTAssertEqual(trends[0]["latestMedian"] as? Double, 66)
+        XCTAssertEqual(trends[0]["unit"] as? String, "bpm")
+        XCTAssertEqual(trends[0]["sourceProvenance"] as? String, HealthVitalAggregateProvenance.healthKitAggregate.rawValue)
+        XCTAssertEqual(trends[0]["currentWindowDays"] as? Int, 1)
+        XCTAssertEqual(trends[0]["currentSampleCount"] as? Int, 3)
+        XCTAssertEqual((trends[0]["baseline"] as? [String: Any])?["median"] as? Double, 61)
+        XCTAssertEqual(trends[0]["baselineWindowDays"] as? Int, 41)
+        XCTAssertEqual(trends[0]["robustZScore"] as? Double, 0.6745 * 5 / 2)
+        XCTAssertEqual(trends[0]["status"] as? String, HealthDomainStatus.changed.rawValue)
+        XCTAssertEqual(trends[0]["dataCoverage"] as? String, HealthDataCoverage.complete.rawValue)
+        XCTAssertEqual(trends[0]["evidenceKey"] as? String, "vitals.restingHeartRate.median")
+        XCTAssertNil(trends[1]["evidenceKey"])
+        XCTAssertEqual(references.count, 1)
+        XCTAssertEqual(references.first?["key"] as? String, "vitals.restingHeartRate.median")
+    }
+
+    func testActivityTrendsExposePerMetricUnitsCoverageAndOnlyValidEvidence() throws {
+        let baseline = HealthBaseline(
+            readiness: .mature,
+            validDays: 14,
+            median: 7_500,
+            p10: 6_000,
+            p90: 9_000,
+            mad: 500
+        )
+        let context = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [],
+            recommendationCandidates: [],
+            aggregateSummary: nil,
+            activityTrends: [
+                ActivityMetricTrend(
+                    metric: .steps,
+                    currentValue: 8_123,
+                    baselineWindowDays: 28,
+                    baseline: baseline,
+                    status: .withinTypicalRange,
+                    dataCoverage: .complete
+                ),
+                ActivityMetricTrend(
+                    metric: .activeEnergy,
+                    currentValue: 430,
+                    baselineWindowDays: 14,
+                    baseline: baseline,
+                    status: .partial,
+                    dataCoverage: .partial
+                ),
+                ActivityMetricTrend(
+                    metric: .exerciseMinutes,
+                    currentValue: nil,
+                    baselineWindowDays: 28,
+                    baseline: baseline,
+                    status: .unknown,
+                    dataCoverage: .unknown
+                ),
+            ]
+        )
+
+        let response = try GetTodayHealthStateTool().response(
+            asOf: Date(timeIntervalSince1970: 1_800_000_000),
+            context: context
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let trends = try XCTUnwrap(object["activityTrends"] as? [[String: Any]])
+        let references = try XCTUnwrap(object["evidenceReferences"] as? [[String: Any]])
+
+        XCTAssertEqual(object["status"] as? String, "insufficientEvidence")
+        XCTAssertEqual(trends.count, 3)
+        XCTAssertEqual(trends[0]["metric"] as? String, HealthActivityMetric.steps.rawValue)
+        XCTAssertEqual(trends[0]["unit"] as? String, "steps")
+        XCTAssertEqual(trends[0]["currentValue"] as? Double, 8_123)
+        XCTAssertEqual(trends[0]["evidenceKey"] as? String, "activity.steps")
+        XCTAssertEqual(trends[1]["unit"] as? String, "kcal")
+        XCTAssertEqual(trends[1]["dataCoverage"] as? String, HealthDataCoverage.partial.rawValue)
+        XCTAssertEqual(trends[2]["dataCoverage"] as? String, HealthDataCoverage.unknown.rawValue)
+        XCTAssertNil(trends[2]["currentValue"])
+        XCTAssertNil(trends[2]["evidenceKey"])
+        XCTAssertEqual(Set(references.compactMap { $0["key"] as? String }), ["activity.steps", "activity.activeEnergy.kcal"])
+        XCTAssertTrue(references.allSatisfy { $0["source"] as? String == HealthDomain.activity.rawValue })
+    }
+
+    func testSleepOnlyStateIsNotMarkedInsufficientByUnavailableActivityCoverage() throws {
+        let baseline = HealthBaseline(
+            readiness: .mature,
+            validDays: 28,
+            median: 420,
+            p10: 390,
+            p90: 450,
+            mad: 15
+        )
+        let sleep = HealthDomainResult(
+            domain: .sleep,
+            status: .withinTypicalRange,
+            currentValue: 435,
+            baseline: baseline,
+            evidenceKeys: ["sleep.mainSleep.minutes"]
+        )
+        let context = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [EvidenceReference(key: "sleep.mainSleep.minutes", source: "sleep")],
+            recommendationCandidates: [],
+            aggregateSummary: nil,
+            cloudHealthState: CloudHealthStateContext(domains: [sleep])
+        )
+
+        let response = try GetTodayHealthStateTool().response(
+            asOf: Date(timeIntervalSince1970: 1_800_000_000),
+            context: context
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+
+        XCTAssertEqual(object["status"] as? String, "available")
+        let state = try XCTUnwrap(object["healthState"] as? [String: Any])
+        XCTAssertNil(state["trainingLoad"])
+        XCTAssertNil(state["recovery"])
+        XCTAssertEqual((state["domains"] as? [[String: Any]])?.first?["domain"] as? String, "sleep")
+    }
+
+    func testCompleteNoDataTrainingLoadDTODoesNotExposeZeroPlaceholders() throws {
+        let payload = #"{"recentSevenDayLoad":0,"priorTwentyEightDayAverage":0,"ratio":0,"readiness":"noData","band":"unavailable","dataCoverage":"complete","estimatedWorkoutCount":0,"unavailableEffortCount":0}"#.data(using: .utf8)!
+
+        let context = try JSONDecoder().decode(HealthTrainingLoadContext.self, from: payload)
+
+        XCTAssertNil(context.recentSevenDayLoad)
+        XCTAssertNil(context.priorTwentyEightDayAverage)
+        XCTAssertNil(context.ratio)
+        XCTAssertNil(context.estimatedWorkoutCount)
+        XCTAssertNil(context.unavailableEffortCount)
+        XCTAssertEqual(context.band, .unavailable)
+        XCTAssertEqual(context.dataCoverage, .complete)
+    }
+
     func testRegistryExposesStrictReadOnlyTool() throws {
         let definition = try XCTUnwrap(
             ToolRegistry().toolDefinitions.first(where: { $0.name == "get_today_health_state" })
@@ -138,7 +341,7 @@ final class GetTodayHealthStateToolTests: XCTestCase {
         let projectionActor = HealthProjectionActor(modelContainer: container)
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let tool = GetTodayHealthStateTool(stateProvider: { date in
-            try await projectionActor.todayHealthState(asOf: date)
+            try await projectionActor.healthNarrativeContext(asOf: date)
         })
 
         let response = try await tool.response(asOf: date)

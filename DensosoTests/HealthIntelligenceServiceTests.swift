@@ -55,7 +55,7 @@ final class HealthIntelligenceServiceTests: XCTestCase {
             mealCount: 1,
             workoutCount: 0,
             energyQuality: "observed",
-            dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true}"#,
+            dataCoverageJSON: #"{"intake":true,"allRecordedMealsHaveEvidence":true,"protein":true,"proteinComplete":true,"fat":true,"fatComplete":true,"carbs":true,"carbsComplete":true,"nutritionRecordStatus":"complete","nutritionMealFingerprint":"fixture-meal-set","nutritionCompletionMealFingerprint":"fixture-meal-set"}"#,
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
             sourceFingerprint: "health-intelligence-fixture"
         )
@@ -248,6 +248,100 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         XCTAssertEqual(coverage.dataAvailabilityLimited, false)
     }
 
+    func testVerifiedWorkoutRestDaysReachReadModelAndUnknownEffortStaysPartial() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let reference = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 12)))
+        let today = calendar.startOfDay(for: reference)
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        var snapshotsByDay: [Date: DailyHealthSnapshotRecord] = [:]
+
+        for offset in -41...0 {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: today))
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                healthReadStates: [
+                    HealthMetricID.workout.rawValue: .available,
+                    HealthMetricID.workoutEffort.rawValue: .available,
+                ],
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            )
+            let record = DailyHealthSnapshotRecord(
+                dayKey: dayKey(day),
+                timezoneID: snapshot.timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "verified-workout-coverage-\(offset)",
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            )
+            context.insert(record)
+            snapshotsByDay[day] = record
+        }
+
+        for offset in [-33, -29, -25, -21, -17, -13, -9] {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: today))
+            context.insert(WorkoutRecord(
+                date: day.addingTimeInterval(12 * 60 * 60),
+                type: "running",
+                durationMinutes: 60,
+                intensity: "moderate"
+            ))
+        }
+        try context.save()
+
+        let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
+        let completeResult = try await service.refresh(asOf: reference)
+        let complete = try XCTUnwrap(completeResult)
+        XCTAssertEqual(complete.dailyBrief.trainingLoad.dataCoverage, .complete)
+        XCTAssertEqual(complete.dailyBrief.trainingLoad.readiness, .mature)
+        XCTAssertEqual(complete.dailyBrief.trainingLoad.priorTwentyEightDayAverage, 525)
+
+        let incompleteDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -2, to: today))
+        let previousSnapshot = try XCTUnwrap(snapshotsByDay[incompleteDay])
+        let incompleteSnapshot = DailyHealthSnapshot(
+            dayStart: incompleteDay,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            healthReadStates: [
+                HealthMetricID.workout.rawValue: .available,
+                HealthMetricID.workoutEffort.rawValue: .dataUnavailableOrReadScopeUnknown,
+            ],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        previousSnapshot.payloadData = try encoder.encode(incompleteSnapshot)
+        previousSnapshot.snapshotHash = "verified-workout-coverage-effort-unknown"
+        context.insert(WorkoutRecord(
+            date: incompleteDay.addingTimeInterval(12 * 60 * 60),
+            type: "running",
+            durationMinutes: 45,
+            intensity: "moderate",
+            healthKitUUID: UUID(),
+            workoutOrigin: WorkoutOrigin.watchHealthKit.rawValue,
+            energySource: "healthKit"
+        ))
+        try context.save()
+
+        let partialResult = try await service.refresh(asOf: reference)
+        let partial = try XCTUnwrap(partialResult)
+        XCTAssertEqual(partial.dailyBrief.trainingLoad.dataCoverage, .partial)
+        XCTAssertEqual(partial.dailyBrief.trainingLoad.readiness, .mature)
+        XCTAssertNil(partial.dailyBrief.trainingLoad.ratio)
+        XCTAssertEqual(partial.dailyBrief.trainingLoad.band, .unavailable)
+
+        let readModel = HealthIntelligenceReadModel(calendar: calendar)
+        let readModelContext = try readModel.healthNarrativeContext(asOf: reference, in: context)
+        let encodedContext = try JSONEncoder().encode(readModelContext)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: encodedContext) as? [String: Any])
+        let state = try XCTUnwrap(root["healthState"] as? [String: Any])
+        let load = try XCTUnwrap(state["trainingLoad"] as? [String: Any])
+        XCTAssertEqual(load["dataCoverage"] as? String, HealthDataCoverage.partial.rawValue)
+        XCTAssertNil(load["recentSevenDayLoad"])
+        XCTAssertNil(load["priorTwentyEightDayAverage"])
+        XCTAssertNil(load["ratio"])
+    }
+
     func testSavingGoalUpdatesTheSinglePrimaryProfile() async throws {
         let container = try makeContainer()
         let service = HealthIntelligenceService(modelContainer: container)
@@ -284,7 +378,7 @@ final class HealthIntelligenceServiceTests: XCTestCase {
                 mealCount: 1,
                 workoutCount: 0,
                 energyQuality: "observed",
-                dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true}"#,
+                dataCoverageJSON: #"{"intake":true,"allRecordedMealsHaveEvidence":true,"protein":true,"proteinComplete":true,"fat":true,"fatComplete":true,"carbs":true,"carbsComplete":true,"nutritionRecordStatus":"complete","nutritionMealFingerprint":"fixture-meal-set","nutritionCompletionMealFingerprint":"fixture-meal-set"}"#,
                 projectionVersion: AlgorithmVersions.dailyMetricsProjection,
                 sourceFingerprint: "weekly-health-intelligence-\(day.timeIntervalSince1970)"
             ))

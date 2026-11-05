@@ -20,6 +20,14 @@ public enum EnergyQuality: String, Codable, CaseIterable, Sendable {
     case legacy
 }
 
+/// Whether a day's nutrition log has been explicitly confirmed as complete.
+/// A present estimate or meal record alone never implies `complete`.
+public enum NutritionDayRecordStatus: String, Codable, CaseIterable, Sendable {
+    case complete
+    case inProgress
+    case unknown
+}
+
 public struct MetricValue<Value: Codable & Equatable & Sendable>: Codable, Equatable, Sendable {
     public let value: Value?
     public let availability: MetricAvailability
@@ -199,6 +207,15 @@ public struct DailyMetricsReadResult: Codable, Equatable, Sendable {
     public let sourceFingerprint: String
     public let mealCount: Int
     public let workoutCount: Int
+    public let nutritionRecordStatus: NutritionDayRecordStatus
+    public let lastMealRecordedAt: Date?
+    public let allRecordedMealsHaveEvidence: Bool?
+
+    /// True only when the current value is safe to describe as a full-day intake.
+    public var hasCompleteDailyIntakeEstimate: Bool {
+        nutritionRecordStatus == .complete
+            && (intake.availability == .observed || intake.availability == .estimated)
+    }
 
     public init(
         date: Date,
@@ -214,7 +231,10 @@ public struct DailyMetricsReadResult: Codable, Equatable, Sendable {
         projectionVersion: String,
         sourceFingerprint: String,
         mealCount: Int,
-        workoutCount: Int
+        workoutCount: Int,
+        nutritionRecordStatus: NutritionDayRecordStatus = .unknown,
+        lastMealRecordedAt: Date? = nil,
+        allRecordedMealsHaveEvidence: Bool? = nil
     ) {
         self.date = date
         self.intake = intake
@@ -230,6 +250,58 @@ public struct DailyMetricsReadResult: Codable, Equatable, Sendable {
         self.sourceFingerprint = sourceFingerprint
         self.mealCount = max(mealCount, 0)
         self.workoutCount = max(workoutCount, 0)
+        self.nutritionRecordStatus = nutritionRecordStatus
+        self.lastMealRecordedAt = lastMealRecordedAt
+        self.allRecordedMealsHaveEvidence = allRecordedMealsHaveEvidence
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case date
+        case intake
+        case expenditure
+        case deficit
+        case proteinG
+        case fatG
+        case carbsG
+        case energyQuality
+        case requiresRecompute
+        case coverage
+        case projectionVersion
+        case sourceFingerprint
+        case mealCount
+        case workoutCount
+        case nutritionRecordStatus
+        case lastMealRecordedAt
+        case allRecordedMealsHaveEvidence
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            date: try container.decode(Date.self, forKey: .date),
+            intake: try container.decode(MetricValue<EstimateRange>.self, forKey: .intake),
+            expenditure: try container.decode(MetricValue<EstimateRange>.self, forKey: .expenditure),
+            deficit: try container.decode(MetricValue<SignedEstimateRange>.self, forKey: .deficit),
+            proteinG: try container.decode(MetricValue<Double>.self, forKey: .proteinG),
+            fatG: try container.decode(MetricValue<Double>.self, forKey: .fatG),
+            carbsG: try container.decode(MetricValue<Double>.self, forKey: .carbsG),
+            energyQuality: try container.decode(EnergyQuality.self, forKey: .energyQuality),
+            requiresRecompute: try container.decode(Bool.self, forKey: .requiresRecompute),
+            coverage: try container.decode(DailyMetricCoverage.self, forKey: .coverage),
+            projectionVersion: try container.decode(String.self, forKey: .projectionVersion),
+            sourceFingerprint: try container.decode(String.self, forKey: .sourceFingerprint),
+            mealCount: try container.decode(Int.self, forKey: .mealCount),
+            workoutCount: try container.decode(Int.self, forKey: .workoutCount),
+            nutritionRecordStatus: try container.decodeIfPresent(
+                NutritionDayRecordStatus.self,
+                forKey: .nutritionRecordStatus
+            ) ?? .unknown,
+            lastMealRecordedAt: try container.decodeIfPresent(Date.self, forKey: .lastMealRecordedAt),
+            allRecordedMealsHaveEvidence: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .allRecordedMealsHaveEvidence
+            )
+        )
     }
 }
 

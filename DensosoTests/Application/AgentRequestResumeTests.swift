@@ -565,7 +565,12 @@ final class AgentRequestResumeTests: XCTestCase {
                 granted: false,
                 policyVersion: "cloud-health-context-v1"
             )
-            return state
+            return HealthNarrativeContext(
+                healthState: state,
+                evidence: [],
+                recommendationCandidates: [],
+                aggregateSummary: nil
+            )
         })
         let session = makeSession(
             container: container,

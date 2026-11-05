@@ -69,11 +69,17 @@ final class DailyHealthSampleSummaryTests: XCTestCase {
         XCTAssertEqual(summary.sleep?.totalAsleepMinutes, 480)
         XCTAssertEqual(summary.sleep?.stages?.core, 480)
         XCTAssertEqual(summary.sleep?.selectedSourceBundleIdentifier, "com.example.watchhealth")
-        XCTAssertEqual(summary.sleep?.selectedSourceIdentifier, "com.example.watchhealth")
+        XCTAssertEqual(
+            summary.sleep?.selectedSourceIdentifier,
+            "bundle:18:com.example.watchhealth|device:8:Watch6,1"
+        )
         XCTAssertTrue(summary.sleep?.hasConflictingSourceStages == true)
         XCTAssertTrue(summary.sleep?.supplementalSourceIdentifiers.isEmpty == true)
         XCTAssertEqual(summary.sleep?.sourceCoverage, [
-            SleepSourceCoverage(sourceIdentifier: "com.example.watchhealth", asleepMinutes: 480),
+            SleepSourceCoverage(
+                sourceIdentifier: "bundle:18:com.example.watchhealth|device:8:Watch6,1",
+                asleepMinutes: 480
+            ),
         ])
         XCTAssertEqual(summary.sleep?.algorithmVersion, AlgorithmVersions.healthIntelligence)
 
@@ -213,6 +219,29 @@ final class DailyHealthSampleSummaryTests: XCTestCase {
         XCTAssertEqual(aggregate.representativeValue, 70)
     }
 
+    func testHourlyHRVSeparatesDevicesWithTheSameSourceBundle() throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let bundle = "com.example.health"
+        let samples = [
+            sample(830, metric: .heartRateVariabilitySDNN, at: start.addingTimeInterval(60), value: 58)
+                .withSource(bundle, device: "Watch10,1"),
+            sample(831, metric: .heartRateVariabilitySDNN, at: start.addingTimeInterval(120), value: 62)
+                .withSource(bundle, device: "Watch10,1"),
+            sample(832, metric: .heartRateVariabilitySDNN, at: start.addingTimeInterval(180), value: 110)
+                .withSource(bundle, device: "iPhone17,1"),
+            sample(833, metric: .heartRateVariabilitySDNN, at: start.addingTimeInterval(240), value: 130)
+                .withSource(bundle, device: "iPhone17,1"),
+        ]
+
+        let aggregate = try XCTUnwrap(
+            DailyHealthSampleSummary(samples: samples, dayStart: start).aggregate(for: .heartRateVariabilitySDNN)
+        )
+
+        XCTAssertEqual(aggregate.representativeValue, 90)
+        XCTAssertEqual(aggregate.sampleCount, 1)
+        XCTAssertEqual(aggregate.rawSampleCount, 4)
+    }
+
     func testLegacyMetricAggregateDecodesWithAverageAsRepresentativeFallback() throws {
         let data = Data(#"{"metric":"heartRate","sampleCount":2,"averageValue":72,"minimumValue":60,"maximumValue":84,"latestValue":84}"#.utf8)
 
@@ -250,6 +279,24 @@ final class DailyHealthSampleSummaryTests: XCTestCase {
             startDate: date,
             endDate: date,
             value: value
+        )
+    }
+}
+
+private extension HealthSampleSnapshot {
+    func withSource(_ bundleIdentifier: String, device: String) -> HealthSampleSnapshot {
+        HealthSampleSnapshot(
+            id: id,
+            metric: metric,
+            startDate: startDate,
+            endDate: endDate,
+            value: value,
+            categoryValue: categoryValue,
+            sourceBundleIdentifier: bundleIdentifier,
+            deviceName: deviceName,
+            deviceModel: device,
+            syncIdentifier: syncIdentifier,
+            syncVersion: syncVersion
         )
     }
 }

@@ -18,11 +18,53 @@ final class HealthContextPromptBuilderTests: XCTestCase {
         let request = "帮我估算午餐热量和蛋白质"
         XCTAssertTrue(HealthContextPromptBuilder.shouldIncludeSummary(for: request))
         XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: request))
+        XCTAssertTrue(HealthContextPromptBuilder.requiresMealEstimationContext(for: request))
+        XCTAssertFalse(HealthContextPromptBuilder.requiresMealEstimationContext(for: "记录午餐：米饭和鸡肉"))
+        XCTAssertFalse(HealthContextPromptBuilder.requiresMealEstimationContext(for: "估算跑步消耗热量"))
+        XCTAssertTrue(HealthContextPromptBuilder.requiresMealEstimationContext(for: "Estimate macros"))
     }
 
     func testBodyMetricInterpretationLoadsHealthContext() {
-        XCTAssertTrue(HealthContextPromptBuilder.shouldIncludeSummary(for: "帮我解读一下体重和体脂变化"))
-        XCTAssertTrue(HealthContextPromptBuilder.requiresNarrative(for: "帮我解读一下体重和体脂变化"))
+        XCTAssertTrue(HealthContextPromptBuilder.shouldIncludeSummary(for: "帮我解读一下体重和静息心率变化"))
+        XCTAssertTrue(HealthContextPromptBuilder.requiresNarrative(for: "帮我解读一下体重和静息心率变化"))
+    }
+
+    func testVitalIntentTermsMatchOnlyMetricsAvailableInHealthContext() {
+        let supportedRequests = [
+            "分析我的体重趋势",
+            "分析我的静息心率趋势",
+            "分析我的心率变异趋势",
+            "分析我的呼吸频率趋势",
+            "分析我的腕温趋势",
+            "Analyze my resting heart rate trend",
+            "Analyze my heart rate variability trend",
+            "Analyze my respiratory rate trend",
+            "Analyze my wrist temperature trend",
+        ]
+        for request in supportedRequests {
+            XCTAssertTrue(HealthContextPromptBuilder.shouldIncludeSummary(for: request), request)
+            XCTAssertTrue(HealthContextPromptBuilder.requiresNarrative(for: request), request)
+        }
+
+        let unsupportedRequests = [
+            "分析我的身高变化",
+            "分析我的体脂变化",
+            "分析我的腰围变化",
+            "分析我的血压变化",
+            "分析我的血糖变化",
+            "分析我的BMI变化",
+            "分析我的心率变化",
+            "Analyze my height trend",
+            "Analyze my body fat trend",
+            "Analyze my blood pressure trend",
+            "Analyze my blood sugar trend",
+            "Analyze my BMI trend",
+            "Analyze my heart rate trend",
+        ]
+        for request in unsupportedRequests {
+            XCTAssertFalse(HealthContextPromptBuilder.shouldIncludeSummary(for: request), request)
+            XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: request), request)
+        }
     }
 
     func testExerciseRecoveryLoadsHealthContext() {
@@ -118,5 +160,152 @@ final class HealthContextPromptBuilderTests: XCTestCase {
         XCTAssertTrue(healthPrompt.contains("sleep.mainSleep.minutes"))
         XCTAssertFalse(healthPrompt.contains("healthKitSamples"))
         XCTAssertFalse(healthPrompt.contains("startDate"))
+    }
+
+    func testStructuredNarrativeDoesNotDuplicateAggregateSummary() throws {
+        let summary = HealthContextSummary(
+            sevenDay: HealthContextWindowSummary(
+                windowDays: 7,
+                coverageDays: ["sleep": 5],
+                averageSleepMinutes: 617,
+                averageStepCount: nil,
+                averageActiveEnergyKcal: nil,
+                averageEnergyIntakeKcal: nil,
+                averageDailyDeficitKcal: nil,
+                averageProteinGrams: nil,
+                medianWeightKilograms: nil
+            ),
+            twentyEightDay: HealthContextWindowSummary(
+                windowDays: 28,
+                coverageDays: ["sleep": 20],
+                averageSleepMinutes: 611,
+                averageStepCount: nil,
+                averageActiveEnergyKcal: nil,
+                averageEnergyIntakeKcal: nil,
+                averageDailyDeficitKcal: nil,
+                averageProteinGrams: nil,
+                medianWeightKilograms: nil
+            ),
+            targetWeightKilograms: nil,
+            dailyDeficitGoalKcal: nil,
+            dailyProteinGoalGrams: nil,
+            recommendationReferences: []
+        )
+        let baseline = HealthBaseline(
+            readiness: .mature,
+            validDays: 28,
+            median: 55,
+            p10: 50,
+            p90: 60,
+            mad: 2
+        )
+        let cloudHealthState = CloudHealthStateContext(domains: [
+            HealthDomainResult(
+                domain: .body,
+                status: .withinTypicalRange,
+                currentValue: 70,
+                baseline: baseline,
+                evidenceKeys: ["body.weight.kg"]
+            ),
+        ])
+        let context = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [EvidenceReference(key: "sleep.mainSleep.minutes", source: "sleep")],
+            recommendationCandidates: [],
+            aggregateSummary: summary,
+            vitalTrends: [HealthVitalTrend(
+                metric: .restingHeartRate,
+                latestMedian: 57,
+                baseline: baseline,
+                status: .withinTypicalRange,
+                evidenceKey: "vitals.restingHeartRate.median",
+                dataCoverage: .complete
+            )],
+            activityTrends: [ActivityMetricTrend(
+                metric: .steps,
+                currentValue: 6_200,
+                baselineWindowDays: 28,
+                baseline: baseline,
+                status: .withinTypicalRange,
+                dataCoverage: .complete
+            )],
+            cloudHealthState: cloudHealthState
+        )
+
+        let prompt = HealthContextPromptBuilder.prompt(
+            basePrompt: "base",
+            userText: "分析我的睡眠",
+            summary: summary,
+            narrativeContext: context,
+            structuredNarrative: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let encodedSummary = String(data: try encoder.encode(summary), encoding: .utf8)!
+
+        XCTAssertEqual(prompt.components(separatedBy: encodedSummary).count - 1, 1)
+        XCTAssertTrue(prompt.contains("cloudHealthState"))
+        XCTAssertTrue(prompt.contains("vitalTrends"))
+        XCTAssertTrue(prompt.contains("activityTrends"))
+        XCTAssertTrue(prompt.contains("vitals.restingHeartRate.median"))
+        XCTAssertFalse(prompt.contains("\"healthState\""))
+    }
+
+    func testMealEstimationPromptNeverFallsBackToFullHealthSummary() {
+        let summary = HealthContextSummary(
+            sevenDay: HealthContextWindowSummary(
+                windowDays: 7,
+                coverageDays: ["sleep": 6],
+                averageSleepMinutes: 617,
+                averageStepCount: nil,
+                averageActiveEnergyKcal: nil,
+                averageEnergyIntakeKcal: 2_111,
+                averageDailyDeficitKcal: nil,
+                averageProteinGrams: 81,
+                medianWeightKilograms: nil
+            ),
+            twentyEightDay: HealthContextWindowSummary(
+                windowDays: 28,
+                coverageDays: ["sleep": 20],
+                averageSleepMinutes: 611,
+                averageStepCount: nil,
+                averageActiveEnergyKcal: nil,
+                averageEnergyIntakeKcal: 2_080,
+                averageDailyDeficitKcal: nil,
+                averageProteinGrams: 79,
+                medianWeightKilograms: nil
+            ),
+            targetWeightKilograms: nil,
+            dailyDeficitGoalKcal: nil,
+            dailyProteinGoalGrams: 92,
+            recommendationReferences: []
+        )
+
+        let withoutNutritionContext = HealthContextPromptBuilder.prompt(
+            basePrompt: "base",
+            userText: "Estimate macros",
+            summary: summary
+        )
+        XCTAssertEqual(withoutNutritionContext, "base")
+
+        let nutritionContext = MealEstimationNutritionContext(
+            today: nil,
+            sevenDay: nil,
+            twentyEightDay: nil,
+            analysisWindowCoverage: [:],
+            dailyProteinGoalGrams: 92,
+            evidenceKeys: []
+        )
+        let withNutritionContext = HealthContextPromptBuilder.prompt(
+            basePrompt: "base",
+            userText: "Estimate macros",
+            summary: summary,
+            mealEstimationNutritionContext: nutritionContext
+        )
+        XCTAssertTrue(withNutritionContext.contains("餐食估算的本地营养参考"))
+        XCTAssertTrue(withNutritionContext.contains("dailyProteinGoalGrams"))
+        XCTAssertFalse(withNutritionContext.contains("averageSleepMinutes"))
+        XCTAssertFalse(withNutritionContext.contains("averageEnergyIntakeKcal"))
+        XCTAssertFalse(withNutritionContext.contains("activityTrends"))
     }
 }

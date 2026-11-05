@@ -788,6 +788,324 @@ final class AgentProviderContextPolicyTests: XCTestCase {
         add(attachment)
     }
 
+    func testPendingActionResultsAreFilteredBeforeDeepSeekAndQwenSerialization() async throws {
+        let now = Date(timeIntervalSince1970: 1_799_000_000)
+        func encodedPayload(_ payload: ActionPayload) throws -> Any {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            return try JSONSerialization.jsonObject(with: encoder.encode(payload))
+        }
+        let mealPayload = ActionPayload.meal(MealDraft(
+            occurredAt: now,
+            mealType: "lunch",
+            dishes: [MealDishDraft(
+                name: "nutrition-title-sentinel nutrition-summary-sentinel",
+                nutrients: NutrientEstimate(energyKcal: try EstimateRange.point(100)),
+                algorithmVersion: "pending-action-policy-test"
+            )],
+            note: "nutrition-payload-sentinel"
+        ))
+        let weightPayload = ActionPayload.weight(WeightDraft(
+            measuredAt: now,
+            kilograms: 72.5,
+            source: "body-payload-sentinel"
+        ))
+        let checkInPayload = ActionPayload.dailyCheckIn(DailyCheckIn(
+            occurredAt: now,
+            energy: .low,
+            stress: .elevated,
+            subjectiveSleep: .poor,
+            note: "subjective-payload-sentinel"
+        ))
+        let communicationPreferencePayload = ActionPayload.userPreference(UserPreference(
+            category: .communication,
+            statement: "communication-payload-sentinel",
+            createdAt: now
+        ))
+        let unknownPayload = ActionPayload.meal(MealDraft(
+            occurredAt: now,
+            mealType: "dinner",
+            dishes: [],
+            note: "unknown-payload-sentinel"
+        ))
+        let actions = [
+            PendingAction(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000101")!,
+                idempotencyKey: "nutrition-action",
+                clientRequestID: UUID(),
+                createdAt: now.addingTimeInterval(-30),
+                expiresAt: now.addingTimeInterval(3_600),
+                payload: mealPayload,
+                state: .pending
+            ),
+            PendingAction(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000102")!,
+                idempotencyKey: "body-action",
+                clientRequestID: UUID(),
+                createdAt: now.addingTimeInterval(-20),
+                expiresAt: now.addingTimeInterval(3_600),
+                payload: weightPayload,
+                state: .pending
+            ),
+            PendingAction(
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000103")!,
+                idempotencyKey: "subjective-action",
+                clientRequestID: UUID(),
+                createdAt: now.addingTimeInterval(-10),
+                expiresAt: now.addingTimeInterval(3_600),
+                payload: checkInPayload,
+                state: .pending
+            ),
+        ]
+        let allHealthClasses = Set(CloudHealthContextPolicy.dataClasses)
+        let generatedResult = try GetPendingActionsTool().response(
+            actions: actions,
+            asOf: now,
+            allowedClasses: allHealthClasses
+        )
+        let generatedRoot = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(generatedResult.utf8)) as? [String: Any]
+        )
+        var rawResultObject = generatedRoot
+        var rawActions = try XCTUnwrap(generatedRoot["actions"] as? [[String: Any]])
+        let mealIndex = try XCTUnwrap(
+            rawActions.firstIndex(where: { $0["type"] as? String == ActionType.meal.rawValue })
+        )
+        rawActions[mealIndex]["privateMetadata"] = "cross-class-metadata-sentinel"
+        rawActions.append([
+            "actionID": "00000000-0000-0000-0000-000000000104",
+            "type": "userPreference",
+            "title": "communication-title-sentinel",
+            "summary": "communication-summary-sentinel",
+            "state": PendingActionState.pending.rawValue,
+            "createdAt": ISO8601DateFormatter().string(from: now),
+            "expiresAt": ISO8601DateFormatter().string(from: now.addingTimeInterval(3_600)),
+            "confidence": 1,
+            "payload": try encodedPayload(communicationPreferencePayload),
+        ])
+        rawActions.append([
+            "actionID": "00000000-0000-0000-0000-000000000105",
+            "type": "legacySecretAction",
+            "title": "unknown-title-sentinel",
+            "summary": "unknown-summary-sentinel",
+            "state": PendingActionState.pending.rawValue,
+            "createdAt": ISO8601DateFormatter().string(from: now),
+            "expiresAt": ISO8601DateFormatter().string(from: now.addingTimeInterval(3_600)),
+            "confidence": 1,
+            "payload": try encodedPayload(unknownPayload),
+        ])
+        rawResultObject["actions"] = rawActions
+        rawResultObject["count"] = rawActions.count
+        rawResultObject["hasMore"] = true
+        rawResultObject["nextOffset"] = 20
+        let rawResultData = try JSONSerialization.data(withJSONObject: rawResultObject, options: [.sortedKeys])
+        let rawResult = String(decoding: rawResultData, as: UTF8.self)
+        let forbiddenSentinels = [
+            "body-title-sentinel", "body-summary-sentinel", "body-payload-sentinel",
+            "subjective-title-sentinel", "subjective-summary-sentinel", "subjective-payload-sentinel",
+            "communication-title-sentinel", "communication-summary-sentinel", "communication-payload-sentinel",
+            "unknown-title-sentinel", "unknown-summary-sentinel", "unknown-payload-sentinel",
+            "cross-class-metadata-sentinel",
+        ]
+
+        for providerID in [ProviderID.deepSeek, .qwen] {
+            let policy = CloudHealthContextPolicy(
+                provider: providerID,
+                allowedClasses: [.healthNutrition]
+            )
+            let callID = "pending-actions-\(providerID.rawValue)"
+            let oldProvenance = HealthContextPolicyProvenance(
+                provider: providerID,
+                policyRevision: "old-broader-revision",
+                allowedClasses: Set(CloudHealthContextPolicy.dataClasses)
+            )
+            let messages = [
+                ModelMessage(role: .user, text: "查看待确认草案。"),
+                ModelMessage(role: .assistant, content: [
+                    .toolCall(ToolCall(id: callID, name: "get_pending_actions", arguments: .object([:])))
+                ]),
+                ModelMessage(
+                    role: .tool,
+                    content: [.toolResult(toolCallID: callID, content: rawResult)],
+                    healthContextPolicyProvenance: oldProvenance
+                ),
+            ]
+            let filtered = CloudRequestPolicyGuard.filterToolResults(in: messages, by: policy)
+            let providerFacing = AgentSession.providerFacingMessages(from: filtered)
+            let dependencies = AgentSession.outboundConsentDependencies(
+                messages: providerFacing,
+                includesImage: false,
+                includesConversationHistory: false,
+                summary: nil,
+                structuredContext: nil,
+                policy: policy
+            )
+            XCTAssertEqual(dependencies, [.healthText, .healthNutrition])
+
+            let request = ModelRequest(
+                requestID: UUID(),
+                conversationID: UUID(),
+                systemPrompt: "fixture",
+                messages: providerFacing,
+                tools: [],
+                maxOutputTokens: 64,
+                thinking: .none,
+                deadline: Date().addingTimeInterval(30)
+            )
+            let transport: ScriptedProviderHTTPTransport
+            if providerID == .deepSeek {
+                transport = ScriptedProviderHTTPTransport(steps: [
+                    .response(
+                        status: 200,
+                        data: try Gate03FixtureLoader.data("deepseek-responses-stream", extension: "sse")
+                    ),
+                ])
+                let provider = DeepSeekProvider(
+                    credentialSource: TestCredentialSource(values: [.deepSeek: "fixture-key"]),
+                    transport: transport,
+                    jitter: { _ in 0 }
+                )
+                _ = try await collect(provider.stream(request))
+            } else {
+                transport = ScriptedProviderHTTPTransport(steps: [
+                    .response(status: 200, data: try Gate03FixtureLoader.data("qwen-text-tool-response")),
+                ])
+                let provider = QwenProvider(
+                    endpoint: URL(string: "https://fixture.invalid/chat/completions")!,
+                    credentialSource: TestCredentialSource(values: [.qwen: "fixture-key"]),
+                    transport: transport,
+                    jitter: { _ in 0 }
+                )
+                _ = try await collect(provider.stream(request))
+            }
+
+            let recordedRequests = await transport.recordedRequests()
+            let captured = try XCTUnwrap(recordedRequests.first)
+            let body = String(decoding: try XCTUnwrap(captured.httpBody), as: UTF8.self)
+            XCTAssertTrue(body.contains("nutrition-title-sentinel"))
+            XCTAssertTrue(body.contains("nutrition-summary-sentinel"))
+            XCTAssertTrue(body.contains("nutrition-payload-sentinel"))
+            for sentinel in forbiddenSentinels {
+                XCTAssertFalse(
+                    body.contains(sentinel),
+                    "Unauthorized pending-action sentinel reached the \(providerID.rawValue) request body: \(sentinel)"
+                )
+            }
+            XCTAssertFalse(body.contains("\\\"hasMore\\\":true"))
+            XCTAssertFalse(body.contains("\\\"nextOffset\\\":20"))
+        }
+    }
+
+    func testPendingActionsOversizedReferencesFailClosedByTypeAndCategory() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let createdAt = ISO8601DateFormatter().string(from: now)
+        let expiresAt = ISO8601DateFormatter().string(from: now.addingTimeInterval(3_600))
+        let payloadObject: [String: Any] = [
+            "status": "requiresLocalReview",
+            "count": 0,
+            "hasMore": true,
+            "nextOffset": 1,
+            "actions": [],
+            "oversizedActions": [
+                [
+                    "actionID": "00000000-0000-0000-0000-000000000201",
+                    "type": "userPreference",
+                    "consentDataClass": "healthNutrition",
+                    "preferenceCategory": "food",
+                    "title": "allowed-food-sentinel",
+                    "summary": "allowed-food-summary",
+                    "state": "pending",
+                    "createdAt": createdAt,
+                    "expiresAt": expiresAt,
+                    "payloadUTF8Bytes": 70_000,
+                    "requiresLocalReview": true,
+                    "unexpectedMetadata": "must-be-dropped",
+                ],
+                [
+                    "actionID": "00000000-0000-0000-0000-000000000202",
+                    "type": "userPreference",
+                    "consentDataClass": "healthNutrition",
+                    "preferenceCategory": "communication",
+                    "title": "communication-sentinel",
+                    "summary": "communication-summary",
+                    "state": "pending",
+                    "createdAt": createdAt,
+                    "expiresAt": expiresAt,
+                    "payloadUTF8Bytes": 70_000,
+                    "requiresLocalReview": true,
+                ],
+                [
+                    "actionID": "00000000-0000-0000-0000-000000000203",
+                    "type": "legacySecretAction",
+                    "consentDataClass": "healthNutrition",
+                    "title": "unknown-sentinel",
+                    "summary": "unknown-summary",
+                    "state": "pending",
+                    "createdAt": createdAt,
+                    "expiresAt": expiresAt,
+                    "payloadUTF8Bytes": 70_000,
+                    "requiresLocalReview": true,
+                ],
+                [
+                    "actionID": "00000000-0000-0000-0000-000000000204",
+                    "type": "dailyCheckIn",
+                    "consentDataClass": "healthSubjective",
+                    "title": "subjective-sentinel",
+                    "summary": "subjective-summary",
+                    "state": "pending",
+                    "createdAt": createdAt,
+                    "expiresAt": expiresAt,
+                    "payloadUTF8Bytes": 70_000,
+                    "requiresLocalReview": true,
+                ],
+            ],
+        ]
+        let payload = String(
+            decoding: try JSONSerialization.data(withJSONObject: payloadObject, options: [.sortedKeys]),
+            as: UTF8.self
+        )
+        let call = ToolCall(id: "pending-oversized", name: "get_pending_actions", arguments: .object([:]))
+        let messages = [
+            ModelMessage(role: .assistant, content: [.toolCall(call)]),
+            ModelMessage(role: .tool, content: [.toolResult(toolCallID: call.id, content: payload)]),
+        ]
+
+        let filtered = CloudRequestPolicyGuard.filterToolResults(
+            in: messages,
+            by: CloudHealthContextPolicy(provider: .qwen, allowedClasses: [.healthNutrition])
+        )
+        guard case .toolResult(_, let result)? = filtered.last?.content.first,
+              let data = result.data(using: .utf8),
+              let root = try JSONDecoder().decode(JSONValue.self, from: data).objectValue,
+              let oversized = root["oversizedActions"]?.arrayValue else {
+            return XCTFail("Expected a filtered oversized pending-action response")
+        }
+        XCTAssertEqual(oversized.count, 1)
+        XCTAssertTrue(result.contains("allowed-food-sentinel"))
+        XCTAssertFalse(result.contains("communication-sentinel"))
+        XCTAssertFalse(result.contains("unknown-sentinel"))
+        XCTAssertFalse(result.contains("subjective-sentinel"))
+        XCTAssertFalse(result.contains("unexpectedMetadata"))
+        XCTAssertEqual(root["hasMore"]?.boolValue, false)
+        XCTAssertEqual(root["nextOffset"], .null)
+    }
+
+    func testOrphanedPendingActionToolResultIsDropped() {
+        let orphan = ModelMessage(role: .tool, content: [
+            .toolResult(
+                toolCallID: "missing-assistant-call",
+                content: #"{"status":"available","count":1,"hasMore":false,"actions":[{"actionID":"00000000-0000-0000-0000-000000000301","type":"meal","title":"orphan-title-sentinel","summary":"orphan-summary-sentinel","state":"pending","createdAt":"2027-01-03T00:00:00Z","expiresAt":"2027-01-03T01:00:00Z","confidence":1,"payload":{"meal":{"_0":{"occurredAt":"2027-01-03T00:00:00Z","mealType":"lunch","dishes":[],"note":"orphan-payload-sentinel"}}}}],"oversizedActions":[]}"#
+            )
+        ])
+
+        let filtered = CloudRequestPolicyGuard.filterToolResults(
+            in: [orphan],
+            by: CloudHealthContextPolicy(provider: .qwen, allowedClasses: [.healthNutrition])
+        )
+        XCTAssertTrue(filtered.isEmpty)
+        XCTAssertFalse(String(describing: filtered).contains("orphan-"))
+    }
+
     private static func historyProvenance() -> HealthContextPolicyProvenance {
         let policy = CloudHealthContextPolicy(
             provider: .deepSeek,

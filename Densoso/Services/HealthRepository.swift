@@ -446,6 +446,52 @@ final class HealthRepository: HealthSyncRepository {
         )
     }
 
+    func hasAvailableHealthReadState(
+        for metric: HealthMetricID,
+        from start: Date,
+        through end: Date
+    ) throws -> Bool {
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: start)
+        let lastDay = calendar.startOfDay(for: end)
+        guard firstDay <= lastDay else { return false }
+        let firstDayKey = Self.dayKey(for: firstDay, calendar: calendar)
+        let lastDayKey = Self.dayKey(for: lastDay, calendar: calendar)
+        let predicate = #Predicate<DailyHealthSnapshotRecord> {
+            $0.dayKey >= firstDayKey && $0.dayKey <= lastDayKey
+        }
+        let records = try modelContext.fetch(FetchDescriptor<DailyHealthSnapshotRecord>(predicate: predicate))
+        let currentTimeZoneIdentifier = calendar.timeZone.identifier
+        var verifiedDayKeys = Set<String>()
+        for record in records {
+            let snapshot = try Self.decodeHealthSnapshot(record.payloadData, decoder: JSONDecoder())
+            let normalizedSnapshotDay = calendar.startOfDay(for: snapshot.dayStart)
+            guard record.dayKey == Self.dayKey(for: normalizedSnapshotDay, calendar: calendar),
+                  snapshot.dayStart == normalizedSnapshotDay,
+                  record.timezoneID == currentTimeZoneIdentifier,
+                  snapshot.timezoneIdentifier == currentTimeZoneIdentifier,
+                  record.algorithmVersion == DailyHealthSnapshot.currentAlgorithmVersion,
+                  snapshot.algorithmVersion == DailyHealthSnapshot.currentAlgorithmVersion else {
+                continue
+            }
+            guard snapshot.healthReadStates?[metric.rawValue] == .available else { continue }
+            verifiedDayKeys.insert(record.dayKey)
+        }
+        return HealthDataWindowPolicy.days(from: firstDay, through: lastDay, calendar: calendar)
+            .allSatisfy { verifiedDayKeys.contains(Self.dayKey(for: $0, calendar: calendar)) }
+    }
+
+    func hasImportedHealthKitWorkout(from start: Date, through end: Date) throws -> Bool {
+        let firstDay = Calendar.current.startOfDay(for: start)
+        guard firstDay <= end else { return false }
+        let predicate = #Predicate<WorkoutRecord> {
+            $0.healthKitUUID != nil && $0.date >= firstDay && $0.date <= end
+        }
+        var descriptor = FetchDescriptor<WorkoutRecord>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first != nil
+    }
+
     /// Explicit settings sync can rebaseline anchored reads after the user changes HealthKit access.
     func resetHealthKitCursors() async throws {
         try await write(affecting: []) { _ in

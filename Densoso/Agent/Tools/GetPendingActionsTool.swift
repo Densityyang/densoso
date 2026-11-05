@@ -9,7 +9,7 @@ struct GetPendingActionsTool: AgentTool {
     var definition: ToolSchema {
         .strictObject(
             name: "get_pending_actions",
-            description: "读取完整的待确认操作内容、来源和状态。结果过多时按 nextOffset 继续读取；此工具只查看状态，不确认、不拒绝，也不提交操作。",
+            description: "仅读取当前请求授权类别内的待确认操作内容、来源和状态。noAuthorizedActions 表示没有可提供给当前请求的授权草案，不代表本机没有其他待确认操作。结果过多时按 nextOffset 继续读取；此工具只查看状态，不确认、不拒绝，也不提交操作。",
             properties: [
                 "offset": .integer(minimum: 0, maximum: 10_000, description: "继续读取时使用上次返回的 nextOffset；默认 0"),
             ],
@@ -27,13 +27,28 @@ struct GetPendingActionsTool: AgentTool {
             throw GetPendingActionsToolError.invalidArguments
         }
         let offset = arguments["offset"] as? Int ?? 0
-        return try response(actions: context.pendingActions, asOf: Date(), offset: offset)
+        return try response(
+            actions: context.pendingActions,
+            asOf: Date(),
+            offset: offset,
+            allowedClasses: context.cloudHealthContextPolicyForPendingActions()?.allowedClasses ?? []
+        )
     }
 
-    func response(actions: [PendingAction], asOf date: Date, offset: Int = 0) throws -> String {
+    func response(
+        actions: [PendingAction],
+        asOf date: Date,
+        offset: Int = 0,
+        allowedClasses: Set<ProviderDataClass> = []
+    ) throws -> String {
         guard (0...10_000).contains(offset) else { throw GetPendingActionsToolError.invalidOffset }
         let candidates = actions
-            .filter { !$0.state.isTerminal && $0.expiresAt > date }
+            .filter {
+                !$0.state.isTerminal
+                    && $0.expiresAt > date
+                    && PendingActionConsentPolicy.dataClass(for: $0.payload)
+                        .map { allowedClasses.contains($0) } == true
+            }
             .sorted { lhs, rhs in
                 if lhs.state != rhs.state {
                     if lhs.state == .committing { return true }
@@ -64,7 +79,7 @@ struct GetPendingActionsTool: AgentTool {
             let hasMore = offset + consumedCount < candidates.count
             let output = PendingActionsToolOutput(
                 status: summaries.isEmpty
-                    ? (oversizedActions.isEmpty ? "noActions" : "requiresLocalReview")
+                    ? (oversizedActions.isEmpty ? "noAuthorizedActions" : "requiresLocalReview")
                     : "available",
                 count: summaries.count,
                 hasMore: hasMore,
@@ -82,6 +97,10 @@ struct GetPendingActionsTool: AgentTool {
                     OversizedPendingActionReference(
                         actionID: removed.actionID,
                         type: removed.type,
+                        consentDataClass: PendingActionConsentPolicy.dataClass(for: removed.payload)?.rawValue,
+                        preferenceCategory: preferenceCategory(for: removed.payload),
+                        createdAt: removed.createdAt,
+                        expiresAt: removed.expiresAt,
                         title: String(removed.title.prefix(80)),
                         summary: String(removed.summary.prefix(160)),
                         state: removed.state,
@@ -91,6 +110,11 @@ struct GetPendingActionsTool: AgentTool {
                 )
             }
         }
+    }
+
+    private func preferenceCategory(for payload: ActionPayload) -> String? {
+        guard case .userPreference(let preference) = payload else { return nil }
+        return preference.category.rawValue
     }
 }
 
@@ -106,6 +130,10 @@ private struct PendingActionsToolOutput: Encodable {
 private struct OversizedPendingActionReference: Encodable {
     let actionID: String
     let type: String
+    let consentDataClass: String?
+    let preferenceCategory: String?
+    let createdAt: Date
+    let expiresAt: Date
     let title: String
     let summary: String
     let state: String

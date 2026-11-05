@@ -25,6 +25,10 @@ final class GetMetricsToolTests: XCTestCase {
         XCTAssertEqual(response["requestedDays"] as? Int, 7)
         XCTAssertEqual(response["validEnergyDays"] as? Int, 6)
         XCTAssertEqual(response["missingEnergyDays"] as? Int, 1)
+        XCTAssertEqual(response["daysWithRecordedMeals"] as? Int, 6)
+        XCTAssertEqual(response["daysWithValidIntakeEstimate"] as? Int, 6)
+        XCTAssertEqual(response["daysWithValidProteinEstimate"] as? Int, 6)
+        XCTAssertEqual(response["completeRecordDays"] as? Int, 6)
         XCTAssertEqual(response["truncated"] as? Bool, true)
         let dailyBreakdown = try XCTUnwrap(response["dailyBreakdown"] as? [[String: Any]])
         XCTAssertGreaterThan(dailyBreakdown.count, 0)
@@ -36,6 +40,7 @@ final class GetMetricsToolTests: XCTestCase {
 
         let firstDay = try XCTUnwrap(dailyBreakdown.first)
         XCTAssertEqual(firstDay["energyQuality"] as? String, EnergyQuality.observed.rawValue)
+        XCTAssertEqual(firstDay["nutritionRecordStatus"] as? String, "complete")
         XCTAssertEqual(firstDay["requiresRecompute"] as? Bool, false)
         XCTAssertEqual(firstDay["projectionVersion"] as? String, AlgorithmVersions.dailyMetricsProjection)
         let dailyCoverage = try XCTUnwrap(firstDay["coverage"] as? [String: Any])
@@ -49,6 +54,51 @@ final class GetMetricsToolTests: XCTestCase {
         XCTAssertEqual(total["availability"] as? String, "partial")
         XCTAssertEqual(try XCTUnwrap(value["likely"] as? Double), 615)
         XCTAssertLessThanOrEqual(output.utf8.count, AgentToolOutputLimiter.maximumUTF8Bytes)
+    }
+
+    func testPartialNutritionRemainsInDailyBreakdownButIsExcludedFromAggregates() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        let mealTime = day.addingTimeInterval(14 * 60 * 60)
+        let partial = DailyMetrics(
+            date: day,
+            totalExpenditureKcal: 2_000,
+            totalIntakeKcal: 1_200,
+            deficitKcal: 800,
+            proteinG: 40,
+            fatG: 30,
+            carbsG: 100,
+            mealCount: 1,
+            energyQuality: EnergyQuality.observed.rawValue,
+            dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true,"nutritionRecordStatus":"inProgress","nutritionMealFingerprint":"partial-set","nutritionLastMealRecordedAt":\#(mealTime.timeIntervalSince1970)}"#,
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "partial-get-metrics"
+        )
+
+        let output = GetMetricsTool.responseJSON(
+            [DailyMetricsReadModelMapper.make(partial)],
+            from: day,
+            through: day,
+            calendar: calendar
+        )
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+        let intake = try XCTUnwrap(response["intake"] as? [String: Any])
+        let intakeTotal = try XCTUnwrap(intake["total"] as? [String: Any])
+        let intakeCoverage = try XCTUnwrap(intake["coverage"] as? [String: Any])
+        let breakdown = try XCTUnwrap((response["dailyBreakdown"] as? [[String: Any]])?.first)
+        let dailyIntake = try XCTUnwrap(breakdown["intake"] as? [String: Any])
+
+        XCTAssertEqual(response["status"] as? String, "insufficient_data")
+        XCTAssertEqual(response["daysWithRecordedMeals"] as? Int, 1)
+        XCTAssertEqual(response["daysWithValidIntakeEstimate"] as? Int, 1)
+        XCTAssertEqual(response["completeRecordDays"] as? Int, 0)
+        XCTAssertEqual(breakdown["nutritionRecordStatus"] as? String, "inProgress")
+        XCTAssertTrue(dailyIntake["value"] is [String: Any])
+        XCTAssertTrue(intakeTotal["value"] is NSNull)
+        XCTAssertEqual(intakeCoverage["availableDays"] as? Int, 0)
+        XCTAssertEqual(intakeCoverage["unavailableDays"] as? Int, 1)
+        XCTAssertEqual(breakdown["lastMealRecordedAt"] as? String, ISO8601DateFormatter().string(from: mealTime))
     }
 
     func testDailyBreakdownPreservesPendingRecomputeEvidence() throws {
@@ -138,6 +188,7 @@ final class GetMetricsToolTests: XCTestCase {
     }
 
     private func metric(on date: Date, deficit: Int) -> DailyMetrics {
+        let mealFingerprint = "get-metrics-meal-set-\(date.timeIntervalSince1970)"
         DailyMetrics(
             date: date,
             totalExpenditureKcal: 2_000,
@@ -149,7 +200,7 @@ final class GetMetricsToolTests: XCTestCase {
             mealCount: 1,
             workoutCount: 0,
             energyQuality: "observed",
-            dataCoverageJSON: #"{"intake":true,"protein":true,"fat":true,"carbs":true}"#,
+            dataCoverageJSON: #"{"intake":true,"allRecordedMealsHaveEvidence":true,"protein":true,"proteinComplete":true,"fat":true,"fatComplete":true,"carbs":true,"carbsComplete":true,"nutritionRecordStatus":"complete","nutritionMealFingerprint":"\#(mealFingerprint)","nutritionCompletionMealFingerprint":"\#(mealFingerprint)"}"#,
             projectionVersion: AlgorithmVersions.dailyMetricsProjection,
             sourceFingerprint: "get-metrics-test-\(date.timeIntervalSince1970)"
         )

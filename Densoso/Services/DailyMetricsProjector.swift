@@ -773,7 +773,10 @@ enum DailyMetricsProjector {
         destination.exerciseMinutes = source.exerciseMinutes
         destination.weightKg = source.weightKg
         destination.energyQuality = source.energyQuality
-        destination.dataCoverageJSON = source.dataCoverageJSON
+        destination.dataCoverageJSON = DailyMetricsReadModelMapper.preservingNutritionRecordStatus(
+            projectedJSON: source.dataCoverageJSON,
+            existingJSON: destination.dataCoverageJSON
+        )
         destination.projectionVersion = source.projectionVersion
         destination.sourceFingerprint = source.sourceFingerprint
         destination.requiresRecompute = source.requiresRecompute

@@ -214,6 +214,391 @@ final class AgentCoordinatorTests: XCTestCase {
         XCTAssertEqual(provider.recordedRequests().count, 0)
     }
 
+    func testMealEstimationLoadsOnlyNutritionContextIntoFinalModelRequest() async throws {
+        let provider = ScriptedTextProvider(scripts: [
+            [.textDelta("我会结合当天摄入和蛋白质目标进行估算。"), .completed(.completed)],
+        ])
+        let sevenDayStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let twentyEightDayStart = sevenDayStart.addingTimeInterval(-21 * 86_400)
+        let summary = HealthContextSummary(
+            sevenDay: HealthContextWindowSummary(
+                windowDays: 7,
+                coverageDays: ["energyIntake": 6, "proteinGrams": 5, "sleep": 6, "steps": 6, "bodyMass": 4],
+                averageSleepMinutes: 617,
+                averageStepCount: 123_456,
+                averageActiveEnergyKcal: 788,
+                averageEnergyIntakeKcal: 2_111,
+                averageDailyDeficitKcal: 333,
+                averageProteinGrams: 81,
+                dataCoverage: ["energyIntake": .partial, "proteinGrams": .partial],
+                metricWindowCoverage: [
+                    "energyIntake": HealthMetricWindowCoverage(
+                        targetWindowStart: sevenDayStart,
+                        targetWindowEnd: sevenDayStart.addingTimeInterval(6 * 86_400),
+                        expectedCalendarDays: 7,
+                        actualEarliestDate: sevenDayStart,
+                        validCalendarDays: 6,
+                        missingCalendarDays: 1,
+                        completeRecordDays: 6,
+                        authorizationLimited: false,
+                        dataAvailabilityLimited: false
+                    ),
+                    "proteinGrams": HealthMetricWindowCoverage(
+                        targetWindowStart: sevenDayStart,
+                        targetWindowEnd: sevenDayStart.addingTimeInterval(6 * 86_400),
+                        expectedCalendarDays: 7,
+                        actualEarliestDate: sevenDayStart,
+                        validCalendarDays: 5,
+                        missingCalendarDays: 2,
+                        completeRecordDays: 5,
+                        authorizationLimited: false,
+                        dataAvailabilityLimited: false
+                    ),
+                ]
+                medianWeightKilograms: 47.25
+            ),
+            twentyEightDay: HealthContextWindowSummary(
+                windowDays: 28,
+                coverageDays: ["energyIntake": 22, "proteinGrams": 20, "sleep": 24, "steps": 23, "bodyMass": 18],
+                averageSleepMinutes: 611,
+                averageStepCount: 120_456,
+                averageActiveEnergyKcal: 789,
+                averageEnergyIntakeKcal: 2_080,
+                averageDailyDeficitKcal: 322,
+                averageProteinGrams: 79,
+                dataCoverage: ["energyIntake": .partial, "proteinGrams": .partial],
+                metricWindowCoverage: [
+                    "energyIntake": HealthMetricWindowCoverage(
+                        targetWindowStart: twentyEightDayStart,
+                        targetWindowEnd: twentyEightDayStart.addingTimeInterval(27 * 86_400),
+                        expectedCalendarDays: 28,
+                        actualEarliestDate: twentyEightDayStart,
+                        validCalendarDays: 22,
+                        missingCalendarDays: 6,
+                        completeRecordDays: 22,
+                        authorizationLimited: false,
+                        dataAvailabilityLimited: false
+                    ),
+                    "proteinGrams": HealthMetricWindowCoverage(
+                        targetWindowStart: twentyEightDayStart,
+                        targetWindowEnd: twentyEightDayStart.addingTimeInterval(27 * 86_400),
+                        expectedCalendarDays: 28,
+                        actualEarliestDate: twentyEightDayStart,
+                        validCalendarDays: 20,
+                        missingCalendarDays: 8,
+                        completeRecordDays: 20,
+                        authorizationLimited: false,
+                        dataAvailabilityLimited: false
+                    ),
+                ]
+                medianWeightKilograms: 48.25
+            ),
+            targetWeightKilograms: 49.5,
+            dailyDeficitGoalKcal: 301,
+            dailyProteinGoalGrams: 92,
+            recommendationReferences: [
+                "sleep.mainSleep.minutes",
+                "activity.steps",
+                "body.weight.kg",
+                "nutrition.energyIntake.kcal",
+            ]
+        )
+        let narrativeContext = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [EvidenceReference(key: "private-sleep-context-evidence", source: "sleep")],
+            recommendationCandidates: [],
+            aggregateSummary: summary
+        )
+        let harness = try await Harness(
+            provider: provider,
+            healthNarrativeContextProvider: { narrativeContext },
+            dailyMetricsProvider: { startDate, _ in
+                let intake = try EstimateRange(low: 1_400, likely: 1_517, high: 1_620)
+                let expenditure = try EstimateRange(low: 2_000, likely: 2_100, high: 2_200)
+                let intakeCoverage = MetricCoverage(availability: [.partial], expectedDays: 1)
+                let unavailableCoverage = MetricCoverage(availability: [.unavailable], expectedDays: 1)
+                return [DailyMetricsReadResult(
+                    date: startDate,
+                    intake: MetricValue(
+                        value: intake,
+                        availability: .partial,
+                        sourceReferences: ["private-intake-record"]
+                    ),
+                    expenditure: MetricValue(value: expenditure, availability: .estimated),
+                    deficit: MetricValue(
+                        value: try SignedEstimateRange(low: 300, likely: 400, high: 500),
+                        availability: .estimated
+                    ),
+                    proteinG: MetricValue(
+                        value: 43.5,
+                        availability: .partial,
+                        sourceReferences: ["private-protein-record"]
+                    ),
+                    fatG: MetricValue(value: 56, availability: .estimated),
+                    carbsG: MetricValue(value: 170, availability: .estimated),
+                    energyQuality: .estimated,
+                    requiresRecompute: false,
+                    coverage: DailyMetricCoverage(
+                        intake: intakeCoverage,
+                        expenditure: unavailableCoverage,
+                        deficit: unavailableCoverage,
+                        proteinG: intakeCoverage,
+                        fatG: intakeCoverage,
+                        carbsG: intakeCoverage
+                    ),
+                    projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+                    sourceFingerprint: "private-daily-metric-fingerprint",
+                    mealCount: 2,
+                    workoutCount: 1,
+                    nutritionRecordStatus: .inProgress,
+                    lastMealRecordedAt: startDate.addingTimeInterval(13 * 60 * 60),
+                    allRecordedMealsHaveEvidence: true
+                )]
+            }
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthNutrition, .healthSleep, .healthActivity, .healthBody],
+            repository: harness.governance,
+            changeSource: .settings
+        )
+
+        _ = try await harness.session.send(userText: "帮我估算午餐热量和蛋白质")
+
+        let request = try XCTUnwrap(provider.recordedRequests().first)
+        let prompt = try XCTUnwrap(request.systemPrompt)
+        XCTAssertTrue(prompt.contains("1517"))
+        XCTAssertTrue(prompt.contains("43.5"))
+        XCTAssertTrue(prompt.contains("inProgress"))
+        XCTAssertTrue(prompt.contains("recordedEnergyIntakeKcal"))
+        XCTAssertTrue(prompt.contains("recordedThroughLocalTime"))
+        XCTAssertTrue(prompt.contains("13:00:00"))
+        XCTAssertTrue(prompt.contains("allRecordedMealsHaveEvidence"))
+        XCTAssertTrue(prompt.contains("\"allRecordedMealsHaveEvidence\":true"))
+        XCTAssertTrue(prompt.contains(#""mayCompareWithCompleteDayHistory":false"#))
+        XCTAssertTrue(prompt.contains("92"))
+        XCTAssertTrue(prompt.contains("2111"))
+        XCTAssertTrue(prompt.contains("81"), "History includes explicit complete-day aggregates despite other partial days")
+        for unrelatedField in [
+            "averageSleepMinutes", "averageStepCount", "averageActiveEnergyKcal",
+            "averageDailyDeficitKcal", "medianWeightKilograms", "targetWeightKilograms",
+            "dailyDeficitGoalKcal", "recommendationReferences", "healthState", "trainingLoad",
+            "activityTrends", "vitalTrends",
+            "private-sleep-context-evidence", "aggregateSummary", "allowedEvidenceKeys",
+            "private-intake-record", "private-protein-record", "private-daily-metric-fingerprint",
+        ] {
+            XCTAssertFalse(prompt.contains(unrelatedField), "Meal estimation must not include \(unrelatedField)")
+        }
+        XCTAssertNil(request.responseFormat)
+        XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: "帮我估算午餐热量和蛋白质"))
+    }
+
+    func testMealEstimationDoesNotReadNutritionContextWithoutConsent() async throws {
+        let provider = ScriptedTextProvider(scripts: [
+            [.textDelta("可以先根据你提供的餐食内容估算。"), .completed(.completed)],
+        ])
+        let readCounter = HealthContextReadCounter()
+        let harness = try await Harness(
+            provider: provider,
+            healthNarrativeContextProvider: {
+                await readCounter.recordRead()
+                return nil
+            },
+            dailyMetricsProvider: { _, _ in
+                await readCounter.recordRead()
+                return []
+            }
+        )
+
+        _ = try await harness.session.send(userText: "帮我估算午餐热量和蛋白质")
+
+        let readCount = await readCounter.value()
+        XCTAssertEqual(readCount, 0)
+        let request = try XCTUnwrap(provider.recordedRequests().first)
+        XCTAssertFalse(try XCTUnwrap(request.systemPrompt).contains("餐食估算的本地营养参考"))
+    }
+
+    func testFinalHealthRequestCarriesOnlyAuthorizedNumericVitalsAndEvidence() async throws {
+        let responseJSON = #"{"headline":"按已授权数据观察","summary":"当前记录可与个人范围一起查看。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes","vitals.heartRateVariability.median","vitals.restingHeartRate.median"]}"#
+        let context = makeVitalNarrativeContext()
+        let authorizedProvider = ScriptedTextProvider(scripts: [[
+            .textDelta(responseJSON),
+            .completed(.completed),
+        ]])
+        let authorizedHarness = try await Harness(
+            provider: authorizedProvider,
+            healthNarrativeContextProvider: { context }
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthBody, .healthSleep],
+            repository: authorizedHarness.governance,
+            changeSource: .settings
+        )
+
+        _ = try await authorizedHarness.session.send(userText: "分析我今天静息心率的状态")
+
+        let authorizedRequest = try XCTUnwrap(authorizedProvider.recordedRequests().first)
+        let authorizedPrompt = try XCTUnwrap(authorizedRequest.systemPrompt)
+        XCTAssertTrue(authorizedPrompt.contains("\"metric\":\"restingHeartRate\""))
+        XCTAssertTrue(authorizedPrompt.contains("\"latestMedian\":58"))
+        XCTAssertTrue(authorizedPrompt.contains("\"unit\":\"bpm\""))
+        XCTAssertTrue(authorizedPrompt.contains("\"currentSampleCount\":3"))
+        XCTAssertTrue(authorizedPrompt.contains("\"baselineWindowDays\":41"))
+        XCTAssertTrue(authorizedPrompt.contains("\"median\":60"))
+        XCTAssertTrue(authorizedPrompt.contains("\"dataCoverage\":\"complete\""))
+        XCTAssertTrue(authorizedPrompt.contains("\"evidenceKey\":\"vitals.restingHeartRate.median\""))
+        XCTAssertTrue(authorizedPrompt.contains("\"allowedEvidenceKeys\":[\"sleep.mainSleep.minutes\",\"vitals.heartRateVariability.median\",\"vitals.restingHeartRate.median\"]"))
+        XCTAssertTrue(authorizedPrompt.contains("\"metric\":\"heartRateVariability\""))
+        XCTAssertTrue(authorizedPrompt.contains("\"latestMedian\":52"))
+        XCTAssertTrue(authorizedPrompt.contains("\"unit\":\"ms\""))
+        XCTAssertTrue(authorizedPrompt.contains("\"currentSampleCount\":4"))
+        XCTAssertTrue(authorizedPrompt.contains("\"median\":48"))
+        XCTAssertTrue(authorizedPrompt.contains("\"evidenceKey\":\"vitals.heartRateVariability.median\""))
+        XCTAssertFalse(authorizedPrompt.contains("vitals.respiratoryRate.median"))
+
+        let restrictedResponseJSON = #"{"headline":"按已授权数据观察","summary":"当前睡眠记录可用于查看。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"]}"#
+        let restrictedProvider = ScriptedTextProvider(scripts: [[
+            .textDelta(restrictedResponseJSON),
+            .completed(.completed),
+        ]])
+        let restrictedHarness = try await Harness(
+            provider: restrictedProvider,
+            healthNarrativeContextProvider: { context }
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: restrictedHarness.governance,
+            changeSource: .settings
+        )
+
+        _ = try await restrictedHarness.session.send(userText: "分析我今天静息心率的状态")
+
+        let restrictedRequest = try XCTUnwrap(restrictedProvider.recordedRequests().first)
+        let restrictedPrompt = try XCTUnwrap(restrictedRequest.systemPrompt)
+        XCTAssertFalse(restrictedPrompt.contains("\"metric\":\"restingHeartRate\""))
+        XCTAssertFalse(restrictedPrompt.contains("\"latestMedian\":58"))
+        XCTAssertFalse(restrictedPrompt.contains("vitals.restingHeartRate.median"))
+        XCTAssertFalse(restrictedPrompt.contains("vitals.heartRateVariability.median"))
+        XCTAssertFalse(restrictedPrompt.contains("vitals.respiratoryRate.median"))
+        XCTAssertTrue(restrictedPrompt.contains("sleep.mainSleep.minutes"))
+    }
+
+    func testFinalHealthRequestIncludesActivityTrendsOnlyWithActivityConsent() async throws {
+        let trend = ActivityMetricTrend(
+            metric: .steps,
+            currentValue: 6_200,
+            baselineWindowDays: 28,
+            baseline: HealthBaseline(
+                readiness: .mature,
+                validDays: 12,
+                median: 5_800,
+                p10: 4_900,
+                p90: 7_100,
+                mad: 350
+            ),
+            status: .withinTypicalRange,
+            dataCoverage: .complete
+        )
+        let sleep = HealthDomainResult(
+            domain: .sleep,
+            status: .withinTypicalRange,
+            currentValue: 420,
+            baseline: HealthBaseline(
+                readiness: .mature,
+                validDays: 12,
+                median: 420,
+                p10: 390,
+                p90: 450,
+                mad: 15
+            ),
+            evidenceKeys: ["sleep.mainSleep.minutes"],
+            dataCoverage: .complete
+        )
+        let summary = HealthContextSummary(
+            sevenDay: HealthContextWindowSummary(
+                windowDays: 7,
+                coverageDays: ["sleep": 6],
+                averageSleepMinutes: 420,
+                averageStepCount: nil,
+                averageActiveEnergyKcal: nil,
+                averageEnergyIntakeKcal: nil,
+                averageDailyDeficitKcal: nil,
+                averageProteinGrams: nil,
+                medianWeightKilograms: nil,
+                dataCoverage: ["sleep": .complete]
+            ),
+            twentyEightDay: HealthContextWindowSummary(
+                windowDays: 28,
+                coverageDays: ["sleep": 24],
+                averageSleepMinutes: 420,
+                averageStepCount: nil,
+                averageActiveEnergyKcal: nil,
+                averageEnergyIntakeKcal: nil,
+                averageDailyDeficitKcal: nil,
+                averageProteinGrams: nil,
+                medianWeightKilograms: nil,
+                dataCoverage: ["sleep": .complete]
+            ),
+            targetWeightKilograms: nil,
+            dailyDeficitGoalKcal: nil,
+            dailyProteinGoalGrams: nil,
+            recommendationReferences: []
+        )
+        let context = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [
+                EvidenceReference(key: "activity.steps", source: "activity"),
+                EvidenceReference(key: "sleep.mainSleep.minutes", source: "sleep"),
+            ],
+            recommendationCandidates: [],
+            aggregateSummary: summary,
+            activityTrends: [trend],
+            cloudHealthState: CloudHealthStateContext(domains: [sleep])
+        )
+
+        let allowedProvider = ScriptedTextProvider(scripts: [[
+            .textDelta(#"{"headline":"按已授权活动数据观察","summary":"当前步数数据可用于查看。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["activity.steps","sleep.mainSleep.minutes"]}"#),
+            .completed(.completed),
+        ]])
+        let allowedHarness = try await Harness(
+            provider: allowedProvider,
+            healthNarrativeContextProvider: { context }
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity, .healthSleep],
+            repository: allowedHarness.governance,
+            changeSource: .settings
+        )
+        _ = try await allowedHarness.session.send(userText: "分析我今天的活动量和步数")
+        let allowedPrompt = try XCTUnwrap(allowedProvider.recordedRequests().first?.systemPrompt)
+        XCTAssertTrue(allowedPrompt.contains("\"metric\":\"steps\""))
+        XCTAssertTrue(allowedPrompt.contains("\"currentValue\":6200"))
+        XCTAssertTrue(allowedPrompt.contains("activity.steps"))
+        XCTAssertTrue(allowedPrompt.contains("sleep.mainSleep.minutes"))
+
+        let deniedProvider = ScriptedTextProvider(scripts: [[
+            .textDelta(#"{"headline":"按已授权数据观察","summary":"活动数据不足。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":[]}"#),
+            .completed(.completed),
+        ]])
+        let deniedHarness = try await Harness(
+            provider: deniedProvider,
+            healthNarrativeContextProvider: { context }
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: deniedHarness.governance,
+            changeSource: .settings
+        )
+        _ = try await deniedHarness.session.send(userText: "分析我今天的活动量和步数")
+        let deniedPrompt = try XCTUnwrap(deniedProvider.recordedRequests().first?.systemPrompt)
+        XCTAssertFalse(deniedPrompt.contains("\"metric\":\"steps\""))
+        XCTAssertFalse(deniedPrompt.contains("activity.steps"))
+    }
+
     func testReplayedWatchRequestIDDoesNotStartAnotherProviderRound() async throws {
         let provider = ScriptedTextProvider(
             scripts: [[.textDelta("已生成可检查的草稿。"), .completed(.completed)]]
@@ -676,6 +1061,101 @@ final class AgentCoordinatorTests: XCTestCase {
         }
     }
 
+    private func makeVitalNarrativeContext() -> HealthNarrativeContext {
+        let baseline = HealthBaseline(
+            readiness: .mature,
+            validDays: 12,
+            median: 60,
+            p10: 55,
+            p90: 66,
+            mad: 2
+        )
+        let noBaseline = HealthBaseline(
+            readiness: .noData,
+            validDays: 0,
+            median: nil,
+            p10: nil,
+            p90: nil,
+            mad: nil
+        )
+        let vitalTrends = [
+            HealthVitalTrend(
+                metric: .restingHeartRate,
+                latestMedian: 58,
+                currentSampleCount: 3,
+                baseline: baseline,
+                status: .withinTypicalRange,
+                evidenceKey: "vitals.restingHeartRate.median",
+                dataCoverage: .complete
+            ),
+            HealthVitalTrend(
+                metric: .heartRateVariability,
+                latestMedian: 52,
+                currentSampleCount: 4,
+                baseline: HealthBaseline(
+                    readiness: .mature,
+                    validDays: 11,
+                    median: 48,
+                    p10: 42,
+                    p90: 54,
+                    mad: 3
+                ),
+                status: .withinTypicalRange,
+                evidenceKey: "vitals.heartRateVariability.median",
+                dataCoverage: .complete
+            ),
+            HealthVitalTrend(
+                metric: .respiratoryRate,
+                latestMedian: nil,
+                baseline: noBaseline,
+                status: .unknown,
+                evidenceKey: "vitals.respiratoryRate.median",
+                dataCoverage: .unknown
+            ),
+        ]
+        let sleep = HealthDomainResult(
+            domain: .sleep,
+            status: .withinTypicalRange,
+            currentValue: 420,
+            baseline: HealthBaseline(
+                readiness: .mature,
+                validDays: 12,
+                median: 420,
+                p10: 390,
+                p90: 450,
+                mad: 15
+            ),
+            evidenceKeys: ["sleep.mainSleep.minutes"],
+            dataCoverage: .complete
+        )
+        let window = HealthContextWindowSummary(
+            windowDays: 7,
+            coverageDays: ["sleep": 7],
+            averageSleepMinutes: 420,
+            dataCoverage: ["sleep": .complete]
+        )
+        let summary = HealthContextSummary(
+            sevenDay: window,
+            twentyEightDay: window,
+            targetWeightKilograms: nil,
+            dailyDeficitGoalKcal: nil,
+            dailyProteinGoalGrams: nil,
+            recommendationReferences: ["sleep.mainSleep.minutes"]
+        )
+        return HealthNarrativeContext(
+            healthState: nil,
+            evidence: [
+                EvidenceReference(key: "sleep.mainSleep.minutes", source: "sleep"),
+                EvidenceReference(key: "vitals.restingHeartRate.median", source: "restingHeartRate"),
+                EvidenceReference(key: "vitals.heartRateVariability.median", source: "heartRateVariability"),
+            ],
+            recommendationCandidates: [],
+            aggregateSummary: summary,
+            vitalTrends: vitalTrends,
+            cloudHealthState: CloudHealthStateContext(domains: [sleep])
+        )
+    }
+
     private func weightCall(id: String, kilograms: Double = 62.5) -> ToolCall {
         ToolCall(
             id: id,
@@ -711,6 +1191,7 @@ private struct Harness {
         conversationRepository: (any ConversationRepository)? = nil,
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
         healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil,
+        dailyMetricsProvider: (@Sendable (Date, Date) async throws -> [AgentDailyMetric])? = nil,
         toolRegistry: ToolRegistry? = nil
     ) async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV14.self)
@@ -738,7 +1219,8 @@ private struct Harness {
             readRepository: agentRepository,
             conversationRepository: conversationRepository ?? agentRepository,
             budgetFactory: budgetFactory,
-            healthNarrativeContextProvider: healthNarrativeContextProvider
+            healthNarrativeContextProvider: healthNarrativeContextProvider,
+            dailyMetricsProvider: dailyMetricsProvider
         )
         self.container = modelContainer
         self.governance = governance

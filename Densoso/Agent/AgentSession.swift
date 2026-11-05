@@ -9,6 +9,182 @@ struct AgentConfirmationStatus: Equatable, Sendable {
     let externalSyncState: HealthSyncState
 }
 
+/// Maps pending-action data to the narrowest provider consent category that
+/// describes its contents. Unknown or uncategorized preference data fails
+/// closed.
+enum PendingActionConsentPolicy {
+    static func dataClass(for payload: ActionPayload) -> ProviderDataClass? {
+        switch payload {
+        case .meal:
+            return .healthNutrition
+        case .weight:
+            return .healthBody
+        case .workoutPlan, .trainingPlan:
+            return .healthActivity
+        case .dailyCheckIn:
+            return .healthSubjective
+        case .userPreference(let preference):
+            switch preference.category {
+            case .food: return .healthNutrition
+            case .exercise: return .healthActivity
+            case .communication: return nil
+            }
+        }
+    }
+
+    static func dataClass(actionType: String, payload: JSONValue) -> ProviderDataClass? {
+        guard let decoded = decodeActionPayload(actionType: actionType, payload: payload) else { return nil }
+        return dataClass(for: decoded)
+    }
+
+    static func filteredSummary(
+        _ summary: JSONValue,
+        allowedClasses: Set<ProviderDataClass>
+    ) -> JSONValue? {
+        guard let object = summary.objectValue,
+              let type = object["type"]?.stringValue,
+              let payloadJSON = object["payload"],
+              let payload = decodeActionPayload(actionType: type, payload: payloadJSON),
+              let dataClass = dataClass(for: payload),
+              allowedClasses.contains(dataClass),
+              let metadataData = try? JSONEncoder().encode(summary) else { return nil }
+        let metadataDecoder = JSONDecoder()
+        metadataDecoder.dateDecodingStrategy = .iso8601
+        guard let metadata = try? metadataDecoder.decode(PendingActionSummaryMetadata.self, from: metadataData),
+              metadata.expiresAt > metadata.createdAt,
+              metadata.expiresAt > Date(),
+              metadata.state == .pending || metadata.state == .committing else { return nil }
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let encodedPayload = try? encoder.encode(payload),
+              let canonicalPayload = try? JSONDecoder().decode(JSONValue.self, from: encodedPayload) else {
+            return nil
+        }
+        return .object([
+            "actionID": .string(metadata.actionID.uuidString.lowercased()),
+            "type": .string(payload.actionType.rawValue),
+            "title": .string(payload.title),
+            "summary": .string(payload.summary),
+            "state": .string(metadata.state.rawValue),
+            "createdAt": .string(ISO8601DateFormatter().string(from: metadata.createdAt)),
+            "expiresAt": .string(ISO8601DateFormatter().string(from: metadata.expiresAt)),
+            "confidence": .number(payload.confidence),
+            "payload": canonicalPayload,
+        ])
+    }
+
+    static func dataClass(for summary: JSONValue) -> ProviderDataClass? {
+        guard let object = summary.objectValue,
+              let type = object["type"]?.stringValue,
+              let payload = object["payload"] else { return nil }
+        return dataClass(actionType: type, payload: payload)
+    }
+
+    static func dataClass(for oversizedReference: JSONValue) -> ProviderDataClass? {
+        guard let object = oversizedReference.objectValue,
+              let type = object["type"]?.stringValue,
+              let actionType = ActionType(rawValue: type) else { return nil }
+        let expectedClass: ProviderDataClass?
+        switch actionType {
+        case .meal: expectedClass = .healthNutrition
+        case .weight: expectedClass = .healthBody
+        case .workoutPlan, .trainingPlan: expectedClass = .healthActivity
+        case .dailyCheckIn: expectedClass = .healthSubjective
+        case .userPreference:
+            guard let categoryRaw = object["preferenceCategory"]?.stringValue,
+                  let category = UserPreferenceCategory(rawValue: categoryRaw) else { return nil }
+            switch category {
+            case .food: expectedClass = .healthNutrition
+            case .exercise: expectedClass = .healthActivity
+            case .communication: expectedClass = nil
+            }
+        }
+        guard let expectedClass else { return nil }
+        if let explicitClassValue = object["consentDataClass"] {
+            guard let explicitClass = explicitClassValue.stringValue,
+                  ProviderDataClass(rawValue: explicitClass) == expectedClass else { return nil }
+        }
+        return expectedClass
+    }
+
+    static func filteredOversizedReference(
+        _ reference: JSONValue,
+        allowedClasses: Set<ProviderDataClass>
+    ) -> JSONValue? {
+        guard let object = reference.objectValue,
+              let actionIDRaw = object["actionID"]?.stringValue,
+              let actionID = UUID(uuidString: actionIDRaw),
+              let typeRaw = object["type"]?.stringValue,
+              let actionType = ActionType(rawValue: typeRaw),
+              let dataClass = dataClass(for: reference),
+              allowedClasses.contains(dataClass),
+              let metadataData = try? JSONEncoder().encode(reference) else { return nil }
+        let metadataDecoder = JSONDecoder()
+        metadataDecoder.dateDecodingStrategy = .iso8601
+        guard let metadata = try? metadataDecoder.decode(PendingActionSummaryMetadata.self, from: metadataData),
+              metadata.expiresAt > metadata.createdAt,
+              metadata.expiresAt > Date(),
+              metadata.state == .pending || metadata.state == .committing,
+              let title = object["title"]?.stringValue, title.count <= 80,
+              let summary = object["summary"]?.stringValue, summary.count <= 160,
+              let payloadBytes = object["payloadUTF8Bytes"]?.intValue,
+              (1...10_000_000).contains(payloadBytes),
+              object["requiresLocalReview"]?.boolValue == true else { return nil }
+
+        var safeObject: [String: JSONValue] = [
+            "actionID": .string(actionID.uuidString.lowercased()),
+            "type": .string(actionType.rawValue),
+            "consentDataClass": .string(dataClass.rawValue),
+            "title": .string(title),
+            "summary": .string(summary),
+            "state": .string(metadata.state.rawValue),
+            "createdAt": .string(ISO8601DateFormatter().string(from: metadata.createdAt)),
+            "expiresAt": .string(ISO8601DateFormatter().string(from: metadata.expiresAt)),
+            "payloadUTF8Bytes": .integer(payloadBytes),
+            "requiresLocalReview": .boolean(true),
+        ]
+        if actionType == .userPreference,
+           let category = object["preferenceCategory"]?.stringValue {
+            safeObject["preferenceCategory"] = .string(category)
+        }
+        return .object(safeObject)
+    }
+
+    static func dataClasses(inToolResult result: String) -> Set<ProviderDataClass> {
+        guard let data = result.data(using: .utf8),
+              let root = try? JSONDecoder().decode(JSONValue.self, from: data).objectValue else {
+            return []
+        }
+        var classes = Set<ProviderDataClass>()
+        for item in root["actions"]?.arrayValue ?? [] {
+            if let dataClass = dataClass(for: item) { classes.insert(dataClass) }
+        }
+        for item in root["oversizedActions"]?.arrayValue ?? [] {
+            if let dataClass = dataClass(for: item) { classes.insert(dataClass) }
+        }
+        return classes
+    }
+
+    private static func decodeActionPayload(actionType: String, payload: JSONValue) -> ActionPayload? {
+        guard ActionType(rawValue: actionType) != nil,
+              let data = try? JSONEncoder().encode(payload) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let decoded = try? decoder.decode(ActionPayload.self, from: data),
+              decoded.actionType.rawValue == actionType else { return nil }
+        return decoded
+    }
+}
+
+private struct PendingActionSummaryMetadata: Decodable {
+    let actionID: UUID
+    let state: PendingActionState
+    let createdAt: Date
+    let expiresAt: Date
+}
+
 enum AgentSessionActionError: Error {
     case actionAlreadyInFlight
 }
@@ -197,6 +373,10 @@ final class AgentSession {
             ).userMessage
             throw error
         }
+    }
+
+    func cloudHealthContextPolicyForPendingActions() -> CloudHealthContextPolicy? {
+        activeCloudHealthPolicy
     }
 
     func isActionInFlight(_ actionID: UUID) -> Bool {
@@ -585,6 +765,10 @@ final class AgentSession {
                 for: effectiveUserText,
                 priorHealthContext: priorHealthContext
             )
+            let wantsMealEstimationContext = HealthContextPromptBuilder.requiresMealEstimationContext(
+                for: effectiveUserText
+            )
+            let wantsHealthContext = wantsHealthNarrative || wantsMealEstimationContext
             let policyAlignmentIntent = CloudHealthContextPolicyAlignmentIntent.parse(effectiveUserText)
             var policyAlignmentAcknowledgement: String?
             func responseIncludingPolicyAcknowledgement(_ text: String) -> String {
@@ -617,22 +801,42 @@ final class AgentSession {
                     }
                 }
             }
-            let unfilteredNarrativeContext: HealthNarrativeContext?
-            if wantsHealthNarrative && !initialCloudHealthPolicy.allowedClasses.isEmpty {
+            var unfilteredNarrativeContext: HealthNarrativeContext?
+            if wantsHealthContext,
+               !initialCloudHealthPolicy.allowedClasses.isEmpty,
+               (!wantsMealEstimationContext || initialCloudHealthPolicy.allows(.healthNutrition)) {
                 do {
                     unfilteredNarrativeContext = try await healthNarrativeContextProvider?()
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    return try await completeDeterministicHealthResponse(
-                        responseIncludingPolicyAcknowledgement(
-                            "读取本机健康状态失败，请重试；数据读取失败不代表没有健康数据。"
-                        ),
-                        requestID: requestID
-                    )
+                    if wantsHealthNarrative {
+                        return try await completeDeterministicHealthResponse(
+                            responseIncludingPolicyAcknowledgement(
+                                "读取本机健康状态失败，请重试；数据读取失败不代表没有健康数据。"
+                            ),
+                            requestID: requestID
+                        )
+                    }
+                }
+            }
+            let todayNutritionMetric: DailyMetricsReadResult?
+            if wantsMealEstimationContext, initialCloudHealthPolicy.allows(.healthNutrition),
+               let dailyMetricsProvider {
+                let calendar = Calendar.autoupdatingCurrent
+                let dayStart = calendar.startOfDay(for: currentToolTimeAnchor)
+                do {
+                    todayNutritionMetric = try await dailyMetricsProvider(dayStart, dayStart)
+                        .first(where: { calendar.startOfDay(for: $0.date) == dayStart })
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // Nutrition context is optional for a meal estimate. A local
+                    // read failure must not be turned into a claim that no data exists.
+                    todayNutritionMetric = nil
                 }
             } else {
-                unfilteredNarrativeContext = nil
+                todayNutritionMetric = nil
             }
             let narrativeContext = CloudRequestPolicyGuard.filtered(
                 unfilteredNarrativeContext,
@@ -742,11 +946,22 @@ final class AgentSession {
                     && roundContext?.aggregateSummary != nil
                     && !roundAllowedEvidenceKeys.isEmpty
                 let roundSummary = roundContext?.aggregateSummary
+                let mealEstimationNutritionContext: MealEstimationNutritionContext?
+                if wantsMealEstimationContext, roundPolicy.allows(.healthNutrition) {
+                    mealEstimationNutritionContext = MealEstimationNutritionContext.make(
+                        today: todayNutritionMetric,
+                        summary: roundSummary
+                    )
+                } else {
+                    mealEstimationNutritionContext = nil
+                }
+                let promptSummary = wantsMealEstimationContext ? nil : roundSummary
                 let providerSystemPrompt = HealthContextPromptBuilder.prompt(
                     basePrompt: systemPrompt.text,
                     userText: effectiveUserText,
-                    summary: roundSummary,
+                    summary: promptSummary,
                     narrativeContext: roundContext,
+                    mealEstimationNutritionContext: mealEstimationNutritionContext,
                     structuredNarrative: currentRoundUsesStructuredNarrative,
                     cloudHealthPolicy: roundPolicy,
                     priorHealthContext: priorHealthContext
@@ -762,19 +977,26 @@ final class AgentSession {
                     responseFormat: responseFormat,
                     cloudHealthPolicy: roundPolicy
                 )
-                let includesSummary = roundSummary != nil
+                let includesSummary = (promptSummary != nil || mealEstimationNutritionContext != nil)
                     && HealthContextPromptBuilder.shouldIncludeSummary(
                         for: effectiveUserText,
                         priorHealthContext: priorHealthContext
                     )
-                let requestDataClasses = Self.outboundConsentDependencies(
+                var requestDataClasses = Self.outboundConsentDependencies(
                     messages: preparedMessages.messages,
                     includesImage: containsImage,
                     includesConversationHistory: preparedMessages.includesConversationHistory,
-                    summary: includesSummary ? roundSummary : nil,
+                    summary: includesSummary
+                        ? (wantsMealEstimationContext
+                            ? MealEstimationNutritionContext.nutritionOnlySummary(from: roundSummary)
+                            : promptSummary)
+                        : nil,
                     structuredContext: currentRoundUsesStructuredNarrative ? roundContext : nil,
                     policy: roundPolicy
                 )
+                if mealEstimationNutritionContext != nil {
+                    requestDataClasses.insert(.healthNutrition)
+                }
                 let request = ModelRequest(
                     requestID: requestID,
                     conversationID: conversationID,
@@ -1746,9 +1968,11 @@ final class AgentSession {
         if let structuredContext { required.formUnion(healthDataClasses(in: structuredContext)) }
 
         var toolCallsByID: [String: Set<ProviderDataClass>] = [:]
+        var toolNamesByID: [String: String] = [:]
         for message in messages where message.role != .user {
             for content in message.content {
                 if case .toolCall(let call) = content {
+                    toolNamesByID[call.id] = call.name
                     let classes = healthToolDataClasses(named: call.name, policy: policy)
                     if !classes.isEmpty { toolCallsByID[call.id] = classes }
                 }
@@ -1756,9 +1980,12 @@ final class AgentSession {
         }
         for message in messages {
             for content in message.content {
-                if case .toolResult(let id, _) = content,
-                   let classes = toolCallsByID[id] {
-                    required.formUnion(classes)
+                if case .toolResult(let id, let result) = content {
+                    if toolNamesByID[id] == "get_pending_actions" {
+                        required.formUnion(PendingActionConsentPolicy.dataClasses(inToolResult: result))
+                    } else if let classes = toolCallsByID[id] {
+                        required.formUnion(classes)
+                    }
                 }
             }
         }
@@ -1792,8 +2019,12 @@ final class AgentSession {
             policy.allowedClasses
         case "get_recent_meals":
             Set([.healthNutrition]).intersection(policy.allowedClasses)
-        case "get_metrics", "get_weekly_deficit":
+        case "get_metrics":
             Set([.healthNutrition, .healthActivity]).intersection(policy.allowedClasses)
+        case "get_weekly_deficit":
+            policy.allows(.healthNutrition) && policy.allows(.healthActivity)
+                ? Set([.healthNutrition, .healthActivity])
+                : []
         case "get_recent_workouts", "get_schedule", "get_today_plan":
             Set([.healthActivity]).intersection(policy.allowedClasses)
         case "get_goal":
@@ -1814,6 +2045,24 @@ final class AgentSession {
                 if let dataClass = healthDataClass(for: evidence.source) { classes.insert(dataClass) }
             }
         }
+        if let state = context.cloudHealthState {
+            for domain in state.domains {
+                classes.insert(healthDataClass(for: domain.domain))
+            }
+            if let recovery = state.recovery {
+                for evidence in recovery.evidence {
+                    if let dataClass = healthDataClass(for: evidence.source) { classes.insert(dataClass) }
+                }
+            }
+            if state.trainingLoad != nil { classes.insert(.healthActivity) }
+            if let guidance = state.tomorrowGuidance {
+                for evidence in guidance.reasons {
+                    if let dataClass = healthDataClass(for: evidence.source) { classes.insert(dataClass) }
+                }
+            }
+        }
+        if !context.vitalTrends.isEmpty { classes.insert(.healthBody) }
+        if !context.activityTrends.isEmpty { classes.insert(.healthActivity) }
         for evidence in context.evidence {
             if let dataClass = healthDataClass(for: evidence.source) { classes.insert(dataClass) }
         }

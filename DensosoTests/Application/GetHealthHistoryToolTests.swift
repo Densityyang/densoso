@@ -169,7 +169,18 @@ final class GetHealthHistoryToolTests: XCTestCase {
         let response = try GetHealthHistoryTool().response(
             from: start,
             through: start,
-            points: [HealthStateHistoryPoint(date: start, state: state)]
+            points: [HealthStateHistoryPoint(
+                date: start,
+                state: state,
+                activityTrends: [HealthActivityTrendContext(ActivityMetricTrend(
+                    metric: .steps,
+                    currentValue: 5_600,
+                    baselineWindowDays: 0,
+                    baseline: baseline,
+                    status: .partial,
+                    dataCoverage: .partial
+                ))]
+            )]
         )
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
         let day = try XCTUnwrap((object["days"] as? [[String: Any]])?.first)
@@ -185,6 +196,118 @@ final class GetHealthHistoryToolTests: XCTestCase {
         XCTAssertEqual(day["trainingLoadCoverage"] as? String, HealthDataCoverage.unknown.rawValue)
         XCTAssertNil(day["trainingLoadBand"])
         XCTAssertNotEqual(object["status"] as? String, "noData")
+    }
+
+    func testHistoryReturnsSafeVitalAggregatesAndOnlyCitesValidCurrentValues() throws {
+        let start = Date(timeIntervalSince1970: 1_780_000_000)
+        let baseline = HealthBaseline(
+            readiness: .mature,
+            validDays: 28,
+            median: 60,
+            p10: 55,
+            p90: 65,
+            mad: 2
+        )
+        let currentTrend = HealthVitalTrendContext(HealthVitalTrend(
+            metric: .restingHeartRate,
+            latestMedian: 66,
+            currentSampleCount: 4,
+            baseline: baseline,
+            status: .changed,
+            evidenceKey: "vitals.restingHeartRate.median",
+            dataCoverage: .complete
+        ))
+        let unknownTrend = HealthVitalTrendContext(HealthVitalTrend(
+            metric: .heartRateVariability,
+            latestMedian: nil,
+            baseline: baseline,
+            status: .unknown,
+            evidenceKey: "vitals.heartRateVariability.median",
+            dataCoverage: .unknown
+        ))
+        let response = try GetHealthHistoryTool().response(
+            from: start,
+            through: start,
+            points: [HealthStateHistoryPoint(
+                date: start,
+                state: makeState(),
+                vitalTrends: [currentTrend, unknownTrend]
+            )]
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let day = try XCTUnwrap((object["days"] as? [[String: Any]])?.first)
+        let trends = try XCTUnwrap(day["vitalTrends"] as? [[String: Any]])
+        let observations = try XCTUnwrap(day["observations"] as? [String: Double])
+
+        XCTAssertEqual(object["status"] as? String, "partial")
+        XCTAssertEqual(trends.count, 2)
+        XCTAssertEqual(trends[0]["unit"] as? String, "bpm")
+        XCTAssertEqual(trends[0]["sourceProvenance"] as? String, HealthVitalAggregateProvenance.healthKitAggregate.rawValue)
+        XCTAssertEqual(trends[0]["currentWindowDays"] as? Int, 1)
+        XCTAssertEqual(trends[0]["currentSampleCount"] as? Int, 4)
+        XCTAssertEqual(trends[0]["latestMedian"] as? Double, 66)
+        XCTAssertEqual(trends[0]["baselineWindowDays"] as? Int, 41)
+        XCTAssertEqual(trends[0]["robustZScore"] as? Double, 0.6745 * 6 / 2)
+        XCTAssertEqual(trends[0]["evidenceKey"] as? String, "vitals.restingHeartRate.median")
+        XCTAssertEqual(trends[1]["dataCoverage"] as? String, HealthDataCoverage.unknown.rawValue)
+        XCTAssertNil(trends[1]["latestMedian"])
+        XCTAssertNil(trends[1]["evidenceKey"])
+        XCTAssertEqual(observations["vitals.restingHeartRate.median"], 66)
+        XCTAssertNil(observations["vitals.heartRateVariability.median"])
+    }
+
+    func testHistoryReturnsPerMetricActivityTrendsAndCitesOnlyKnownValues() throws {
+        let start = Date(timeIntervalSince1970: 1_780_000_000)
+        let baseline = HealthBaseline(
+            readiness: .mature,
+            validDays: 21,
+            median: 7_000,
+            p10: 5_500,
+            p90: 8_500,
+            mad: 600
+        )
+        let trends = [
+            HealthActivityTrendContext(ActivityMetricTrend(
+                metric: .steps,
+                currentValue: 8_200,
+                baselineWindowDays: 28,
+                baseline: baseline,
+                status: .withinTypicalRange,
+                dataCoverage: .complete
+            )),
+            HealthActivityTrendContext(ActivityMetricTrend(
+                metric: .exerciseMinutes,
+                currentValue: nil,
+                baselineWindowDays: 28,
+                baseline: baseline,
+                status: .unknown,
+                dataCoverage: .unknown
+            )),
+        ]
+        let response = try GetHealthHistoryTool().response(
+            from: start,
+            through: start,
+            points: [HealthStateHistoryPoint(
+                date: start,
+                state: makeState(),
+                activityTrends: trends
+            )]
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+        let day = try XCTUnwrap((object["days"] as? [[String: Any]])?.first)
+        let activityTrends = try XCTUnwrap(day["activityTrends"] as? [[String: Any]])
+        let observations = try XCTUnwrap(day["observations"] as? [String: Double])
+
+        XCTAssertEqual(object["status"] as? String, "partial")
+        XCTAssertEqual(activityTrends.count, 2)
+        XCTAssertEqual(activityTrends[0]["metric"] as? String, HealthActivityMetric.steps.rawValue)
+        XCTAssertEqual(activityTrends[0]["unit"] as? String, "steps")
+        XCTAssertEqual(activityTrends[0]["currentValue"] as? Double, 8_200)
+        XCTAssertEqual(activityTrends[0]["evidenceKey"] as? String, "activity.steps")
+        XCTAssertEqual(activityTrends[1]["dataCoverage"] as? String, HealthDataCoverage.unknown.rawValue)
+        XCTAssertNil(activityTrends[1]["evidenceKey"])
+        XCTAssertEqual(observations["activity.steps"], 8_200)
+        XCTAssertNil(observations["activity.exerciseMinutes"])
     }
 
     func testReadModelHistoryKeepsUnknownHealthKitCoverageTypedWithoutZeroObservations() async throws {

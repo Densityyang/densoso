@@ -103,6 +103,55 @@ final class HealthNarrativeTests: XCTestCase {
         XCTAssertEqual(sevenDay["averageEnergyIntakeKcal"] as? Double, 1_800)
     }
 
+    func testNarrativeContextOmitsPartialEffortLoadValuesFromFinalJSON() throws {
+        let baseline = HealthBaseline(readiness: .noData, validDays: 0, median: nil, p10: nil, p90: nil, mad: nil)
+        let state = HealthStateV2(
+            domains: [HealthDomainResult(
+                domain: .activity,
+                status: .unknown,
+                currentValue: nil,
+                baseline: baseline,
+                evidenceKeys: [],
+                dataCoverage: .unknown
+            )],
+            recovery: RecoveryAssessment(
+                status: .insufficientEvidence,
+                confidence: .low,
+                evidence: [],
+                recommendedAction: .collectData
+            ),
+            trainingLoad: TrainingLoadSummary(
+                recentSevenDayLoad: 0,
+                priorTwentyEightDayAverage: 525,
+                ratio: nil,
+                readiness: .mature,
+                band: .unavailable,
+                estimatedWorkoutCount: 7,
+                unavailableEffortCount: 1,
+                dataCoverage: .partial
+            ),
+            tomorrowGuidance: nil
+        )
+        let context = HealthNarrativeContext(
+            healthState: state,
+            evidence: [],
+            recommendationCandidates: [],
+            aggregateSummary: nil
+        )
+
+        let encoded = try JSONEncoder().encode(context)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let healthState = try XCTUnwrap(root["healthState"] as? [String: Any])
+        let trainingLoad = try XCTUnwrap(healthState["trainingLoad"] as? [String: Any])
+
+        XCTAssertEqual(trainingLoad["dataCoverage"] as? String, HealthDataCoverage.partial.rawValue)
+        XCTAssertNil(trainingLoad["recentSevenDayLoad"])
+        XCTAssertNil(trainingLoad["priorTwentyEightDayAverage"])
+        XCTAssertNil(trainingLoad["ratio"])
+        XCTAssertNil(trainingLoad["estimatedWorkoutCount"])
+        XCTAssertNil(trainingLoad["unavailableEffortCount"])
+    }
+
     func testAllowedEvidenceKeysExcludeRecommendationIDsAndUnknownReferences() throws {
         let context = HealthNarrativeContext(
             healthState: nil,
@@ -194,8 +243,64 @@ final class HealthNarrativeTests: XCTestCase {
         let encoded = try JSONEncoder().encode(context)
         let decoded = try JSONDecoder().decode(HealthNarrativeContext.self, from: encoded)
         XCTAssertEqual(decoded, context)
+        var forgedObject = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var forgedTrends = try XCTUnwrap(forgedObject["activityTrends"] as? [[String: Any]])
+        forgedTrends[0]["unit"] = "kcal"
+        forgedObject["activityTrends"] = forgedTrends
+        let mismatchedUnit = try JSONSerialization.data(withJSONObject: forgedObject)
+        XCTAssertThrowsError(try JSONDecoder().decode(HealthNarrativeContext.self, from: mismatchedUnit))
 
         let legacy = #"{"healthState":null,"evidence":[],"recommendationCandidates":[],"aggregateSummary":null}"#.data(using: .utf8)!
         XCTAssertNil(try JSONDecoder().decode(HealthNarrativeContext.self, from: legacy).subjectiveContext)
+    }
+
+    func testActivityNarrativeContextKeepsOnlyCanonicalNumericEvidenceAndDecodesLegacyJSON() throws {
+        let baseline = HealthBaseline(
+            readiness: .mature,
+            validDays: 14,
+            median: 7_000,
+            p10: 5_000,
+            p90: 9_000,
+            mad: 500
+        )
+        let context = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [
+                EvidenceReference(key: "activity.steps", source: HealthDomain.activity.rawValue),
+                EvidenceReference(key: "activity.exerciseMinutes", source: HealthDomain.activity.rawValue),
+                EvidenceReference(key: "activity.forged", source: HealthDomain.activity.rawValue),
+            ],
+            recommendationCandidates: [],
+            aggregateSummary: nil,
+            activityTrends: [
+                ActivityMetricTrend(
+                    metric: .steps,
+                    currentValue: 8_100,
+                    baselineWindowDays: 28,
+                    baseline: baseline,
+                    status: .withinTypicalRange,
+                    dataCoverage: .complete
+                ),
+                ActivityMetricTrend(
+                    metric: .exerciseMinutes,
+                    currentValue: nil,
+                    baselineWindowDays: 28,
+                    baseline: baseline,
+                    status: .unknown,
+                    dataCoverage: .unknown
+                ),
+            ]
+        )
+
+        XCTAssertEqual(context.allowedEvidenceKeys, ["activity.steps"])
+        XCTAssertEqual(context.evidence.map(\.source), [HealthDomain.activity.rawValue])
+        XCTAssertNil(context.activityTrends[1].evidenceKey)
+
+        let encoded = try JSONEncoder().encode(context)
+        let decoded = try JSONDecoder().decode(HealthNarrativeContext.self, from: encoded)
+        XCTAssertEqual(decoded, context)
+
+        let legacy = #"{"healthState":null,"evidence":[],"recommendationCandidates":[],"aggregateSummary":null}"#.data(using: .utf8)!
+        XCTAssertTrue(try JSONDecoder().decode(HealthNarrativeContext.self, from: legacy).activityTrends.isEmpty)
     }
 }

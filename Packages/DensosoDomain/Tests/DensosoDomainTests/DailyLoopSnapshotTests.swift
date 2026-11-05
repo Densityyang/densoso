@@ -5,17 +5,21 @@ import XCTest
 final class DailyLoopSnapshotTests: XCTestCase {
     func testMainPRAlgorithmVersionsAreCentralizedAndInvalidateDailyBriefCache() {
         XCTAssertEqual(AlgorithmVersions.calorieAccounting, "calorie-accounting-v3")
-        XCTAssertEqual(AlgorithmVersions.dailyMetricsProjection, "daily-metrics-projection-v1")
+        XCTAssertEqual(AlgorithmVersions.dailyMetricsProjection, "daily-metrics-projection-v2")
         XCTAssertEqual(AlgorithmVersions.mealEstimator, "meal-estimator-v2")
         XCTAssertEqual(AlgorithmVersions.portionEstimator, "portion-estimator-v2")
-        XCTAssertEqual(AlgorithmVersions.healthIntelligence, "health-intelligence-v4")
+        XCTAssertEqual(AlgorithmVersions.healthIntelligence, "health-intelligence-v6")
         XCTAssertEqual(AlgorithmVersions.recommendationPolicy, "recommendation-policy-v1")
         XCTAssertEqual(AlgorithmVersions.dailyLoop, "daily-loop-v2")
         XCTAssertEqual(RecommendationEngine.algorithmVersion, AlgorithmVersions.recommendationPolicy)
         XCTAssertEqual(DailyLoopSnapshot.currentAlgorithmVersion, AlgorithmVersions.dailyLoop)
         XCTAssertEqual(
             HealthIntelligenceEngine.dailyBriefCacheAlgorithmVersion,
-            "health-intelligence-v4+recommendation-policy-v1+metric-window-coverage-v1"
+            "health-intelligence-v6+recommendation-policy-v1+metric-window-coverage-v1+activity-independent-metric-trends-v1"
+        )
+        XCTAssertEqual(
+            HealthIntelligenceEngine.weeklyBriefCacheAlgorithmVersion,
+            "health-intelligence-v6+activity-independent-metric-trends-v1"
         )
     }
 
