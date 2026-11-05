@@ -191,6 +191,11 @@ enum HealthContextPromptBuilder {
         return priorHealthContext && isContextualFollowUp(normalized)
     }
 
+    static func requiresHealthContext(for userText: String, priorHealthContext: Bool = false) -> Bool {
+        shouldIncludeSummary(for: userText, priorHealthContext: priorHealthContext)
+            || requiresMealEstimationContext(for: userText)
+    }
+
     static func requiresMealEstimationContext(for userText: String) -> Bool {
         let normalized = userText.lowercased()
         let asksForEstimate = ["估算", "估计", "估一估", "算一下", "calculate", "estimate"]

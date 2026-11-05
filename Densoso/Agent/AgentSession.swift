@@ -768,7 +768,10 @@ final class AgentSession {
             let wantsMealEstimationContext = HealthContextPromptBuilder.requiresMealEstimationContext(
                 for: effectiveUserText
             )
-            let wantsHealthContext = wantsHealthNarrative || wantsMealEstimationContext
+            let wantsHealthContext = HealthContextPromptBuilder.requiresHealthContext(
+                for: effectiveUserText,
+                priorHealthContext: priorHealthContext
+            )
             let policyAlignmentIntent = CloudHealthContextPolicyAlignmentIntent.parse(effectiveUserText)
             var policyAlignmentAcknowledgement: String?
             func responseIncludingPolicyAcknowledgement(_ text: String) -> String {

@@ -110,6 +110,14 @@ final class HealthContextPromptBuilderTests: XCTestCase {
         XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: "今天我吃了什么？"))
     }
 
+    func testSimplePersonalMetricReadLoadsContextWithoutStructuredNarrative() {
+        let request = "我的活动量记录"
+        XCTAssertTrue(HealthContextPromptBuilder.shouldIncludeSummary(for: request))
+        XCTAssertFalse(HealthContextPromptBuilder.requiresNarrative(for: request))
+        XCTAssertTrue(HealthContextPromptBuilder.requiresHealthContext(for: request))
+        XCTAssertFalse(HealthContextPromptBuilder.requiresHealthContext(for: "今天天气怎么样？"))
+    }
+
     func testColloquialTranscribedHealthQuestionLoadsContext() {
         let transcript = "我昨晚老醒，今天还适合去跑步吗"
         XCTAssertTrue(HealthContextPromptBuilder.shouldIncludeSummary(for: transcript))
