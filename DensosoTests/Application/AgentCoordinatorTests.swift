@@ -254,7 +254,7 @@ final class AgentCoordinatorTests: XCTestCase {
                         authorizationLimited: false,
                         dataAvailabilityLimited: false
                     ),
-                ]
+                ],
                 medianWeightKilograms: 47.25
             ),
             twentyEightDay: HealthContextWindowSummary(
@@ -290,7 +290,7 @@ final class AgentCoordinatorTests: XCTestCase {
                         authorizationLimited: false,
                         dataAvailabilityLimited: false
                     ),
-                ]
+                ],
                 medianWeightKilograms: 48.25
             ),
             targetWeightKilograms: 49.5,

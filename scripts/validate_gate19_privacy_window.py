@@ -15,7 +15,7 @@ The optional evidence manifest is JSON with this shape (status values are exact)
     "runId": "<CI run id>",
     "testResults": {"<required app XCTest method>": "PASS"},
     "swiftPackageTestResults": {
-      "HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial": "PASS"
+      "HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndSelectedActivityMetricKeepsItsCoverage": "PASS"
     },
     "behaviorChecks": {
       "provider_final_request_body": {
@@ -156,7 +156,7 @@ REQUIRED_TESTS = (
 )
 
 REQUIRED_DOMAIN_TESTS = (
-    "HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial",
+    "HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndSelectedActivityMetricKeepsItsCoverage",
     "HealthIntelligenceTests/testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders",
     "HealthIntelligenceTests/testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage",
     "HealthIntelligenceTests/testMetricWindowCoverageReportsThirtyAuthorizedDaysWithinFortyTwoDayTarget",
@@ -308,7 +308,7 @@ BEHAVIOR_CHECKS: dict[str, BehaviorCheck] = {
             "testInvalidatedBriefCacheDoesNotReloadPrePurgeBriefs",
             "testUnavailableBoundaryRebuildsOnlyAffectedStreamsAndAggregateFailureStaysUnknown",
             "testUnknownTrainingLoadOmitsZeroAndDerivedValuesAndReportsCoverage",
-            "HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial",
+            "HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndSelectedActivityMetricKeepsItsCoverage",
             "HealthIntelligenceTests/testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders",
             "HealthIntelligenceTests/testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage",
             "HealthStateTests/testUnknownAndPartialDomainStatusesDoNotBecomeUsableRecoveryEvidence",
@@ -1207,7 +1207,7 @@ TEST_FILE_CONTRACTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         "domain_unknown_coverage_tests_present",
         "Packages/DensosoDomain/Tests/DensosoDomainTests/HealthIntelligenceTests.swift",
         (
-            "testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial",
+            "testUnknownHealthKitCoverageRemainsUnknownAndSelectedActivityMetricKeepsItsCoverage",
             "testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders",
             "testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage",
         ),

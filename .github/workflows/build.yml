@@ -2227,11 +2227,11 @@ jobs:
         run: |
           set +e
           set -o pipefail
-          swift test --package-path Packages/DensosoDomain --filter 'HealthIntelligenceTests/(testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial|testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders|testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage|testMetricWindowCoverageReportsThirtyAuthorizedDaysWithinFortyTwoDayTarget|testSleepWindowCoverageUsesFirstFullyAuthorizedWakeDay)' 2>&1 | tee gate19-domain-health-intelligence.log
+          swift test --package-path Packages/DensosoDomain --filter 'HealthIntelligenceTests/(testUnknownHealthKitCoverageRemainsUnknownAndSelectedActivityMetricKeepsItsCoverage|testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders|testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage|testMetricWindowCoverageReportsThirtyAuthorizedDaysWithinFortyTwoDayTarget|testSleepWindowCoverageUsesFirstFullyAuthorizedWakeDay)' 2>&1 | tee gate19-domain-health-intelligence.log
           TEST_EXIT=$?
           python3 scripts/validate_swiftpm_test_manifest.py \
             --input gate19-domain-health-intelligence.log \
-            --required HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial \
+            --required HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndSelectedActivityMetricKeepsItsCoverage \
             --required HealthIntelligenceTests/testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders \
             --required HealthIntelligenceTests/testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage \
             --required HealthIntelligenceTests/testMetricWindowCoverageReportsThirtyAuthorizedDaysWithinFortyTwoDayTarget \

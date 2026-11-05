@@ -480,7 +480,7 @@ def main() -> int:
     require_text(
         "Packages/DensosoDomain/Tests/DensosoDomainTests/HealthIntelligenceTests.swift",
         (
-            "testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial",
+            "testUnknownHealthKitCoverageRemainsUnknownAndSelectedActivityMetricKeepsItsCoverage",
             "testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders",
             "testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage",
         ),
@@ -809,7 +809,7 @@ def main() -> int:
                 "localTestExecution": "NOT_MEASURED",
                 "liveHealthKitAuthorizationEvidence": "NOT_MEASURED",
                 "swiftPackageFilters": [
-                    "HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial",
+                    "HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndSelectedActivityMetricKeepsItsCoverage",
                     "HealthIntelligenceTests/testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders",
                     "HealthIntelligenceTests/testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage",
                     "HealthStateTests/testUnknownAndPartialDomainStatusesDoNotBecomeUsableRecoveryEvidence",
