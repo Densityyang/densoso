@@ -1546,6 +1546,38 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(try pendingMetricDays(), Set([days[1], days[2], days[4], days[5]]))
     }
 
+    func testMovingWeightLaterWithinSameDayInvalidatesNewEffectiveInterval() async throws {
+        let calendar = Calendar.current
+        let base = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let days = try seedMetricDays(startingAt: base, count: 8)
+        let moved = WeightRecord(
+            sourceActionKey: "weight-same-day-move-target",
+            measuredAt: days[1].addingTimeInterval(8 * 60 * 60),
+            kilograms: 66
+        )
+        context.insert(moved)
+        context.insert(WeightRecord(
+            sourceActionKey: "weight-same-day-move-later-observation",
+            measuredAt: days[1].addingTimeInterval(10 * 60 * 60),
+            kilograms: 70
+        ))
+        context.insert(WeightRecord(
+            sourceActionKey: "weight-same-day-move-next-day-boundary",
+            measuredAt: days[6].addingTimeInterval(8 * 60 * 60),
+            kilograms: 76
+        ))
+        try context.save()
+        let oldDate = moved.measuredAt
+        moved.measuredAt = days[1].addingTimeInterval(12 * 60 * 60)
+
+        try await HealthRepository(
+            modelContext: context,
+            willSaveProjection: { throw TestSaveError.injected }
+        ).updateWeight(id: moved.id, previouslyAt: oldDate)
+
+        XCTAssertEqual(try pendingMetricDays(), Set(days[1..<6]))
+    }
+
     func testLocalAndHealthKitWeightMutationHaveEquivalentProjectionInvalidation() throws {
         let calendar = Calendar.current
         let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))

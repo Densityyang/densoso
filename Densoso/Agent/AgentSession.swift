@@ -1184,7 +1184,8 @@ final class AgentSession {
                             content: assistantContent,
                             healthContextPolicyProvenance: healthContextPolicyProvenance(
                                 for: roundPolicy,
-                                includeIf: roundContext != nil || hasHealthToolCall || currentTurnContainsHealthTool()
+                                includeIf: roundContext != nil || hasHealthToolCall || currentTurnContainsHealthTool(),
+                                contentClasses: Set(requestDataClasses.filter(\.isHealthContextClass))
                             )
                         ),
                         requestID: requestID

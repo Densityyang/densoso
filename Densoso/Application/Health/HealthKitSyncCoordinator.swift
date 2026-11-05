@@ -1229,9 +1229,16 @@ final class HealthKitSyncCoordinator {
                         calendar: calendar
                     ))
                 }
-                let readStateUpdates = Dictionary(
+                var readStateUpdates = Dictionary(
                     uniqueKeysWithValues: availableDays.map { ($0, HealthReadState.available) }
                 )
+                if !canVerifyThroughNow, coverageStart <= throughDay {
+                    // Persist the current day as unknown when the incremental
+                    // query cannot prove HealthKit read scope. A manual workout
+                    // must not turn missing HealthKit coverage into an implicit
+                    // available state.
+                    readStateUpdates[throughDay] = .dataUnavailableOrReadScopeUnknown
+                }
                 try await repository.applyImportedWorkouts(
                     latestWorkoutsByUUID.values.sorted {
                         $0.healthKitUUID.uuidString < $1.healthKitUUID.uuidString

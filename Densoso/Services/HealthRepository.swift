@@ -86,7 +86,7 @@ final class HealthRepository: HealthSyncRepository {
                 excludingWeightID: id,
                 in: modelContext
             ))
-            if !Calendar.current.isDate(oldDate, inSameDayAs: weight.measuredAt) {
+            if oldDate != weight.measuredAt {
                 affectedDates.formUnion(try DailyMetricsWeightInvalidation.projectionDates(
                     startingAt: weight.measuredAt,
                     excludingWeightID: id,

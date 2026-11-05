@@ -2612,7 +2612,7 @@ final class CloudHealthContextPolicyTests: XCTestCase {
             (
                 .healthSleep,
                 ["sleep-status-sentinel", "sleep.value.SENTINEL", "sleep.derived.SENTINEL", "20201", "20202"],
-                "activity.value.SENTINEL",
+                "30301",
                 true,
                 false
             ),
@@ -2641,7 +2641,7 @@ final class CloudHealthContextPolicyTests: XCTestCase {
             (
                 .healthSubjective,
                 ["subjective-status-sentinel", "subjective.value.SENTINEL", "subjective.derived.SENTINEL", "50501", "50502"],
-                "activity.value.SENTINEL",
+                "30301",
                 false,
                 false
             ),
@@ -2668,11 +2668,22 @@ final class CloudHealthContextPolicyTests: XCTestCase {
                     "activity.value.SENTINEL": 30301,
                     "activity.derived.SENTINEL": 30302,
                     "trainingLoad.derived.SENTINEL": 30303,
+                    "activity.steps": 30301,
                     "body.value.SENTINEL": 40401,
                     "body.derived.SENTINEL": 40402,
                     "subjective.value.SENTINEL": 50501,
                     "subjective.derived.SENTINEL": 50502,
                 ],
+                "activityTrends": [[
+                    "metric": "steps",
+                    "unit": "steps",
+                    "currentValue": 30301,
+                    "baselineWindowDays": 28,
+                    "baseline": ["readiness": "mature", "validDays": 21, "median": 28000, "p10": 20000, "p90": 36000, "mad": 2000],
+                    "status": "withinTypicalRange",
+                    "evidenceKey": "activity.steps",
+                    "dataCoverage": "complete",
+                ]],
                 "recoveryStatus": "recovery.derived.SENTINEL",
                 "trainingLoadBand": "trainingLoad.derived.SENTINEL",
             ]],
@@ -2722,7 +2733,7 @@ final class CloudHealthContextPolicyTests: XCTestCase {
 
     func testProviderContinuationOmitsTrainingLoadWhenActivityIsNotAuthorized() throws {
         let policy = CloudHealthContextPolicy(provider: .deepSeek, allowedClasses: [.healthSleep])
-        let payload = #"{"status":"available","healthState":{"domains":[{"domain":"sleep","currentValue":420,"evidenceKeys":["sleep-visible"]},{"domain":"activity","currentValue":9876,"evidenceKeys":["activity-secret"]}],"recovery":{"status":"attention","evidence":[{"key":"sleep-visible","source":"sleep"}]},"trainingLoad":{"recentSevenDayLoad":555,"estimatedWorkoutCount":12,"band":"increased"}}}"#
+        let payload = #"{"status":"available","healthState":{"domains":[{"domain":"sleep","currentValue":420,"evidenceKeys":["sleep.latest"]},{"domain":"activity","currentValue":9876,"evidenceKeys":["activity-secret"]}],"recovery":{"status":"attention","evidence":[{"key":"sleep.latest","source":"sleep"}]},"trainingLoad":{"recentSevenDayLoad":555,"estimatedWorkoutCount":12,"band":"increased"}}}"#
         let messages = [
             ModelMessage(role: .assistant, content: [
                 .toolCall(ToolCall(id: "health-state", name: "get_today_health_state", arguments: .object([:])))
@@ -2738,7 +2749,7 @@ final class CloudHealthContextPolicyTests: XCTestCase {
             return nil
         }.joined()
 
-        XCTAssertTrue(sentContent.contains("sleep-visible"))
+        XCTAssertTrue(sentContent.contains("sleep.latest"))
         XCTAssertFalse(sentContent.contains("activity-secret"))
         XCTAssertFalse(sentContent.contains("9876"))
         XCTAssertFalse(sentContent.contains("555"))
@@ -2993,7 +3004,12 @@ final class CloudHealthContextPolicyTests: XCTestCase {
             averageEnergyIntakeKcal: 1_900,
             averageDailyDeficitKcal: 250,
             averageProteinGrams: 90,
-            medianWeightKilograms: 60
+            medianWeightKilograms: 60,
+            dataCoverage: [
+                "sleep": .complete,
+                "steps": .complete,
+                "activeEnergy": .complete,
+            ]
         )
         let summary = HealthContextSummary(
             sevenDay: window,

@@ -532,7 +532,7 @@ final class AgentRequestResumeTests: XCTestCase {
                     status: .withinTypicalRange,
                     currentValue: 606_060,
                     baseline: baseline,
-                    evidenceKeys: ["activity.allowed-value-sentinel"]
+                    evidenceKeys: ["activity.steps"]
                 ),
             ],
             recovery: RecoveryAssessment(
@@ -569,7 +569,15 @@ final class AgentRequestResumeTests: XCTestCase {
                 healthState: state,
                 evidence: [],
                 recommendationCandidates: [],
-                aggregateSummary: nil
+                aggregateSummary: nil,
+                activityTrends: [ActivityMetricTrend(
+                    metric: .steps,
+                    currentValue: 606_060,
+                    baselineWindowDays: 42,
+                    baseline: baseline,
+                    status: .withinTypicalRange,
+                    dataCoverage: .complete
+                )]
             )
         })
         let session = makeSession(
@@ -602,7 +610,7 @@ final class AgentRequestResumeTests: XCTestCase {
         XCTAssertFalse(continuationText.contains("sleep.guidance-provenance-sentinel"))
         XCTAssertFalse(continuationText.contains("919191"))
         XCTAssertFalse(continuationText.contains("sleep.revoked-derived-sentinel"))
-        XCTAssertTrue(continuationText.contains("activity.allowed-value-sentinel"))
+        XCTAssertTrue(continuationText.contains("activity.steps"))
         XCTAssertTrue(continuationText.contains("606060"))
     }
 

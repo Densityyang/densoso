@@ -605,7 +605,7 @@ final class AgentProviderContextPolicyTests: XCTestCase {
             (
                 .healthSleep,
                 ["sleep-status-sentinel", "sleep.value.SENTINEL", "sleep.derived.SENTINEL", "20201", "20202"],
-                "activity.value.SENTINEL",
+                "30301",
                 true,
                 false
             ),
@@ -626,7 +626,7 @@ final class AgentProviderContextPolicyTests: XCTestCase {
             (
                 .healthSubjective,
                 ["subjective-status-sentinel", "subjective.value.SENTINEL", "subjective.derived.SENTINEL", "50501", "50502"],
-                "activity.value.SENTINEL",
+                "30301",
                 false,
                 false
             ),
@@ -653,11 +653,22 @@ final class AgentProviderContextPolicyTests: XCTestCase {
                     "activity.value.SENTINEL": 30301,
                     "activity.derived.SENTINEL": 30302,
                     "trainingLoad.derived.SENTINEL": 30303,
+                    "activity.steps": 30301,
                     "body.value.SENTINEL": 40401,
                     "body.derived.SENTINEL": 40402,
                     "subjective.value.SENTINEL": 50501,
                     "subjective.derived.SENTINEL": 50502,
                 ],
+                "activityTrends": [[
+                    "metric": "steps",
+                    "unit": "steps",
+                    "currentValue": 30301,
+                    "baselineWindowDays": 28,
+                    "baseline": ["readiness": "mature", "validDays": 21, "median": 28000, "p10": 20000, "p90": 36000, "mad": 2000],
+                    "status": "withinTypicalRange",
+                    "evidenceKey": "activity.steps",
+                    "dataCoverage": "complete",
+                ]],
                 "recoveryStatus": "recovery.derived.SENTINEL",
                 "trainingLoadBand": "trainingLoad.derived.SENTINEL",
             ]],
@@ -1407,7 +1418,8 @@ final class AgentProviderContextPolicyTests: XCTestCase {
             averageEnergyIntakeKcal: nil,
             averageDailyDeficitKcal: nil,
             averageProteinGrams: nil,
-            medianWeightKilograms: nil
+            medianWeightKilograms: nil,
+            dataCoverage: [:]
         )
         let nutritionSummary = HealthContextSummary(
             sevenDay: emptyWindow,

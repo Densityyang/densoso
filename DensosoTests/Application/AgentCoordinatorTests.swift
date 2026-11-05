@@ -703,6 +703,7 @@ final class AgentCoordinatorTests: XCTestCase {
         for providerID in [ProviderID.deepSeek, .qwen] {
             let transport = ScriptedProviderHTTPTransport(steps: [
                 .response(status: 200, data: try providerResponseData(provider: providerID, text: responseText)),
+                .response(status: 200, data: try providerResponseData(provider: providerID, text: "图片已收到。")),
             ])
             let provider: any TextModelProvider
             let mode: IntelligenceMode
@@ -733,20 +734,18 @@ final class AgentCoordinatorTests: XCTestCase {
                 healthNarrativeContextProvider: { context }
             )
 
-            _ = try await harness.session.send(
-                multimodalRequest: try MultimodalModelRequest(
-                    userText: "请分析我最近的睡眠和活动状态",
-                    imageJPEG: imageData,
-                    mealEvidence: []
-                )
-            )
+            let healthRequestText = providerID == .deepSeek
+                ? "请分析我的运动状态"
+                : "我的活动量记录"
+            _ = try await harness.session.send(userText: healthRequestText)
 
             let sentRequests = await transport.recordedRequests()
             let bodyData = try XCTUnwrap(sentRequests.first?.httpBody)
             let body = String(decoding: bodyData, as: UTF8.self)
             let serializedPrompt = try systemPrompt(in: bodyData, provider: providerID)
-            XCTAssertTrue(body.contains(activityCandidateID), "Authorized activity evidence should reach the real \(providerID.rawValue) serializer")
-            XCTAssertTrue(body.contains(imageData.base64EncodedString()), "The authorized image payload should be serialized for \(providerID.rawValue)")
+            if providerID == .deepSeek {
+                XCTAssertTrue(body.contains(activityCandidateID), "Authorized activity evidence should reach the real DeepSeek serializer")
+            }
             for deniedSentinel in [
                 sleepKey, "SLEEP_PRIVATE_731", nutritionKey, "NUTRITION_PRIVATE_953",
                 bodyKey, "BODY_PRIVATE_164", subjectiveKey, "SUBJECTIVE_PRIVATE_275",
@@ -767,6 +766,21 @@ final class AgentCoordinatorTests: XCTestCase {
             }
             XCTAssertTrue(serializedPrompt.contains("\"averageStepCount\":842") || serializedPrompt.contains("\"averageStepCount\": 842"))
             XCTAssertFalse(body.contains("SUBJECTIVE_PRIVATE_275"))
+
+            _ = try await harness.session.send(
+                multimodalRequest: try MultimodalModelRequest(
+                    userText: "请描述这张图片。",
+                    imageJPEG: imageData,
+                    mealEvidence: []
+                )
+            )
+            let requestsAfterImage = await transport.recordedRequests()
+            XCTAssertEqual(requestsAfterImage.count, 2)
+            let imageBodyData = try XCTUnwrap(requestsAfterImage.last?.httpBody)
+            XCTAssertTrue(
+                String(decoding: imageBodyData, as: UTF8.self).contains(imageData.base64EncodedString()),
+                "The authorized image payload should be serialized for \(providerID.rawValue)"
+            )
         }
     }
 

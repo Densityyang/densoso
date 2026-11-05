@@ -935,7 +935,10 @@ final class LogMealQuantityEvidenceTests: XCTestCase {
         )
         let repository = SwiftDataAgentRepository(modelContainer: container)
         let mealPortionPriorRepository = SwiftDataMealPortionPriorRepository(modelContainer: container)
-        var grants: [(ProviderID, ProviderDataClass)] = [(.deepSeek, .healthText)]
+        var grants: [(ProviderID, ProviderDataClass)] = [
+            (.deepSeek, .healthText),
+            (.deepSeek, .healthNutrition),
+        ]
         if grantMealImage { grants.append((.deepSeek, .mealImage)) }
         let governance = InMemoryProviderGovernanceRepository(granted: grants)
         let preferences = IntelligencePreferences()
