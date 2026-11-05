@@ -20,6 +20,7 @@ struct HistoryScreen: View {
     }
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(Dependencies.self) private var dependencies
     private let pageReader = HistoryRecordPageReader()
 
     @State private var selectedKind: RecordKind = .meals
@@ -443,10 +444,12 @@ struct HistoryScreen: View {
     private func deleteMeals(offsets: IndexSet) {
         let selected = offsets.compactMap { meals.indices.contains($0) ? meals[$0] : nil }
         Task { @MainActor in
+            var didDelete = false
             for meal in selected {
                 do {
                     try await HealthRepository(modelContext: modelContext).deleteMeal(id: meal.id)
                     meals.removeAll { $0.id == meal.id }
+                    didDelete = true
                 } catch {
                     loadError = SharedErrorDescriptor.mapped(
                         from: error,
@@ -454,6 +457,7 @@ struct HistoryScreen: View {
                     ).userMessage
                 }
             }
+            if didDelete { await refreshHealthBriefAfterLocalMutation() }
             loadSyncSummary()
         }
     }
@@ -461,10 +465,12 @@ struct HistoryScreen: View {
     private func deleteWorkouts(offsets: IndexSet) {
         let selected = offsets.compactMap { workouts.indices.contains($0) ? workouts[$0] : nil }
         Task { @MainActor in
+            var didDelete = false
             for workout in selected {
                 do {
                     try await HealthRepository(modelContext: modelContext).deleteWorkout(id: workout.id)
                     workouts.removeAll { $0.id == workout.id }
+                    didDelete = true
                 } catch {
                     loadError = SharedErrorDescriptor.mapped(
                         from: error,
@@ -472,6 +478,7 @@ struct HistoryScreen: View {
                     ).userMessage
                 }
             }
+            if didDelete { await refreshHealthBriefAfterLocalMutation() }
             loadSyncSummary()
         }
     }
@@ -479,10 +486,12 @@ struct HistoryScreen: View {
     private func deleteWeights(offsets: IndexSet) {
         let selected = offsets.compactMap { weights.indices.contains($0) ? weights[$0] : nil }
         Task { @MainActor in
+            var didDelete = false
             for weight in selected {
                 do {
                     try await HealthRepository(modelContext: modelContext).deleteWeight(id: weight.id)
                     weights.removeAll { $0.id == weight.id }
+                    didDelete = true
                 } catch {
                     loadError = SharedErrorDescriptor.mapped(
                         from: error,
@@ -490,18 +499,28 @@ struct HistoryScreen: View {
                     ).userMessage
                 }
             }
+            if didDelete { await refreshHealthBriefAfterLocalMutation() }
             loadSyncSummary()
+        }
+    }
+
+    @MainActor
+    private func refreshHealthBriefAfterLocalMutation() async {
+        do {
+            _ = try await dependencies.healthIntelligenceService.refresh()
+        } catch {
+            let descriptor = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            )
+            loadError = "记录已删除，但健康摘要暂时无法更新：\(descriptor.userMessage)"
         }
     }
 }
 
 #Preview {
+    let persistence = PersistenceBootstrap.make(inMemory: true)
     HistoryScreen()
-        .modelContainer(
-            for: [
-                MealRecord.self, DishEntry.self, WorkoutRecord.self, WeightRecord.self,
-                HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
-            ],
-            inMemory: true
-        )
+        .modelContainer(persistence.container)
+        .environment(Dependencies(modelContainer: persistence.container))
 }

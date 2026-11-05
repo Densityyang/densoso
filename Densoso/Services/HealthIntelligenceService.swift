@@ -175,6 +175,14 @@ final class HealthIntelligenceService {
                 guard requestGeneration == refreshGeneration else { continue }
                 lastRefreshFailedAt = Date()
                 consecutiveRefreshFailures += 1
+                // A failed refresh cannot validate cached health context against
+                // the current source data. Drop it so DailyLoop and Agent reads
+                // cannot continue presenting or consuming it as current.
+                dailyBrief = nil
+                dailyBriefSourceFingerprint = nil
+                dailyBriefValidatedAt = nil
+                weeklyBrief = nil
+                isBriefCacheInvalidated = true
                 let errorMessage = SharedErrorDescriptor.mapped(
                     from: error,
                     fallback: .projectionFailedFallback

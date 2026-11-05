@@ -5,6 +5,55 @@ import XCTest
 
 @MainActor
 final class HealthIntelligenceServiceTests: XCTestCase {
+    func testFailedRefreshClearsPreviousBriefAndCannotRemainFresh() async throws {
+        let container = try makeContainer()
+        let reference = Date(timeIntervalSince1970: 1_800_000_000)
+        let dayStart = Calendar.current.startOfDay(for: reference)
+        let brief = Self.fixtureBrief(dayStart: dayStart)
+        var shouldFail = false
+        let projectionActor = HealthProjectionActor(modelContainer: container)
+        let service = HealthIntelligenceService(
+            projectionActor: projectionActor,
+            briefCacheGenerationFence: HealthBriefCacheGenerationFence(),
+            refreshOperation: { date, _ in
+                guard !shouldFail else { throw InjectedRefreshError.failure }
+                return HealthIntelligenceRefreshSnapshot(
+                    dailyBrief: brief,
+                    dailyBriefSourceFingerprint: "fixture-current-source",
+                    dailyBriefValidatedAt: date,
+                    weeklyBrief: nil,
+                    updatesWeeklyBrief: true
+                )
+            }
+        )
+
+        _ = try await service.refresh(asOf: reference)
+        XCTAssertNotNil(service.dailyBrief)
+        XCTAssertEqual(service.dailyBriefValidatedAt, reference)
+
+        shouldFail = true
+        do {
+            _ = try await service.refresh(asOf: reference.addingTimeInterval(60))
+            XCTFail("A failed refresh must be surfaced to its caller")
+        } catch InjectedRefreshError.failure {
+            // Expected.
+        }
+
+        XCTAssertNil(service.dailyBrief)
+        XCTAssertNil(service.dailyBriefSourceFingerprint)
+        XCTAssertNil(service.dailyBriefValidatedAt)
+        XCTAssertNil(service.weeklyBrief)
+        let snapshot = DailyLoopSnapshotComposer().compose(
+            asOf: reference.addingTimeInterval(60),
+            dailyBrief: service.dailyBrief,
+            dailyBriefSourceFingerprint: service.dailyBriefSourceFingerprint,
+            dailyBriefValidatedAt: service.dailyBriefValidatedAt,
+            pendingActions: [],
+            workoutPlans: []
+        )
+        XCTAssertEqual(snapshot.refreshState, .refreshRequired)
+    }
+
     func testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
@@ -483,8 +532,68 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         return try ModelContainer(for: schema, configurations: [configuration])
     }
 
+    private static func fixtureBrief(dayStart: Date) -> DailyHealthBrief {
+        func window(days: Int) -> HealthContextWindowSummary {
+            HealthContextWindowSummary(
+                windowDays: days,
+                coverageDays: [:],
+                averageSleepMinutes: nil,
+                averageStepCount: nil,
+                averageActiveEnergyKcal: nil,
+                averageEnergyIntakeKcal: nil,
+                averageDailyDeficitKcal: nil,
+                averageProteinGrams: nil,
+                medianWeightKilograms: nil
+            )
+        }
+        let load = TrainingLoadSummary(
+            recentSevenDayLoad: 0,
+            priorTwentyEightDayAverage: nil,
+            ratio: nil,
+            readiness: .noData,
+            band: .unavailable,
+            estimatedWorkoutCount: 0,
+            unavailableEffortCount: 0,
+            dataCoverage: .unknown
+        )
+        let state = HealthStateV2(
+            domains: [],
+            recovery: RecoveryAssessment(
+                status: .insufficientEvidence,
+                confidence: .low,
+                evidence: [],
+                recommendedAction: .collectData
+            ),
+            trainingLoad: load,
+            tomorrowGuidance: nil
+        )
+        return DailyHealthBrief(
+            dayStart: dayStart,
+            summary: "Fixture brief",
+            domains: [],
+            recommendations: [],
+            sleep: nil,
+            vitalTrends: [],
+            trainingLoad: load,
+            contextSummary: HealthContextSummary(
+                sevenDay: window(days: 7),
+                twentyEightDay: window(days: 28),
+                targetWeightKilograms: nil,
+                dailyDeficitGoalKcal: nil,
+                dailyProteinGoalGrams: nil,
+                recommendationReferences: []
+            ),
+            algorithmVersion: "fixture",
+            healthState: state
+        )
+    }
+
     private func dayKey(_ date: Date) -> String {
         let parts = Calendar.current.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
+}
+
+private enum InjectedRefreshError: Error {
+    case failure
 }

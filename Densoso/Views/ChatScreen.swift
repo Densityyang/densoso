@@ -790,7 +790,6 @@ struct ChatScreen: View {
                 isUser: false
             )
             Task {
-                _ = try? await dependencies.healthIntelligenceService.refresh()
                 await refreshDailyLoopSnapshot(refreshHealth: true)
             }
         } catch {

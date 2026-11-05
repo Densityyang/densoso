@@ -1454,6 +1454,12 @@ private struct ProfileEditorSheet: View {
                 validationError = "资料已保存，但每日指标仍待更新；系统已保留重试标记。"
                 return
             }
+            do {
+                _ = try await dependencies.healthIntelligenceService.refresh()
+            } catch {
+                validationError = "资料已保存，但健康摘要暂时无法更新：\(safeErrorMessage(error))"
+                return
+            }
             dismiss()
         } catch {
             validationError = "保存失败：\(safeErrorMessage(error))"
