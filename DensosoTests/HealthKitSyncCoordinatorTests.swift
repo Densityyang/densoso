@@ -76,7 +76,14 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
     }
 
     func testEffortSampleIsReassociatedWhenWorkoutArrivesLater() async throws {
-        let now = Date()
+        // Keep the sample and workout on one local day even when CI runs near
+        // midnight; the association is projected into the workout's day.
+        let now = try XCTUnwrap(Calendar.current.date(
+            bySettingHour: 12,
+            minute: 0,
+            second: 0,
+            of: Date()
+        ))
         let day = Calendar.current.startOfDay(for: now)
         let sample = HealthSampleSnapshot(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000081")!,
@@ -141,7 +148,12 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
     }
 
     func testWorkoutUpdateRebuildsEffortAssociationForAffectedDay() async throws {
-        let now = Date()
+        let now = try XCTUnwrap(Calendar.current.date(
+            bySettingHour: 12,
+            minute: 0,
+            second: 0,
+            of: Date()
+        ))
         let day = Calendar.current.startOfDay(for: now)
         let workoutID = UUID(uuidString: "00000000-0000-0000-0000-000000000083")!
         let sample = effortSample(id: "00000000-0000-0000-0000-000000000084", at: now)
@@ -191,7 +203,12 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
     }
 
     func testWorkoutDeletionRemovesOrphanedEffortAssociation() async throws {
-        let now = Date()
+        let now = try XCTUnwrap(Calendar.current.date(
+            bySettingHour: 12,
+            minute: 0,
+            second: 0,
+            of: Date()
+        ))
         let day = Calendar.current.startOfDay(for: now)
         let workoutID = UUID(uuidString: "00000000-0000-0000-0000-000000000085")!
         let sample = effortSample(id: "00000000-0000-0000-0000-000000000086", at: now)
