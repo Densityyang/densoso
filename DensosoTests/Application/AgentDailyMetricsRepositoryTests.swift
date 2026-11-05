@@ -215,7 +215,7 @@ final class AgentDailyMetricsRepositoryTests: XCTestCase {
 
     private func metric(at date: Date, deficit: Int) -> DailyMetrics {
         let mealFingerprint = "meal-set-\(date.timeIntervalSince1970)"
-        DailyMetrics(
+        return DailyMetrics(
             date: date,
             bmrKcal: 1_400,
             activeCaloriesKcal: 400,
