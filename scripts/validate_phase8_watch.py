@@ -87,7 +87,8 @@ def main() -> int:
         (
             "legacyStorageKey",
             "maximumPersistedBytes",
-            "data.write(to: storageURL, options: .atomic)",
+            "data.write(to: url, options: .atomic)",
+            "try writeData(data, storageURL)",
             "defaults.removeObject(forKey: Self.legacyStorageKey)",
         ),
         errors,
@@ -210,7 +211,7 @@ def main() -> int:
         (
             "displayedWatchTranscriptIDs",
             "hasPersistedRequestHistory(for: agentRequestID)",
-            "guard !agentUIState.isBusy else { return }",
+            "guard !agentUIState.isBusy, !dependencies.agentSession.hasActiveRequest else { return }",
         ),
         errors,
     )
