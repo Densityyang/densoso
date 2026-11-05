@@ -84,22 +84,8 @@ final class DailyHealthSampleSummaryBuilderTests: XCTestCase {
 
     func testDistinctEffortSamplesMatchDistinctOverlappingWorkouts() {
         let start = Date(timeIntervalSince1970: 1_800_000_200)
-        let firstWorkout = WorkoutRecord(
-            date: start,
-            type: "running",
-            durationMinutes: 90,
-            intensity: "unknown",
-            healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000817")!,
-            workoutOrigin: "externalHealthKit"
-        )
-        let secondWorkout = WorkoutRecord(
-            date: start.addingTimeInterval(30 * 60),
-            type: "running",
-            durationMinutes: 60,
-            intensity: "unknown",
-            healthKitUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000818")!,
-            workoutOrigin: "externalHealthKit"
-        )
+        let firstWorkout = makeWorkout(817, start: start, durationMinutes: 90)
+        let secondWorkout = makeWorkout(818, start: start.addingTimeInterval(30 * 60), durationMinutes: 60)
         let firstEffort = HealthSampleSnapshot(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000819")!,
             metric: .workoutEffort,
@@ -256,7 +242,7 @@ final class DailyHealthSampleSummaryBuilderTests: XCTestCase {
     }
 
     private func makeWorkout(_ id: Int, start: Date, durationMinutes: Int) -> WorkoutRecord {
-        WorkoutRecord(
+        let workout = WorkoutRecord(
             date: start,
             type: "running",
             durationMinutes: durationMinutes,
@@ -264,6 +250,8 @@ final class DailyHealthSampleSummaryBuilderTests: XCTestCase {
             healthKitUUID: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", id))!,
             workoutOrigin: "externalHealthKit"
         )
+        workout.id = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", id))!
+        return workout
     }
 
     private func makeEffort(_ id: Int, start: Date, end: Date, score: Double) -> HealthSampleSnapshot {
