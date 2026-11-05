@@ -243,7 +243,7 @@ final class DeepSeekProviderContractTests: XCTestCase {
             schema: .object(properties: [:], required: [], additionalProperties: false)
         )
         let requestID = UUID()
-        let request = ModelRequest(
+        var request = ModelRequest(
             requestID: requestID,
             conversationID: UUID(),
             systemPrompt: "inspect image",
@@ -265,6 +265,8 @@ final class DeepSeekProviderContractTests: XCTestCase {
             responseFormat: format,
             deadline: clock.now().addingTimeInterval(45)
         )
+        request.preSerializationGate = { serialize in try serialize() }
+        request.networkAttemptGate = {}
 
         let events = try await collect(provider.stream(request))
         XCTAssertTrue(events.contains { event in

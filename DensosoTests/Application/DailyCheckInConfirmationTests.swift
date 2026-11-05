@@ -636,7 +636,10 @@ final class DailyCheckInConfirmationTests: XCTestCase {
     ) -> AgentSession {
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: container)
         let agentRepository = SwiftDataAgentRepository(modelContainer: container)
-        let governance = InMemoryProviderGovernanceRepository(granted: [(.deepSeek, .healthText)])
+        let governance = InMemoryProviderGovernanceRepository(granted: [
+            (.deepSeek, .healthText),
+            (.deepSeek, .healthSubjective),
+        ])
         let preferences = IntelligencePreferences()
         preferences.mode = .cloudDeepSeek
         return AgentSession(

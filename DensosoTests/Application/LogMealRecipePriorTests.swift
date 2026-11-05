@@ -272,7 +272,10 @@ final class LogMealRecipePriorTests: XCTestCase {
             configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
         )
         let repository = SwiftDataAgentRepository(modelContainer: container)
-        let governance = InMemoryProviderGovernanceRepository(granted: [(.deepSeek, .healthText)])
+        let governance = InMemoryProviderGovernanceRepository(granted: [
+            (.deepSeek, .healthText),
+            (.deepSeek, .healthNutrition),
+        ])
         let preferences = IntelligencePreferences()
         preferences.mode = .cloudDeepSeek
         let confirmation = ConfirmationCoordinator(

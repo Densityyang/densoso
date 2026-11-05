@@ -779,7 +779,16 @@ final class ToolExecutionJournalTests: XCTestCase {
             repository: SwiftDataConfirmationRepository(modelContainer: container),
             writeGate: PersistenceWriteGate(state: .writable)
         )
-        let governance = InMemoryProviderGovernanceRepository(granted: [(.deepSeek, .healthText)])
+        let governance = InMemoryProviderGovernanceRepository(granted: [
+            (.deepSeek, .healthText),
+            (.deepSeek, .conversationHistory),
+            (.deepSeek, .mealImage),
+            (.deepSeek, .healthNutrition),
+            (.deepSeek, .healthSleep),
+            (.deepSeek, .healthActivity),
+            (.deepSeek, .healthBody),
+            (.deepSeek, .healthSubjective),
+        ])
         let preferences = IntelligencePreferences()
         preferences.mode = .cloudDeepSeek
         let session = AgentSession(

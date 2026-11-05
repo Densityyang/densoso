@@ -172,7 +172,7 @@ final class AgentCoordinatorTests: XCTestCase {
         )
         _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
             provider: .deepSeek,
-            allowedClasses: [.healthSleep],
+            allowedClasses: [.healthBody, .healthSleep],
             repository: harness.governance,
             changeSource: .settings
         )
@@ -428,7 +428,7 @@ final class AgentCoordinatorTests: XCTestCase {
         let authorizedProvider = ScriptedTextProvider(scripts: [[
             .textDelta(responseJSON),
             .completed(.completed),
-        ]])
+        ]], capabilities: [.text, .toolCalling, .structuredOutput])
         let authorizedHarness = try await Harness(
             provider: authorizedProvider,
             healthNarrativeContextProvider: { context }
@@ -465,7 +465,7 @@ final class AgentCoordinatorTests: XCTestCase {
         let restrictedProvider = ScriptedTextProvider(scripts: [[
             .textDelta(restrictedResponseJSON),
             .completed(.completed),
-        ]])
+        ]], capabilities: [.text, .toolCalling, .structuredOutput])
         let restrictedHarness = try await Harness(
             provider: restrictedProvider,
             healthNarrativeContextProvider: { context }
@@ -565,7 +565,7 @@ final class AgentCoordinatorTests: XCTestCase {
         let allowedProvider = ScriptedTextProvider(scripts: [[
             .textDelta(#"{"headline":"按已授权活动数据观察","summary":"当前步数数据可用于查看。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["activity.steps","sleep.mainSleep.minutes"]}"#),
             .completed(.completed),
-        ]])
+        ]], capabilities: [.text, .toolCalling, .structuredOutput])
         let allowedHarness = try await Harness(
             provider: allowedProvider,
             healthNarrativeContextProvider: { context }
@@ -586,7 +586,7 @@ final class AgentCoordinatorTests: XCTestCase {
         let deniedProvider = ScriptedTextProvider(scripts: [[
             .textDelta(#"{"headline":"按已授权数据观察","summary":"活动数据不足。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":[]}"#),
             .completed(.completed),
-        ]])
+        ]], capabilities: [.text, .toolCalling, .structuredOutput])
         let deniedHarness = try await Harness(
             provider: deniedProvider,
             healthNarrativeContextProvider: { context }
@@ -866,7 +866,10 @@ final class AgentCoordinatorTests: XCTestCase {
         let provider = ScriptedTextProvider(
             scripts: [[.textDelta("我会按这段转写继续处理。"), .completed(.completed)]]
         )
-        let harness = try await Harness(provider: provider)
+        let harness = try await Harness(
+            provider: provider,
+            grantedConsents: [(.deepSeek, .healthText), (.deepSeek, .healthNutrition)]
+        )
         let transcript = "我刚刚吃了一碗牛肉面。"
         let envelope = VoiceCommandEnvelope(
             text: transcript,
@@ -1605,6 +1608,7 @@ private struct Harness {
         let governance = InMemoryProviderGovernanceRepository(granted: grantedConsents ?? [
             (.deepSeek, .healthText),
             (.deepSeek, .healthSleep),
+            (.deepSeek, .healthBody),
         ])
         let preferences = IntelligencePreferences()
         preferences.mode = mode

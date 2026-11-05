@@ -122,11 +122,11 @@ final class MealPriorSchemaMigrationTests: XCTestCase {
 
         migratedContainer = try Self.openCurrentStore(at: location.storeURL)
         XCTAssertNotNil(migratedContainer)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "15.0.0")
         migratedContainer = nil
         await Task.yield()
 
-        // Reopen the migrated on-disk V14 store before checking prior reads or
+        // Reopen the migrated on-disk V15 store before checking prior reads or
         // applying new confirmation contributions.
         currentContainer = try Self.openCurrentStore(at: location.storeURL)
         repository = SwiftDataMealPortionPriorRepository(
@@ -192,14 +192,14 @@ final class MealPriorSchemaMigrationTests: XCTestCase {
         )
         try currentContainer!.mainContext.save()
 
-        // Close every V14 handle, then reopen the disk store once more. This
+        // Close every V15 handle, then reopen the disk store once more. This
         // proves the newly written contribution ledger and recomputed priors
         // survive a process-style container replacement.
         repository = nil
         currentContainer = nil
         await Task.yield()
         currentContainer = try Self.openCurrentStore(at: location.storeURL)
-        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "14.0.0")
+        XCTAssertEqual(PersistentStoreVersionInspector.version(at: location.storeURL), "15.0.0")
         updatedRepository = SwiftDataMealPortionPriorRepository(
             modelContainer: currentContainer!
         )
@@ -242,7 +242,7 @@ final class MealPriorSchemaMigrationTests: XCTestCase {
     }
 
     private static func openCurrentStore(at storeURL: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let configuration = ModelConfiguration("Densoso", schema: schema, url: storeURL)
         return try ModelContainer(
             for: schema,

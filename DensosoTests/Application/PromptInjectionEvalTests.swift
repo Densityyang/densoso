@@ -177,10 +177,11 @@ private struct PromptInjectionHarness {
         let governance = InMemoryProviderGovernanceRepository(granted: [
             (.deepSeek, .healthText),
             (.deepSeek, .healthActivity),
+            (.deepSeek, .healthBody),
         ])
         _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
             provider: .deepSeek,
-            allowedClasses: [.healthActivity],
+            allowedClasses: [.healthActivity, .healthBody],
             repository: governance,
             changeSource: .settings
         )
