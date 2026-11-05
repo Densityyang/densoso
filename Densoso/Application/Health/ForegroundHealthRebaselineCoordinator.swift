@@ -52,6 +52,7 @@ final class ForegroundHealthRebaselineCoordinator {
     /// activation gets its own generation and waits for any older run to end.
     func prepareActivation(onNewGeneration: @MainActor () -> Void = {}) {
         guard !isForegroundActive else { return }
+        cancelPendingRetry()
         isForegroundActive = true
         activationGeneration &+= 1
         completedGeneration = nil
@@ -67,6 +68,7 @@ final class ForegroundHealthRebaselineCoordinator {
 
     func deactivate() {
         isForegroundActive = false
+        cancelPendingRetry()
     }
 
     /// Starts a fresh full synchronization after a dataset replacement even
@@ -77,9 +79,7 @@ final class ForegroundHealthRebaselineCoordinator {
         completedGeneration = nil
         fullRebaselineCompletedGeneration = nil
         pendingFailedStreams = []
-        retryTask?.cancel()
-        retryTask = nil
-        retryNotBefore = nil
+        cancelPendingRetry()
         await requestCurrentActivation()
     }
 
@@ -243,6 +243,13 @@ final class ForegroundHealthRebaselineCoordinator {
             guard self.isForegroundActive else { return }
             await self.requestCurrentActivation()
         }
+    }
+
+    private func cancelPendingRetry() {
+        retryTask?.cancel()
+        retryTask = nil
+        retryNotBefore = nil
+        retryAttempt = 0
     }
 
 }

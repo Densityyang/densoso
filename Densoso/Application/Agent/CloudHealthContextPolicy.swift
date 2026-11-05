@@ -1408,7 +1408,7 @@ enum CloudRequestPolicyGuard {
                 ? message.healthContextPolicyProvenance.map {
                     var generationClasses = filteredToolDataClasses
                     if hasUnclassifiedToolContent {
-                        generationClasses.formUnion(Self.dataClasses)
+                        generationClasses.formUnion(CloudHealthContextPolicy.dataClasses)
                     }
                     return HealthContextPolicyProvenance(
                         provider: $0.provider,

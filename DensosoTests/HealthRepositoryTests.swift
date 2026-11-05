@@ -1461,6 +1461,162 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertTrue(pendingMetric.sourceFingerprint.isEmpty)
     }
 
+    func testUpdatingHistoricalLocalWeightMarksAllDownstreamMetricDaysPending() async throws {
+        let (days, target, nextObservation) = try seedWeightTimeline(metricDayCount: 7, nextObservationOffset: 4)
+        target.kilograms = 72
+
+        try await HealthRepository(
+            modelContext: context,
+            willSaveProjection: { throw TestSaveError.injected }
+        ).updateWeight(id: target.id, previouslyAt: target.measuredAt)
+
+        XCTAssertEqual(try pendingMetricDays(), Set(days[0..<4]))
+        XCTAssertFalse(try pendingMetricDays().contains(days[4]))
+        XCTAssertEqual(target.kilograms, 72)
+        XCTAssertEqual(nextObservation.kilograms, 75)
+    }
+
+    func testDeletingHistoricalLocalWeightReprojectsUntilNextEffectiveWeight() async throws {
+        let (days, target, _) = try seedWeightTimeline(metricDayCount: 7, nextObservationOffset: 3)
+
+        try await HealthRepository(
+            modelContext: context,
+            willSaveProjection: { throw TestSaveError.injected }
+        ).deleteWeight(id: target.id)
+
+        XCTAssertEqual(try pendingMetricDays(), Set(days[0..<3]))
+        XCTAssertNil(try context.fetch(FetchDescriptor<WeightRecord>()).first { $0.id == target.id })
+        XCTAssertFalse(try pendingMetricDays().contains(days[3]))
+    }
+
+    func testInsertingHistoricalLocalWeightInvalidatesFollowingDays() async throws {
+        let calendar = Calendar.current
+        let base = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let days = try seedMetricDays(startingAt: base, count: 8)
+        context.insert(WeightRecord(
+            sourceActionKey: "weight-insert-boundary",
+            measuredAt: days[5].addingTimeInterval(10 * 60 * 60),
+            kilograms: 75
+        ))
+        try context.save()
+        let inserted = WeightRecord(
+            sourceActionKey: "weight-insert-historical",
+            measuredAt: days[2].addingTimeInterval(9 * 60 * 60),
+            kilograms: 68
+        )
+
+        try await HealthRepository(
+            modelContext: context,
+            willSaveProjection: { throw TestSaveError.injected }
+        ).insert(inserted)
+
+        XCTAssertEqual(try pendingMetricDays(), Set(days[2..<5]))
+        XCTAssertNotNil(try context.fetch(FetchDescriptor<WeightRecord>()).first { $0.id == inserted.id })
+    }
+
+    func testMovingWeightRecordInvalidatesBothOldAndNewEffectiveIntervals() async throws {
+        let calendar = Calendar.current
+        let base = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let days = try seedMetricDays(startingAt: base, count: 8)
+        let moved = WeightRecord(
+            sourceActionKey: "weight-move-target",
+            measuredAt: days[1].addingTimeInterval(8 * 60 * 60),
+            kilograms: 66
+        )
+        context.insert(moved)
+        context.insert(WeightRecord(
+            sourceActionKey: "weight-move-old-boundary",
+            measuredAt: days[3].addingTimeInterval(8 * 60 * 60),
+            kilograms: 70
+        ))
+        context.insert(WeightRecord(
+            sourceActionKey: "weight-move-new-boundary",
+            measuredAt: days[6].addingTimeInterval(8 * 60 * 60),
+            kilograms: 76
+        ))
+        try context.save()
+        let oldDate = moved.measuredAt
+        moved.measuredAt = days[4].addingTimeInterval(8 * 60 * 60)
+
+        try await HealthRepository(
+            modelContext: context,
+            willSaveProjection: { throw TestSaveError.injected }
+        ).updateWeight(id: moved.id, previouslyAt: oldDate)
+
+        XCTAssertEqual(try pendingMetricDays(), Set([days[1], days[2], days[4], days[5]]))
+    }
+
+    func testLocalAndHealthKitWeightMutationHaveEquivalentProjectionInvalidation() throws {
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let days = try seedMetricDays(startingAt: firstDay, count: 6)
+        context.insert(WeightRecord(
+            sourceActionKey: "local-weight-invalidation-boundary",
+            measuredAt: days[4].addingTimeInterval(8 * 60 * 60),
+            kilograms: 75
+        ))
+        try context.save()
+        let localDates = try DailyMetricsWeightInvalidation.projectionDates(
+            startingAt: days[0].addingTimeInterval(9 * 60 * 60),
+            in: context
+        )
+
+        let schema = Schema(versionedSchema: DensosoSchemaV14.self)
+        let healthKitContainer = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let healthKitContext = ModelContext(healthKitContainer)
+        for day in days {
+            healthKitContext.insert(DailyMetrics(
+                date: day,
+                sourceFingerprint: "weight-invalidation-fixture",
+                requiresRecompute: false
+            ))
+        }
+        let sample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000605")!,
+            metric: .bodyMass,
+            startDate: days[4].addingTimeInterval(8 * 60 * 60),
+            endDate: days[4].addingTimeInterval(8 * 60 * 60),
+            value: 75
+        )
+        let snapshot = DailyHealthSnapshot(
+            dayStart: days[4],
+            timezoneIdentifier: calendar.timeZone.identifier,
+            healthKitSampleSummary: DailyHealthSampleSummary(samples: [sample], dayStart: days[4]),
+            healthReadStates: [HealthMetricID.bodyMass.rawValue: .available],
+            algorithmVersion: "weight-invalidation-fixture"
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        healthKitContext.insert(DailyHealthSnapshotRecord(
+            dayKey: Self.dayKey(days[4]),
+            timezoneID: calendar.timeZone.identifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "healthkit-weight-invalidation-fixture",
+            algorithmVersion: snapshot.algorithmVersion
+        ))
+        healthKitContext.insert(HealthKitSampleIndexRecord(
+            sampleID: sample.id,
+            stream: HealthMetricID.bodyMass.rawValue,
+            dayKey: Self.dayKey(days[4]),
+            startDate: sample.startDate,
+            endDate: sample.endDate
+        ))
+        try healthKitContext.save()
+        let dayEnd = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: days[0]))
+        let healthKitDates = try DailyMetricsWeightInvalidation.projectionDates(
+            startingAt: days[0],
+            searchingAfter: dayEnd.addingTimeInterval(-0.000_001),
+            in: healthKitContext,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(localDates, Set(days[0..<4]))
+        XCTAssertEqual(healthKitDates, localDates)
+    }
+
     func testHealthSamplePagesUpdateDeleteAndDeduplicateByHealthKitUUID() async throws {
         let repository = HealthRepository(modelContext: context)
         let sampleID = UUID(uuidString: "00000000-0000-0000-0000-000000000031")!
@@ -2275,6 +2431,49 @@ final class HealthRepositoryTests: XCTestCase {
     private static func dayKey(_ date: Date) -> String {
         let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
+
+    private func seedWeightTimeline(
+        metricDayCount: Int,
+        nextObservationOffset: Int
+    ) throws -> (days: [Date], target: WeightRecord, nextObservation: WeightRecord) {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let days = try seedMetricDays(startingAt: start, count: metricDayCount)
+        let target = WeightRecord(
+            sourceActionKey: "weight-timeline-target",
+            measuredAt: days[0].addingTimeInterval(8 * 60 * 60),
+            kilograms: 68
+        )
+        let nextObservation = WeightRecord(
+            sourceActionKey: "weight-timeline-next",
+            measuredAt: days[nextObservationOffset].addingTimeInterval(8 * 60 * 60),
+            kilograms: 75
+        )
+        context.insert(target)
+        context.insert(nextObservation)
+        try context.save()
+        return (days, target, nextObservation)
+    }
+
+    private func seedMetricDays(startingAt start: Date, count: Int) throws -> [Date] {
+        let calendar = Calendar.current
+        let days = try (0..<count).map { offset in
+            try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: start))
+        }
+        for day in days {
+            context.insert(DailyMetrics(
+                date: day,
+                sourceFingerprint: "weight-invalidation-fixture",
+                requiresRecompute: false
+            ))
+        }
+        try context.save()
+        return days
+    }
+
+    private func pendingMetricDays() throws -> Set<Date> {
+        Set(try context.fetch(FetchDescriptor<DailyMetrics>()).filter(\.requiresRecompute).map(\.date))
     }
 
     private func mealEvidenceData(grade: EvidenceGrade) throws -> Data {

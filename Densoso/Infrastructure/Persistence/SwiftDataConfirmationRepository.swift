@@ -910,6 +910,7 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
 
                 let localRecordID: UUID
                 var affectedDate: Date?
+                var affectedDailyMetricDates = Set<Date>()
                 var outboxIDs: [UUID] = []
                 var healthSyncState = HealthSyncState.notApplicable
                 switch payload {
@@ -932,6 +933,10 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                     affectedDate = meal.date
                     healthSyncState = .pending
                 case .weight(let draft):
+                    affectedDailyMetricDates.formUnion(try DailyMetricsWeightInvalidation.projectionDates(
+                        startingAt: draft.measuredAt,
+                        in: modelContext
+                    ))
                     let weight = WeightRecord(
                         sourceActionKey: action.idempotencyKey,
                         measuredAt: draft.measuredAt,
@@ -1024,9 +1029,21 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
                 try injectFailure(.afterRecord)
 
                 if let affectedDate {
-                    try reprojectDaily(on: affectedDate)
+                    affectedDailyMetricDates.insert(Calendar.current.startOfDay(for: affectedDate))
+                }
+                for metricDate in affectedDailyMetricDates.sorted() {
+                    try reprojectDaily(on: metricDate)
+                }
+                if let affectedDate {
                     try reprojectDailyHealthSnapshot(on: affectedDate)
-                    try reprojectWeek(containing: affectedDate)
+                }
+                let affectedWeekStarts = Set(affectedDailyMetricDates.compactMap { date in
+                    Calendar.current.dateInterval(of: .weekOfYear, for: date).map {
+                        Calendar.current.startOfDay(for: $0.start)
+                    }
+                })
+                for weekStart in affectedWeekStarts.sorted() {
+                    try reprojectWeek(containing: weekStart)
                 }
                 try injectFailure(.afterProjection)
 
@@ -1931,8 +1948,10 @@ actor SwiftDataConfirmationRepository: ConfirmationRepository {
         switch payload {
         case .meal(let draft):
             return [DailyMetricsProjectionWriteGate.dayKey(for: draft.occurredAt)]
-        case .weight(let draft):
-            return [DailyMetricsProjectionWriteGate.dayKey(for: draft.measuredAt)]
+        case .weight:
+            // Weight observations change the effective timeline until the next
+            // observation, so a confirmation must hold the store-wide gate.
+            return nil
         case .workoutPlan, .trainingPlan, .dailyCheckIn, .userPreference:
             return nil
         }

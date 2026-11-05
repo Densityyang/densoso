@@ -142,6 +142,110 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         ).requiresRecompute)
     }
 
+    func testFortyTwoPendingDaysConvergeAcrossBoundedTenDayBatches() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let calendar = Calendar.current
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 12)))
+        let today = calendar.startOfDay(for: now)
+        try insertValidProfileAndWeight(in: context, effectiveAt: today)
+        let firstDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -42, to: today))
+        for offset in 0..<42 {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: firstDay))
+            context.insert(DailyMetrics(date: day, requiresRecompute: true))
+        }
+        try context.save()
+
+        let service = HistoricalMetricsRecomputeService(modelContainer: container)
+        var batchDurationsMilliseconds: [Double] = []
+        var processedCount = 0
+        var batchCount = 0
+        while batchCount < 5 {
+            let startedAt = DispatchTime.now().uptimeNanoseconds
+            let result = try await service.recomputePendingMetrics(
+                now: now,
+                batchSize: 10,
+                shouldStop: { false }
+            )
+            let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+            batchDurationsMilliseconds.append(Double(elapsed) / 1_000_000)
+            XCTAssertEqual(result.processedCount, min(10, 42 - processedCount))
+            processedCount += result.processedCount
+            batchCount += 1
+            if batchCount < 5 {
+                XCTAssertTrue(result.hasMoreEligibleWork)
+            } else {
+                XCTAssertFalse(result.hasMoreEligibleWork)
+            }
+        }
+
+        let sortedDurations = batchDurationsMilliseconds.sorted()
+        let p50 = sortedDurations[sortedDurations.count / 2]
+        let p95 = sortedDurations[min(sortedDurations.count - 1, Int(Double(sortedDurations.count - 1) * 0.95))]
+        print("DENSOSO_PERF scenario=historical_recompute_42_days batches=5 batchSize=10 p50_ms=\(p50) p95_ms=\(p95)")
+        XCTAssertEqual(processedCount, 42)
+        XCTAssertTrue(try fetchMetrics(in: container).allSatisfy { !$0.requiresRecompute && !$0.sourceFingerprint.isEmpty })
+    }
+
+    func testHistoricalRecomputeProcessesMetricsInvalidatedByLocalWeightChange() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let calendar = Calendar.current
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 12)))
+        let today = calendar.startOfDay(for: now)
+        try insertValidProfileAndWeight(in: context, effectiveAt: today)
+
+        let firstDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -10, to: today))
+        let days = try (0..<6).map { offset in
+            try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: firstDay))
+        }
+        let target = WeightRecord(
+            sourceActionKey: "historical-recompute-local-weight-target",
+            measuredAt: days[0].addingTimeInterval(8 * 60 * 60),
+            kilograms: 68
+        )
+        context.insert(target)
+        context.insert(WeightRecord(
+            sourceActionKey: "historical-recompute-local-weight-boundary",
+            measuredAt: days[4].addingTimeInterval(8 * 60 * 60),
+            kilograms: 75
+        ))
+        for day in days {
+            context.insert(DailyMetrics(
+                date: day,
+                energyQuality: "stale-weight-projection",
+                sourceFingerprint: "stale-weight-fingerprint",
+                requiresRecompute: false
+            ))
+        }
+        try context.save()
+
+        target.kilograms = 72
+        try await HealthRepository(
+            modelContext: context,
+            willSaveProjection: { throw HistoricalWeightProjectionFailure.injected }
+        ).updateWeight(id: target.id, previouslyAt: target.measuredAt)
+
+        let failedProjectionMetrics = try fetchMetrics(in: container)
+        let expectedDates = Set(days[0..<4])
+        XCTAssertEqual(
+            Set(failedProjectionMetrics.filter(\.requiresRecompute).map(\.date)),
+            expectedDates
+        )
+
+        let result = try await HistoricalMetricsRecomputeService(modelContainer: container)
+            .recomputePendingMetrics(now: now, batchSize: 10, shouldStop: { false })
+
+        XCTAssertEqual(result.processedCount, expectedDates.count)
+        XCTAssertFalse(result.hasMoreEligibleWork)
+        let recomputed = try fetchMetrics(in: container)
+        XCTAssertTrue(recomputed.allSatisfy { !$0.requiresRecompute })
+        for day in days[0..<4] {
+            let metric = try XCTUnwrap(recomputed.first { calendar.isDate($0.date, inSameDayAs: day) })
+            XCTAssertNotEqual(metric.sourceFingerprint, "stale-weight-fingerprint")
+        }
+    }
+
     func testStaleProjectionVersionIsDiscoveredWithoutPendingFlag() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
@@ -500,4 +604,8 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         let components = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
+}
+
+private enum HistoricalWeightProjectionFailure: Error {
+    case injected
 }

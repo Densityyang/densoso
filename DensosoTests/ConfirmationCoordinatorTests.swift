@@ -1380,6 +1380,64 @@ final class ConfirmationCoordinatorTests: XCTestCase {
         XCTAssertEqual(revisions.first?.weightKg, 62.5)
     }
 
+    func testConfirmedHistoricalWeightReprojectsEffectiveWeightUntilNextObservation() async throws {
+        let harness = try Harness()
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
+        let days = try (0..<6).map { offset in
+            try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: firstDay))
+        }
+        let context = ModelContext(harness.container)
+        let birthDate = Date(timeIntervalSince1970: 315_532_800)
+        let profile = UserProfile(weightKg: 70)
+        profile.updatedAt = Date(timeIntervalSince1970: 1_600_000_000)
+        context.insert(profile)
+        context.insert(ProfileRevisionRecord(
+            profileKey: "primary",
+            effectiveFrom: calendar.date(byAdding: .day, value: -365, to: firstDay)!,
+            dateOfBirth: birthDate,
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 70,
+            activityLevel: "moderate",
+            source: "userEdited"
+        ))
+        context.insert(WeightRecord(
+            sourceActionKey: "confirmed-weight-next-observation",
+            measuredAt: days[4].addingTimeInterval(8 * 60 * 60),
+            kilograms: 75
+        ))
+        for day in days {
+            context.insert(DailyMetrics(
+                date: day,
+                weightKg: 60,
+                sourceFingerprint: "before-confirmed-weight",
+                requiresRecompute: false
+            ))
+        }
+        try context.save()
+
+        let measuredAt = days[0].addingTimeInterval(8 * 60 * 60)
+        let action = try await harness.coordinator.stage(
+            payload: .weight(WeightDraft(measuredAt: measuredAt, kilograms: 62.5)),
+            clientRequestID: UUID()
+        )
+        _ = try await harness.coordinator.confirm(action: action)
+
+        let resultContext = ModelContext(harness.container)
+        let metricsByDay = Dictionary(uniqueKeysWithValues: try resultContext.fetch(FetchDescriptor<DailyMetrics>()).map {
+            (calendar.startOfDay(for: $0.date), $0)
+        })
+        for day in days[0..<4] {
+            let metric = try XCTUnwrap(metricsByDay[day])
+            XCTAssertEqual(metric.weightKg, 62.5)
+            XCTAssertNotEqual(metric.sourceFingerprint, "before-confirmed-weight")
+        }
+        let nextObservationDay = try XCTUnwrap(metricsByDay[days[4]])
+        XCTAssertEqual(nextObservationDay.weightKg, 75)
+        XCTAssertEqual(metricsByDay[days[5]]?.weightKg, 75)
+    }
+
     func testConfirmationDoesNotPersistAnIncompleteWeeklyReport() async throws {
         let harness = try Harness()
         let date = Date(timeIntervalSince1970: 1_700_000_000)

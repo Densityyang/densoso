@@ -165,6 +165,93 @@ final class ForegroundHealthRebaselineCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.foregroundRebaselineAttemptCount, 2)
     }
 
+    func testReactivationCancelsPendingRetryAndStartsImmediately() async throws {
+        var calls = 0
+        var fullRebaselineArguments: [Bool] = []
+        let coordinator = ForegroundHealthRebaselineCoordinator(
+            retryDelayNanoseconds: { _ in 60_000_000_000 },
+            operation: { requiresFullRebaseline, _ in
+                calls += 1
+                fullRebaselineArguments.append(requiresFullRebaseline)
+                if calls == 1 { throw TestFailure.injected }
+                return Self.successfulResult
+            }
+        )
+
+        await coordinator.activate()
+        XCTAssertEqual(calls, 1)
+        if case .failed(generation: 1, diagnostic: _) = coordinator.state {
+            // Expected: the first activation failed and has a delayed retry queued.
+        } else {
+            XCTFail("Expected the first activation to fail before deactivation")
+        }
+
+        coordinator.deactivate()
+        coordinator.prepareActivation()
+        await coordinator.activate()
+
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(fullRebaselineArguments, [true, true])
+        XCTAssertEqual(coordinator.state, .completed(generation: 2))
+    }
+
+    func testNewActivationDoesNotInheritPreviousGenerationBackoff() async throws {
+        var retryAttempts: [Int] = []
+        var calls = 0
+        let coordinator = ForegroundHealthRebaselineCoordinator(
+            retryDelayNanoseconds: { attempt in
+                retryAttempts.append(attempt)
+                return 60_000_000_000
+            },
+            operation: { _, _ in
+                calls += 1
+                return HealthSyncResult(
+                    completedStreams: [],
+                    failedStreams: [.heartRate: Self.failure(.heartRate)]
+                )
+            }
+        )
+
+        await coordinator.activate()
+        coordinator.deactivate()
+        coordinator.prepareActivation()
+        await coordinator.activate()
+
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(retryAttempts, [1, 1])
+        XCTAssertEqual(coordinator.state, .partiallyCompleted(
+            generation: 2,
+            failedStreams: [.heartRate]
+        ))
+    }
+
+    func testBackgroundToForegroundDuringRetryDoesNotBlockNewGeneration() async throws {
+        var generations: [Bool] = []
+        var calls = 0
+        let coordinator = ForegroundHealthRebaselineCoordinator(
+            retryDelayNanoseconds: { _ in 60_000_000_000 },
+            operation: { fullRebaseline, _ in
+                calls += 1
+                generations.append(fullRebaseline)
+                if calls == 1 {
+                    return HealthSyncResult(
+                        completedStreams: [],
+                        failedStreams: [.heartRate: Self.failure(.heartRate)]
+                    )
+                }
+                return Self.successfulResult
+            }
+        )
+
+        await coordinator.activate()
+        coordinator.deactivate()
+        await coordinator.activate()
+
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(generations, [true, true])
+        XCTAssertEqual(coordinator.state, .completed(generation: 2))
+    }
+
     func testSupersededRunIsNotMarkedCompleteAndRetriesTheActivation() async throws {
         var fullRebaselineArguments: [Bool] = []
         var callCount = 0

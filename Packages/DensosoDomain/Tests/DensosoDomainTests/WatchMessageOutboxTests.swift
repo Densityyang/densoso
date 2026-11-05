@@ -236,7 +236,10 @@ final class WatchMessageOutboxTests: XCTestCase {
         XCTAssertEqual(decodedLegacyPayload.tomorrowGuidance?.reasons, [])
         XCTAssertNil(decodedLegacyPayload.recoverySummary)
         XCTAssertNil(decodedLegacyPayload.terminalCausalSequenceWatermark)
-        XCTAssertEqual(decodedLegacyPayload.domains, [domain])
+        XCTAssertEqual(
+            decodedLegacyPayload.domains,
+            [WatchHealthDomainStatus(domain: .nutrition, status: .unknown)]
+        )
         XCTAssertEqual(decodedLegacyPayload.refreshState, .stale)
         XCTAssertEqual(decodedLegacyPayload.snapshotRevision, 0)
         let reencodedLegacyPayload = try JSONEncoder().encode(decodedLegacyPayload)

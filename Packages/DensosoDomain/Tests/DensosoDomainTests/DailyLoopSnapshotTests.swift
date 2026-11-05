@@ -3,6 +3,32 @@ import XCTest
 @testable import DensosoDomain
 
 final class DailyLoopSnapshotTests: XCTestCase {
+    func testPhaseChangesAtLocalNoonAndEveningBoundaries() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+        let beforeNoon = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 11, day: 5, hour: 11, minute: 59
+        )))
+        let noon = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 11, day: 5, hour: 12
+        )))
+        let beforeEvening = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 11, day: 5, hour: 17, minute: 59
+        )))
+        let evening = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 11, day: 5, hour: 18
+        )))
+
+        XCTAssertEqual(DailyLoopPhasePolicy.phase(at: beforeNoon, calendar: calendar), .morning)
+        XCTAssertEqual(DailyLoopPhasePolicy.phase(at: noon, calendar: calendar), .daytime)
+        XCTAssertEqual(DailyLoopPhasePolicy.phase(at: beforeEvening, calendar: calendar), .daytime)
+        XCTAssertEqual(DailyLoopPhasePolicy.phase(at: evening, calendar: calendar), .evening)
+        XCTAssertEqual(
+            DailyLoopPhasePolicy.phase(at: evening, timezoneIdentifier: "Asia/Shanghai"),
+            .evening
+        )
+    }
+
     func testMainPRAlgorithmVersionsAreCentralizedAndInvalidateDailyBriefCache() {
         XCTAssertEqual(AlgorithmVersions.calorieAccounting, "calorie-accounting-v3")
         XCTAssertEqual(AlgorithmVersions.dailyMetricsProjection, "daily-metrics-projection-v2")

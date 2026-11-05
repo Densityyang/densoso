@@ -77,9 +77,22 @@ final class HealthRepository: HealthSyncRepository {
 
     func updateWeight(id: UUID, previouslyAt previousDate: Date? = nil) async throws {
         let initialWeight = try requireWeight(id: id)
-        try await write(affecting: [initialWeight.measuredAt] + (previousDate.map { [$0] } ?? [])) { affectedDates in
+        try await write(affecting: []) { affectedDates in
             let weight = try requireWeight(id: id)
             guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
+            let oldDate = previousDate ?? initialWeight.measuredAt
+            affectedDates.formUnion(try DailyMetricsWeightInvalidation.projectionDates(
+                startingAt: oldDate,
+                excludingWeightID: id,
+                in: modelContext
+            ))
+            if !Calendar.current.isDate(oldDate, inSameDayAs: weight.measuredAt) {
+                affectedDates.formUnion(try DailyMetricsWeightInvalidation.projectionDates(
+                    startingAt: weight.measuredAt,
+                    excludingWeightID: id,
+                    in: modelContext
+                ))
+            }
             affectedDates.insert(weight.measuredAt)
             try enqueue(operation: "upsertWeight", recordID: weight.id, syncType: "weight")
             try refreshDailyWeightSnapshot(on: weight.measuredAt)
@@ -91,7 +104,11 @@ final class HealthRepository: HealthSyncRepository {
 
     func insert(_ weight: WeightRecord) async throws {
         guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
-        try await write(affecting: [weight.measuredAt]) { _ in
+        try await write(affecting: []) { affectedDates in
+            affectedDates.formUnion(try DailyMetricsWeightInvalidation.projectionDates(
+                startingAt: weight.measuredAt,
+                in: modelContext
+            ))
             modelContext.insert(weight)
             try enqueue(operation: "upsertWeight", recordID: weight.id, syncType: "weight")
             try refreshDailyWeightSnapshot(on: weight.measuredAt)
@@ -116,7 +133,11 @@ final class HealthRepository: HealthSyncRepository {
             dayKeys: [DailyMetricsProjectionWriteGate.dayKey(for: weight.measuredAt)]
         )
         guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
-        try await writeWhileStoreGateHeld(affecting: [weight.measuredAt], lease: lease) { _ in
+        try await writeWhileStoreGateHeld(affecting: [], lease: lease) { affectedDates in
+            affectedDates.formUnion(try DailyMetricsWeightInvalidation.projectionDates(
+                startingAt: weight.measuredAt,
+                in: modelContext
+            ))
             modelContext.insert(weight)
             try enqueue(operation: "upsertWeight", recordID: weight.id, syncType: "weight")
             try refreshDailyWeightSnapshot(on: weight.measuredAt)
@@ -125,9 +146,14 @@ final class HealthRepository: HealthSyncRepository {
 
     func deleteWeight(id: UUID) async throws {
         let initialWeight = try requireWeight(id: id)
-        try await write(affecting: [initialWeight.measuredAt]) { affectedDates in
+        try await write(affecting: []) { affectedDates in
             let weight = try requireWeight(id: id)
             guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }
+            affectedDates.formUnion(try DailyMetricsWeightInvalidation.projectionDates(
+                startingAt: weight.measuredAt,
+                excludingWeightID: weight.id,
+                in: modelContext
+            ))
             affectedDates.insert(weight.measuredAt)
             try enqueue(operation: "deleteWeight", recordID: weight.id, syncType: "weight")
             modelContext.delete(weight)
@@ -1074,16 +1100,10 @@ final class HealthRepository: HealthSyncRepository {
             replacements.map { (calendar.startOfDay(for: $0.dayStart), $0) },
             uniquingKeysWith: { _, latest in latest }
         )
-        var affectedDays = Array(replacementsByDay.keys)
-        if stream == HealthMetricID.bodyMass.rawValue,
-           let firstAffectedDay = replacementsByDay.keys.min() {
-            affectedDays.append(contentsOf: HealthDataWindowPolicy.days(
-                from: firstAffectedDay,
-                through: calendar.startOfDay(for: lastSuccessfulAt),
-                calendar: calendar
-            ))
-        }
-        try await write(affecting: affectedDays) { affectedProjectionDates in
+        let writeDates = stream == HealthMetricID.bodyMass.rawValue
+            ? []
+            : Array(replacementsByDay.keys)
+        try await write(affecting: writeDates) { affectedProjectionDates in
             for (day, replacement) in replacementsByDay {
                 let existing = try healthSnapshot(for: day) ?? Self.emptyHealthSnapshot(for: day)
                 let priorSummary = existing.healthKitSampleSummary
@@ -1227,12 +1247,16 @@ final class HealthRepository: HealthSyncRepository {
                 ))
             }
             if stream == HealthMetricID.bodyMass.rawValue,
-               let firstAffectedDay = replacementsByDay.keys.min() {
-                try addDailyMetricDates(
-                    from: firstAffectedDay,
-                    through: lastSuccessfulAt,
-                    to: &affectedProjectionDates
-                )
+               !replacementsByDay.isEmpty {
+                for changedDay in replacementsByDay.keys.sorted() {
+                    let dayEnd = calendar.date(byAdding: .day, value: 1, to: changedDay) ?? changedDay
+                    affectedProjectionDates.formUnion(try DailyMetricsWeightInvalidation.projectionDates(
+                        startingAt: changedDay,
+                        searchingAfter: dayEnd.addingTimeInterval(-0.000_001),
+                        in: modelContext,
+                        calendar: calendar
+                    ))
+                }
             }
         }
     }

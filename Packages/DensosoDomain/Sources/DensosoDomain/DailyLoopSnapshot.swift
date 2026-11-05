@@ -7,6 +7,23 @@ public enum DailyLoopPhase: String, Codable, CaseIterable, Sendable {
     case evening
 }
 
+public enum DailyLoopPhasePolicy {
+    public static func phase(at date: Date, calendar: Calendar) -> DailyLoopPhase {
+        let hour = calendar.component(.hour, from: date)
+        if hour < 12 { return .morning }
+        if hour < 18 { return .daytime }
+        return .evening
+    }
+
+    public static func phase(at date: Date, timezoneIdentifier: String) -> DailyLoopPhase {
+        var calendar = Calendar.autoupdatingCurrent
+        if let timezone = TimeZone(identifier: timezoneIdentifier) {
+            calendar.timeZone = timezone
+        }
+        return phase(at: date, calendar: calendar)
+    }
+}
+
 /// Semantic shortcuts that a client may offer from the daily loop.
 public enum DailyLoopQuickAction: String, Codable, CaseIterable, Sendable {
     case logMeal

@@ -42,8 +42,16 @@ struct DailyLoopSnapshotCard: View {
                     Label("今日节奏", systemImage: "sun.max.fill")
                         .font(.headline)
                     Spacer()
-                    OrbitStatusBadge(text: phaseName(snapshot.phase), tone: .blue)
-                        .accessibilityIdentifier("daily-loop-phase")
+                    TimelineView(.periodic(from: Date(), by: 60)) { timeline in
+                        OrbitStatusBadge(
+                            text: phaseName(DailyLoopPhasePolicy.phase(
+                                at: timeline.date,
+                                timezoneIdentifier: snapshot.timezoneIdentifier
+                            )),
+                            tone: .blue
+                        )
+                    }
+                    .accessibilityIdentifier("daily-loop-phase")
                 }
 
                 if snapshot.refreshState == .stale || snapshot.refreshState == .refreshRequired {

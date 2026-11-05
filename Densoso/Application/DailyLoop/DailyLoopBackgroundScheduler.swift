@@ -33,6 +33,88 @@ enum DailyLoopBackgroundRefreshReason: String, Equatable, Sendable {
     }
 }
 
+struct DailyLoopBackgroundTaskRequest: Equatable, Sendable {
+    let identifier: String
+    let earliestBeginDate: Date
+    let reason: DailyLoopBackgroundRefreshReason
+}
+
+@MainActor
+protocol DailyLoopBackgroundTaskScheduling {
+    func submit(_ request: DailyLoopBackgroundTaskRequest) throws
+    func cancel(taskRequestWithIdentifier identifier: String)
+}
+
+@MainActor
+struct SystemDailyLoopBackgroundTaskScheduler: DailyLoopBackgroundTaskScheduling {
+    func submit(_ request: DailyLoopBackgroundTaskRequest) throws {
+        let systemRequest = BGAppRefreshTaskRequest(identifier: request.identifier)
+        systemRequest.earliestBeginDate = request.earliestBeginDate
+        // Submitting replaces an unexecuted request with the same identifier
+        // only after success; a failed submission leaves the old request queued.
+        try BGTaskScheduler.shared.submit(systemRequest)
+    }
+
+    func cancel(taskRequestWithIdentifier identifier: String) {
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
+    }
+}
+
+@MainActor
+final class DailyLoopBackgroundScheduleController {
+    private let client: any DailyLoopBackgroundTaskScheduling
+    private let defaults: UserDefaults
+    private let taskIdentifier: String
+    private let earliestDateKey: String
+    private let reasonKey: String
+
+    private(set) var nextRefreshEarliestAt: Date?
+    private(set) var nextRefreshReason: DailyLoopBackgroundRefreshReason?
+
+    init(
+        client: any DailyLoopBackgroundTaskScheduling,
+        defaults: UserDefaults,
+        taskIdentifier: String,
+        earliestDateKey: String,
+        reasonKey: String
+    ) {
+        self.client = client
+        self.defaults = defaults
+        self.taskIdentifier = taskIdentifier
+        self.earliestDateKey = earliestDateKey
+        self.reasonKey = reasonKey
+        nextRefreshEarliestAt = defaults.object(forKey: earliestDateKey) as? Date
+        nextRefreshReason = defaults.string(forKey: reasonKey)
+            .flatMap { DailyLoopBackgroundRefreshReason(rawValue: $0) }
+    }
+
+    func submit(_ request: DailyLoopBackgroundTaskRequest) throws {
+        try client.submit(request)
+        nextRefreshEarliestAt = request.earliestBeginDate
+        nextRefreshReason = request.reason
+        defaults.set(request.earliestBeginDate, forKey: earliestDateKey)
+        defaults.set(request.reason.rawValue, forKey: reasonKey)
+    }
+
+    func preserveLegacyRequestReasonIfNeeded() {
+        guard nextRefreshEarliestAt != nil, nextRefreshReason == nil else { return }
+        nextRefreshReason = .regular
+        defaults.set(DailyLoopBackgroundRefreshReason.regular.rawValue, forKey: reasonKey)
+    }
+
+    func clearPersistedSchedule() {
+        nextRefreshEarliestAt = nil
+        nextRefreshReason = nil
+        defaults.removeObject(forKey: earliestDateKey)
+        defaults.removeObject(forKey: reasonKey)
+    }
+
+    func cancelAndClear() {
+        client.cancel(taskRequestWithIdentifier: taskIdentifier)
+        clearPersistedSchedule()
+    }
+}
+
 @MainActor
 protocol HistoricalMetricsRecomputing {
     func recomputePendingMetrics(
@@ -66,14 +148,15 @@ final class DailyLoopBackgroundScheduler {
     private let notificationScheduler: BriefNotificationScheduler
     private let watchConnectivityCoordinator: PhoneWatchConnectivityCoordinator
     private let isHealthAuthorized: @MainActor () -> Bool
-    private let scheduleDefaults: UserDefaults
+    private let scheduleController: DailyLoopBackgroundScheduleController
     private let prepareLocalHealthCacheIfNeeded: @MainActor (HealthRepository) async throws -> Void
 
     private(set) var isRegistered = false
     private(set) var lastError: String?
-    private(set) var nextRefreshEarliestAt: Date?
-    private(set) var nextRefreshReason: DailyLoopBackgroundRefreshReason?
     private var activeRefreshTask: Task<Void, Never>?
+
+    var nextRefreshEarliestAt: Date? { scheduleController.nextRefreshEarliestAt }
+    var nextRefreshReason: DailyLoopBackgroundRefreshReason? { scheduleController.nextRefreshReason }
 
     init(
         modelContainer: ModelContainer,
@@ -84,6 +167,7 @@ final class DailyLoopBackgroundScheduler {
         notificationScheduler: BriefNotificationScheduler,
         watchConnectivityCoordinator: PhoneWatchConnectivityCoordinator,
         isHealthAuthorized: @escaping @MainActor () -> Bool,
+        backgroundTaskScheduler: any DailyLoopBackgroundTaskScheduling = SystemDailyLoopBackgroundTaskScheduler(),
         scheduleDefaults: UserDefaults = .standard,
         prepareLocalHealthCacheIfNeeded: @escaping @MainActor (HealthRepository) async throws -> Void = { _ in }
     ) {
@@ -95,11 +179,14 @@ final class DailyLoopBackgroundScheduler {
         self.notificationScheduler = notificationScheduler
         self.watchConnectivityCoordinator = watchConnectivityCoordinator
         self.isHealthAuthorized = isHealthAuthorized
-        self.scheduleDefaults = scheduleDefaults
+        scheduleController = DailyLoopBackgroundScheduleController(
+            client: backgroundTaskScheduler,
+            defaults: scheduleDefaults,
+            taskIdentifier: Self.taskIdentifier,
+            earliestDateKey: Self.nextRefreshDefaultsKey,
+            reasonKey: Self.nextRefreshReasonDefaultsKey
+        )
         self.prepareLocalHealthCacheIfNeeded = prepareLocalHealthCacheIfNeeded
-        nextRefreshEarliestAt = scheduleDefaults.object(forKey: Self.nextRefreshDefaultsKey) as? Date
-        nextRefreshReason = scheduleDefaults.string(forKey: Self.nextRefreshReasonDefaultsKey)
-            .flatMap { DailyLoopBackgroundRefreshReason(rawValue: $0) }
     }
 
     /// Must run during application launch, before the system delivers a pending refresh.
@@ -131,8 +218,7 @@ final class DailyLoopBackgroundScheduler {
     @discardableResult
     func scheduleNextRefresh(reason: DailyLoopBackgroundRefreshReason = .regular) -> Bool {
         guard isRegistered else {
-            clearScheduledRefresh()
-            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.taskIdentifier)
+            scheduleController.cancelAndClear()
             return false
         }
         let requestedEarliestAt = Date().addingTimeInterval(max(reason.earliestBeginInterval, 60))
@@ -143,25 +229,19 @@ final class DailyLoopBackgroundScheduler {
             // Preserve the reason paired with an earlier persisted request. If
             // upgrading from a build that stored only the date, classify that
             // legacy request as regular and persist the migrated reason.
-            if nextRefreshReason == nil {
-                nextRefreshReason = .regular
-                scheduleDefaults.set(DailyLoopBackgroundRefreshReason.regular.rawValue, forKey: Self.nextRefreshReasonDefaultsKey)
-            }
+            scheduleController.preserveLegacyRequestReasonIfNeeded()
             return true
         }
 
-        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.taskIdentifier)
-        let request = BGAppRefreshTaskRequest(identifier: Self.taskIdentifier)
-        request.earliestBeginDate = requestedEarliestAt
+        let request = DailyLoopBackgroundTaskRequest(
+            identifier: Self.taskIdentifier,
+            earliestBeginDate: requestedEarliestAt,
+            reason: reason
+        )
         do {
-            try BGTaskScheduler.shared.submit(request)
-            nextRefreshEarliestAt = requestedEarliestAt
-            nextRefreshReason = reason
-            scheduleDefaults.set(requestedEarliestAt, forKey: Self.nextRefreshDefaultsKey)
-            scheduleDefaults.set(reason.rawValue, forKey: Self.nextRefreshReasonDefaultsKey)
+            try scheduleController.submit(request)
             return true
         } catch {
-            clearScheduledRefresh()
             let fallback = SharedErrorDescriptor(
                 code: .projectionFailed,
                 userMessage: "每日健康回顾暂时无法安排。",
@@ -329,10 +409,7 @@ final class DailyLoopBackgroundScheduler {
     }
 
     private func clearScheduledRefresh() {
-        nextRefreshEarliestAt = nil
-        nextRefreshReason = nil
-        scheduleDefaults.removeObject(forKey: Self.nextRefreshDefaultsKey)
-        scheduleDefaults.removeObject(forKey: Self.nextRefreshReasonDefaultsKey)
+        scheduleController.clearPersistedSchedule()
     }
 }
 

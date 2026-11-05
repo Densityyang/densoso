@@ -1216,7 +1216,11 @@ struct ChatScreen: View {
                 // new authoritative state immediately; HealthKit work retries
                 // independently in the outbox worker.
                 dependencies.watchConnectivityCoordinator.refreshApplicationContext()
-                await refreshDailyLoopSnapshot()
+                await refreshDailyLoopSnapshot(
+                    refreshHealth: DailyLoopConfirmationRefreshPolicy.shouldRefreshHealth(
+                        afterConfirming: action.payload.actionType
+                    )
+                )
                 addMessage(text: message, isUser: false)
                 setAgentUIState(
                     activePendingActions.isEmpty

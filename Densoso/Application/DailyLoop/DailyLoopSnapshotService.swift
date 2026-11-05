@@ -140,7 +140,7 @@ struct DailyLoopSnapshotComposer {
             coverage: coverage,
             refreshState: refreshState,
             errorCode: errorCode,
-            phase: Self.phase(at: date, calendar: calendar),
+            phase: DailyLoopPhasePolicy.phase(at: date, calendar: calendar),
             todayState: todayState,
             todaySummary: Self.nonEmpty(currentBrief?.summary),
             tomorrowGuidance: healthState?.tomorrowGuidance,
@@ -191,13 +191,6 @@ struct DailyLoopSnapshotComposer {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(material) else { return nil }
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func phase(at date: Date, calendar: Calendar) -> DailyLoopPhase {
-        let hour = calendar.component(.hour, from: date)
-        if hour < 12 { return .morning }
-        if hour < 18 { return .daytime }
-        return .evening
     }
 
     private static func headline(for state: HealthStateV2) -> String {
