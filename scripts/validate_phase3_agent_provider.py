@@ -197,7 +197,10 @@ def main() -> int:
             "requestID: request.requestID",
             "imageCount: request.imageCount",
             "latencyMilliseconds: Self.latencyMilliseconds(since: startedAt)",
-            "if let gate = request.preSerializationGate",
+            "request.preSerializationGate",
+            "request.networkAttemptGate",
+            "preSerializationGate {",
+            "beforeNetworkAttempt: networkAttemptGate",
         ],
         errors,
     )
@@ -225,7 +228,12 @@ def main() -> int:
     )
     require_text(
         ROOT / "Densoso" / "Infrastructure" / "LLM" / "QwenProvider.swift",
-        ["if let gate = request.preSerializationGate"],
+        [
+            "request.preSerializationGate",
+            "request.networkAttemptGate",
+            "preSerializationGate {",
+            "beforeNetworkAttempt: networkAttemptGate",
+        ],
         errors,
     )
     require_text(
