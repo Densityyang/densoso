@@ -40,7 +40,7 @@ struct GetTodayHealthStateTool: AgentTool {
     func response(asOf date: Date, context: HealthNarrativeContext?) throws -> String {
         let cloudState = context?.cloudHealthState
             ?? context?.healthState.map(Self.cloudState)
-        try response(
+        return try response(
             asOf: date,
             cloudState: cloudState,
             vitalTrends: context?.vitalTrends ?? [],
