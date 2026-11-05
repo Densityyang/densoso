@@ -171,7 +171,7 @@ final class AgentRequestResumeTests: XCTestCase {
         let rebuiltBody = try XCTUnwrap(serializedBodies.first)
         XCTAssertFalse(rebuiltBody.contains("sleep.pre-serialization-secret"))
         XCTAssertFalse(rebuiltBody.contains("919191"))
-        XCTAssertTrue(rebuiltBody.contains("activity.allowed-control"))
+        XCTAssertTrue(rebuiltBody.contains("activity.steps"))
         XCTAssertTrue(rebuiltBody.contains("606060"))
 
         let savedRequestSnapshot = try await repository.agentRequest(
@@ -242,7 +242,7 @@ final class AgentRequestResumeTests: XCTestCase {
         XCTAssertTrue(serializedBodies[0].contains("sleep.pre-serialization-secret"))
         XCTAssertFalse(serializedBodies[1].contains("sleep.pre-serialization-secret"))
         XCTAssertFalse(serializedBodies[1].contains("919191"))
-        XCTAssertTrue(serializedBodies[1].contains("activity.allowed-control"))
+        XCTAssertTrue(serializedBodies[1].contains("activity.steps"))
         XCTAssertEqual(transportBodies.count, 1)
         XCTAssertEqual(transportBodies[0], serializedBodies[1])
         XCTAssertFalse(transportBodies[0].contains("sleep.pre-serialization-secret"))
@@ -1124,6 +1124,14 @@ final class AgentRequestResumeTests: XCTestCase {
     }
 
     private static func sleepAndActivityNarrativeContext() -> HealthNarrativeContext {
+        let activityBaseline = HealthBaseline(
+            readiness: .mature,
+            validDays: 7,
+            median: 8_000,
+            p10: 5_000,
+            p90: 12_000,
+            mad: 1_000
+        )
         let window = HealthContextWindowSummary(
             windowDays: 7,
             coverageDays: ["sleep": 7, "steps": 7],
@@ -1147,10 +1155,18 @@ final class AgentRequestResumeTests: XCTestCase {
             healthState: nil,
             evidence: [
                 EvidenceReference(key: "sleep.pre-serialization-secret", source: "sleep"),
-                EvidenceReference(key: "activity.allowed-control", source: "activity"),
+                EvidenceReference(key: "activity.steps", source: "activity"),
             ],
             recommendationCandidates: [],
-            aggregateSummary: summary
+            aggregateSummary: summary,
+            activityTrends: [ActivityMetricTrend(
+                metric: .steps,
+                currentValue: 606_060,
+                baselineWindowDays: 7,
+                baseline: activityBaseline,
+                status: .withinTypicalRange,
+                dataCoverage: .complete
+            )]
         )
     }
 
@@ -1255,7 +1271,7 @@ private final class GatePausedTextProvider: TextModelProvider, @unchecked Sendab
                         self.transportBodies.append(String(decoding: body, as: UTF8.self))
                     }
                     continuation.yield(.textDelta(
-                        "{\"headline\":\"趋势\",\"summary\":\"已按授权数据分析\",\"recommendations\":[],\"tomorrowGuidance\":null,\"evidenceKeys\":[\"activity.allowed-control\"]}"
+                        "{\"headline\":\"趋势\",\"summary\":\"已按授权数据分析\",\"recommendations\":[],\"tomorrowGuidance\":null,\"evidenceKeys\":[\"activity.steps\"]}"
                     ))
                     continuation.yield(.completed(.completed))
                     continuation.finish()
