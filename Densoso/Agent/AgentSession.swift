@@ -82,7 +82,7 @@ enum PendingActionConsentPolicy {
         return dataClass(actionType: type, payload: payload)
     }
 
-    static func dataClass(for oversizedReference: JSONValue) -> ProviderDataClass? {
+    static func dataClass(forOversizedReference oversizedReference: JSONValue) -> ProviderDataClass? {
         guard let object = oversizedReference.objectValue,
               let type = object["type"]?.stringValue,
               let actionType = ActionType(rawValue: type) else { return nil }
@@ -118,7 +118,7 @@ enum PendingActionConsentPolicy {
               let actionID = UUID(uuidString: actionIDRaw),
               let typeRaw = object["type"]?.stringValue,
               let actionType = ActionType(rawValue: typeRaw),
-              let dataClass = dataClass(for: reference),
+              let dataClass = dataClass(forOversizedReference: reference),
               allowedClasses.contains(dataClass),
               let metadataData = try? JSONEncoder().encode(reference) else { return nil }
         let metadataDecoder = JSONDecoder()
@@ -162,7 +162,7 @@ enum PendingActionConsentPolicy {
             if let dataClass = dataClass(for: item) { classes.insert(dataClass) }
         }
         for item in root["oversizedActions"]?.arrayValue ?? [] {
-            if let dataClass = dataClass(for: item) { classes.insert(dataClass) }
+            if let dataClass = dataClass(forOversizedReference: item) { classes.insert(dataClass) }
         }
         return classes
     }

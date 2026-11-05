@@ -1247,9 +1247,9 @@ final class HealthIntelligenceTests: XCTestCase {
             ]
             return HealthIntelligenceDay(
                 dayStart: day,
+                activeEnergyKcal: 900,
                 stepCount: 40_000,
                 exerciseMinutes: Double(25 + (offset + 27) % 12),
-                activeEnergyKcal: 900,
                 healthReadStates: states
             )
         }
