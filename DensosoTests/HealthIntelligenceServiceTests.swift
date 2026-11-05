@@ -167,6 +167,34 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         _ = try await service.refresh(asOf: reference)
         let changed = try XCTUnwrap(context.fetch(FetchDescriptor<DailyBriefRecord>()).first(where: { $0.dayKey == key }))
         XCTAssertNotEqual(changed.snapshotHash, firstHash)
+
+        let changedMetricFingerprint = changed.snapshotHash
+        let tomorrow = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 1, to: day))
+        let workoutPlan = ConfirmedWorkoutPlanEntry(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000991")!,
+            idempotencyKey: "health-intelligence-plan-refresh",
+            draft: WorkoutPlanDraft(
+                name: "明日步行",
+                activity: .walking,
+                scheduledAt: tomorrow.addingTimeInterval(9 * 60 * 60)
+            )
+        )
+        let scheduledAt = try XCTUnwrap(workoutPlan.draft.scheduledAt)
+        context.insert(ScheduleEvent(
+            date: scheduledAt,
+            title: workoutPlan.draft.name,
+            notes: try workoutPlan.encodedNotes(),
+            startTime: scheduledAt
+        ))
+        try context.save()
+
+        let guidanceBeforePlan = service.dailyBrief?.healthState?.tomorrowGuidance
+        _ = try await service.refresh(asOf: reference)
+        let planUpdated = try XCTUnwrap(
+            context.fetch(FetchDescriptor<DailyBriefRecord>()).first(where: { $0.dayKey == key })
+        )
+        XCTAssertNotEqual(planUpdated.snapshotHash, changedMetricFingerprint)
+        XCTAssertNotEqual(service.dailyBrief?.healthState?.tomorrowGuidance, guidanceBeforePlan)
     }
 
     func testHealthBriefCacheGenerationFenceRejectsPrePurgeWrites() throws {

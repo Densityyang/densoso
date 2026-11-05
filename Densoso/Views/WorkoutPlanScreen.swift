@@ -243,15 +243,28 @@ struct WorkoutPlanScreen: View {
             )
             try? await dependencies.agentSession.reloadPendingActions()
             refreshConfirmedPlans()
+            var planResultMessage: String
             do {
                 try await dependencies.workoutPlanSchedulingService.scheduleConfirmedPlan(actionID: action.id)
-                resultMessage = "计划已确认，并已交给 WorkoutKit 安排。"
+                planResultMessage = "计划已确认，并已交给 WorkoutKit 安排。"
             } catch {
                 let errorMessage = SharedErrorDescriptor.mapped(
                     from: error,
                     fallback: .workoutKitUnavailableFallback
                 ).userMessage
-                resultMessage = "计划已在本机确认；系统安排待处理，可在下方重试：\(errorMessage)"
+                planResultMessage = "计划已在本机确认；系统安排待处理，可在下方重试：\(errorMessage)"
+            }
+            do {
+                // The plan affects tomorrow guidance in the cached Daily Brief,
+                // even though this screen confirms it outside ChatScreen.
+                _ = try await dependencies.healthIntelligenceService.refresh()
+                resultMessage = planResultMessage
+            } catch {
+                let errorMessage = SharedErrorDescriptor.mapped(
+                    from: error,
+                    fallback: .projectionFailedFallback
+                ).userMessage
+                resultMessage = "\(planResultMessage) 健康摘要暂时无法更新：\(errorMessage)"
             }
             dependencies.watchConnectivityCoordinator.refreshApplicationContext()
             refreshConfirmedPlans()
