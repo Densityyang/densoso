@@ -130,7 +130,7 @@ final class AgentDailyMetricsRepositoryTests: XCTestCase {
         XCTAssertNotNil(result.intake.value)
         XCTAssertEqual(result.lastMealRecordedAt, lastMeal)
         XCTAssertNil(result.deficit.value)
-        XCTAssertEqual(result.coverage.unavailableDays, 1)
+        XCTAssertEqual(result.coverage.deficit.unavailableDays, 1)
     }
 
     func testCompleteLogWithMissingMealEstimateIsNotPresentedAsFullDayIntake() {

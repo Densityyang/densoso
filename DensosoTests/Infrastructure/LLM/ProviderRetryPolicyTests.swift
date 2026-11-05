@@ -331,7 +331,9 @@ final class ProviderRetryPolicyTests: XCTestCase {
             tools: [],
             maxOutputTokens: 10,
             thinking: .disabled,
-            deadline: Date().addingTimeInterval(45)
+            deadline: Date().addingTimeInterval(45),
+            preSerializationGate: { serialize in try serialize() },
+            networkAttemptGate: {}
         )
         let task = Task { try await collect(provider.stream(request)) }
         let clock = ContinuousClock()

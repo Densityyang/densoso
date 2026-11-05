@@ -2,10 +2,28 @@ import DensosoDomain
 import Foundation
 
 enum HealthNarrativePolicy {
-    static func responseFormat(allowedEvidenceKeys: [String]) -> StructuredOutputFormat {
+    static func responseFormat(
+        allowedEvidenceKeys: [String],
+        recommendationCandidates: [HealthRecommendation]
+    ) -> StructuredOutputFormat {
         let keySchema: JSONSchemaNode = allowedEvidenceKeys.isEmpty
             ? .string(maximumLength: 0)
             : .string(allowedValues: allowedEvidenceKeys)
+        let eligibleCandidateIDs = recommendationCandidates
+            .filter { allowedEvidenceKeys.contains($0.evidenceKey) }
+            .map(\.id)
+            .sorted()
+        let recommendationSchema: JSONSchemaNode = eligibleCandidateIDs.isEmpty
+            ? .object(
+                properties: ["candidateID": .string(maximumLength: 0)],
+                required: ["candidateID"],
+                additionalProperties: false
+            )
+            : .object(
+                properties: ["candidateID": .string(allowedValues: eligibleCandidateIDs)],
+                required: ["candidateID"],
+                additionalProperties: false
+            )
         return StructuredOutputFormat(
             name: "health_narrative",
             schema: .object(
@@ -13,8 +31,8 @@ enum HealthNarrativePolicy {
                     "headline": .string(minimumLength: 1, maximumLength: 100),
                     "summary": .string(minimumLength: 1, maximumLength: 500),
                     "recommendations": .array(
-                        items: .string(minimumLength: 1, maximumLength: 180),
-                        maximumItems: 4
+                        items: recommendationSchema,
+                        maximumItems: eligibleCandidateIDs.isEmpty ? 0 : 4
                     ),
                     "tomorrowGuidance": .anyOf([
                         .string(maximumLength: 240),
@@ -28,27 +46,46 @@ enum HealthNarrativePolicy {
         )
     }
 
-    static func decode(_ source: String, allowedEvidenceKeys: Set<String>) -> HealthNarrative? {
+    static func decode(
+        _ source: String,
+        allowedEvidenceKeys: Set<String>,
+        recommendationCandidates: [HealthRecommendation]
+    ) -> HealthNarrative? {
         guard let data = source.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == ["headline", "summary", "recommendations", "tomorrowGuidance", "evidenceKeys"],
+              let rawRecommendations = object["recommendations"] as? [[String: Any]],
+              rawRecommendations.allSatisfy({ Set($0.keys) == ["candidateID"] }),
               let narrative = try? JSONDecoder().decode(HealthNarrative.self, from: data),
-              isValid(narrative, allowedEvidenceKeys: allowedEvidenceKeys) else {
+              isValid(
+                narrative,
+                allowedEvidenceKeys: allowedEvidenceKeys,
+                recommendationCandidates: recommendationCandidates
+              ) else {
             return nil
         }
         return narrative
     }
 
-    static func isValid(_ narrative: HealthNarrative, allowedEvidenceKeys: Set<String>) -> Bool {
+    static func isValid(
+        _ narrative: HealthNarrative,
+        allowedEvidenceKeys: Set<String>,
+        recommendationCandidates: [HealthRecommendation]
+    ) -> Bool {
         let headline = narrative.headline.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = narrative.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let eligibleCandidates = Dictionary(
+            recommendationCandidates
+                .filter { allowedEvidenceKeys.contains($0.evidenceKey) }
+                .map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let recommendationIDs = narrative.recommendations.map(\.candidateID)
         guard !headline.isEmpty, headline.count <= 100,
               !summary.isEmpty, summary.count <= 500,
               narrative.recommendations.count <= 4,
-              narrative.recommendations.allSatisfy({
-                  let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-                  return !value.isEmpty && value.count <= 180 && isNarrativeTextSafe(value)
-              }),
+              Set(recommendationIDs).count == recommendationIDs.count,
+              recommendationIDs.allSatisfy({ eligibleCandidates[$0] != nil }),
               narrative.tomorrowGuidance.map({ $0.count <= 240 && isNarrativeTextSafe($0) }) ?? true,
               isNarrativeTextSafe(headline), isNarrativeTextSafe(summary),
               !narrative.evidenceKeys.isEmpty,
@@ -60,9 +97,20 @@ enum HealthNarrativePolicy {
         return true
     }
 
-    static func displayText(_ narrative: HealthNarrative) -> String {
+    static func displayText(
+        _ narrative: HealthNarrative,
+        recommendationCandidates: [HealthRecommendation]
+    ) -> String {
         var lines = [narrative.headline, narrative.summary]
-        lines.append(contentsOf: narrative.recommendations.map { "• \($0)" })
+        let candidatesByID = Dictionary(
+            recommendationCandidates.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        lines.append(contentsOf: narrative.recommendations.compactMap { recommendation in
+            guard let candidate = candidatesByID[recommendation.candidateID],
+                  isNarrativeTextSafe(candidate.title) else { return nil }
+            return "• \(candidate.title)"
+        })
         if let guidance = narrative.tomorrowGuidance, !guidance.isEmpty {
             lines.append("明日：\(guidance)")
         }

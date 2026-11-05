@@ -327,7 +327,9 @@ final class DeepSeekProviderContractTests: XCTestCase {
             tools: [],
             maxOutputTokens: 128,
             thinking: .none,
-            deadline: Date().addingTimeInterval(45)
+            deadline: Date().addingTimeInterval(45),
+            preSerializationGate: { serialize in try serialize() },
+            networkAttemptGate: {}
         )
 
         do {
@@ -352,7 +354,7 @@ final class DeepSeekProviderContractTests: XCTestCase {
     }
 
     private func request(deadline: Date, thinking: ThinkingPolicy = .none) -> ModelRequest {
-        ModelRequest(
+        var request = ModelRequest(
             requestID: UUID(),
             conversationID: UUID(),
             systemPrompt: "fixture",
@@ -362,6 +364,9 @@ final class DeepSeekProviderContractTests: XCTestCase {
             thinking: thinking,
             deadline: deadline
         )
+        request.preSerializationGate = { serialize in try serialize() }
+        request.networkAttemptGate = {}
+        return request
     }
 
     private func makeProvider(data: Data) -> DeepSeekProvider {

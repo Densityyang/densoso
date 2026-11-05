@@ -34,7 +34,8 @@ final class QwenASRProviderContractTests: XCTestCase {
         let transcript = try await provider.transcribe(
             audio: audio,
             locale: Locale(identifier: "zh-CN"),
-            requestID: requestID
+            requestID: requestID,
+            beforeNetworkAttempt: {}
         )
 
         XCTAssertEqual(transcript.text, "午饭吃了米饭二百克")
@@ -76,7 +77,12 @@ final class QwenASRProviderContractTests: XCTestCase {
         )
 
         do {
-            _ = try await provider.transcribe(audio: fixtureAudio(), locale: Locale(identifier: "zh-CN"))
+            _ = try await provider.transcribe(
+                audio: fixtureAudio(),
+                locale: Locale(identifier: "zh-CN"),
+                requestID: UUID(),
+                beforeNetworkAttempt: {}
+            )
             XCTFail("Expected malformed response")
         } catch {
             XCTAssertEqual(error as? ProviderError, .malformedResponse)
@@ -102,7 +108,12 @@ final class QwenASRProviderContractTests: XCTestCase {
         )
 
         do {
-            _ = try await provider.transcribe(audio: audio, locale: Locale(identifier: "zh-CN"))
+            _ = try await provider.transcribe(
+                audio: audio,
+                locale: Locale(identifier: "zh-CN"),
+                requestID: UUID(),
+                beforeNetworkAttempt: {}
+            )
             XCTFail("Expected local size rejection")
         } catch {
             XCTAssertEqual(

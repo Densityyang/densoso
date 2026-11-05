@@ -119,13 +119,36 @@ struct HealthContentClassification: Equatable, Sendable {
 enum HealthContentProvenanceClassifier {
     static func classify(_ text: String) -> HealthContentClassification {
         let value = text.lowercased()
-        var dataClasses = Set<ProviderDataClass>()
+        let clauses = healthFactClauses(in: value)
+        let dataClasses = clauses.reduce(into: Set<ProviderDataClass>()) { result, clause in
+            result.formUnion(recognizedDataClasses(in: clause))
+        }
+        let hasUnclassifiedHealthContent = clauses.contains { clause in
+            guard containsHealthEntity(clause), hasHealthFactCue(clause) else { return false }
+            let clauseClasses = recognizedDataClasses(in: clause)
+            return clauseClasses.isEmpty || containsAmbiguousMedicalDetail(clause)
+        }
+        return HealthContentClassification(
+            dataClasses: dataClasses,
+            hasUnclassifiedHealthContent: hasUnclassifiedHealthContent
+        )
+    }
 
+    private static func recognizedDataClasses(in value: String) -> Set<ProviderDataClass> {
+        var dataClasses = Set<ProviderDataClass>()
         if matches(#"(?i)(?:hrv|rhr)\s*[:：=]?\s*\d"#, in: value)
             || matches(#"(?i)\b(?:resting\s*heart\s*rate|heart\s*rate|blood\s*pressure|weight)\b.{0,16}\d"#, in: value)
             || matches(#"(静息心率|心率|血压|体重|体脂|腰围)\s*(是|[:：=])?\s*\d"#, in: value)
             || matches(#"(?i)(hrv|rhr|heart\s*rate|blood\s*pressure|weight).{0,16}(high|low|normal|elevated|abnormal|poor|good)"#, in: value)
-            || matches(#"(心率|血压|体重|体脂|腰围).{0,16}(偏高|偏低|正常|异常)"#, in: value) {
+            || matches(#"(心率|血压|体重|体脂|腰围).{0,16}(偏高|偏低|正常|异常)"#, in: value)
+            || [
+                "diabetes", "diabetic", "asthma", "hypertension", "blood glucose", "glucose",
+                "medication", "medicine", "diagnosis", "symptom", "pain", "pregnant", "pregnancy",
+                "headache", "dizzy", "nausea", "fever", "cough", "rash", "sore", "illness",
+                "糖尿病", "哮喘", "高血压", "低血糖", "血糖", "用药", "药物", "诊断", "症状", "疼痛",
+                "头痛", "头疼", "头晕", "恶心", "发烧", "发热", "咳嗽", "皮疹", "不舒服", "不适",
+                "过敏", "怀孕", "月经",
+            ].contains(where: { value.contains($0) }) {
             dataClasses.insert(.healthBody)
         }
 
@@ -152,31 +175,58 @@ enum HealthContentProvenanceClassifier {
             || matches(#"(感觉|觉得|feeling|feel).{0,20}(压力|疲劳|疲惫|stress|tired|anxious)"#, in: value) {
             dataClasses.insert(.healthSubjective)
         }
+        return dataClasses
+    }
 
-        let containsSensitiveCondition = [
+    private static func hasHealthFactCue(_ value: String) -> Bool {
+        let sensitiveHealthTerms = [
             "diabetes", "diabetic", "asthma", "hypertension", "medication", "medicine",
-            "diagnosis", "symptom", "pain", "blood glucose", "pregnant", "pregnancy",
-            "糖尿病", "哮喘", "高血压", "低血糖", "用药", "药物", "诊断", "症状", "疼痛", "过敏", "怀孕", "月经",
-        ].contains { value.contains($0) }
-        let hasHealthFactCue = containsSensitiveCondition
+            "diagnosis", "symptom", "pain", "blood glucose", "glucose", "pregnant", "pregnancy",
+            "headache", "dizzy", "nausea", "fever", "cough", "rash", "sore", "illness",
+            "糖尿病", "哮喘", "高血压", "低血糖", "血糖", "用药", "药物", "诊断", "症状", "疼痛",
+            "头痛", "头疼", "头晕", "恶心", "发烧", "发热", "咳嗽", "皮疹", "不舒服", "不适",
+            "过敏", "怀孕", "月经",
+        ]
+        return sensitiveHealthTerms.contains(where: { value.contains($0) })
             || matches(#"\d"#, in: value)
-            || ["偏高", "偏低", "很差", "不足", "正常", "异常", "高", "低", "elevated", "high", "low", "normal", "poor", "bad"].contains { value.contains($0) }
-            || ["我", "我的", "今天感觉", "昨晚", "my ", "i feel", "i slept", "i ate"].contains { value.contains($0) }
-        let hasHealthEntity = [
+            || [
+                "偏高", "偏低", "很差", "不足", "正常", "异常", "不明", "不清楚", "说不清",
+                "不舒服", "不适", "不对劲", "elevated", "high", "low", "normal", "poor", "bad", "unusual",
+            ].contains { value.contains($0) }
+    }
+
+    private static func containsHealthEntity(_ value: String) -> Bool {
+        [
             "hrv", "heart rate", "blood pressure", "recovery", "readiness", "心率", "血压", "体重", "体脂",
             "睡眠", "睡了", "sleep", "步数", "steps", "运动", "训练", "workout", "exercise", "meal",
             "breakfast", "lunch", "dinner", "餐", "饮食", "摄入", "calorie", "kcal", "压力", "精力", "疲劳", "stress",
             "diabetes", "diabetic", "asthma", "hypertension", "medication", "medicine", "diagnosis", "symptom",
-            "pain", "blood glucose", "pregnant", "pregnancy", "糖尿病", "哮喘", "高血压", "低血糖", "用药", "药物",
-            "诊断", "症状", "疼痛", "过敏", "怀孕", "月经",
+            "pain", "blood glucose", "glucose", "pregnant", "pregnancy", "headache", "dizzy", "nausea", "fever", "cough", "rash", "illness",
+            "糖尿病", "哮喘", "高血压", "低血糖", "血糖", "用药", "药物", "诊断", "症状", "疼痛", "头痛", "头疼", "头晕",
+            "恶心", "发烧", "发热", "咳嗽", "皮疹", "不舒服", "不适", "过敏", "怀孕", "月经",
         ].contains { value.contains($0) }
-        let hasUnclassifiedHealthContent = hasHealthEntity
-            && hasHealthFactCue
-            && dataClasses.isEmpty
-        return HealthContentClassification(
-            dataClasses: dataClasses,
-            hasUnclassifiedHealthContent: hasUnclassifiedHealthContent
-        )
+    }
+
+    private static func containsAmbiguousMedicalDetail(_ value: String) -> Bool {
+        ["medication", "medicine", "用药", "药物", "症状", "symptom", "pain", "疼痛", "unknown", "unspecified", "不明", "不清楚", "说不清"]
+            .contains(where: { value.contains($0) })
+    }
+
+    private static func healthFactClauses(in value: String) -> [String] {
+        let clauseConnectors = ["但是", "不过", "而且", "并且", "同时", "另外"]
+        let separated = clauseConnectors.reduce(value) { partial, connector in
+            partial.replacingOccurrences(of: connector, with: "|")
+        }
+        let englishConnector = try? NSRegularExpression(pattern: #"(?i)\b(?:and|but|also)\b"#)
+        let separatedEnglish = englishConnector?.stringByReplacingMatches(
+            in: separated,
+            range: NSRange(separated.startIndex..<separated.endIndex, in: separated),
+            withTemplate: "|"
+        ) ?? separated
+        return separatedEnglish
+            .components(separatedBy: CharacterSet(charactersIn: "，,。；;!?！？\n|"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     private static func matches(_ pattern: String, in value: String) -> Bool {
@@ -352,6 +402,14 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
 
     func allows(_ dataClass: ProviderDataClass) -> Bool {
         allowedClasses.contains(dataClass)
+    }
+
+    func consentRevisions(for classes: Set<ProviderDataClass>) -> [ProviderDataClass: String] {
+        Dictionary(uniqueKeysWithValues: classes.compactMap { dataClass in
+            guard let revision = sendConsentRevisions[dataClass],
+                  revision != "<unavailable>", revision != "<unstable>" else { return nil }
+            return (dataClass, revision)
+        })
     }
 
     var allowsDerivedRecovery: Bool {
@@ -744,6 +802,7 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         expectedHealthPolicy: Self,
         includesImage: Bool,
         requiresHealthText: Bool = true,
+        additionalRequiredClasses: Set<ProviderDataClass> = [],
         operation: @Sendable () throws -> Result
     ) async throws -> Result {
         if let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
@@ -754,7 +813,8 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
             let requiredClasses = currentSendRequiredClasses(
                 expectedHealthPolicy: expectedHealthPolicy,
                 includesImage: includesImage,
-                requiresHealthText: requiresHealthText
+                requiresHealthText: requiresHealthText,
+                additionalRequiredClasses: additionalRequiredClasses
             )
             guard requiredClasses.allSatisfy({ expectedHealthPolicy.sendConsentRevisions[$0] != nil }) else {
                 throw ProviderError.consentPolicyChanged(provider: provider)
@@ -772,9 +832,67 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
             provider: provider,
             expectedHealthPolicy: expectedHealthPolicy,
             includesImage: includesImage,
-            requiresHealthText: requiresHealthText
+            requiresHealthText: requiresHealthText,
+            additionalRequiredClasses: additionalRequiredClasses
         )
         return try operation()
+    }
+
+    /// Runs an independent cloud request while watching for revocation of any
+    /// category the request uses. A matching change cancels the request task;
+    /// the final authorization read closes the response/revocation race.
+    static func withRevocableSendAttempt<Result: Sendable>(
+        from repository: any ProviderGovernanceRepository,
+        provider: ProviderID,
+        expectedHealthPolicy: Self,
+        includesImage: Bool,
+        requiresHealthText: Bool = true,
+        additionalRequiredClasses: Set<ProviderDataClass> = [],
+        operation: @escaping @Sendable () async throws -> Result
+    ) async throws -> Result {
+        let requiredClasses = currentSendRequiredClasses(
+            expectedHealthPolicy: expectedHealthPolicy,
+            includesImage: includesImage,
+            requiresHealthText: requiresHealthText,
+            additionalRequiredClasses: additionalRequiredClasses
+        )
+        let changes = await restrictiveChanges(for: provider)
+        return try await withThrowingTaskGroup(of: Result.self) { group in
+            group.addTask {
+                try await validateCurrentSendConsent(
+                    from: repository,
+                    provider: provider,
+                    expectedHealthPolicy: expectedHealthPolicy,
+                    includesImage: includesImage,
+                    requiresHealthText: requiresHealthText,
+                    additionalRequiredClasses: additionalRequiredClasses
+                )
+                let result = try await operation()
+                try Task.checkCancellation()
+                try await validateCurrentSendConsent(
+                    from: repository,
+                    provider: provider,
+                    expectedHealthPolicy: expectedHealthPolicy,
+                    includesImage: includesImage,
+                    requiresHealthText: requiresHealthText,
+                    additionalRequiredClasses: additionalRequiredClasses
+                )
+                return result
+            }
+            group.addTask {
+                for await change in changes {
+                    if change.provider == provider,
+                       change.affects(requestDataClasses: requiredClasses) {
+                        throw ProviderError.consentPolicyChanged(provider: provider)
+                    }
+                }
+                throw CancellationError()
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else { throw CancellationError() }
+            group.cancelAll()
+            return result
+        }
     }
 
     static func validateCurrentSendConsent(
@@ -1098,11 +1216,39 @@ enum CloudRequestPolicyGuard {
             let containsStaleHealthProvenance = turn.contains { message in
                 guard let provenance = message.healthContextPolicyProvenance else { return false }
                 guard provenance.provider == policy.provider else { return true }
-                if let contentClasses = provenance.contentClasses,
-                   !contentClasses.isSubset(of: policy.allowedClasses) {
+                var contentClasses = provenance.contentClasses ?? []
+                var hasUnclassifiedContent = provenance.hasUnclassifiedHealthContent == true
+                if provenance.contentClasses == nil {
+                    for content in message.content {
+                        guard case .text(let text) = content else { continue }
+                        let classification = HealthContentProvenanceClassifier.classify(text)
+                        contentClasses.formUnion(classification.dataClasses)
+                        hasUnclassifiedContent = hasUnclassifiedContent
+                            || classification.hasUnclassifiedHealthContent
+                    }
+                }
+                if !contentClasses.isSubset(of: policy.allowedClasses) {
                     return true
                 }
-                return provenance.hasUnclassifiedHealthContent == true && !allHealthClassesAllowed
+                var generationClasses = contentClasses
+                if hasUnclassifiedContent {
+                    generationClasses.formUnion(CloudHealthContextPolicy.dataClasses)
+                }
+                if !generationClasses.isEmpty {
+                    if let recordedRevisions = provenance.dataClassConsentRevisions,
+                       !recordedRevisions.isEmpty {
+                        for dataClass in generationClasses {
+                            guard let recorded = recordedRevisions[dataClass],
+                                  let current = policy.sendConsentRevisions[dataClass],
+                                  recorded == current else { return true }
+                        }
+                    } else if provenance.policyRevision != policy.revision {
+                        // Legacy provenance cannot identify per-category
+                        // generations. Fail closed after any policy revision.
+                        return true
+                    }
+                }
+                return hasUnclassifiedContent && !allHealthClassesAllowed
             }
             var turnContentClasses = Set<ProviderDataClass>()
             var hasUnclassifiedHealthContent = false
@@ -1260,11 +1406,16 @@ enum CloudRequestPolicyGuard {
             guard message.role != .tool || !content.isEmpty else { return nil }
             let provenance = message.role == .tool
                 ? message.healthContextPolicyProvenance.map {
-                    HealthContextPolicyProvenance(
+                    var generationClasses = filteredToolDataClasses
+                    if hasUnclassifiedToolContent {
+                        generationClasses.formUnion(Self.dataClasses)
+                    }
+                    return HealthContextPolicyProvenance(
                         provider: $0.provider,
                         policyRevision: $0.policyRevision,
                         allowedClasses: $0.allowedClasses,
                         contentClasses: filteredToolDataClasses,
+                        dataClassConsentRevisions: policy.consentRevisions(for: generationClasses),
                         hasUnclassifiedHealthContent: hasUnclassifiedToolContent
                     )
                 }

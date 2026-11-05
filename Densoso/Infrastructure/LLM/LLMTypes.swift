@@ -72,6 +72,9 @@ struct HealthContextPolicyProvenance: Codable, Equatable, Sendable {
     /// Categories present in this message's content. This is deliberately
     /// separate from the policy that was active when the message was created.
     let contentClasses: Set<ProviderDataClass>?
+    /// Per-category consent generations prevent a later re-grant from making
+    /// old message content eligible for history again.
+    let dataClassConsentRevisions: [ProviderDataClass: String]?
     /// `true` means the message contains a likely health fact whose category
     /// could not be identified safely. Missing values indicate legacy data.
     let hasUnclassifiedHealthContent: Bool?
@@ -81,12 +84,14 @@ struct HealthContextPolicyProvenance: Codable, Equatable, Sendable {
         policyRevision: String,
         allowedClasses: Set<ProviderDataClass>,
         contentClasses: Set<ProviderDataClass>? = nil,
+        dataClassConsentRevisions: [ProviderDataClass: String]? = nil,
         hasUnclassifiedHealthContent: Bool? = nil
     ) {
         self.provider = provider
         self.policyRevision = policyRevision
         self.allowedClasses = allowedClasses
         self.contentClasses = contentClasses
+        self.dataClassConsentRevisions = dataClassConsentRevisions
         self.hasUnclassifiedHealthContent = hasUnclassifiedHealthContent
     }
 }

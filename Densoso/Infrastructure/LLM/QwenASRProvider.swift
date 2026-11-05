@@ -28,23 +28,6 @@ struct QwenASRProvider: CloudSpeechProvider {
         self.logSink = logSink
     }
 
-    func transcribe(audio: SanitizedAudio, locale: Locale) async throws -> CloudTranscript {
-        try await transcribe(audio: audio, locale: locale, requestID: UUID())
-    }
-
-    func transcribe(
-        audio: SanitizedAudio,
-        locale: Locale,
-        requestID: UUID
-    ) async throws -> CloudTranscript {
-        try await transcribe(
-            audio: audio,
-            locale: locale,
-            requestID: requestID,
-            beforeNetworkAttempt: {}
-        )
-    }
-
     func transcribe(
         audio: SanitizedAudio,
         locale: Locale,
@@ -154,23 +137,6 @@ struct ConfiguredQwenASRProvider: CloudSpeechProvider {
         self.credentialSource = credentialSource
         self.transport = transport
         self.logSink = logSink
-    }
-
-    func transcribe(audio: SanitizedAudio, locale: Locale) async throws -> CloudTranscript {
-        try await transcribe(audio: audio, locale: locale, requestID: UUID())
-    }
-
-    func transcribe(
-        audio: SanitizedAudio,
-        locale: Locale,
-        requestID: UUID
-    ) async throws -> CloudTranscript {
-        try await transcribe(
-            audio: audio,
-            locale: locale,
-            requestID: requestID,
-            beforeNetworkAttempt: {}
-        )
     }
 
     func transcribe(

@@ -856,6 +856,297 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         }
     }
 
+    func testActualDataDependencyRevokedAfterSerializationStopsBeforeNetworkAttempt() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity],
+            repository: repository,
+            confirmedAt: Date(),
+            changeSource: .settings
+        )
+        let expectedPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
+
+        let serializedBody = try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
+            from: repository,
+            provider: .deepSeek,
+            expectedHealthPolicy: expectedPolicy,
+            includesImage: false,
+            additionalRequiredClasses: [.healthActivity],
+            operation: { Data("activity-sentinel".utf8) }
+        )
+        XCTAssertEqual(String(decoding: serializedBody, as: UTF8.self), "activity-sentinel")
+
+        _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+            provider: .deepSeek,
+            allowedClasses: [],
+            repository: repository,
+            changeSource: .settings
+        )
+        do {
+            _ = try await CloudHealthContextPolicy.withCurrentSendConsent(
+                from: repository,
+                provider: .deepSeek,
+                expectedHealthPolicy: expectedPolicy,
+                includesImage: false,
+                additionalRequiredClasses: [.healthActivity],
+                operation: { "must-not-send" }
+            )
+            XCTFail("Revocation after serialization must stop the network attempt")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .deepSeek))
+        }
+    }
+
+    func testSnapshotRepositoryRejectsActualDependencyAtAllThreeFinalSendGates() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthBody,
+            granted: false,
+            policyVersion: "health-body-denied-v1"
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity],
+            repository: repository,
+            changeSource: .settings
+        )
+        let policy = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
+        let required = Set<ProviderDataClass>([.healthActivity, .healthBody])
+
+        let serializationProbe = CloudGateInvocationProbe()
+        do {
+            _ = try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
+                from: repository,
+                provider: .deepSeek,
+                expectedHealthPolicy: policy,
+                includesImage: false,
+                additionalRequiredClasses: required,
+                operation: {
+                    serializationProbe.recordInvocation()
+                    return Data("must-not-serialize".utf8)
+                }
+            )
+            XCTFail("The atomic snapshot serialization gate must reject denied Body data")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentRequired(provider: .deepSeek, dataClass: .healthBody))
+        }
+        XCTAssertEqual(serializationProbe.invocationCount, 0)
+
+        let networkProbe = CloudGateInvocationProbe()
+        do {
+            try await CloudHealthContextPolicy.withCurrentSendConsent(
+                from: repository,
+                provider: .deepSeek,
+                expectedHealthPolicy: policy,
+                includesImage: false,
+                additionalRequiredClasses: required,
+                operation: { networkProbe.recordInvocation() }
+            )
+            XCTFail("The atomic snapshot network gate must reject denied Body data")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentRequired(provider: .deepSeek, dataClass: .healthBody))
+        }
+        XCTAssertEqual(networkProbe.invocationCount, 0)
+
+        let streamProbe = CloudGateInvocationProbe()
+        do {
+            try await CloudHealthContextPolicy.withCurrentSendConsent(
+                from: repository,
+                provider: .deepSeek,
+                expectedHealthPolicy: policy,
+                includesImage: false,
+                additionalRequiredClasses: required,
+                operation: { streamProbe.recordInvocation() }
+            )
+            XCTFail("The atomic snapshot Provider Stream gate must reject denied Body data")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentRequired(provider: .deepSeek, dataClass: .healthBody))
+        }
+        XCTAssertEqual(streamProbe.invocationCount, 0)
+    }
+
+    func testRevocationBeforeProviderRetryRejectsTheSameActualDataDependency() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: repository,
+            confirmedAt: Date(),
+            changeSource: .settings
+        )
+        let expectedPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
+
+        let messages = [ModelMessage(role: .user, text: "我昨晚只睡了4小时")]
+        let requestDataClasses = AgentSession.outboundConsentDependencies(
+            messages: messages,
+            includesImage: false,
+            includesConversationHistory: false,
+            summary: nil,
+            structuredContext: nil,
+            policy: expectedPolicy
+        )
+        XCTAssertTrue(requestDataClasses.contains(.healthSleep))
+
+        let transport = RetryPolicyChangingTransport {
+            _ = try? await CloudHealthContextPolicy.applyRestrictiveChange(
+                provider: .deepSeek,
+                allowedClasses: [],
+                repository: repository,
+                changeSource: .settings
+            )
+        }
+        let clock = TestProviderRetryClock()
+        let provider = DeepSeekProvider(
+            credentialSource: TestCredentialSource(values: [.deepSeek: "fixture"]),
+            transport: transport,
+            clock: clock,
+            jitter: { _ in 0 }
+        )
+        var request = ModelRequest(
+            requestID: UUID(),
+            conversationID: UUID(),
+            systemPrompt: nil,
+            messages: messages,
+            tools: [],
+            maxOutputTokens: 32,
+            thinking: .none,
+            deadline: clock.now().addingTimeInterval(45)
+        )
+        request.preSerializationGate = { serialize in
+            try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
+                from: repository,
+                provider: .deepSeek,
+                expectedHealthPolicy: expectedPolicy,
+                includesImage: false,
+                additionalRequiredClasses: requestDataClasses,
+                operation: serialize
+            )
+        }
+        request.networkAttemptGate = {
+            try await CloudHealthContextPolicy.withCurrentSendConsent(
+                from: repository,
+                provider: .deepSeek,
+                expectedHealthPolicy: expectedPolicy,
+                includesImage: false,
+                additionalRequiredClasses: requestDataClasses,
+                operation: {}
+            )
+        }
+
+        do {
+            _ = try await collect(provider.stream(request))
+            XCTFail("Every retry must re-check the original request's actual data dependencies")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .deepSeek))
+        }
+        let requests = await transport.recordedRequests()
+        XCTAssertEqual(requests.count, 1, "Revocation after the first failed attempt must stop the retry")
+    }
+
+    func testRevokingSpeechAudioCancelsActiveASRAttempt() async throws {
+        try await assertActiveIndependentAttemptIsCancelled(dataClass: .speechAudio, includesImage: false)
+    }
+
+    func testRevokingMealImageCancelsActiveVisionAttempt() async throws {
+        try await assertActiveIndependentAttemptIsCancelled(dataClass: .mealImage, includesImage: true)
+    }
+
+    private func assertActiveIndependentAttemptIsCancelled(
+        dataClass: ProviderDataClass,
+        includesImage: Bool
+    ) async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        try await repository.setConsent(
+            provider: .qwen,
+            dataClass: dataClass,
+            granted: true,
+            policyVersion: "qwen-\(dataClass.rawValue)-v1"
+        )
+        let expectedPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .qwen)
+        let probe = RevocableAttemptProbe()
+        let attempt = Task {
+            try await CloudHealthContextPolicy.withRevocableSendAttempt(
+                from: repository,
+                provider: .qwen,
+                expectedHealthPolicy: expectedPolicy,
+                includesImage: includesImage,
+                requiresHealthText: false,
+                additionalRequiredClasses: [dataClass],
+                operation: {
+                    await probe.markStarted()
+                    do {
+                        try await Task.sleep(for: .seconds(60))
+                        return "stale-result"
+                    } catch is CancellationError {
+                        await probe.markCancelled()
+                        throw CancellationError()
+                    }
+                }
+            )
+        }
+
+        await probe.waitUntilStarted()
+        try await repository.setConsent(
+            provider: .qwen,
+            dataClass: dataClass,
+            granted: false,
+            policyVersion: "qwen-\(dataClass.rawValue)-v1"
+        )
+        await CloudHealthContextPolicy.notifyRevokedConsent(
+            provider: .qwen,
+            dataClass: dataClass,
+            repository: repository
+        )
+        do {
+            _ = try await attempt.value
+            XCTFail("Revocation must stop the in-flight \(dataClass.rawValue) response")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentPolicyChanged(provider: .qwen))
+        }
+        let wasCancelled = await probe.wasCancelled()
+        XCTAssertTrue(wasCancelled)
+    }
+
     func testImageConsentReconfirmationDoesNotAdvanceHealthPolicyRevision() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV11.self)
         let container = try ModelContainer(
@@ -2019,6 +2310,118 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         XCTAssertFalse(String(describing: filtered).contains("sleep.revoked-then-reconfirmed-secret"))
     }
 
+    func testRevokedAndReconfirmedClassDoesNotRestoreOldMessageWithExplicitContentClasses() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+
+        for provider in [ProviderID.deepSeek, .qwen] {
+            try await repository.setConsent(
+                provider: provider,
+                dataClass: .healthText,
+                granted: true,
+                policyVersion: "cloud-health-text-v1"
+            )
+            _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+                provider: provider,
+                allowedClasses: [.healthSleep, .healthActivity],
+                repository: repository,
+                confirmedAt: Date(timeIntervalSince1970: 1_798_100_000),
+                changeSource: .settings
+            )
+            _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+                provider: provider,
+                allowed: true,
+                repository: repository,
+                confirmedAt: Date(timeIntervalSince1970: 1_798_100_030),
+                changeSource: .settings
+            )
+            let original = try await CloudHealthContextPolicy.load(from: repository, provider: provider)
+            let oldSleep = ModelMessage(
+                role: .user,
+                text: "sleep.old-generation-sentinel",
+                healthContextPolicyProvenance: HealthContextPolicyProvenance(
+                    provider: provider,
+                    policyRevision: original.revision,
+                    allowedClasses: original.allowedClasses,
+                    contentClasses: [.healthSleep],
+                    dataClassConsentRevisions: original.consentRevisions(for: [.healthSleep]),
+                    hasUnclassifiedHealthContent: false
+                )
+            )
+            let stillValidActivity = ModelMessage(
+                role: .user,
+                text: "activity.still-authorized-sentinel",
+                healthContextPolicyProvenance: HealthContextPolicyProvenance(
+                    provider: provider,
+                    policyRevision: original.revision,
+                    allowedClasses: original.allowedClasses,
+                    contentClasses: [.healthActivity],
+                    dataClassConsentRevisions: original.consentRevisions(for: [.healthActivity]),
+                    hasUnclassifiedHealthContent: false
+                )
+            )
+
+            _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+                provider: provider,
+                allowedClasses: [.healthActivity],
+                repository: repository,
+                changeSource: .settings
+            )
+            _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+                provider: provider,
+                allowedClasses: [.healthSleep, .healthActivity],
+                repository: repository,
+                confirmedAt: Date(timeIntervalSince1970: 1_798_100_060),
+                changeSource: .settings
+            )
+            let current = try await CloudHealthContextPolicy.load(from: repository, provider: provider)
+            XCTAssertNotEqual(
+                original.sendConsentRevisions[.healthSleep],
+                current.sendConsentRevisions[.healthSleep]
+            )
+            XCTAssertEqual(
+                original.sendConsentRevisions[.healthActivity],
+                current.sendConsentRevisions[.healthActivity],
+                "Changing Sleep consent must not invalidate still-authorized Activity history"
+            )
+            let newSleep = ModelMessage(
+                role: .user,
+                text: "sleep.new-generation-sentinel",
+                healthContextPolicyProvenance: HealthContextPolicyProvenance(
+                    provider: provider,
+                    policyRevision: current.revision,
+                    allowedClasses: current.allowedClasses,
+                    contentClasses: [.healthSleep],
+                    dataClassConsentRevisions: current.consentRevisions(for: [.healthSleep]),
+                    hasUnclassifiedHealthContent: false
+                )
+            )
+            let persistedHistory = try JSONDecoder().decode(
+                [ModelMessage].self,
+                from: JSONEncoder().encode([oldSleep, stillValidActivity, newSleep, ModelMessage(role: .user, text: "continue")])
+            )
+
+            let filtered = CloudRequestPolicyGuard.filterConversationHistory(
+                persistedHistory,
+                currentTurnStartIndex: 3,
+                by: current
+            )
+            let text = filtered.flatMap { message in
+                message.content.compactMap { content -> String? in
+                    if case .text(let value) = content { return value }
+                    return nil
+                }
+            }.joined(separator: "\n")
+            XCTAssertFalse(text.contains("sleep.old-generation-sentinel"), "Provider: \(provider.rawValue)")
+            XCTAssertTrue(text.contains("activity.still-authorized-sentinel"), "Provider: \(provider.rawValue)")
+            XCTAssertTrue(text.contains("sleep.new-generation-sentinel"), "Provider: \(provider.rawValue)")
+        }
+    }
+
     func testConversationAlignmentRequiresExplicitOptInAndSeparatesRevocation() {
         XCTAssertNil(CloudHealthContextPolicyAlignmentIntent.parse("看看我的睡眠数据"))
         XCTAssertEqual(
@@ -2712,5 +3115,44 @@ private actor RevokesSleepConsentDuringSnapshotRepository: ProviderGovernanceRep
             estimatedCostMicros: nil,
             currency: nil
         )
+    }
+}
+
+private actor RevocableAttemptProbe {
+    private var started = false
+    private var cancelled = false
+    private var startContinuation: CheckedContinuation<Void, Never>?
+
+    func markStarted() {
+        started = true
+        startContinuation?.resume()
+        startContinuation = nil
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            startContinuation = continuation
+        }
+    }
+
+    func markCancelled() { cancelled = true }
+    func wasCancelled() -> Bool { cancelled }
+}
+
+private final class CloudGateInvocationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func recordInvocation() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+
+    var invocationCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
     }
 }

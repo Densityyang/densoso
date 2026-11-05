@@ -692,7 +692,9 @@ final class AgentProviderContextPolicyTests: XCTestCase {
                     tools: [],
                     maxOutputTokens: 64,
                     thinking: .none,
-                    deadline: Date().addingTimeInterval(30)
+                    deadline: Date().addingTimeInterval(30),
+                    preSerializationGate: { serialize in try serialize() },
+                    networkAttemptGate: {}
                 )
                 let transport: ScriptedProviderHTTPTransport
                 if providerID == .deepSeek {
@@ -952,7 +954,9 @@ final class AgentProviderContextPolicyTests: XCTestCase {
                 tools: [],
                 maxOutputTokens: 64,
                 thinking: .none,
-                deadline: Date().addingTimeInterval(30)
+                deadline: Date().addingTimeInterval(30),
+                preSerializationGate: { serialize in try serialize() },
+                networkAttemptGate: {}
             )
             let transport: ScriptedProviderHTTPTransport
             if providerID == .deepSeek {
@@ -1130,7 +1134,111 @@ final class AgentProviderContextPolicyTests: XCTestCase {
         XCTAssertTrue(
             HealthContentProvenanceClassifier.classify("my recovery score is 7").hasUnclassifiedHealthContent
         )
-        XCTAssertTrue(HealthContentProvenanceClassifier.classify("I have asthma").hasUnclassifiedHealthContent)
+        let asthma = HealthContentProvenanceClassifier.classify("I have asthma")
+        XCTAssertEqual(asthma.dataClasses, [.healthBody])
+        XCTAssertFalse(asthma.hasUnclassifiedHealthContent)
+    }
+
+    func testMixedActivityAndHypertensionRequiresBothClasses() {
+        let text = "今天跑了5公里，我有高血压。"
+        let classification = HealthContentProvenanceClassifier.classify(text)
+        XCTAssertEqual(classification.dataClasses, [.healthActivity, .healthBody])
+        XCTAssertFalse(classification.hasUnclassifiedHealthContent)
+
+        let policy = CloudHealthContextPolicy(provider: .deepSeek, allowedClasses: [.healthActivity])
+        let dependencies = AgentSession.outboundConsentDependencies(
+            messages: [ModelMessage(role: .user, text: text)],
+            includesImage: false,
+            includesConversationHistory: false,
+            summary: nil,
+            structuredContext: nil,
+            policy: policy
+        )
+        XCTAssertTrue(dependencies.isSuperset(of: [.healthActivity, .healthBody]))
+
+        let history = [
+            ModelMessage(role: .user, text: text, healthContextPolicyProvenance: Self.historyProvenance()),
+            ModelMessage(role: .assistant, text: "已记录。", healthContextPolicyProvenance: Self.historyProvenance()),
+            ModelMessage(role: .user, text: "继续", healthContextPolicyProvenance: Self.historyProvenance()),
+        ]
+        let filtered = CloudRequestPolicyGuard.filterConversationHistory(
+            history,
+            currentTurnStartIndex: 2,
+            by: policy
+        )
+        XCTAssertFalse(String(describing: filtered).contains(text))
+    }
+
+    func testMixedNutritionAndMedicationDoesNotLoseUnknownClassification() {
+        let text = "今天吃了两碗饭，我服用了药物。"
+        let classification = HealthContentProvenanceClassifier.classify(text)
+        XCTAssertEqual(classification.dataClasses, [.healthNutrition, .healthBody])
+        XCTAssertTrue(classification.hasUnclassifiedHealthContent)
+
+        let policy = CloudHealthContextPolicy(provider: .qwen, allowedClasses: [.healthNutrition])
+        let dependencies = AgentSession.outboundConsentDependencies(
+            messages: [ModelMessage(role: .user, text: text)],
+            includesImage: false,
+            includesConversationHistory: false,
+            summary: nil,
+            structuredContext: nil,
+            policy: policy
+        )
+        XCTAssertTrue(dependencies.isSuperset(of: Set(CloudHealthContextPolicy.dataClasses)))
+
+        let history = [
+            ModelMessage(role: .user, text: text, healthContextPolicyProvenance: Self.historyProvenance(provider: .qwen)),
+            ModelMessage(role: .assistant, text: "已记录。", healthContextPolicyProvenance: Self.historyProvenance(provider: .qwen)),
+            ModelMessage(role: .user, text: "继续", healthContextPolicyProvenance: Self.historyProvenance(provider: .qwen)),
+        ]
+        let filtered = CloudRequestPolicyGuard.filterConversationHistory(
+            history,
+            currentTurnStartIndex: 2,
+            by: policy
+        )
+        XCTAssertFalse(String(describing: filtered).contains(text))
+    }
+
+    func testMixedSleepAndBloodGlucoseRequiresAllRelevantClasses() {
+        let classification = HealthContentProvenanceClassifier.classify("昨晚只睡了4小时，我的血糖偏高。")
+        XCTAssertEqual(classification.dataClasses, [.healthSleep, .healthBody])
+        XCTAssertFalse(classification.hasUnclassifiedHealthContent)
+    }
+
+    func testRecognizedHealthClassDoesNotSuppressUnclassifiedHealthFacts() {
+        let text = "今天跑了5公里，我有不明症状。"
+        let classification = HealthContentProvenanceClassifier.classify(text)
+        XCTAssertTrue(classification.dataClasses.contains(.healthActivity))
+        XCTAssertTrue(classification.dataClasses.contains(.healthBody))
+        XCTAssertTrue(classification.hasUnclassifiedHealthContent)
+
+        let dependencies = AgentSession.outboundConsentDependencies(
+            messages: [ModelMessage(role: .user, text: text)],
+            includesImage: false,
+            includesConversationHistory: false,
+            summary: nil,
+            structuredContext: nil,
+            policy: CloudHealthContextPolicy(provider: .deepSeek, allowedClasses: [.healthActivity])
+        )
+        XCTAssertTrue(dependencies.isSuperset(of: Set(CloudHealthContextPolicy.dataClasses)))
+    }
+
+    func testHealthAnalysisQuestionDoesNotBecomeAnUnclassifiedPersonalHealthFact() {
+        for text in ["请分析我最近的睡眠和活动状态", "我今天身体状态如何", "How is my sleep and activity lately?"] {
+            let classification = HealthContentProvenanceClassifier.classify(text)
+            XCTAssertTrue(classification.dataClasses.isEmpty, "A question must not be classified as a user health fact: \(text)")
+            XCTAssertFalse(classification.hasUnclassifiedHealthContent, "A question alone must not require every health category: \(text)")
+
+            let dependencies = AgentSession.outboundConsentDependencies(
+                messages: [ModelMessage(role: .user, text: text)],
+                includesImage: false,
+                includesConversationHistory: false,
+                summary: nil,
+                structuredContext: nil,
+                policy: CloudHealthContextPolicy(provider: .deepSeek, allowedClasses: [.healthActivity])
+            )
+            XCTAssertEqual(dependencies, [.healthText])
+        }
     }
 
     func testHistoricalHRVDoesNotSurviveWithOnlyConversationHistoryOrActivityConsent() throws {
@@ -1281,10 +1389,175 @@ final class AgentProviderContextPolicyTests: XCTestCase {
         XCTAssertTrue(dependencies.contains(.healthBody))
     }
 
+    func testFinalSendGatesRequireDependenciesFromEveryOutboundHealthSource() async throws {
+        let historyProvenance = HealthContextPolicyProvenance(
+            provider: .deepSeek,
+            policyRevision: 7,
+            allowedClasses: [],
+            contentClasses: [.healthActivity],
+            hasUnclassifiedHealthContent: false
+        )
+        let toolCallID = "recent-workouts"
+        let emptyWindow = HealthContextWindowSummary(
+            windowDays: 7,
+            coverageDays: [:],
+            averageSleepMinutes: nil,
+            averageStepCount: nil,
+            averageActiveEnergyKcal: nil,
+            averageEnergyIntakeKcal: nil,
+            averageDailyDeficitKcal: nil,
+            averageProteinGrams: nil,
+            medianWeightKilograms: nil
+        )
+        let nutritionSummary = HealthContextSummary(
+            sevenDay: emptyWindow,
+            twentyEightDay: emptyWindow,
+            targetWeightKilograms: nil,
+            dailyDeficitGoalKcal: nil,
+            dailyProteinGoalGrams: 80,
+            recommendationReferences: []
+        )
+        let bodyNarrative = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [EvidenceReference(key: "body.weight.kg", source: "body")],
+            recommendationCandidates: [],
+            aggregateSummary: nil
+        )
+        let cases: [(
+            name: String,
+            messages: [ModelMessage],
+            includesHistory: Bool,
+            summary: HealthContextSummary?,
+            structuredContext: HealthNarrativeContext?,
+            allowedPolicyClasses: Set<ProviderDataClass>,
+            expectedClass: ProviderDataClass
+        )] = [
+            (
+                "current user text",
+                [ModelMessage(role: .user, text: "我昨晚只睡了4小时")],
+                false, nil, nil, [], .healthSleep
+            ),
+            (
+                "historical user fact",
+                [ModelMessage(role: .user, text: "我今天跑了5公里", healthContextPolicyProvenance: historyProvenance)],
+                true, nil, nil, [], .healthActivity
+            ),
+            (
+                "tool result",
+                [
+                    ModelMessage(role: .assistant, content: [
+                        .toolCall(ToolCall(id: toolCallID, name: "get_recent_workouts", arguments: .object([:]))),
+                    ]),
+                    ModelMessage(role: .tool, content: [
+                        .toolResult(toolCallID: toolCallID, content: "workout-sentinel"),
+                    ]),
+                ],
+                false, nil, nil, [], .healthActivity
+            ),
+            (
+                "summary",
+                [],
+                false, nutritionSummary, nil, [], .healthNutrition
+            ),
+            (
+                "structured narrative",
+                [],
+                false, nil, bodyNarrative, [], .healthBody
+            ),
+        ]
+
+        for item in cases {
+            let policy = CloudHealthContextPolicy(
+                provider: .deepSeek,
+                allowedClasses: item.allowedPolicyClasses,
+                allowsConversationHistory: item.includesHistory
+            )
+            let dependencies = AgentSession.outboundConsentDependencies(
+                messages: item.messages,
+                includesImage: false,
+                includesConversationHistory: item.includesHistory,
+                summary: item.summary,
+                structuredContext: item.structuredContext,
+                policy: policy
+            )
+            XCTAssertTrue(dependencies.contains(item.expectedClass), "Missing dependency from \(item.name)")
+
+            var granted: [(ProviderID, ProviderDataClass)] = [(.deepSeek, .healthText)]
+            if item.includesHistory { granted.append((.deepSeek, .conversationHistory)) }
+            let repository = InMemoryProviderGovernanceRepository(granted: granted)
+            let serializationProbe = SendGateInvocationProbe()
+            do {
+                _ = try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
+                    from: repository,
+                    provider: .deepSeek,
+                    expectedHealthPolicy: policy,
+                    includesImage: false,
+                    additionalRequiredClasses: dependencies,
+                    operation: {
+                        serializationProbe.recordInvocation()
+                        return Data("unauthorized-\(item.name)".utf8)
+                    }
+                )
+                XCTFail("The serialization gate must reject the \(item.name) dependency")
+            } catch {
+                XCTAssertEqual(
+                    error as? ProviderError,
+                    .consentRequired(provider: .deepSeek, dataClass: item.expectedClass),
+                    "Wrong denial for \(item.name)"
+                )
+            }
+            XCTAssertEqual(serializationProbe.invocationCount, 0, "The \(item.name) request body must not be serialized")
+
+            let networkProbe = SendGateInvocationProbe()
+            do {
+                try await CloudHealthContextPolicy.withCurrentSendConsent(
+                    from: repository,
+                    provider: .deepSeek,
+                    expectedHealthPolicy: policy,
+                    includesImage: false,
+                    additionalRequiredClasses: dependencies,
+                    operation: { networkProbe.recordInvocation() }
+                )
+                XCTFail("The network gate must reject the \(item.name) dependency")
+            } catch {
+                XCTAssertEqual(
+                    error as? ProviderError,
+                    .consentRequired(provider: .deepSeek, dataClass: item.expectedClass),
+                    "Wrong network denial for \(item.name)"
+                )
+            }
+            XCTAssertEqual(networkProbe.invocationCount, 0, "The \(item.name) request must not start a network attempt")
+
+            let streamStartProbe = SendGateInvocationProbe()
+            do {
+                _ = try await CloudHealthContextPolicy.withCurrentSendConsent(
+                    from: repository,
+                    provider: .deepSeek,
+                    expectedHealthPolicy: policy,
+                    includesImage: false,
+                    additionalRequiredClasses: dependencies,
+                    operation: { streamStartProbe.recordInvocation() }
+                )
+                XCTFail("The Provider Stream start gate must reject the \(item.name) dependency")
+            } catch {
+                XCTAssertEqual(
+                    error as? ProviderError,
+                    .consentRequired(provider: .deepSeek, dataClass: item.expectedClass),
+                    "Wrong Provider Stream start denial for \(item.name)"
+                )
+            }
+            XCTAssertEqual(streamStartProbe.invocationCount, 0, "The \(item.name) Provider Stream must not start")
+        }
+    }
+
     func testRevokedHistoricalHealthFactIsAbsentFromDeepSeekAndQwenRequestBodies() async throws {
         let facts: [(text: String, deniedClass: ProviderDataClass, allowedClass: ProviderDataClass)] = [
             ("HRV 45", .healthBody, .healthActivity),
             ("我今天跑了5公里", .healthActivity, .healthNutrition),
+            ("今天跑了5公里，我有高血压。", .healthBody, .healthActivity),
+            ("今天跑了5公里，我有不明症状。", .healthBody, .healthActivity),
+            ("今天吃了两碗饭，我服用了药物。", .healthBody, .healthNutrition),
+            ("昨晚只睡了4小时，我的血糖偏高。", .healthBody, .healthSleep),
             ("我昨晚只睡了4小时", .healthSleep, .healthActivity),
             ("今天吃了两碗饭", .healthNutrition, .healthSleep),
         ]
@@ -1314,7 +1587,9 @@ final class AgentProviderContextPolicyTests: XCTestCase {
                     tools: [],
                     maxOutputTokens: 64,
                     thinking: .none,
-                    deadline: Date().addingTimeInterval(30)
+                    deadline: Date().addingTimeInterval(30),
+                    preSerializationGate: { serialize in try serialize() },
+                    networkAttemptGate: {}
                 )
                 let responseData = providerID == .deepSeek
                     ? try Gate03FixtureLoader.data("deepseek-responses-stream", extension: "sse")
@@ -1401,5 +1676,22 @@ final class AgentProviderContextPolicyTests: XCTestCase {
                 return text
             }
         }.joined(separator: "\n")
+    }
+}
+
+private final class SendGateInvocationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func recordInvocation() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+
+    var invocationCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
     }
 }

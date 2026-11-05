@@ -224,7 +224,9 @@ final class QwenProviderContractTests: XCTestCase {
             tools: [],
             maxOutputTokens: 2_048,
             thinking: .disabled,
-            deadline: Date().addingTimeInterval(45)
+            deadline: Date().addingTimeInterval(45),
+            preSerializationGate: { serialize in try serialize() },
+            networkAttemptGate: {}
         )
 
         do {
@@ -241,7 +243,7 @@ final class QwenProviderContractTests: XCTestCase {
     }
 
     private func request(deadline: Date, requestID: UUID = UUID()) -> ModelRequest {
-        ModelRequest(
+        var request = ModelRequest(
             requestID: requestID,
             conversationID: UUID(),
             systemPrompt: "fixture",
@@ -251,5 +253,8 @@ final class QwenProviderContractTests: XCTestCase {
             thinking: .disabled,
             deadline: deadline
         )
+        request.preSerializationGate = { serialize in try serialize() }
+        request.networkAttemptGate = {}
+        return request
     }
 }

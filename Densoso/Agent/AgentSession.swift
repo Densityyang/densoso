@@ -974,7 +974,8 @@ final class AgentSession {
                 )
                 let responseFormat = currentRoundUsesStructuredNarrative
                     ? HealthNarrativePolicy.responseFormat(
-                        allowedEvidenceKeys: roundContext?.allowedEvidenceKeys ?? []
+                        allowedEvidenceKeys: roundContext?.allowedEvidenceKeys ?? [],
+                        recommendationCandidates: roundContext?.recommendationCandidates ?? []
                     )
                     : nil
                 let sendAttempt = CloudHealthPolicySendAttempt()
@@ -988,7 +989,7 @@ final class AgentSession {
                         for: effectiveUserText,
                         priorHealthContext: priorHealthContext
                     )
-                var requestDataClasses = Self.outboundConsentDependencies(
+                var computedRequestDataClasses = Self.outboundConsentDependencies(
                     messages: preparedMessages.messages,
                     includesImage: containsImage,
                     includesConversationHistory: preparedMessages.includesConversationHistory,
@@ -1001,8 +1002,12 @@ final class AgentSession {
                     policy: roundPolicy
                 )
                 if mealEstimationNutritionContext != nil {
-                    requestDataClasses.insert(.healthNutrition)
+                    computedRequestDataClasses.insert(.healthNutrition)
                 }
+                // Freeze the exact request dependencies once prompt construction
+                // and all derived context have been finalized. Every send gate
+                // and the active-round revocation watcher must use this same set.
+                let requestDataClasses = computedRequestDataClasses
                 let request = ModelRequest(
                     requestID: requestID,
                     conversationID: conversationID,
@@ -1021,6 +1026,7 @@ final class AgentSession {
                             provider: provider.descriptor.id,
                             expectedHealthPolicy: roundPolicy,
                             includesImage: containsImage,
+                            additionalRequiredClasses: requestDataClasses,
                             operation: serialize
                         )
                         await sendAttempt.markSerializationGateReleased()
@@ -1032,6 +1038,7 @@ final class AgentSession {
                             provider: provider.descriptor.id,
                             expectedHealthPolicy: roundPolicy,
                             includesImage: containsImage,
+                            additionalRequiredClasses: requestDataClasses,
                             operation: {}
                         )
                         await sendAttempt.markNetworkAttemptAllowed()
@@ -1311,9 +1318,13 @@ final class AgentSession {
                 if currentRoundUsesStructuredNarrative {
                     if let narrative = HealthNarrativePolicy.decode(
                         result.text,
-                        allowedEvidenceKeys: currentAllowedEvidenceKeys
+                        allowedEvidenceKeys: currentAllowedEvidenceKeys,
+                        recommendationCandidates: currentNarrativeContext?.recommendationCandidates ?? []
                     ) {
-                        providerResponseText = HealthNarrativePolicy.displayText(narrative)
+                        providerResponseText = HealthNarrativePolicy.displayText(
+                            narrative,
+                            recommendationCandidates: currentNarrativeContext?.recommendationCandidates ?? []
+                        )
                     } else {
                         providerResponseText = HealthNarrativePolicy.deterministicFallback(currentNarrativeContext)
                     }
@@ -2032,7 +2043,7 @@ final class AgentSession {
         case "get_today_health_state", "get_health_history":
             policy.allowedClasses
         case "get_recent_meals":
-            Set([.healthNutrition]).intersection(policy.allowedClasses)
+            [.healthNutrition]
         case "get_metrics":
             Set([.healthNutrition, .healthActivity]).intersection(policy.allowedClasses)
         case "get_weekly_deficit":
@@ -2040,7 +2051,7 @@ final class AgentSession {
                 ? Set([.healthNutrition, .healthActivity])
                 : []
         case "get_recent_workouts", "get_schedule", "get_today_plan":
-            Set([.healthActivity]).intersection(policy.allowedClasses)
+            [.healthActivity]
         case "get_goal":
             Set([.healthNutrition, .healthBody, .healthActivity]).intersection(policy.allowedClasses)
         default:
@@ -2333,6 +2344,7 @@ final class AgentSession {
                 provider: provider.descriptor.id,
                 expectedHealthPolicy: expectedHealthPolicy,
                 includesImage: includesImage,
+                additionalRequiredClasses: requestDataClasses,
                 operation: {
                     try Task.checkCancellation()
                     return provider.stream(request)
@@ -2509,13 +2521,25 @@ final class AgentSession {
         if let activeCloudHealthPolicy {
             let inferred = contentClassification(for: message, policy: activeCloudHealthPolicy)
             let existing = message.healthContextPolicyProvenance
+            let contentClasses = (existing?.contentClasses ?? []).union(inferred.dataClasses)
+            var generationClasses = contentClasses
+            let hasUnclassifiedHealthContent = existing?.hasUnclassifiedHealthContent == true
+                || inferred.hasUnclassifiedHealthContent
+            if hasUnclassifiedHealthContent {
+                generationClasses.formUnion(CloudHealthContextPolicy.dataClasses)
+            }
+            var dataClassConsentRevisions = existing?.dataClassConsentRevisions ?? [:]
+            for (dataClass, revision) in activeCloudHealthPolicy.consentRevisions(for: generationClasses)
+            where dataClassConsentRevisions[dataClass] == nil {
+                dataClassConsentRevisions[dataClass] = revision
+            }
             let provenance = HealthContextPolicyProvenance(
                 provider: existing?.provider ?? activeCloudHealthPolicy.provider,
                 policyRevision: existing?.policyRevision ?? activeCloudHealthPolicy.revision,
                 allowedClasses: existing?.allowedClasses ?? activeCloudHealthPolicy.allowedClasses,
-                contentClasses: (existing?.contentClasses ?? []).union(inferred.dataClasses),
-                hasUnclassifiedHealthContent: existing?.hasUnclassifiedHealthContent == true
-                    || inferred.hasUnclassifiedHealthContent
+                contentClasses: contentClasses,
+                dataClassConsentRevisions: dataClassConsentRevisions,
+                hasUnclassifiedHealthContent: hasUnclassifiedHealthContent
             )
             recordedMessage = ModelMessage(
                 role: message.role,
@@ -2617,11 +2641,16 @@ final class AgentSession {
         contentClasses: Set<ProviderDataClass>? = nil,
         hasUnclassifiedHealthContent: Bool = false
     ) -> HealthContextPolicyProvenance {
-        HealthContextPolicyProvenance(
+        var generationClasses = contentClasses ?? policy.allowedClasses
+        if hasUnclassifiedHealthContent {
+            generationClasses.formUnion(CloudHealthContextPolicy.dataClasses)
+        }
+        return HealthContextPolicyProvenance(
             provider: policy.provider,
             policyRevision: policy.revision,
             allowedClasses: policy.allowedClasses,
             contentClasses: contentClasses,
+            dataClassConsentRevisions: policy.consentRevisions(for: generationClasses),
             hasUnclassifiedHealthContent: hasUnclassifiedHealthContent
         )
     }

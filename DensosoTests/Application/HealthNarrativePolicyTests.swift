@@ -5,11 +5,15 @@ import XCTest
 final class HealthNarrativePolicyTests: XCTestCase {
     func testStructuredNarrativeAcceptsOnlyKnownEvidenceKeysAndNarrativeText() throws {
         let allowed = Set(["sleep.mainSleep.minutes"])
-        let valid = #"{"headline":"目前可按舒适节奏安排","summary":"现有证据支持继续留意规律作息。","recommendations":["保持稳定的日常节奏。"],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"]}"#
+        let valid = #"{"headline":"目前可按舒适节奏安排","summary":"现有证据支持继续留意规律作息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"]}"#
 
-        let decoded = try XCTUnwrap(HealthNarrativePolicy.decode(valid, allowedEvidenceKeys: allowed))
+        let decoded = try XCTUnwrap(HealthNarrativePolicy.decode(
+            valid,
+            allowedEvidenceKeys: allowed,
+            recommendationCandidates: []
+        ))
         XCTAssertEqual(decoded.evidenceKeys, ["sleep.mainSleep.minutes"])
-        XCTAssertFalse(HealthNarrativePolicy.displayText(decoded).contains("sleep.mainSleep.minutes"))
+        XCTAssertFalse(HealthNarrativePolicy.displayText(decoded, recommendationCandidates: []).contains("sleep.mainSleep.minutes"))
     }
 
     func testNarrativeRejectsNumericMetricClaimsUnknownKeysAndExtraFields() {
@@ -21,12 +25,64 @@ final class HealthNarrativePolicyTests: XCTestCase {
         let unknownKey = #"{"headline":"状态需要留意","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.consistency"]}"#
         let extraField = #"{"headline":"状态需要留意","summary":"目前可用证据支持留意休息。","recommendations":[],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"],"value":17}"#
 
-        XCTAssertNil(HealthNarrativePolicy.decode(numeric, allowedEvidenceKeys: allowed))
-        XCTAssertNil(HealthNarrativePolicy.decode(chineseNumeric, allowedEvidenceKeys: allowed))
-        XCTAssertNil(HealthNarrativePolicy.decode(spelledNumeric, allowedEvidenceKeys: allowed))
-        XCTAssertNil(HealthNarrativePolicy.decode(metric, allowedEvidenceKeys: allowed))
-        XCTAssertNil(HealthNarrativePolicy.decode(unknownKey, allowedEvidenceKeys: allowed))
-        XCTAssertNil(HealthNarrativePolicy.decode(extraField, allowedEvidenceKeys: allowed))
+        XCTAssertNil(HealthNarrativePolicy.decode(numeric, allowedEvidenceKeys: allowed, recommendationCandidates: []))
+        XCTAssertNil(HealthNarrativePolicy.decode(chineseNumeric, allowedEvidenceKeys: allowed, recommendationCandidates: []))
+        XCTAssertNil(HealthNarrativePolicy.decode(spelledNumeric, allowedEvidenceKeys: allowed, recommendationCandidates: []))
+        XCTAssertNil(HealthNarrativePolicy.decode(metric, allowedEvidenceKeys: allowed, recommendationCandidates: []))
+        XCTAssertNil(HealthNarrativePolicy.decode(unknownKey, allowedEvidenceKeys: allowed, recommendationCandidates: []))
+        XCTAssertNil(HealthNarrativePolicy.decode(extraField, allowedEvidenceKeys: allowed, recommendationCandidates: []))
+    }
+
+    func testRecommendationsCanOnlySelectLocallyVerifiedEvidenceBoundCandidates() throws {
+        let allowedEvidenceKeys: Set<String> = ["sleep.mainSleep.minutes"]
+        let candidate = HealthRecommendation(
+            id: "sleep.consistency",
+            domain: .sleep,
+            title: "关注睡眠节奏",
+            detail: "可先查看记录是否完整。",
+            evidenceKey: "sleep.mainSleep.minutes",
+            conflictGroup: "sleep-routine",
+            score: 0.8
+        )
+        let valid = #"{"headline":"按个人节奏安排","summary":"目前证据支持留意近期休息。","recommendations":[{"candidateID":"sleep.consistency"}],"tomorrowGuidance":null,"evidenceKeys":["sleep.mainSleep.minutes"]}"#
+        let decoded = try XCTUnwrap(HealthNarrativePolicy.decode(
+            valid,
+            allowedEvidenceKeys: allowedEvidenceKeys,
+            recommendationCandidates: [candidate]
+        ))
+        XCTAssertEqual(decoded.recommendations, [HealthNarrativeRecommendation(candidateID: candidate.id)])
+        XCTAssertTrue(HealthNarrativePolicy.displayText(decoded, recommendationCandidates: [candidate]).contains(candidate.title))
+
+        let inventedCandidate = valid.replacingOccurrences(of: candidate.id, with: "activity.unverified")
+        XCTAssertNil(HealthNarrativePolicy.decode(
+            inventedCandidate,
+            allowedEvidenceKeys: allowedEvidenceKeys,
+            recommendationCandidates: [candidate]
+        ))
+        let freeformRecommendation = valid.replacingOccurrences(
+            of: #"{"candidateID":"sleep.consistency"}"#,
+            with: #""建立独立健身计划""#
+        )
+        XCTAssertNil(HealthNarrativePolicy.decode(
+            freeformRecommendation,
+            allowedEvidenceKeys: allowedEvidenceKeys,
+            recommendationCandidates: [candidate]
+        ))
+        let ungroundedCandidate = HealthRecommendation(
+            id: "activity.unverified",
+            domain: .activity,
+            title: "增加力量训练",
+            detail: "缺少活动证据。",
+            evidenceKey: "activity.steps",
+            conflictGroup: "activity",
+            score: 0.8
+        )
+        let ungroundedSelection = valid.replacingOccurrences(of: candidate.id, with: ungroundedCandidate.id)
+        XCTAssertNil(HealthNarrativePolicy.decode(
+            ungroundedSelection,
+            allowedEvidenceKeys: allowedEvidenceKeys,
+            recommendationCandidates: [candidate, ungroundedCandidate]
+        ))
     }
 
     func testPromptUsesStructuredContractOnlyForPersonalHealthQuestions() throws {
@@ -194,7 +250,19 @@ final class HealthNarrativePolicyTests: XCTestCase {
     }
 
     func testStructuredSchemaIsClosedAndConstrainsEvidenceKeys() {
-        let format = HealthNarrativePolicy.responseFormat(allowedEvidenceKeys: ["sleep.mainSleep.minutes"])
+        let candidate = HealthRecommendation(
+            id: "sleep.consistency",
+            domain: .sleep,
+            title: "关注睡眠节奏",
+            detail: "可先查看记录是否完整。",
+            evidenceKey: "sleep.mainSleep.minutes",
+            conflictGroup: "sleep-routine",
+            score: 0.8
+        )
+        let format = HealthNarrativePolicy.responseFormat(
+            allowedEvidenceKeys: ["sleep.mainSleep.minutes"],
+            recommendationCandidates: [candidate]
+        )
         XCTAssertEqual(format.name, "health_narrative")
         guard case .object(let properties, let required, let additionalProperties, _) = format.schema else {
             return XCTFail("Expected closed JSON object schema")
@@ -208,6 +276,14 @@ final class HealthNarrativePolicyTests: XCTestCase {
             return XCTFail("Expected enumerated evidence key strings")
         }
         XCTAssertEqual(values, ["sleep.mainSleep.minutes"])
+        guard case .array(let recommendationItems, _, _, _) = properties["recommendations"],
+              case .object(let recommendationProperties, let recommendationRequired, let recommendationAdditionalProperties, _) = recommendationItems,
+              case .string(let candidateIDs, _, _, _, _) = recommendationProperties["candidateID"] else {
+            return XCTFail("Expected recommendations to select a locally allowlisted candidate ID")
+        }
+        XCTAssertEqual(candidateIDs, [candidate.id])
+        XCTAssertEqual(recommendationRequired, ["candidateID"])
+        XCTAssertFalse(recommendationAdditionalProperties)
     }
 
     func testStateWithoutAggregateSummaryDoesNotProduceHealthConclusion() {

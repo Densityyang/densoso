@@ -621,31 +621,36 @@ final class SpeechService {
                 from: governanceRepository,
                 provider: .qwen
             )
-            try await CloudHealthContextPolicy.withCurrentSendConsent(
+            let speechProvider = cloudProvider
+            let consentRepository = governanceRepository
+            let requestLocale = locale
+            let cloud = try await CloudHealthContextPolicy.withRevocableSendAttempt(
                 from: governanceRepository,
                 provider: .qwen,
                 expectedHealthPolicy: expectedSpeechPolicy,
                 includesImage: false,
                 requiresHealthText: false,
                 additionalRequiredClasses: [.speechAudio],
-                operation: {}
-            )
-            let cloud = try await cloudProvider.transcribe(
-                audio: audio,
-                locale: locale,
-                requestID: captureRequestID,
-                beforeNetworkAttempt: {
-                    try await CloudHealthContextPolicy.withCurrentSendConsent(
-                        from: governanceRepository,
-                        provider: .qwen,
-                        expectedHealthPolicy: expectedSpeechPolicy,
-                        includesImage: false,
-                        requiresHealthText: false,
-                        additionalRequiredClasses: [.speechAudio],
-                        operation: {}
+                operation: {
+                    try await speechProvider.transcribe(
+                        audio: audio,
+                        locale: requestLocale,
+                        requestID: captureRequestID,
+                        beforeNetworkAttempt: {
+                            try await CloudHealthContextPolicy.withCurrentSendConsent(
+                                from: consentRepository,
+                                provider: .qwen,
+                                expectedHealthPolicy: expectedSpeechPolicy,
+                                includesImage: false,
+                                requiresHealthText: false,
+                                additionalRequiredClasses: [.speechAudio],
+                                operation: {}
+                            )
+                        }
                     )
                 }
             )
+            try Task.checkCancellation()
             transcribedText = cloud.text
             recordFirstTranscriptLatencyIfNeeded()
             transcriptSource = .qwenASR

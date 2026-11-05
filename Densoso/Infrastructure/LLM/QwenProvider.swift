@@ -69,15 +69,13 @@ struct QwenProvider: TextModelProvider {
                           !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw ProviderError.configurationMissing(provider: .qwen)
                     }
+                    guard let preSerializationGate = request.preSerializationGate,
+                          let networkAttemptGate = request.networkAttemptGate else {
+                        throw ProviderError.consentRequired(provider: .qwen, dataClass: .healthText)
+                    }
                     let body: Data
-                    if let gate = request.preSerializationGate {
-                        body = try await gate {
-                            try JSONEncoder().encode(
-                                OpenAIRequest(request: request, model: descriptor.model)
-                            )
-                        }
-                    } else {
-                        body = try JSONEncoder().encode(
+                    body = try await preSerializationGate {
+                        try JSONEncoder().encode(
                             OpenAIRequest(request: request, model: descriptor.model)
                         )
                     }
@@ -93,7 +91,7 @@ struct QwenProvider: TextModelProvider {
                     let result = try await executor.execute(
                         urlRequest,
                         deadline: request.deadline,
-                        beforeNetworkAttempt: request.networkAttemptGate
+                        beforeNetworkAttempt: networkAttemptGate
                     )
                     logSink.record(
                         ProviderLogRedactor.metadata(

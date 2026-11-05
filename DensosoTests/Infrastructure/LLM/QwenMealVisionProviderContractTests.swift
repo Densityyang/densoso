@@ -86,7 +86,8 @@ final class QwenMealVisionProviderContractTests: XCTestCase {
 
         let observation = try await provider.analyze(
             imageJPEG: fixtureJPEG,
-            locale: Locale(identifier: "zh-CN")
+            locale: Locale(identifier: "zh-CN"),
+            serializationGate: { serialize in try serialize() }
         )
 
         XCTAssertEqual(observation.labels, ["红烧豆腐"])
@@ -151,7 +152,11 @@ final class QwenMealVisionProviderContractTests: XCTestCase {
         )
 
         do {
-            _ = try await provider.analyze(imageJPEG: fixtureJPEG, locale: .current)
+            _ = try await provider.analyze(
+                imageJPEG: fixtureJPEG,
+                locale: .current,
+                serializationGate: { serialize in try serialize() }
+            )
             XCTFail("Expected a non-pinned response model to be rejected")
         } catch {
             XCTAssertEqual(error as? ProviderError, .malformedResponse)
@@ -175,7 +180,11 @@ final class QwenMealVisionProviderContractTests: XCTestCase {
         )
 
         do {
-            _ = try await provider.analyze(imageJPEG: fixtureJPEG, locale: .current)
+            _ = try await provider.analyze(
+                imageJPEG: fixtureJPEG,
+                locale: .current,
+                serializationGate: { serialize in try serialize() }
+            )
             XCTFail("Expected strict observation rejection")
         } catch {
             XCTAssertEqual(error as? ProviderError, .schemaViolation(path: "visionObservation"))

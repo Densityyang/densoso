@@ -31,12 +31,6 @@ struct QwenMealVisionProvider: MealVisionProviding {
         self.logSink = logSink
     }
 
-    func analyze(imageJPEG: Data, locale: Locale) async throws -> MealVisionObservation {
-        try await analyze(imageJPEG: imageJPEG, locale: locale, serializationGate: { serialize in
-            try serialize()
-        })
-    }
-
     func analyze(
         imageJPEG: Data,
         locale: Locale,
@@ -184,12 +178,6 @@ struct ConfiguredQwenMealVisionProvider: MealVisionProviding {
         self.credentialSource = credentialSource
         self.transport = transport
         self.logSink = logSink
-    }
-
-    func analyze(imageJPEG: Data, locale: Locale) async throws -> MealVisionObservation {
-        try await analyze(imageJPEG: imageJPEG, locale: locale, serializationGate: { serialize in
-            try serialize()
-        })
     }
 
     func analyze(

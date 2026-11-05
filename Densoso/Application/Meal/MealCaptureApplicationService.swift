@@ -358,17 +358,28 @@ final class MealCaptureApplicationService {
             from: governanceRepository,
             provider: .qwen
         )
-        let observation = try await visionProvider.analyze(
-            imageJPEG: sanitized,
-            locale: locale,
-            serializationGate: { serialize in
-                try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
-                    from: self.governanceRepository,
-                    provider: .qwen,
-                    expectedHealthPolicy: expectedImagePolicy,
-                    includesImage: true,
-                    requiresHealthText: false,
-                    operation: serialize
+        let consentRepository = governanceRepository
+        let selectedVisionProvider = visionProvider
+        let observation = try await CloudHealthContextPolicy.withRevocableSendAttempt(
+            from: consentRepository,
+            provider: .qwen,
+            expectedHealthPolicy: expectedImagePolicy,
+            includesImage: true,
+            requiresHealthText: false,
+            operation: {
+                try await selectedVisionProvider.analyze(
+                    imageJPEG: sanitized,
+                    locale: locale,
+                    serializationGate: { serialize in
+                        try await CloudHealthContextPolicy.withCurrentSendConsentSerialization(
+                            from: consentRepository,
+                            provider: .qwen,
+                            expectedHealthPolicy: expectedImagePolicy,
+                            includesImage: true,
+                            requiresHealthText: false,
+                            operation: serialize
+                        )
+                    }
                 )
             }
         )

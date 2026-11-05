@@ -230,7 +230,6 @@ public struct MealVisionObservation: Codable, Equatable, Sendable {
 }
 
 public protocol MealVisionProviding: Sendable {
-    func analyze(imageJPEG: Data, locale: Locale) async throws -> MealVisionObservation
     func analyze(
         imageJPEG: Data,
         locale: Locale,

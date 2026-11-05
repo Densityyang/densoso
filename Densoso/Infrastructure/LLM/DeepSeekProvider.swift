@@ -44,19 +44,17 @@ struct DeepSeekProvider: MultimodalModelProvider {
                           !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw ProviderError.configurationMissing(provider: .deepSeek)
                     }
+                    guard let preSerializationGate = request.preSerializationGate,
+                          let networkAttemptGate = request.networkAttemptGate else {
+                        throw ProviderError.consentRequired(provider: .deepSeek, dataClass: .healthText)
+                    }
                     var urlRequest = URLRequest(url: endpoint)
                     urlRequest.httpMethod = "POST"
                     urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     urlRequest.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
                     let body: Data
-                    if let gate = request.preSerializationGate {
-                        body = try await gate {
-                            try JSONEncoder().encode(
-                                DeepSeekResponsesRequest(request: request, model: descriptor.model)
-                            )
-                        }
-                    } else {
-                        body = try JSONEncoder().encode(
+                    body = try await preSerializationGate {
+                        try JSONEncoder().encode(
                             DeepSeekResponsesRequest(request: request, model: descriptor.model)
                         )
                     }
@@ -65,7 +63,7 @@ struct DeepSeekProvider: MultimodalModelProvider {
                     let result = try await executor.executeStream(
                         urlRequest,
                         deadline: request.deadline,
-                        beforeNetworkAttempt: request.networkAttemptGate
+                        beforeNetworkAttempt: networkAttemptGate
                     )
                     try executor.checkDeadline(request.deadline)
                     logSink.record(

@@ -599,6 +599,215 @@ final class AgentCoordinatorTests: XCTestCase {
         XCTAssertFalse(deniedPrompt.contains("activity.steps"))
     }
 
+    func testAgentSessionDeepSeekAndQwenHTTPBodiesKeepOnlyAuthorizedHealthSentinels() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let baseline = HealthBaseline(
+            readiness: .mature,
+            validDays: 7,
+            median: 500,
+            p10: 400,
+            p90: 600,
+            mad: 25
+        )
+        func domain(_ domain: HealthDomain, value: Double, evidenceKey: String) -> HealthDomainResult {
+            HealthDomainResult(
+                domain: domain,
+                status: .attention,
+                currentValue: value,
+                baseline: baseline,
+                evidenceKeys: [evidenceKey],
+                dataCoverage: .complete
+            )
+        }
+        let sleepKey = "sleep.SLEEP_PRIVATE_731"
+        let activityCandidateID = "activity.ACTIVITY_PRIVATE_842"
+        let activityKey = "activity.steps"
+        let nutritionKey = "nutrition.NUTRITION_PRIVATE_953"
+        let bodyKey = "body.BODY_PRIVATE_164"
+        let subjectiveKey = "userReportedCheckIn.SUBJECTIVE_PRIVATE_275"
+        let sevenDay = HealthContextWindowSummary(
+            windowDays: 7,
+            coverageDays: ["sleep": 7, "steps": 7, "energyIntake": 7, "bodyMass": 7],
+            averageSleepMinutes: 731,
+            averageStepCount: 842,
+            averageActiveEnergyKcal: nil,
+            averageEnergyIntakeKcal: nil,
+            averageDailyDeficitKcal: nil,
+            averageProteinGrams: nil,
+            medianWeightKilograms: 164,
+            dataCoverage: [
+                "sleep": .complete,
+                "steps": .complete,
+                "energyIntake": .complete,
+                "bodyMass": .complete,
+            ]
+        )
+        let summary = HealthContextSummary(
+            sevenDay: sevenDay,
+            twentyEightDay: sevenDay,
+            targetWeightKilograms: 164,
+            dailyDeficitGoalKcal: nil,
+            dailyProteinGoalGrams: nil,
+            recommendationReferences: [sleepKey, activityKey, nutritionKey, bodyKey]
+        )
+        let subjective = SubjectiveHealthContext(
+            asOf: now,
+            entries: [SubjectiveHealthEntry(
+                dayStart: now,
+                occurredAt: now,
+                energy: .low,
+                stress: .elevated,
+                subjectiveSleep: .poor,
+                evidenceKey: subjectiveKey
+            )]
+        )
+        let activityTrend = ActivityMetricTrend(
+            metric: .steps,
+            currentValue: 842,
+            baselineWindowDays: 7,
+            baseline: baseline,
+            status: .attention,
+            dataCoverage: .complete
+        )
+        let activityCandidate = HealthRecommendation(
+            id: activityCandidateID,
+            domain: .activity,
+            title: "查看近期活动变化",
+            detail: "活动量与个人近期范围不同；可按当前状态选择轻松活动或休息。",
+            evidenceKey: activityKey,
+            conflictGroup: "activity-load",
+            score: 0.8
+        )
+        let context = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [
+                EvidenceReference(key: sleepKey, source: "sleep"),
+                EvidenceReference(key: activityKey, source: "activity"),
+                EvidenceReference(key: nutritionKey, source: "nutrition"),
+                EvidenceReference(key: bodyKey, source: "body"),
+            ],
+            recommendationCandidates: [activityCandidate],
+            aggregateSummary: summary,
+            subjectiveContext: subjective,
+            activityTrends: [activityTrend],
+            cloudHealthState: CloudHealthStateContext(domains: [
+                domain(.sleep, value: 731, evidenceKey: sleepKey),
+                domain(.activity, value: 842, evidenceKey: activityKey),
+                domain(.nutrition, value: 953, evidenceKey: nutritionKey),
+                domain(.body, value: 164, evidenceKey: bodyKey),
+            ])
+        )
+        let responseText = #"{"headline":"按已授权数据观察","summary":"当前活动记录可用于参考。","recommendations":[{"candidateID":"activity.ACTIVITY_PRIVATE_842"}],"tomorrowGuidance":null,"evidenceKeys":["activity.steps"]}"#
+        let imageData = Data([0xFF, 0xD8, 0xFF] + Array("IMAGE_PRIVATE_386".utf8) + [0xFF, 0xD9])
+
+        for providerID in [ProviderID.deepSeek, .qwen] {
+            let transport = ScriptedProviderHTTPTransport(steps: [
+                .response(status: 200, data: try providerResponseData(provider: providerID, text: responseText)),
+            ])
+            let provider: any TextModelProvider
+            let mode: IntelligenceMode
+            if providerID == .deepSeek {
+                provider = DeepSeekProvider(
+                    credentialSource: TestCredentialSource(values: [.deepSeek: "fixture-key"]),
+                    transport: transport,
+                    jitter: { _ in 0 }
+                )
+                mode = .cloudDeepSeek
+            } else {
+                provider = QwenProvider(
+                    endpoint: URL(string: "https://fixture.invalid/chat/completions")!,
+                    credentialSource: TestCredentialSource(values: [.qwen: "fixture-key"]),
+                    transport: transport,
+                    jitter: { _ in 0 }
+                )
+                mode = .cloudQwen
+            }
+            let harness = try await Harness(
+                provider: provider,
+                mode: mode,
+                grantedConsents: [
+                    (providerID, .healthText),
+                    (providerID, .healthActivity),
+                    (providerID, .mealImage),
+                ],
+                healthNarrativeContextProvider: { context }
+            )
+
+            _ = try await harness.session.send(
+                multimodalRequest: try MultimodalModelRequest(
+                    userText: "请分析我最近的睡眠和活动状态",
+                    imageJPEG: imageData,
+                    mealEvidence: []
+                )
+            )
+
+            let sentRequests = await transport.recordedRequests()
+            let bodyData = try XCTUnwrap(sentRequests.first?.httpBody)
+            let body = String(decoding: bodyData, as: UTF8.self)
+            let serializedPrompt = try systemPrompt(in: bodyData, provider: providerID)
+            XCTAssertTrue(body.contains(activityCandidateID), "Authorized activity evidence should reach the real \(providerID.rawValue) serializer")
+            XCTAssertTrue(body.contains(imageData.base64EncodedString()), "The authorized image payload should be serialized for \(providerID.rawValue)")
+            for deniedSentinel in [
+                sleepKey, "SLEEP_PRIVATE_731", nutritionKey, "NUTRITION_PRIVATE_953",
+                bodyKey, "BODY_PRIVATE_164", subjectiveKey, "SUBJECTIVE_PRIVATE_275",
+            ] {
+                XCTAssertFalse(body.contains(deniedSentinel), "Denied content reached the final \(providerID.rawValue) HTTP body: \(deniedSentinel)")
+            }
+            for (field, value) in [
+                ("averageSleepMinutes", "731"),
+                ("averageEnergyIntakeKcal", "953"),
+                ("medianWeightKilograms", "164"),
+                ("targetWeightKilograms", "164"),
+            ] {
+                let numberPattern = #"\"\#(NSRegularExpression.escapedPattern(for: field))\"\s*:\s*\#(value)(?:\.0)?(?:\D|$)"#
+                XCTAssertNil(
+                    serializedPrompt.range(of: numberPattern, options: .regularExpression),
+                    "Denied aggregate \(field)=\(value) reached the \(providerID.rawValue) prompt"
+                )
+            }
+            XCTAssertTrue(serializedPrompt.contains("\"averageStepCount\":842") || serializedPrompt.contains("\"averageStepCount\": 842"))
+            XCTAssertFalse(body.contains("SUBJECTIVE_PRIVATE_275"))
+        }
+    }
+
+    func testMixedCurrentActivityAndBodyFactIsRejectedBeforeDeepSeekAndQwenHTTPTransport() async throws {
+        for providerID in [ProviderID.deepSeek, .qwen] {
+            let transport = ScriptedProviderHTTPTransport(steps: [])
+            let provider: any TextModelProvider
+            let mode: IntelligenceMode
+            if providerID == .deepSeek {
+                provider = DeepSeekProvider(
+                    credentialSource: TestCredentialSource(values: [.deepSeek: "fixture-key"]),
+                    transport: transport,
+                    jitter: { _ in 0 }
+                )
+                mode = .cloudDeepSeek
+            } else {
+                provider = QwenProvider(
+                    endpoint: URL(string: "https://fixture.invalid/chat/completions")!,
+                    credentialSource: TestCredentialSource(values: [.qwen: "fixture-key"]),
+                    transport: transport,
+                    jitter: { _ in 0 }
+                )
+                mode = .cloudQwen
+            }
+            let harness = try await Harness(
+                provider: provider,
+                mode: mode,
+                grantedConsents: [(providerID, .healthText), (providerID, .healthActivity)]
+            )
+
+            do {
+                _ = try await harness.session.send(userText: "今天跑了5公里，我有高血压。")
+                XCTFail("A mixed activity/body fact must fail closed when only Activity is authorized for \(providerID.rawValue)")
+            } catch {
+                XCTAssertEqual(error as? ProviderError, .consentRequired(provider: providerID, dataClass: .healthBody))
+            }
+            let requests = await transport.recordedRequests()
+            XCTAssertTrue(requests.isEmpty, "No denied mixed-category request may reach \(providerID.rawValue) HTTP transport")
+        }
+    }
+
     func testReplayedWatchRequestIDDoesNotStartAnotherProviderRound() async throws {
         let provider = ScriptedTextProvider(
             scripts: [[.textDelta("已生成可检查的草稿。"), .completed(.completed)]]
@@ -923,6 +1132,23 @@ final class AgentCoordinatorTests: XCTestCase {
                 .consentRequired(provider: .deepSeek, dataClass: .healthText)
             )
         }
+    }
+
+    func testCurrentUnconsentedHealthFactIsRejectedBeforeProviderInvocation() async throws {
+        let provider = RevocationBlockingTextProvider()
+        let harness = try await Harness(
+            provider: provider,
+            grantedConsents: [(.deepSeek, .healthText)]
+        )
+
+        do {
+            _ = try await harness.session.send(userText: "我昨晚只睡了4小时")
+            XCTFail("A current sleep fact must require Sleep consent even though it is plain text")
+        } catch {
+            XCTAssertEqual(error as? ProviderError, .consentRequired(provider: .deepSeek, dataClass: .healthSleep))
+        }
+
+        XCTAssertTrue(provider.recordedRequests().isEmpty, "The provider must not be invoked for an unconsented fact")
     }
 
     func testTypedEventStreamPreservesOrderAndRealCounts() async throws {
@@ -1252,6 +1478,47 @@ final class AgentCoordinatorTests: XCTestCase {
             attempt: 1
         )
     }
+
+    private func providerResponseData(provider: ProviderID, text: String) throws -> Data {
+        if provider == .deepSeek {
+            let response: [String: Any] = [
+                "type": "response.completed",
+                "response": [
+                    "id": "resp-privacy-fixture",
+                    "model": "deepseek-fixture",
+                    "status": "completed",
+                    "output": [[
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [["type": "output_text", "text": text]],
+                    ]],
+                    "usage": ["input_tokens": 20, "output_tokens": 12],
+                ],
+            ]
+            let payload = try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+            return Data("event: response.completed\ndata: \(String(decoding: payload, as: UTF8.self))\n\n".utf8)
+        }
+        let response: [String: Any] = [
+            "id": "chatcmpl-privacy-fixture",
+            "model": "qwen-fixture",
+            "choices": [[
+                "message": ["role": "assistant", "content": text],
+                "finish_reason": "stop",
+            ]],
+            "usage": ["prompt_tokens": 20, "completion_tokens": 12],
+        ]
+        return try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+    }
+
+    private func systemPrompt(in bodyData: Data, provider: ProviderID) throws -> String {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: bodyData) as? [String: Any])
+        if provider == .deepSeek {
+            return try XCTUnwrap(object["instructions"] as? String)
+        }
+        let messages = try XCTUnwrap(object["messages"] as? [[String: Any]])
+        let systemMessage = try XCTUnwrap(messages.first { $0["role"] as? String == "system" })
+        return try XCTUnwrap(systemMessage["content"] as? String)
+    }
 }
 
 @MainActor
@@ -1262,8 +1529,10 @@ private struct Harness {
 
     init(
         provider: any TextModelProvider,
+        mode: IntelligenceMode = .cloudDeepSeek,
         conversationRepository: (any ConversationRepository)? = nil,
         budgetFactory: @escaping @Sendable () -> AgentBudget = { AgentBudget() },
+        grantedConsents: [(ProviderID, ProviderDataClass)]? = nil,
         healthNarrativeContextProvider: (@Sendable () async throws -> HealthNarrativeContext?)? = nil,
         dailyMetricsProvider: (@Sendable (Date, Date) async throws -> [AgentDailyMetric])? = nil,
         toolRegistry: ToolRegistry? = nil
@@ -1273,12 +1542,12 @@ private struct Harness {
         let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
         let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: modelContainer)
         let agentRepository = SwiftDataAgentRepository(modelContainer: modelContainer)
-        let governance = InMemoryProviderGovernanceRepository(granted: [
+        let governance = InMemoryProviderGovernanceRepository(granted: grantedConsents ?? [
             (.deepSeek, .healthText),
             (.deepSeek, .healthSleep),
         ])
         let preferences = IntelligencePreferences()
-        preferences.mode = .cloudDeepSeek
+        preferences.mode = mode
         let session = AgentSession(
             providerSelector: TestProviderSelector(provider),
             intelligencePreferences: preferences,

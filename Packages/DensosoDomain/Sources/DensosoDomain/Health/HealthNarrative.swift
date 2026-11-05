@@ -5,14 +5,14 @@ import Foundation
 public struct HealthNarrative: Codable, Equatable, Sendable {
     public let headline: String
     public let summary: String
-    public let recommendations: [String]
+    public let recommendations: [HealthNarrativeRecommendation]
     public let tomorrowGuidance: String?
     public let evidenceKeys: [String]
 
     public init(
         headline: String,
         summary: String,
-        recommendations: [String],
+        recommendations: [HealthNarrativeRecommendation],
         tomorrowGuidance: String?,
         evidenceKeys: [String]
     ) {
@@ -21,6 +21,16 @@ public struct HealthNarrative: Codable, Equatable, Sendable {
         self.recommendations = recommendations
         self.tomorrowGuidance = tomorrowGuidance
         self.evidenceKeys = evidenceKeys
+    }
+}
+
+/// A model may select a locally verified recommendation, but cannot author a
+/// new personalized health recommendation without a deterministic evidence link.
+public struct HealthNarrativeRecommendation: Codable, Equatable, Sendable {
+    public let candidateID: String
+
+    public init(candidateID: String) {
+        self.candidateID = candidateID
     }
 }
 

@@ -2305,6 +2305,25 @@ jobs:
               -only-testing:DensosoTests/GetRecentWorkoutsToolTests/testRepositoryIncludesPersistedHealthKitWorkoutsWithUnknownOrMissingReadState \
               -only-testing:DensosoTests/HealthRepositoryTests/testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue \
               -only-testing:DensosoTests/AgentProviderContextPolicyTests/testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testRevokedHistoricalHealthFactIsAbsentFromDeepSeekAndQwenRequestBodies \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testMixedActivityAndHypertensionRequiresBothClasses \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testMixedNutritionAndMedicationDoesNotLoseUnknownClassification \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testMixedSleepAndBloodGlucoseRequiresAllRelevantClasses \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testRecognizedHealthClassDoesNotSuppressUnclassifiedHealthFacts \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testHealthAnalysisQuestionDoesNotBecomeAnUnclassifiedPersonalHealthFact \
+              -only-testing:DensosoTests/HealthNarrativePolicyTests/testRecommendationsCanOnlySelectLocallyVerifiedEvidenceBoundCandidates \
+              -only-testing:DensosoTests/HealthNarrativePolicyTests/testStructuredSchemaIsClosedAndConstrainsEvidenceKeys \
+              -only-testing:DensosoTests/AgentDailyMetricsRepositoryTests/testInProgressNutritionKeepsRecordedEstimateAndLocalLastMealTimeButNoDailyDeficit \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testFinalSendGatesRequireDependenciesFromEveryOutboundHealthSource \
+              -only-testing:DensosoTests/AgentCoordinatorTests/testMixedCurrentActivityAndBodyFactIsRejectedBeforeDeepSeekAndQwenHTTPTransport \
+              -only-testing:DensosoTests/AgentCoordinatorTests/testAgentSessionDeepSeekAndQwenHTTPBodiesKeepOnlyAuthorizedHealthSentinels \
+              -only-testing:DensosoTests/AgentCoordinatorTests/testRevokingHealthActivityCancelsRoundUsingOnlyHistoricalUserActivityFact \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testActualDataDependencyRevokedAfterSerializationStopsBeforeNetworkAttempt \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testSnapshotRepositoryRejectsActualDependencyAtAllThreeFinalSendGates \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testRevocationBeforeProviderRetryRejectsTheSameActualDataDependency \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testRevokedAndReconfirmedClassDoesNotRestoreOldMessageWithExplicitContentClasses \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testRevokingSpeechAudioCancelsActiveASRAttempt \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testRevokingMealImageCancelsActiveVisionAttempt \
               -only-testing:DensosoTests/DeepSeekProviderContractTests/testPreSerializationConsentCheckStopsBeforeDeepSeekRequestIsSent \
               -only-testing:DensosoTests/QwenProviderContractTests/testPreSerializationConsentCheckStopsBeforeQwenRequestIsSent \
               -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testSerializationConsentGateStopsBeforeNetworkRequest \

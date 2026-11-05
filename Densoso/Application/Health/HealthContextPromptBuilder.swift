@@ -290,7 +290,7 @@ enum HealthContextPromptBuilder {
         \(prompt)
 
         ## 健康解读结构（强制）
-        只返回符合 response schema 的 JSON。使用 cloudHealthState、vitalTrends、activityTrends、aggregateSummary、subjectiveContext、evidence 和 recommendationCandidates 中可验证的信息；subjectiveContext 只代表用户本人报告的主观感受，不是 HealthKit 测量，不得混入客观健康状态。引用时必须明确标为用户自述。evidenceKeys 必须引用由本机状态、自述或推荐候选组成的 allowedEvidenceKeys，不得引用 recommendation ID。只保留能由引用支撑的判断；无证据支撑的领域应明确说明不足，不作推断。
+        只返回符合 response schema 的 JSON。使用 cloudHealthState、vitalTrends、activityTrends、aggregateSummary、subjectiveContext、evidence 和 recommendationCandidates 中可验证的信息；subjectiveContext 只代表用户本人报告的主观感受，不是 HealthKit 测量，不得混入客观健康状态。引用时必须明确标为用户自述。recommendations 只能选择 recommendationCandidates 中的 candidateID；本机将 ID 映射为已经验证的建议标题和证据，不能自行编写个性化建议。evidenceKeys 必须引用由本机状态、自述或推荐候选组成的 allowedEvidenceKeys。只保留能由引用支撑的判断；无证据支撑的领域应明确说明不足，不作推断。
         文本字段只写不含数值的自然语言，不得写数字、百分比、具体指标值或单位；数值和指标由界面从本机确定性 HealthState 渲染。不得诊断或猜测缺失数据。
         \(contextJSON)
         """

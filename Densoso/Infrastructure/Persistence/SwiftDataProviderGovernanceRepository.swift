@@ -178,15 +178,7 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
         let allowed = expectedAllowedClasses.intersection(Set(CloudHealthContextPolicy.dataClasses))
         let now = max(Date(), current.updatedAt.addingTimeInterval(0.001))
         do {
-            for dataClass in CloudHealthContextPolicy.dataClasses {
-                try upsertConsentRecord(
-                    provider: provider,
-                    dataClass: dataClass,
-                    granted: allowed.contains(dataClass),
-                    policyVersion: "cloud-health-context-v1",
-                    decidedAt: now
-                )
-            }
+            try updateHealthContextConsentRecords(provider: provider, allowedClasses: allowed, decidedAt: now)
             var snapshotClasses = allowed
             if try isConsentGranted(provider: provider, dataClass: .conversationHistory) {
                 snapshotClasses.insert(.conversationHistory)
@@ -256,15 +248,7 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
 
         let now = Date()
         do {
-            for dataClass in CloudHealthContextPolicy.dataClasses {
-                try upsertConsentRecord(
-                    provider: provider,
-                    dataClass: dataClass,
-                    granted: allowed.contains(dataClass),
-                    policyVersion: "cloud-health-context-v1",
-                    decidedAt: now
-                )
-            }
+            try updateHealthContextConsentRecords(provider: provider, allowedClasses: allowed, decidedAt: now)
             var snapshotClasses = allowed
             if try isConsentGranted(provider: provider, dataClass: .conversationHistory) {
                 snapshotClasses.insert(.conversationHistory)
@@ -718,6 +702,26 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
                 decidedAt: decidedAt,
                 revokedAt: granted ? nil : decidedAt
             ))
+        }
+    }
+
+    private func updateHealthContextConsentRecords(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        decidedAt: Date
+    ) throws {
+        for dataClass in CloudHealthContextPolicy.dataClasses {
+            let shouldGrant = allowedClasses.contains(dataClass)
+            guard try isConsentGranted(provider: provider, dataClass: dataClass) != shouldGrant else {
+                continue
+            }
+            try upsertConsentRecord(
+                provider: provider,
+                dataClass: dataClass,
+                granted: shouldGrant,
+                policyVersion: "cloud-health-context-v1",
+                decidedAt: decidedAt
+            )
         }
     }
 }
