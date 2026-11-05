@@ -140,10 +140,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             "Packages/DensosoDomain/Sources/DensosoDomain/AlgorithmVersions.swift",
             (
                 'public static let calorieAccounting = "calorie-accounting-v3"',
-                'public static let dailyMetricsProjection = "daily-metrics-projection-v1"',
+                'public static let dailyMetricsProjection = "daily-metrics-projection-v2"',
                 'public static let mealEstimator = "meal-estimator-v2"',
                 'public static let portionEstimator = "portion-estimator-v2"',
-                'public static let healthIntelligence = "health-intelligence-v4"',
+                'public static let healthIntelligence = "health-intelligence-v6"',
                 'public static let recommendationPolicy = "recommendation-policy-v1"',
                 'public static let dailyLoop = "daily-loop-v2"',
             ),
@@ -391,7 +391,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "refreshOperation.cancel()",
                 "activeRefreshTask = refreshOperation",
                 "HistoricalMetricsRecomputing",
-                "historicalMetricsRecomputer.recomputePendingMetrics(",
+                "let recomputeResult = try await operations.recomputeMetrics(",
                 "if recomputeResult.hasMoreEligibleWork",
                 "reason: .historicalRecompute",
                 "DailyLoopBackgroundSchedulePolicy.shouldReplace(",
@@ -437,7 +437,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
             step_start = background_scheduler.find(await_step)
             check_start = background_scheduler.find(cancellation_guard, step_start + len(await_step))
             maximum_cancellation_gap = (
-                700 if "recomputePendingMetrics" in await_step
+                700 if "recomputeMetrics" in await_step
                 else 450 if "syncAvailableData" in await_step
                 else 240
             )
@@ -546,7 +546,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "let healthIntelligenceService = HealthIntelligenceService(",
                 "projectionActor: healthProjectionActor",
                 "briefCacheGenerationFence: briefCacheGenerationFence",
-                "try await healthProjectionActor.todayHealthState(asOf: date)",
+                "todayHealthStateProvider: { date in",
+                "try await healthProjectionActor.healthNarrativeContext(asOf: date)",
                 "try await healthProjectionActor.healthHistory(from: start, through: end)",
                 "try await healthProjectionActor.healthNarrativeContext()",
                 "DailyLoopSnapshotService(",
@@ -592,12 +593,12 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "Densoso/Agent/Tools/GetTodayHealthStateTool.swift",
             (
-                "@Sendable (Date) async throws -> HealthStateV2?",
-                "let state = try await stateProvider(date)",
-                "TodayTrainingLoadPayload(summary: state.trainingLoad)",
-                "let isComplete = summary.dataCoverage == .complete",
-                "recentSevenDayLoad = isComplete && summary.readiness != .noData ? summary.recentSevenDayLoad : nil",
-                "priorTwentyEightDayAverage = isComplete ? summary.priorTwentyEightDayAverage : nil",
+                "@Sendable (Date) async throws -> HealthNarrativeContext?",
+                "let context = try await stateProvider(date)",
+                "context?.cloudHealthState",
+                "TodayHealthStateToolOutput(",
+                "hasCoverageGaps(state, vitalTrends: vitalTrends, activityTrends: activityTrends)",
+                "$0.dataCoverage != .complete",
             ),
             errors,
         )
@@ -1025,7 +1026,7 @@ def gate_contract(gate: int, errors: list[str]) -> str:
                 "onSendToAgent(preparedRequest)",
                 "case .localReview(let review)",
                 "case .textOnlyFallback(let prompt)",
-                "stageLocalReview(localReview)",
+                "stageLocalReview(localReview, operationID: operationID)",
                 "onLocalPendingAction(action)",
                 "条码和完整营养标签可在本机生成待确认草稿",
             ),
@@ -1717,8 +1718,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         require(
             "DensosoTests/DensosoMigrationTests.swift",
             (
-                "testV11DiskStoreMigratesToV14WithDishPriorTableAndPreservedPolicy",
-                "testV12DiskStoreMigratesToV14WithEmptyToolExecutionJournalAndContributionLedger",
+                "testV11DiskStoreMigratesToV15WithDishPriorTableAndPreservedPolicy",
+                "testV12DiskStoreMigratesToV15WithEmptyToolExecutionJournalAndContributionLedger",
                 "testV13DiskStoreAddsEmptyMealPriorContributionLedger",
             ),
             errors,
@@ -2186,7 +2187,8 @@ def gate_contract(gate: int, errors: list[str]) -> str:
         (
             "legacyStorageKey",
             "maximumPersistedBytes",
-            "data.write(to: storageURL, options: .atomic)",
+            "data.write(to: url, options: .atomic)",
+            "writeData(data, storageURL)",
             "defaults.removeObject(forKey: Self.legacyStorageKey)",
         ),
         errors,
@@ -2204,10 +2206,10 @@ def gate_contract(gate: int, errors: list[str]) -> str:
     require(
         "DensosoWatchApp/WatchConnectivityClient.swift",
         (
-            "let predecessorSequence = outbox.latestPendingCausalSequence",
-            "dependsOn: predecessorSequence",
+            "WatchMessageOutboxPersistenceTransaction.enqueue(",
+            "outbox = commit.outbox",
             "snapshot.terminalCausalSequenceWatermark",
-            "outbox.acknowledge(throughCausalSequence: watermark)",
+            "candidate.acknowledge(throughCausalSequence: watermark)",
         ),
         errors,
     )

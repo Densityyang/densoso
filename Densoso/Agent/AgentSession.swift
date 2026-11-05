@@ -1989,7 +1989,10 @@ final class AgentSession {
         if let summary { required.formUnion(healthDataClasses(in: summary)) }
         if let structuredContext { required.formUnion(healthDataClasses(in: structuredContext)) }
 
-        for message in messages where message.role != .system {
+        // ModelMessage contains only conversation roles (user, assistant, tool).
+        // The provider system prompt is a separate ModelRequest field and is
+        // intentionally not part of health-data dependency inference.
+        for message in messages {
             let provenance = message.healthContextPolicyProvenance
             if let contentClasses = provenance?.contentClasses {
                 required.formUnion(contentClasses)

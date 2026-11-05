@@ -1578,7 +1578,7 @@ final class HealthRepositoryTests: XCTestCase {
         XCTAssertEqual(try pendingMetricDays(), Set(days[1..<6]))
     }
 
-    func testLocalAndHealthKitWeightMutationHaveEquivalentProjectionInvalidation() throws {
+    func testLocalAndHealthKitWeightMutationHaveEquivalentProjectionInvalidation() async throws {
         let calendar = Calendar.current
         let firstDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_700_000_000))
         let days = try seedMetricDays(startingAt: firstDay, count: 6)
@@ -1588,10 +1588,18 @@ final class HealthRepositoryTests: XCTestCase {
             kilograms: 75
         ))
         try context.save()
-        let localDates = try DailyMetricsWeightInvalidation.projectionDates(
-            startingAt: days[0].addingTimeInterval(9 * 60 * 60),
-            in: context
+        let localWeight = WeightRecord(
+            sourceActionKey: "local-weight-invalidation-source",
+            measuredAt: days[0].addingTimeInterval(9 * 60 * 60),
+            kilograms: 68
         )
+        try await HealthRepository(
+            modelContext: context,
+            willSaveProjection: { throw TestSaveError.injected }
+        ).insert(localWeight)
+        let localPendingDates = Set(try context.fetch(FetchDescriptor<DailyMetrics>())
+            .filter(\.requiresRecompute)
+            .map { calendar.startOfDay(for: $0.date) })
 
         let schema = Schema(versionedSchema: DensosoSchemaV14.self)
         let healthKitContainer = try ModelContainer(
@@ -1637,16 +1645,35 @@ final class HealthRepositoryTests: XCTestCase {
             endDate: sample.endDate
         ))
         try healthKitContext.save()
-        let dayEnd = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: days[0]))
-        let healthKitDates = try DailyMetricsWeightInvalidation.projectionDates(
-            startingAt: days[0],
-            searchingAfter: dayEnd.addingTimeInterval(-0.000_001),
-            in: healthKitContext,
-            calendar: calendar
+        let importedSample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000606")!,
+            metric: .bodyMass,
+            startDate: days[0].addingTimeInterval(9 * 60 * 60),
+            endDate: days[0].addingTimeInterval(9 * 60 * 60),
+            value: 68
         )
+        try await HealthRepository(
+            modelContext: healthKitContext,
+            willSaveProjection: { throw TestSaveError.injected }
+        ).applyImportedHealthSamples(
+            HealthSamplePage(samples: [importedSample], nextAnchorData: Data([1]), readState: .available),
+            stream: HealthMetricID.bodyMass.rawValue,
+            lastSuccessfulAt: days[0].addingTimeInterval(10 * 60 * 60),
+            lookbackStart: days[0],
+            replacements: [HealthSampleDaySnapshot(
+                dayStart: days[0],
+                samples: [importedSample],
+                readState: .available
+            )]
+        )
+        let healthKitPendingDates = Set(try healthKitContext.fetch(FetchDescriptor<DailyMetrics>())
+            .filter(\.requiresRecompute)
+            .map { calendar.startOfDay(for: $0.date) })
 
-        XCTAssertEqual(localDates, Set(days[0..<4]))
-        XCTAssertEqual(healthKitDates, localDates)
+        let expectedDates = Set(days[0..<4])
+        XCTAssertEqual(localPendingDates, expectedDates)
+        XCTAssertEqual(healthKitPendingDates, expectedDates)
+        XCTAssertEqual(healthKitPendingDates, localPendingDates)
     }
 
     func testHealthSamplePagesUpdateDeleteAndDeduplicateByHealthKitUUID() async throws {

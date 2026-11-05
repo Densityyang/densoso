@@ -145,7 +145,6 @@ final class HealthRepository: HealthSyncRepository {
     }
 
     func deleteWeight(id: UUID) async throws {
-        let initialWeight = try requireWeight(id: id)
         try await write(affecting: []) { affectedDates in
             let weight = try requireWeight(id: id)
             guard weight.source != "healthKit" else { throw HealthRepositoryError.refuseHealthKitEcho }

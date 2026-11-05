@@ -311,9 +311,17 @@ def main() -> int:
     confirmation_repository = (
         ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataConfirmationRepository.swift"
     ).read_text(encoding="utf-8")
-    daily_projection_index = confirmation_repository.find("try reprojectDaily(on: affectedDate)")
+    daily_projection_loop_index = confirmation_repository.find(
+        "for metricDate in affectedDailyMetricDates.sorted()"
+    )
+    daily_projection_index = confirmation_repository.find("try reprojectDaily(on: metricDate)")
     snapshot_projection_index = confirmation_repository.find("try reprojectDailyHealthSnapshot(on: affectedDate)")
-    if daily_projection_index < 0 or snapshot_projection_index < 0 or daily_projection_index > snapshot_projection_index:
+    if (
+        daily_projection_loop_index < 0
+        or daily_projection_index < daily_projection_loop_index
+        or snapshot_projection_index < 0
+        or daily_projection_index > snapshot_projection_index
+    ):
         errors.append("confirmation must refresh DailyMetrics before deriving the DailyHealthSnapshot intake")
 
     require_text(

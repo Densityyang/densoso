@@ -56,7 +56,7 @@ def main() -> int:
     snapshot_contract = require_text(
         "Packages/DensosoDomain/Sources/DensosoDomain/HealthDomainDrafts.swift",
         (
-            'public static let currentAlgorithmVersion = "daily-health-snapshot-v3"',
+            'public static let currentAlgorithmVersion = "daily-health-snapshot-v4"',
             "public let healthKitSampleSummary: DailyHealthSampleSummary?",
             "case healthKitSamples",
             "try container.encodeIfPresent(healthKitSampleSummary, forKey: .healthKitSampleSummary)",
@@ -410,7 +410,7 @@ def main() -> int:
     decoded_domain_coverage = " ".join(
         """
         let decodedCoverage = try container.decodeIfPresent(HealthDataCoverage.self, forKey: .dataCoverage)
-            ?? (domain == .nutrition ? .complete : .unknown)
+            ?? .unknown
         """.split()
     )
     fail_closed_unknown_domain = " ".join(
@@ -455,6 +455,7 @@ def main() -> int:
         """
         if resolvedCoverage == .unknown {
             self.latestMedian = nil
+            self.currentSampleCount = nil
             self.baseline = HealthBaseline(readiness: .noData, validDays: 0, median: nil, p10: nil, p90: nil, mad: nil)
             self.status = .unknown
         }
@@ -471,12 +472,12 @@ def main() -> int:
         errors.append("legacy training-load caches without coverage must decode as unknown and omit numeric placeholders")
     if unknown_vital_trend not in normalized_domain_coverage:
         errors.append("unknown vital-trend coverage must clear its median and reset its baseline/status")
-    if "health-intelligence-v4" not in require_text(
+    if "health-intelligence-v6" not in require_text(
         "Packages/DensosoDomain/Sources/DensosoDomain/AlgorithmVersions.swift",
-        ("public static let healthIntelligence = \"health-intelligence-v4\"",),
+        ("public static let healthIntelligence = \"health-intelligence-v6\"",),
         errors,
     ):
-        errors.append("health-intelligence-v4 must invalidate briefs built with the old coverage semantics")
+        errors.append("health-intelligence-v6 must invalidate briefs built with the old coverage semantics")
     require_text(
         "Packages/DensosoDomain/Tests/DensosoDomainTests/HealthIntelligenceTests.swift",
         (
@@ -514,18 +515,18 @@ def main() -> int:
         "Densoso/Application/DailyLoop/DailyLoopBackgroundScheduler.swift",
         (
             "BGTaskScheduler.shared.register(",
-            "BGAppRefreshTaskRequest(identifier: Self.taskIdentifier)",
+            "BGAppRefreshTaskRequest(identifier: request.identifier)",
             "backgroundTask.expirationHandler",
-            "self.healthSyncCoordinator.syncAvailableData(",
+            "syncAvailableData(",
             "forceRebaseline: false",
             "aggregateIncrementalLookbackDays: 3",
-            "self.isHealthAuthorized()",
-            "self.historicalMetricsRecomputer.recomputePendingMetrics(",
-            "self.prepareLocalHealthCacheIfNeeded(repository)",
-            "self.healthIntelligenceService.refresh()",
-            "self.dailyLoopSnapshotService.snapshot()",
-            "updateSnapshot(snapshot)",
-            "refreshApplicationContext()",
+            "if isHealthAuthorized()",
+            "let recomputeResult = try await operations.recomputeMetrics(",
+            "prepareLocalHealthCache: prepareLocalHealthCacheIfNeeded",
+            "healthIntelligenceService.refresh()",
+            "dailyLoopSnapshotService.snapshot()",
+            "notificationScheduler.updateSnapshot($0)",
+            "watchConnectivityCoordinator.refreshApplicationContext()",
         ),
         errors,
     )

@@ -1373,11 +1373,19 @@ final class AgentProviderContextPolicyTests: XCTestCase {
             allowedClasses: [],
             allowsConversationHistory: false
         )
+        let request = ModelRequest(
+            requestID: UUID(),
+            conversationID: UUID(),
+            systemPrompt: "健康安全说明：血糖、药物、心率、饮食、睡眠和运动",
+            messages: [ModelMessage(role: .user, text: "你好")],
+            tools: [],
+            maxOutputTokens: 64,
+            thinking: .none,
+            deadline: .distantFuture
+        )
+        XCTAssertTrue(request.systemPrompt?.contains("血糖") == true)
         let dependencies = AgentSession.outboundConsentDependencies(
-            messages: [
-                ModelMessage(role: .system, text: "健康安全说明：血糖、药物、心率、饮食、睡眠和运动"),
-                ModelMessage(role: .user, text: "你好"),
-            ],
+            messages: request.messages,
             includesImage: false,
             includesConversationHistory: false,
             summary: nil,
