@@ -312,6 +312,32 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         XCTAssertTrue(nutritionConsent)
     }
 
+    func testPendingExpansionKeepsPreviouslyConfirmedClassesAvailable() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep],
+            repository: repository,
+            confirmedAt: Date()
+        )
+        _ = try await CloudHealthContextPolicy.stageConversationExpansion(
+            provider: .deepSeek,
+            requestedClasses: [.healthActivity],
+            repository: repository
+        )
+
+        let pendingPolicy = try await CloudHealthContextPolicy.load(from: repository, provider: .deepSeek)
+        XCTAssertEqual(pendingPolicy.snapshot.state, .draft)
+        XCTAssertEqual(pendingPolicy.allowedClasses, [.healthSleep])
+        XCTAssertTrue(pendingPolicy.allows(.healthSleep))
+        XCTAssertFalse(pendingPolicy.allows(.healthActivity))
+    }
+
     func testPendingExpansionConfirmationCannotRestoreUserCanceledDraft() async throws {
         let schema = Schema(versionedSchema: DensosoSchemaV11.self)
         let container = try ModelContainer(
@@ -445,6 +471,139 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         XCTAssertEqual(persisted.state, .revoked)
         XCTAssertTrue(persisted.allowedClasses.isEmpty)
         XCTAssertGreaterThan(persisted.revision, draft.revision)
+        XCTAssertFalse(sleepConsent)
+    }
+
+    func testStaleSettingsExpansionCannotRestorePreviouslyRevokedHealthClass() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthSleep, .healthActivity],
+            repository: repository,
+            confirmedAt: Date()
+        )
+        let staleSnapshot = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+        let revoked = try await CloudHealthContextPolicy.applyRestrictiveChange(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity],
+            repository: repository,
+            changeSource: .settings
+        )
+
+        do {
+            _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+                provider: .deepSeek,
+                allowedClasses: [.healthSleep, .healthActivity, .healthBody],
+                repository: repository,
+                expectedSnapshot: staleSnapshot,
+                confirmedAt: Date(),
+                changeSource: .settings
+            )
+            XCTFail("A confirmation based on a stale Settings snapshot must not restore Sleep")
+        } catch {
+            XCTAssertEqual(error as? CloudHealthContextPolicyError, .stalePolicyRevision)
+        }
+
+        let persisted = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+        let sleepConsent = try await repository.isConsentGranted(provider: .deepSeek, dataClass: .healthSleep)
+        let bodyConsent = try await repository.isConsentGranted(provider: .deepSeek, dataClass: .healthBody)
+        let activityConsent = try await repository.isConsentGranted(provider: .deepSeek, dataClass: .healthActivity)
+        XCTAssertEqual(persisted, revoked)
+        XCTAssertFalse(sleepConsent)
+        XCTAssertFalse(bodyConsent)
+        XCTAssertTrue(activityConsent)
+    }
+
+    func testStaleConversationHistoryConfirmationCannotOverrideRevocation() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .qwen,
+            allowedClasses: [.healthActivity],
+            repository: repository,
+            confirmedAt: Date()
+        )
+        _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+            provider: .qwen,
+            allowed: true,
+            repository: repository,
+            confirmedAt: Date()
+        )
+        let staleSnapshot = try await repository.currentCloudHealthContextPolicySnapshot(provider: .qwen)
+        let revoked = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+            provider: .qwen,
+            allowed: false,
+            repository: repository,
+            changeSource: .settings
+        )
+
+        do {
+            _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+                provider: .qwen,
+                allowed: true,
+                repository: repository,
+                expectedSnapshot: staleSnapshot,
+                confirmedAt: Date(),
+                changeSource: .settings
+            )
+            XCTFail("A stale history confirmation must not restore revoked conversation history")
+        } catch {
+            XCTAssertEqual(error as? CloudHealthContextPolicyError, .stalePolicyRevision)
+        }
+
+        let persisted = try await repository.currentCloudHealthContextPolicySnapshot(provider: .qwen)
+        let historyConsent = try await repository.isConsentGranted(provider: .qwen, dataClass: .conversationHistory)
+        let activityConsent = try await repository.isConsentGranted(provider: .qwen, dataClass: .healthActivity)
+        XCTAssertEqual(persisted, revoked)
+        XCTAssertFalse(historyConsent)
+        XCTAssertTrue(activityConsent)
+    }
+
+    func testStaleExpansionStageCannotRebuildFromAnOlderPolicySnapshot() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV11.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity, .healthSleep],
+            repository: repository,
+            confirmedAt: Date()
+        )
+        let staleSnapshot = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+        let revoked = try await CloudHealthContextPolicy.applyRestrictiveChange(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity],
+            repository: repository,
+            changeSource: .settings
+        )
+
+        do {
+            _ = try await repository.stageCloudHealthContextPolicyDraft(
+                expectedSnapshot: staleSnapshot,
+                provider: .deepSeek,
+                allowedClasses: [.healthActivity, .healthSleep, .healthBody],
+                changeSource: .settings
+            )
+            XCTFail("A stale expansion stage must not carry a revoked class into a new draft")
+        } catch {
+            XCTAssertEqual(error as? CloudHealthContextPolicyError, .stalePolicyRevision)
+        }
+
+        let persisted = try await repository.currentCloudHealthContextPolicySnapshot(provider: .deepSeek)
+        let sleepConsent = try await repository.isConsentGranted(provider: .deepSeek, dataClass: .healthSleep)
+        XCTAssertEqual(persisted, revoked)
         XCTAssertFalse(sleepConsent)
     }
 
@@ -1260,6 +1419,41 @@ final class CloudHealthContextPolicyTests: XCTestCase {
         )
     }
 
+    func testNutritionOnlyConsentKeepsRecommendationsThatOnlyUseNutritionEvidence() throws {
+        let nutritionOnly = HealthRecommendation(
+            id: "nutrition.review-balance",
+            domain: .nutrition,
+            title: "回看今天的饮食节奏",
+            detail: "可以回看餐食份量与记录完整度。",
+            evidenceKey: "nutrition.energyIntake.kcal",
+            conflictGroup: "nutrition-balance",
+            score: 0.65,
+            requiredDataDomains: [.nutrition]
+        )
+        let deficitRecommendation = HealthRecommendation(
+            id: "nutrition.deficit-aware",
+            domain: .nutrition,
+            title: "查看能量目标",
+            detail: "结合活动与摄入查看目标。",
+            evidenceKey: "nutrition.energyIntake.kcal",
+            conflictGroup: "nutrition-deficit",
+            score: 0.6,
+            requiredDataDomains: [.nutrition, .activity]
+        )
+        let context = HealthNarrativeContext(
+            healthState: nil,
+            evidence: [EvidenceReference(key: "nutrition.energyIntake.kcal", source: "nutrition")],
+            recommendationCandidates: [nutritionOnly, deficitRecommendation],
+            aggregateSummary: nil
+        )
+
+        let filtered = try XCTUnwrap(CloudRequestPolicyGuard.filtered(
+            context,
+            by: CloudHealthContextPolicy(provider: .qwen, allowedClasses: [.healthNutrition])
+        ))
+        XCTAssertEqual(filtered.recommendationCandidates.map(\.id), ["nutrition.review-balance"])
+    }
+
     func testStructuredActivityTrendsRequireActivityConsentAndKnownMetricEvidence() throws {
         let baseline = HealthBaseline(
             readiness: .mature,
@@ -1369,7 +1563,8 @@ final class CloudHealthContextPolicyTests: XCTestCase {
                 band: .increased,
                 estimatedWorkoutCount: 3,
                 unavailableEffortCount: 0
-            )
+            ),
+            tomorrowGuidance: nil
         )
         let trend = HealthVitalTrend(
             metric: .restingHeartRate,

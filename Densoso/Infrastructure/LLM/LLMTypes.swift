@@ -62,13 +62,33 @@ enum ProviderDataClass: String, Codable, CaseIterable, Hashable, Sendable {
     }
 }
 
-/// Local-only provenance for assistant and tool messages generated from
-/// automatic health context. It is persisted with conversation history so a
-/// later provider request can remove turns whose policy became more restrictive.
+/// Local-only policy and content provenance persisted with each conversation
+/// message. Actual content categories remain distinct from categories that
+/// happened to be allowed when the message was created.
 struct HealthContextPolicyProvenance: Codable, Equatable, Sendable {
     let provider: ProviderID
     let policyRevision: String
     let allowedClasses: Set<ProviderDataClass>
+    /// Categories present in this message's content. This is deliberately
+    /// separate from the policy that was active when the message was created.
+    let contentClasses: Set<ProviderDataClass>?
+    /// `true` means the message contains a likely health fact whose category
+    /// could not be identified safely. Missing values indicate legacy data.
+    let hasUnclassifiedHealthContent: Bool?
+
+    init(
+        provider: ProviderID,
+        policyRevision: String,
+        allowedClasses: Set<ProviderDataClass>,
+        contentClasses: Set<ProviderDataClass>? = nil,
+        hasUnclassifiedHealthContent: Bool? = nil
+    ) {
+        self.provider = provider
+        self.policyRevision = policyRevision
+        self.allowedClasses = allowedClasses
+        self.contentClasses = contentClasses
+        self.hasUnclassifiedHealthContent = hasUnclassifiedHealthContent
+    }
 }
 
 enum ThinkingPolicy: String, Codable, Sendable {

@@ -2,7 +2,7 @@ import DensosoDomain
 import CryptoKit
 import Foundation
 
-enum CloudHealthPolicyState: String, Codable, Sendable {
+enum CloudHealthPolicyState: String, Codable, Hashable, Sendable {
     case notConfigured
     case draft
     case active
@@ -108,6 +108,84 @@ struct CloudHealthContextPolicyChange: Sendable {
     }
 }
 
+struct HealthContentClassification: Equatable, Sendable {
+    let dataClasses: Set<ProviderDataClass>
+    let hasUnclassifiedHealthContent: Bool
+}
+
+/// Classifies factual health content for message provenance and outbound
+/// consent checks. This is intentionally independent of health intent
+/// detection, which answers whether health context should be retrieved.
+enum HealthContentProvenanceClassifier {
+    static func classify(_ text: String) -> HealthContentClassification {
+        let value = text.lowercased()
+        var dataClasses = Set<ProviderDataClass>()
+
+        if matches(#"(?i)(?:hrv|rhr)\s*[:：=]?\s*\d"#, in: value)
+            || matches(#"(?i)\b(?:resting\s*heart\s*rate|heart\s*rate|blood\s*pressure|weight)\b.{0,16}\d"#, in: value)
+            || matches(#"(静息心率|心率|血压|体重|体脂|腰围)\s*(是|[:：=])?\s*\d"#, in: value)
+            || matches(#"(?i)(hrv|rhr|heart\s*rate|blood\s*pressure|weight).{0,16}(high|low|normal|elevated|abnormal|poor|good)"#, in: value)
+            || matches(#"(心率|血压|体重|体脂|腰围).{0,16}(偏高|偏低|正常|异常)"#, in: value) {
+            dataClasses.insert(.healthBody)
+        }
+
+        if matches(#"(睡眠|睡了|睡着|昨晚睡|sleep(?:ing)?|slept).{0,36}(\d|小时|分钟|hour|minute|record|记录|很差|不足|充足|poor|bad|good)"#, in: value)
+            || value.contains("睡眠记录") || value.contains("sleep record") {
+            dataClasses.insert(.healthSleep)
+        }
+
+        if matches(#"\d+\s*步"#, in: value)
+            || matches(#"\d+\s*steps?"#, in: value)
+            || matches(#"(步数|steps?)\s*[:：=]?\s*\d"#, in: value)
+            || matches(#"(走了|walked|ran|跑了|运动了|worked out|workout|exercise|running).{0,18}(\d|公里|千米|km|分钟|minute)"#, in: value) {
+            dataClasses.insert(.healthActivity)
+        }
+
+        if matches(#"(早餐|午餐|晚餐|加餐|餐食|饮食|摄入|meal|ate|eaten|intake|diet|consumed|consumption).{0,36}(\d|kcal|calorie|千卡|卡路里|吃了|素食|vegetarian)"#, in: value)
+            || matches(#"(吃了|摄入).{0,24}(\d|kcal|calorie|千卡|卡路里)"#, in: value)
+            || matches(#"(我|今天|刚才|i ).{0,8}(吃了|吃过).{1,48}"#, in: value)
+            || matches(#"\b(i ate|ate|eaten|consumed)\b.{1,48}"#, in: value) {
+            dataClasses.insert(.healthNutrition)
+        }
+
+        if matches(#"(压力|精力|疲劳|疲惫|心情|状态|stress|energy|fatigue|mood).{0,20}(偏高|很大|很累|疲惫|低|高|差|好|\d|high|low|tired|poor|good)"#, in: value)
+            || matches(#"(感觉|觉得|feeling|feel).{0,20}(压力|疲劳|疲惫|stress|tired|anxious)"#, in: value) {
+            dataClasses.insert(.healthSubjective)
+        }
+
+        let containsSensitiveCondition = [
+            "diabetes", "diabetic", "asthma", "hypertension", "medication", "medicine",
+            "diagnosis", "symptom", "pain", "blood glucose", "pregnant", "pregnancy",
+            "糖尿病", "哮喘", "高血压", "低血糖", "用药", "药物", "诊断", "症状", "疼痛", "过敏", "怀孕", "月经",
+        ].contains { value.contains($0) }
+        let hasHealthFactCue = containsSensitiveCondition
+            || matches(#"\d"#, in: value)
+            || ["偏高", "偏低", "很差", "不足", "正常", "异常", "高", "低", "elevated", "high", "low", "normal", "poor", "bad"].contains { value.contains($0) }
+            || ["我", "我的", "今天感觉", "昨晚", "my ", "i feel", "i slept", "i ate"].contains { value.contains($0) }
+        let hasHealthEntity = [
+            "hrv", "heart rate", "blood pressure", "recovery", "readiness", "心率", "血压", "体重", "体脂",
+            "睡眠", "睡了", "sleep", "步数", "steps", "运动", "训练", "workout", "exercise", "meal",
+            "breakfast", "lunch", "dinner", "餐", "饮食", "摄入", "calorie", "kcal", "压力", "精力", "疲劳", "stress",
+            "diabetes", "diabetic", "asthma", "hypertension", "medication", "medicine", "diagnosis", "symptom",
+            "pain", "blood glucose", "pregnant", "pregnancy", "糖尿病", "哮喘", "高血压", "低血糖", "用药", "药物",
+            "诊断", "症状", "疼痛", "过敏", "怀孕", "月经",
+        ].contains { value.contains($0) }
+        let hasUnclassifiedHealthContent = hasHealthEntity
+            && hasHealthFactCue
+            && dataClasses.isEmpty
+        return HealthContentClassification(
+            dataClasses: dataClasses,
+            hasUnclassifiedHealthContent: hasUnclassifiedHealthContent
+        )
+    }
+
+    private static func matches(_ pattern: String, in value: String) -> Bool {
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return false }
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return expression.firstMatch(in: value, range: range) != nil
+    }
+}
+
 private actor CloudHealthContextPolicyChangeHub {
     static let shared = CloudHealthContextPolicyChangeHub()
 
@@ -191,8 +269,14 @@ protocol CloudHealthContextPolicySnapshotRepository: Sendable {
         operation: @Sendable () throws -> Result
     ) async throws -> Result
     func stageCloudHealthContextPolicyDraft(
+        expectedSnapshot: CloudHealthContextPolicySnapshot,
         provider: ProviderID,
         allowedClasses: Set<ProviderDataClass>,
+        changeSource: CloudHealthPolicyChangeSource
+    ) async throws -> CloudHealthContextPolicySnapshot
+    func cancelCloudHealthContextPolicyDraft(
+        expectedSnapshot: CloudHealthContextPolicySnapshot,
+        provider: ProviderID,
         changeSource: CloudHealthPolicyChangeSource
     ) async throws -> CloudHealthContextPolicySnapshot
     func confirmCloudHealthContextPolicyDraft(
@@ -205,12 +289,14 @@ protocol CloudHealthContextPolicySnapshotRepository: Sendable {
         changeSource: CloudHealthPolicyChangeSource
     ) async throws -> CloudHealthContextPolicySnapshot
     func updateConversationHistoryConsent(
+        expectedSnapshot: CloudHealthContextPolicySnapshot,
         provider: ProviderID,
         allowed: Bool,
         changeSource: CloudHealthPolicyChangeSource,
         confirmedAt: Date?
     ) async throws -> CloudHealthContextPolicySnapshot
     func updateCloudHealthContextPolicy(
+        expectedSnapshot: CloudHealthContextPolicySnapshot,
         provider: ProviderID,
         allowedClasses: Set<ProviderDataClass>,
         changeSource: CloudHealthPolicyChangeSource,
@@ -300,9 +386,13 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         }
         // If consent changes during the asynchronous reads, prefer the class that was denied in either pass.
         let persistedClasses: Set<ProviderDataClass>?
-        if firstPolicySnapshot?.state == .active, secondPolicySnapshot?.state == .active {
-            persistedClasses = firstPolicySnapshot?.allowedClasses.intersection(
-                secondPolicySnapshot?.allowedClasses ?? []
+        let readableStates: Set<CloudHealthPolicyState> = [.active, .draft]
+        if let firstPolicySnapshot,
+           let secondPolicySnapshot,
+           readableStates.contains(firstPolicySnapshot.state),
+           readableStates.contains(secondPolicySnapshot.state) {
+            persistedClasses = firstPolicySnapshot.allowedClasses.intersection(
+                secondPolicySnapshot.allowedClasses
             )
         } else if firstPolicySnapshot != nil || secondPolicySnapshot != nil {
             persistedClasses = []
@@ -314,8 +404,8 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         let snapshot = secondPolicySnapshot ?? Self.snapshotForRead(provider: provider, allowedClasses: allowed)
         let snapshotAllowsConversationHistory: Bool
         if let firstPolicySnapshot, let secondPolicySnapshot {
-            snapshotAllowsConversationHistory = firstPolicySnapshot.state == .active
-                && secondPolicySnapshot.state == .active
+            snapshotAllowsConversationHistory = readableStates.contains(firstPolicySnapshot.state)
+                && readableStates.contains(secondPolicySnapshot.state)
                 && firstPolicySnapshot.allowedClasses.contains(.conversationHistory)
                 && secondPolicySnapshot.allowedClasses.contains(.conversationHistory)
         } else {
@@ -340,6 +430,7 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
     ) async throws -> CloudHealthContextPolicySnapshot {
         let previous = try await load(from: repository, provider: provider)
         let snapshot = try await persist(
+            current: previous,
             provider: provider,
             allowedClasses: allowedClasses,
             repository: repository,
@@ -371,10 +462,16 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         provider: ProviderID,
         allowedClasses: Set<ProviderDataClass>,
         repository: any ProviderGovernanceRepository,
+        expectedSnapshot: CloudHealthContextPolicySnapshot? = nil,
         confirmedAt: Date = Date(),
         changeSource: CloudHealthPolicyChangeSource = .agentConversation
     ) async throws -> CloudHealthContextPolicySnapshot {
-        try await persist(
+        let current = try await load(from: repository, provider: provider)
+        if let expectedSnapshot, current.snapshot != expectedSnapshot {
+            throw CloudHealthContextPolicyError.stalePolicyRevision
+        }
+        return try await persist(
+            current: current,
             provider: provider,
             allowedClasses: allowedClasses,
             repository: repository,
@@ -388,9 +485,15 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         provider: ProviderID,
         allowed: Bool,
         repository: any ProviderGovernanceRepository,
+        expectedSnapshot: CloudHealthContextPolicySnapshot? = nil,
         confirmedAt: Date? = nil,
         changeSource: CloudHealthPolicyChangeSource = .settings
     ) async throws -> CloudHealthContextPolicySnapshot {
+        let current = try await load(from: repository, provider: provider)
+        let currentPolicySnapshot = current.snapshot
+        if let expectedSnapshot, currentPolicySnapshot != expectedSnapshot {
+            throw CloudHealthContextPolicyError.stalePolicyRevision
+        }
         let first = try await repository.isConsentGranted(provider: provider, dataClass: .conversationHistory)
         let second = try await repository.isConsentGranted(provider: provider, dataClass: .conversationHistory)
         guard !allowed || (first && second) || confirmedAt != nil else {
@@ -398,6 +501,7 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         }
         if let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
             let snapshot = try await snapshotRepository.updateConversationHistoryConsent(
+                expectedSnapshot: currentPolicySnapshot,
                 provider: provider,
                 allowed: allowed,
                 changeSource: changeSource,
@@ -489,6 +593,7 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
             return current.snapshot
         }
         return try await snapshotRepository.stageCloudHealthContextPolicyDraft(
+            expectedSnapshot: current.snapshot,
             provider: provider,
             allowedClasses: target,
             changeSource: .agentConversation
@@ -529,20 +634,15 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         guard draft.state == .draft else {
             throw CloudHealthContextPolicyError.noPendingExpansion
         }
-        // Consent records are deliberately untouched while a draft is pending;
-        // intersect reads twice before restoring their previously active set.
-        let before = try await consentSnapshot(from: repository, provider: provider, classes: dataClasses)
-        let after = try await consentSnapshot(from: repository, provider: provider, classes: dataClasses)
-        let retainedClasses = before.intersection(after)
-        return try await snapshotRepository.updateCloudHealthContextPolicy(
+        return try await snapshotRepository.cancelCloudHealthContextPolicyDraft(
+            expectedSnapshot: draft,
             provider: provider,
-            allowedClasses: retainedClasses,
-            changeSource: .agentConversation,
-            confirmedAt: nil
+            changeSource: .agentConversation
         )
     }
 
     private static func persist(
+        current: CloudHealthContextPolicy,
         provider: ProviderID,
         allowedClasses: Set<ProviderDataClass>,
         repository: any ProviderGovernanceRepository,
@@ -551,13 +651,13 @@ struct CloudHealthContextPolicy: Equatable, Sendable {
         confirmedAt: Date? = nil
     ) async throws -> CloudHealthContextPolicySnapshot {
         let allowed = allowedClasses.intersection(Set(dataClasses))
-        let current = try await load(from: repository, provider: provider)
         let additions = allowed.subtracting(current.allowedClasses)
         guard additions.isEmpty || confirmedExpansion else {
             throw CloudHealthContextPolicyError.expansionRequiresConfirmation
         }
         if let snapshotRepository = repository as? any CloudHealthContextPolicySnapshotRepository {
             return try await snapshotRepository.updateCloudHealthContextPolicy(
+                expectedSnapshot: current.snapshot,
                 provider: provider,
                 allowedClasses: allowed,
                 changeSource: changeSource,
@@ -890,7 +990,8 @@ enum CloudRequestPolicyGuard {
             return true
         }
         let recommendations = context.recommendationCandidates.filter { recommendation in
-            guard policy.allows(recommendation.domain),
+            guard !recommendation.requiredDataDomains.isEmpty,
+                  recommendation.requiredDataDomains.allSatisfy({ policy.allows($0) }),
                   policy.allows(evidenceKey: recommendation.evidenceKey) else { return false }
             if recommendation.evidenceKey.lowercased().hasPrefix("vitals.") {
                 guard numericVitalEvidence.contains(recommendation.evidenceKey) else { return false }
@@ -900,7 +1001,6 @@ enum CloudRequestPolicyGuard {
                       numericActivityEvidence.contains(recommendation.evidenceKey) else { return false }
             }
             if recommendation.id.hasPrefix("recovery.") { return policy.allowsDerivedRecovery }
-            if recommendation.domain == .nutrition { return policy.allows(.healthActivity) }
             return true
         }
         let subjective = policy.allows(.healthSubjective) ? context.subjectiveContext : nil
@@ -983,27 +1083,66 @@ enum CloudRequestPolicyGuard {
         var isCurrentTurn = false
         func flush() {
             guard !turn.isEmpty else { return }
-            let userText = turn.first(where: { $0.role == .user }).flatMap { plainText(in: $0) } ?? ""
             let containsHealthTool = turn.contains { message in
                 message.content.contains { content in
                     if case .toolCall(let call) = content { return healthToolNames.contains(call.name) }
                     return false
                 }
             }
-            let assistantReferencesHealth = turn.contains { message in
-                guard message.role == .assistant,
-                      let text = plainText(in: message) else { return false }
-                return HealthContextPromptBuilder.shouldIncludeSummary(for: text)
-            }
+            let completedToolCallIDs = Set(turn.flatMap { message in
+                message.content.compactMap { content -> String? in
+                    if case .toolResult(let callID, _) = content { return callID }
+                    return nil
+                }
+            })
             let containsStaleHealthProvenance = turn.contains { message in
                 guard let provenance = message.healthContextPolicyProvenance else { return false }
-                return provenance.provider != policy.provider
-                    || provenance.policyRevision != policy.revision
-                    || !provenance.allowedClasses.isSubset(of: policy.allowedClasses)
+                guard provenance.provider == policy.provider else { return true }
+                if let contentClasses = provenance.contentClasses,
+                   !contentClasses.isSubset(of: policy.allowedClasses) {
+                    return true
+                }
+                return provenance.hasUnclassifiedHealthContent == true && !allHealthClassesAllowed
             }
-            // Old user, assistant, or tool messages without a captured policy
-            // revision cannot be safely filtered for health text or policy
-            // changes. Drop the entire historical turn fail-closed.
+            var turnContentClasses = Set<ProviderDataClass>()
+            var hasUnclassifiedHealthContent = false
+            for message in turn {
+                if let provenance = message.healthContextPolicyProvenance {
+                    turnContentClasses.formUnion(provenance.contentClasses ?? [])
+                    hasUnclassifiedHealthContent = hasUnclassifiedHealthContent
+                        || provenance.hasUnclassifiedHealthContent == true
+                }
+                for content in message.content {
+                    guard case .text(let text) = content else { continue }
+                    let classification = HealthContentProvenanceClassifier.classify(text)
+                    turnContentClasses.formUnion(classification.dataClasses)
+                    hasUnclassifiedHealthContent = hasUnclassifiedHealthContent
+                        || classification.hasUnclassifiedHealthContent
+                    if message.role == .assistant,
+                       message.healthContextPolicyProvenance?.contentClasses == nil,
+                       HealthContextPromptBuilder.shouldIncludeSummary(for: text),
+                       classification.dataClasses.isEmpty {
+                        hasUnclassifiedHealthContent = true
+                    }
+                }
+                for content in message.content {
+                    guard case .toolCall(let call) = content,
+                          isHealthTool(name: call.name),
+                          !completedToolCallIDs.contains(call.id) else { continue }
+                    hasUnclassifiedHealthContent = true
+                }
+                if message.role == .tool,
+                   message.healthContextPolicyProvenance?.contentClasses == nil,
+                   message.content.contains(where: { if case .toolResult = $0 { return true }; return false }) {
+                    // Old tool results have no content provenance. The payload
+                    // cannot be safely reclassified from display text alone.
+                    hasUnclassifiedHealthContent = true
+                }
+            }
+            let containsUnauthorizedHealthContent = !turnContentClasses.isSubset(of: policy.allowedClasses)
+                || (hasUnclassifiedHealthContent && !allHealthClassesAllowed)
+            // Legacy turns without per-message policy provenance cannot be
+            // safely classified and are dropped as a whole.
             let containsUnprovenancedConversationMessage = turn.contains { message in
                 [.user, .assistant, .tool].contains(message.role)
                     && message.healthContextPolicyProvenance == nil
@@ -1026,10 +1165,7 @@ enum CloudRequestPolicyGuard {
                       !containsStaleHealthProvenance,
                       !containsUnprovenancedConversationMessage,
                       !containsUnprovenancedHealthTool,
-                      (allHealthClassesAllowed
-                        || (!HealthContextPromptBuilder.shouldIncludeSummary(for: userText)
-                            && !containsHealthTool
-                            && !assistantReferencesHealth)) {
+                      !containsUnauthorizedHealthContent {
                 output.append(contentsOf: turn)
             }
             turn.removeAll(keepingCapacity: true)
@@ -1048,18 +1184,24 @@ enum CloudRequestPolicyGuard {
         by policy: CloudHealthContextPolicy
     ) -> ModelMessage? {
         guard message.role == .assistant else { return message }
+        let text = plainText(in: message) ?? ""
+        let inferred = HealthContentProvenanceClassifier.classify(text)
         if let provenance = message.healthContextPolicyProvenance,
-           provenance.provider == policy.provider,
-           provenance.policyRevision == policy.revision,
-           provenance.allowedClasses.isSubset(of: policy.allowedClasses) {
-            // Same-turn provider continuation is safe when it was produced under
-            // this exact policy revision. Tool results are filtered again before
-            // every serialization; stale prose/reasoning is never carried over.
-            return ModelMessage(
-                role: message.role,
-                content: message.content,
-                healthContextPolicyProvenance: provenance
-            )
+           provenance.provider == policy.provider {
+            let contentClasses = provenance.contentClasses ?? inferred.dataClasses
+            let hasUnknownContent = provenance.hasUnclassifiedHealthContent
+                ?? (inferred.hasUnclassifiedHealthContent
+                    || (contentClasses.isEmpty && HealthContextPromptBuilder.shouldIncludeSummary(for: text)))
+            if contentClasses.isSubset(of: policy.allowedClasses),
+               (!hasUnknownContent || allHealthClassesAllowed(policy)) {
+                // Same-turn content can continue when its actual data classes
+                // remain authorized. Tool results are filtered before every send.
+                return ModelMessage(
+                    role: message.role,
+                    content: message.content,
+                    healthContextPolicyProvenance: provenance
+                )
+            }
         }
         // Earlier provider prose or opaque reasoning may repeat health facts from
         // a round whose policy was broader. Only tool-call structure may cross a
@@ -1084,6 +1226,8 @@ enum CloudRequestPolicyGuard {
             }
         }
         return messages.compactMap { message in
+            var filteredToolDataClasses = Set<ProviderDataClass>()
+            var hasUnclassifiedToolContent = false
             let content = message.content.compactMap { item -> ModelContent? in
                 guard case .toolResult(let callID, let result) = item else { return item }
                 // A tool result without a matching assistant call cannot be
@@ -1095,16 +1239,70 @@ enum CloudRequestPolicyGuard {
                     result: result,
                     by: policy,
                     provenance: message.healthContextPolicyProvenance
-                ) else { return item }
+                ) else {
+                    let dataClasses = toolResultDataClasses(name: name, result: result, by: policy)
+                    filteredToolDataClasses.formUnion(dataClasses)
+                    if isHealthTool(name: name), name != "get_pending_actions", dataClasses.isEmpty {
+                        hasUnclassifiedToolContent = true
+                    }
+                    return item
+                }
+                let dataClasses = toolResultDataClasses(name: name, result: filtered, by: policy)
+                filteredToolDataClasses.formUnion(dataClasses)
+                if isHealthTool(name: name),
+                   name != "get_pending_actions",
+                   filtered != restrictedResult,
+                   dataClasses.isEmpty {
+                    hasUnclassifiedToolContent = true
+                }
                 return .toolResult(toolCallID: callID, content: filtered)
             }
             guard message.role != .tool || !content.isEmpty else { return nil }
+            let provenance = message.role == .tool
+                ? message.healthContextPolicyProvenance.map {
+                    HealthContextPolicyProvenance(
+                        provider: $0.provider,
+                        policyRevision: $0.policyRevision,
+                        allowedClasses: $0.allowedClasses,
+                        contentClasses: filteredToolDataClasses,
+                        hasUnclassifiedHealthContent: hasUnclassifiedToolContent
+                    )
+                }
+                : message.healthContextPolicyProvenance
             return ModelMessage(
                 role: message.role,
                 content: content,
                 inputEnvelope: message.inputEnvelope,
-                healthContextPolicyProvenance: message.healthContextPolicyProvenance
+                healthContextPolicyProvenance: provenance
             )
+        }
+    }
+
+    private static func toolResultDataClasses(
+        name: String,
+        result: String,
+        by policy: CloudHealthContextPolicy
+    ) -> Set<ProviderDataClass> {
+        guard result != restrictedResult else { return [] }
+        return switch name {
+        case "get_today_health_state", "get_health_history":
+            policy.allowedClasses
+        case "get_recent_meals":
+            policy.allows(.healthNutrition) ? [.healthNutrition] : []
+        case "get_metrics":
+            Set([.healthNutrition, .healthActivity]).intersection(policy.allowedClasses)
+        case "get_weekly_deficit":
+            policy.allows(.healthNutrition) && policy.allows(.healthActivity)
+                ? [.healthNutrition, .healthActivity]
+                : []
+        case "get_recent_workouts", "get_schedule", "get_today_plan":
+            policy.allows(.healthActivity) ? [.healthActivity] : []
+        case "get_goal":
+            Set([.healthNutrition, .healthBody, .healthActivity]).intersection(policy.allowedClasses)
+        case "get_pending_actions":
+            PendingActionConsentPolicy.dataClasses(inToolResult: result)
+        default:
+            []
         }
     }
 
@@ -1995,6 +2193,7 @@ enum CloudHealthContextPolicyError: Error, Equatable {
     case expansionRequiresConfirmation
     case snapshotRepositoryUnavailable
     case noPendingExpansion
+    case stalePolicyRevision
 }
 
 enum CloudHealthContextPolicyAlignmentIntent: Equatable {

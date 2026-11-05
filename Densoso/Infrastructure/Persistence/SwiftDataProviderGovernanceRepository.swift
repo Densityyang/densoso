@@ -119,10 +119,15 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
         }
         let legacy = try legacyPolicySnapshot(provider: provider)
         if legacy.state != .notConfigured {
-            guard upsertPolicySnapshot(legacy) else {
-                throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+            do {
+                guard upsertPolicySnapshot(legacy) else {
+                    throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+                }
+                try savePolicySnapshotChanges()
+            } catch {
+                modelContext.rollback()
+                throw error
             }
-            try modelContext.save()
         }
         return legacy
     }
@@ -233,6 +238,7 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
     }
 
     func updateCloudHealthContextPolicy(
+        expectedSnapshot: CloudHealthContextPolicySnapshot,
         provider: ProviderID,
         allowedClasses: Set<ProviderDataClass>,
         changeSource: CloudHealthPolicyChangeSource,
@@ -240,6 +246,9 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
     ) throws -> CloudHealthContextPolicySnapshot {
         let allowed = allowedClasses.intersection(Set(CloudHealthContextPolicy.dataClasses))
         let prior = try currentCloudHealthContextPolicySnapshot(provider: provider)
+        guard prior == expectedSnapshot else {
+            throw CloudHealthContextPolicyError.stalePolicyRevision
+        }
         let expansion = allowed.subtracting(prior.allowedClasses)
         guard expansion.isEmpty || confirmedAt != nil else {
             throw CloudHealthContextPolicyError.expansionRequiresConfirmation
@@ -274,7 +283,7 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
             guard upsertPolicySnapshot(snapshot) else {
                 throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
             }
-            try modelContext.save()
+            try savePolicySnapshotChanges()
             return snapshot
         } catch {
             modelContext.rollback()
@@ -283,6 +292,7 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
     }
 
     func stageCloudHealthContextPolicyDraft(
+        expectedSnapshot: CloudHealthContextPolicySnapshot,
         provider: ProviderID,
         allowedClasses: Set<ProviderDataClass>,
         changeSource: CloudHealthPolicyChangeSource
@@ -291,6 +301,9 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
             Set(CloudHealthContextPolicy.dataClasses).union([.conversationHistory])
         )
         let prior = try currentCloudHealthContextPolicySnapshot(provider: provider)
+        guard prior == expectedSnapshot else {
+            throw CloudHealthContextPolicyError.stalePolicyRevision
+        }
         guard !target.subtracting(prior.allowedClasses).isEmpty else { return prior }
         let now = Date()
         let snapshot = CloudHealthContextPolicySnapshot.make(
@@ -316,6 +329,43 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
         }
     }
 
+    func cancelCloudHealthContextPolicyDraft(
+        expectedSnapshot: CloudHealthContextPolicySnapshot,
+        provider: ProviderID,
+        changeSource: CloudHealthPolicyChangeSource
+    ) throws -> CloudHealthContextPolicySnapshot {
+        let current = try currentCloudHealthContextPolicySnapshot(provider: provider)
+        guard current == expectedSnapshot, current.state == .draft else {
+            throw CloudHealthContextPolicyError.noPendingExpansion
+        }
+        let now = max(Date(), current.updatedAt.addingTimeInterval(0.001))
+        do {
+            var retainedClasses = try currentGrantedHealthContextClasses(for: provider)
+            if try isConsentGranted(provider: provider, dataClass: .conversationHistory) {
+                retainedClasses.insert(.conversationHistory)
+            }
+            let cancelled = CloudHealthContextPolicySnapshot.make(
+                provider: provider,
+                policyID: current.policyID,
+                revision: current.revision + 1,
+                state: retainedClasses.isEmpty ? .revoked : .active,
+                allowedClasses: retainedClasses,
+                createdAt: current.createdAt,
+                updatedAt: now,
+                confirmedAt: current.confirmedAt,
+                changeSource: changeSource
+            )
+            guard upsertPolicySnapshot(cancelled) else {
+                throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
+            }
+            try savePolicySnapshotChanges()
+            return cancelled
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
     #if DEBUG
     func failNextPolicySnapshotSaveForTesting() {
         shouldFailNextPolicySnapshotSaveForTesting = true
@@ -323,12 +373,16 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
     #endif
 
     func updateConversationHistoryConsent(
+        expectedSnapshot: CloudHealthContextPolicySnapshot,
         provider: ProviderID,
         allowed: Bool,
         changeSource: CloudHealthPolicyChangeSource,
         confirmedAt: Date?
     ) throws -> CloudHealthContextPolicySnapshot {
         let prior = try currentCloudHealthContextPolicySnapshot(provider: provider)
+        guard prior == expectedSnapshot else {
+            throw CloudHealthContextPolicyError.stalePolicyRevision
+        }
         let wasAllowed = try isConsentGranted(provider: provider, dataClass: .conversationHistory)
         guard !allowed || wasAllowed || confirmedAt != nil else {
             throw CloudHealthContextPolicyError.expansionRequiresConfirmation
@@ -358,7 +412,7 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
             guard upsertPolicySnapshot(snapshot) else {
                 throw CloudHealthContextPolicyError.snapshotRepositoryUnavailable
             }
-            try modelContext.save()
+            try savePolicySnapshotChanges()
             return snapshot
         } catch {
             modelContext.rollback()

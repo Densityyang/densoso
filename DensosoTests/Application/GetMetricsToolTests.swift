@@ -189,7 +189,7 @@ final class GetMetricsToolTests: XCTestCase {
 
     private func metric(on date: Date, deficit: Int) -> DailyMetrics {
         let mealFingerprint = "get-metrics-meal-set-\(date.timeIntervalSince1970)"
-        DailyMetrics(
+        return DailyMetrics(
             date: date,
             totalExpenditureKcal: 2_000,
             totalIntakeKcal: 2_000 - deficit,

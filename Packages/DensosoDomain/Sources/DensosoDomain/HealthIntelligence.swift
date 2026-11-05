@@ -1,6 +1,6 @@
 import Foundation
 
-public enum HealthDomain: String, Codable, CaseIterable, Sendable {
+public enum HealthDomain: String, Codable, CaseIterable, Hashable, Sendable {
     case nutrition
     case sleep
     case activity
@@ -718,6 +718,10 @@ public struct HealthRecommendation: Codable, Equatable, Sendable, Identifiable {
     public let evidenceKey: String
     public let conflictGroup: String
     public let score: Double
+    /// Evidence domains this recommendation actually uses. This may include
+    /// more than its presentation domain, such as nutrition plus activity
+    /// when a recommendation depends on an energy-deficit goal.
+    public let requiredDataDomains: Set<HealthDomain>
 
     public init(
         id: String,
@@ -726,7 +730,8 @@ public struct HealthRecommendation: Codable, Equatable, Sendable, Identifiable {
         detail: String,
         evidenceKey: String,
         conflictGroup: String,
-        score: Double
+        score: Double,
+        requiredDataDomains: Set<HealthDomain>? = nil
     ) {
         self.id = id
         self.domain = domain
@@ -735,6 +740,63 @@ public struct HealthRecommendation: Codable, Equatable, Sendable, Identifiable {
         self.evidenceKey = evidenceKey
         self.conflictGroup = conflictGroup
         self.score = score
+        self.requiredDataDomains = requiredDataDomains ?? [domain]
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case domain
+        case title
+        case detail
+        case evidenceKey
+        case conflictGroup
+        case score
+        case requiredDataDomains
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decode(String.self, forKey: .id)
+        let domain = try container.decode(HealthDomain.self, forKey: .domain)
+        let detail = try container.decode(String.self, forKey: .detail)
+        let requiredDataDomains = try container.decodeIfPresent([HealthDomain].self, forKey: .requiredDataDomains)
+            ?? Self.legacyRequiredDataDomains(id: id, domain: domain, detail: detail)
+        self.init(
+            id: id,
+            domain: domain,
+            title: try container.decode(String.self, forKey: .title),
+            detail: detail,
+            evidenceKey: try container.decode(String.self, forKey: .evidenceKey),
+            conflictGroup: try container.decode(String.self, forKey: .conflictGroup),
+            score: try container.decode(Double.self, forKey: .score),
+            requiredDataDomains: Set(requiredDataDomains)
+        )
+    }
+
+    private static func legacyRequiredDataDomains(
+        id: String,
+        domain: HealthDomain,
+        detail: String
+    ) -> [HealthDomain] {
+        guard domain == .nutrition else { return [domain] }
+        if id == "nutrition.review-balance", !detail.contains("日目标") {
+            return [.nutrition]
+        }
+        // Older unknown nutrition recommendations may depend on activity. A
+        // legacy cache cannot prove otherwise, so require both categories.
+        return [.nutrition, .activity]
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(domain, forKey: .domain)
+        try container.encode(title, forKey: .title)
+        try container.encode(detail, forKey: .detail)
+        try container.encode(evidenceKey, forKey: .evidenceKey)
+        try container.encode(conflictGroup, forKey: .conflictGroup)
+        try container.encode(score, forKey: .score)
+        try container.encode(requiredDataDomains.sorted { $0.rawValue < $1.rawValue }, forKey: .requiredDataDomains)
     }
 }
 
@@ -2623,7 +2685,8 @@ public struct RecommendationEngine: Sendable {
                         ?? "可以回看餐食份量与记录完整度。",
                     evidenceKey: evidenceKey,
                     conflictGroup: "nutrition-balance",
-                    score: result.status == .attention ? 0.9 : 0.65
+                    score: result.status == .attention ? 0.9 : 0.65,
+                    requiredDataDomains: target == nil ? [.nutrition] : [.nutrition, .activity]
                 )
             case .sleep:
                 recommendation = HealthRecommendation(
@@ -2678,7 +2741,8 @@ public struct RecommendationEngine: Sendable {
                     detail: "恢复相关数据偏离个人近期范围，可先选择轻量活动。",
                     evidenceKey: evidenceKey,
                     conflictGroup: "activity-load",
-                    score: 0.97
+                    score: 0.97,
+                    requiredDataDomains: [.sleep, .body, .activity]
                 )
             )
         }

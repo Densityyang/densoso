@@ -854,7 +854,10 @@ final class AgentSession {
                     ),
                     requestID: requestID,
                     healthContextPolicyProvenance: narrativeContext.map { _ in
-                        Self.healthContextProvenance(for: initialCloudHealthPolicy)
+                        Self.healthContextProvenance(
+                            for: initialCloudHealthPolicy,
+                            contentClasses: narrativeContext.map { Self.healthDataClasses(in: $0) }
+                        )
                     }
                 )
             }
@@ -936,7 +939,10 @@ final class AgentSession {
                         responseIncludingPolicyAcknowledgement(safeFallback),
                         requestID: requestID,
                         healthContextPolicyProvenance: roundContext.map { _ in
-                            Self.healthContextProvenance(for: roundPolicy)
+                            Self.healthContextProvenance(
+                                for: roundPolicy,
+                                contentClasses: roundContext.map { Self.healthDataClasses(in: $0) }
+                            )
                         }
                     )
                 }
@@ -1321,7 +1327,8 @@ final class AgentSession {
                         text: responseText,
                         healthContextPolicyProvenance: healthContextPolicyProvenance(
                             for: roundPolicy,
-                            includeIf: currentNarrativeContext != nil || currentTurnContainsHealthTool()
+                            includeIf: currentNarrativeContext != nil || currentTurnContainsHealthTool(),
+                            contentClasses: Set(requestDataClasses.filter(\.isHealthContextClass))
                         )
                     ),
                     requestID: requestID
@@ -1967,6 +1974,30 @@ final class AgentSession {
         if let summary { required.formUnion(healthDataClasses(in: summary)) }
         if let structuredContext { required.formUnion(healthDataClasses(in: structuredContext)) }
 
+        for message in messages {
+            let provenance = message.healthContextPolicyProvenance
+            if let contentClasses = provenance?.contentClasses {
+                required.formUnion(contentClasses)
+            }
+            var inferredClasses = Set<ProviderDataClass>()
+            var hasUnclassifiedHealthContent = provenance?.hasUnclassifiedHealthContent == true
+            for content in message.content {
+                guard case .text(let text) = content else { continue }
+                let classification = HealthContentProvenanceClassifier.classify(text)
+                inferredClasses.formUnion(classification.dataClasses)
+                hasUnclassifiedHealthContent = hasUnclassifiedHealthContent
+                    || classification.hasUnclassifiedHealthContent
+                    || (message.role == .assistant
+                        && provenance?.contentClasses == nil
+                        && classification.dataClasses.isEmpty
+                        && HealthContextPromptBuilder.shouldIncludeSummary(for: text))
+            }
+            required.formUnion(inferredClasses)
+            if hasUnclassifiedHealthContent {
+                required.formUnion(CloudHealthContextPolicy.dataClasses)
+            }
+        }
+
         var toolCallsByID: [String: Set<ProviderDataClass>] = [:]
         var toolNamesByID: [String: String] = [:]
         for message in messages where message.role != .user {
@@ -1990,23 +2021,6 @@ final class AgentSession {
             }
         }
 
-        // A previous assistant explanation can contain health facts even when
-        // its original source was a tool rather than the structured context.
-        // Preserve its captured classes as dependencies only when that history
-        // is actually present in this provider payload.
-        if includesConversationHistory {
-            for message in messages where message.role == .assistant {
-                guard let provenance = message.healthContextPolicyProvenance,
-                      message.content.contains(where: { content in
-                          if case .text(let text) = content {
-                              return text.contains(AgentProviderContextPolicy.historicalSummaryMarker)
-                                  || HealthContextPromptBuilder.shouldIncludeSummary(for: text)
-                          }
-                          return false
-                      }) else { continue }
-                required.formUnion(provenance.allowedClasses)
-            }
-        }
         return required
     }
 
@@ -2067,7 +2081,9 @@ final class AgentSession {
             if let dataClass = healthDataClass(for: evidence.source) { classes.insert(dataClass) }
         }
         for recommendation in context.recommendationCandidates {
-            classes.insert(healthDataClass(for: recommendation.domain))
+            for domain in recommendation.requiredDataDomains {
+                classes.insert(healthDataClass(for: domain))
+            }
             if let dataClass = healthDataClass(for: recommendation.evidenceKey) { classes.insert(dataClass) }
         }
         if context.subjectiveContext != nil { classes.insert(.healthSubjective) }
@@ -2490,13 +2506,22 @@ final class AgentSession {
 
     private func append(_ message: ModelMessage, requestID: UUID?) async throws {
         let recordedMessage: ModelMessage
-        if message.healthContextPolicyProvenance == nil,
-           let activeCloudHealthPolicy {
+        if let activeCloudHealthPolicy {
+            let inferred = contentClassification(for: message, policy: activeCloudHealthPolicy)
+            let existing = message.healthContextPolicyProvenance
+            let provenance = HealthContextPolicyProvenance(
+                provider: existing?.provider ?? activeCloudHealthPolicy.provider,
+                policyRevision: existing?.policyRevision ?? activeCloudHealthPolicy.revision,
+                allowedClasses: existing?.allowedClasses ?? activeCloudHealthPolicy.allowedClasses,
+                contentClasses: (existing?.contentClasses ?? []).union(inferred.dataClasses),
+                hasUnclassifiedHealthContent: existing?.hasUnclassifiedHealthContent == true
+                    || inferred.hasUnclassifiedHealthContent
+            )
             recordedMessage = ModelMessage(
                 role: message.role,
                 content: message.content,
                 inputEnvelope: message.inputEnvelope,
-                healthContextPolicyProvenance: Self.healthContextProvenance(for: activeCloudHealthPolicy)
+                healthContextPolicyProvenance: provenance
             )
         } else {
             recordedMessage = message
@@ -2532,6 +2557,45 @@ final class AgentSession {
         conversationHistory.append(recordedMessage)
     }
 
+    private func contentClassification(
+        for message: ModelMessage,
+        policy: CloudHealthContextPolicy
+    ) -> HealthContentClassification {
+        var classes = Set<ProviderDataClass>()
+        var unclassified = false
+        for content in message.content {
+            switch content {
+            case .text(let text):
+                let classification = HealthContentProvenanceClassifier.classify(text)
+                classes.formUnion(classification.dataClasses)
+                unclassified = unclassified || classification.hasUnclassifiedHealthContent
+            case .toolResult(let callID, let result):
+                let toolName = conversationHistory.reversed().compactMap { priorMessage in
+                    priorMessage.content.compactMap { priorContent -> String? in
+                        if case .toolCall(let call) = priorContent, call.id == callID { return call.name }
+                        return nil
+                    }.first
+                }.first
+                guard let toolName else { continue }
+                if toolName == "get_pending_actions" {
+                    classes.formUnion(PendingActionConsentPolicy.dataClasses(inToolResult: result))
+                } else {
+                    let toolClasses = Self.healthToolDataClasses(named: toolName, policy: policy)
+                    classes.formUnion(toolClasses)
+                    if CloudRequestPolicyGuard.isHealthTool(name: toolName), toolClasses.isEmpty {
+                        unclassified = true
+                    }
+                }
+            case .image, .toolCall, .reasoning:
+                break
+            }
+        }
+        return HealthContentClassification(
+            dataClasses: classes,
+            hasUnclassifiedHealthContent: unclassified
+        )
+    }
+
     private static func withoutSensitiveTransientContent(_ message: ModelMessage) -> ModelMessage {
         ModelMessage(
             role: message.role,
@@ -2549,12 +2613,16 @@ final class AgentSession {
     }
 
     private static func healthContextProvenance(
-        for policy: CloudHealthContextPolicy
+        for policy: CloudHealthContextPolicy,
+        contentClasses: Set<ProviderDataClass>? = nil,
+        hasUnclassifiedHealthContent: Bool = false
     ) -> HealthContextPolicyProvenance {
         HealthContextPolicyProvenance(
             provider: policy.provider,
             policyRevision: policy.revision,
-            allowedClasses: policy.allowedClasses
+            allowedClasses: policy.allowedClasses,
+            contentClasses: contentClasses,
+            hasUnclassifiedHealthContent: hasUnclassifiedHealthContent
         )
     }
 
@@ -2656,10 +2724,11 @@ final class AgentSession {
 
     private func healthContextPolicyProvenance(
         for policy: CloudHealthContextPolicy,
-        includeIf: Bool
+        includeIf: Bool,
+        contentClasses: Set<ProviderDataClass>? = nil
     ) -> HealthContextPolicyProvenance? {
         guard includeIf else { return nil }
-        return Self.healthContextProvenance(for: policy)
+        return Self.healthContextProvenance(for: policy, contentClasses: contentClasses)
     }
 
     private func currentTurnContainsHealthTool() -> Bool {

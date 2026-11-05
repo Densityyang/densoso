@@ -2,6 +2,40 @@ import DensosoDomain
 import XCTest
 
 final class HealthNarrativeTests: XCTestCase {
+    func testLegacyNutritionRecommendationInfersConservativeEvidenceDependencies() throws {
+        func decode(_ id: String, detail: String) throws -> HealthRecommendation {
+            let object: [String: Any] = [
+                "id": id,
+                "domain": HealthDomain.nutrition.rawValue,
+                "title": "nutrition recommendation",
+                "detail": detail,
+                "evidenceKey": "nutrition.energyIntake.kcal",
+                "conflictGroup": "nutrition",
+                "score": 0.6,
+            ]
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            return try JSONDecoder().decode(HealthRecommendation.self, from: data)
+        }
+
+        let pureNutrition = try decode(
+            "nutrition.review-balance",
+            detail: "可以回看餐食份量与记录完整度。"
+        )
+        XCTAssertEqual(pureNutrition.requiredDataDomains, [.nutrition])
+
+        let goalAware = try decode(
+            "nutrition.review-balance",
+            detail: "可以结合自己的 400 kcal 日目标查看餐食份量。"
+        )
+        XCTAssertEqual(goalAware.requiredDataDomains, [.nutrition, .activity])
+
+        let unknownLegacyRecommendation = try decode(
+            "nutrition.legacy-unknown",
+            detail: "旧版本营养建议。"
+        )
+        XCTAssertEqual(unknownLegacyRecommendation.requiredDataDomains, [.nutrition, .activity])
+    }
+
     func testNarrativeCodableContainsOnlyNarrativeFieldsAndEvidenceKeys() throws {
         let narrative = HealthNarrative(
             headline: "今天可以按舒适节奏安排",

@@ -8,11 +8,13 @@ struct SettingsScreen: View {
     private struct PendingHealthPolicyExpansion: Equatable {
         let provider: ProviderID
         let dataClass: ProviderDataClass
+        let expectedSnapshot: CloudHealthContextPolicySnapshot
+        let currentlyAllowedClasses: Set<ProviderDataClass>
     }
 
     private enum PendingCloudPolicyExpansion {
         case health(PendingHealthPolicyExpansion)
-        case conversationHistory(ProviderID)
+        case conversationHistory(ProviderID, CloudHealthContextPolicySnapshot)
     }
 
     @Environment(Dependencies.self) private var dependencies
@@ -117,13 +119,14 @@ struct SettingsScreen: View {
                     Button("允许上传\(pending.dataClass.healthContextTitle ?? "健康")历史汇总") {
                         Task { await confirmHealthPolicyExpansion(pending) }
                     }
-                case .some(.conversationHistory(let provider)):
+                case .some(.conversationHistory(let provider, let expectedSnapshot)):
                     Button("允许向\(provider == .deepSeek ? "DeepSeek" : "Qwen")发送此前聊天记录") {
                         Task {
                             await saveConversationHistoryConsent(
                                 provider: provider,
                                 granted: true,
-                                confirmedAt: Date()
+                                confirmedAt: Date(),
+                                expectedSnapshot: expectedSnapshot
                             )
                         }
                     }
@@ -137,7 +140,7 @@ struct SettingsScreen: View {
                 switch pendingCloudPolicyExpansion {
                 case .health(let pending)?:
                     Text("仅允许所选的\(pending.dataClass.healthContextTitle ?? "健康")类别用于\(pending.provider == .deepSeek ? "DeepSeek" : "Qwen")后续请求。扩权会保存新的本地 policy revision；你可以随时撤销。")
-                case .some(.conversationHistory(_)):
+                case .some(.conversationHistory(_, _)):
                     Text("此前聊天记录与本轮你主动提交的文字是两项独立权限。确认后，后续请求只会包含仍符合当前云端健康类别策略且 policy revision 一致的完整对话轮次。")
                 case nil:
                     Text("确认后会保存新的本地云端授权 policy revision。")
@@ -817,11 +820,7 @@ struct SettingsScreen: View {
                     set: { granted in
                         var updated = selection.wrappedValue
                         if granted {
-                            pendingCloudPolicyExpansion = .health(PendingHealthPolicyExpansion(
-                                provider: provider,
-                                dataClass: dataClass
-                            ))
-                            isConfirmingCloudPolicyExpansion = true
+                            Task { await requestHealthPolicyExpansion(provider: provider, dataClass: dataClass) }
                         } else {
                             updated.remove(dataClass)
                             selection.wrappedValue = updated
@@ -840,24 +839,44 @@ struct SettingsScreen: View {
     }
 
     private func confirmHealthPolicyExpansion(_ pending: PendingHealthPolicyExpansion) async {
-        var updated = pending.provider == .deepSeek
-            ? deepSeekHealthContextClasses
-            : qwenHealthContextClasses
-        updated.insert(pending.dataClass)
         await saveHealthContextPolicy(
             provider: pending.provider,
-            allowedClasses: updated,
+            allowedClasses: pending.currentlyAllowedClasses.union([pending.dataClass]),
             source: .settings,
-            confirmedAt: Date()
+            confirmedAt: Date(),
+            expectedSnapshot: pending.expectedSnapshot
         )
         pendingCloudPolicyExpansion = nil
+    }
+
+    private func requestHealthPolicyExpansion(
+        provider: ProviderID,
+        dataClass: ProviderDataClass
+    ) async {
+        do {
+            let policy = try await CloudHealthContextPolicy.load(
+                from: dependencies.providerGovernanceRepository,
+                provider: provider
+            )
+            pendingCloudPolicyExpansion = .health(PendingHealthPolicyExpansion(
+                provider: provider,
+                dataClass: dataClass,
+                expectedSnapshot: policy.snapshot,
+                currentlyAllowedClasses: policy.allowedClasses
+            ))
+            isConfirmingCloudPolicyExpansion = true
+        } catch {
+            healthAuthorizationError = "无法读取云端健康授权策略：\(safeErrorMessage(error))"
+            await refreshProviderGovernance()
+        }
     }
 
     private func saveHealthContextPolicy(
         provider: ProviderID,
         allowedClasses: Set<ProviderDataClass>,
         source: CloudHealthPolicyChangeSource,
-        confirmedAt: Date? = nil
+        confirmedAt: Date? = nil,
+        expectedSnapshot: CloudHealthContextPolicySnapshot? = nil
     ) async {
         do {
             if let confirmedAt {
@@ -865,6 +884,7 @@ struct SettingsScreen: View {
                     provider: provider,
                     allowedClasses: allowedClasses,
                     repository: dependencies.providerGovernanceRepository,
+                    expectedSnapshot: expectedSnapshot,
                     confirmedAt: confirmedAt,
                     changeSource: source
                 )
@@ -898,8 +918,7 @@ struct SettingsScreen: View {
                 get: { selection.wrappedValue },
                 set: { granted in
                     if granted {
-                        pendingCloudPolicyExpansion = .conversationHistory(provider)
-                        isConfirmingCloudPolicyExpansion = true
+                        Task { await requestConversationHistoryExpansion(provider: provider) }
                     } else {
                         selection.wrappedValue = false
                         Task {
@@ -914,13 +933,15 @@ struct SettingsScreen: View {
     private func saveConversationHistoryConsent(
         provider: ProviderID,
         granted: Bool,
-        confirmedAt: Date? = nil
+        confirmedAt: Date? = nil,
+        expectedSnapshot: CloudHealthContextPolicySnapshot? = nil
     ) async {
         do {
             _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
                 provider: provider,
                 allowed: granted,
                 repository: dependencies.providerGovernanceRepository,
+                expectedSnapshot: expectedSnapshot,
                 confirmedAt: confirmedAt,
                 changeSource: .settings
             )
@@ -932,6 +953,20 @@ struct SettingsScreen: View {
             pendingCloudPolicyExpansion = nil
         } catch {
             healthAuthorizationError = "无法保存聊天记录云端授权：\(safeErrorMessage(error))"
+            await refreshProviderGovernance()
+        }
+    }
+
+    private func requestConversationHistoryExpansion(provider: ProviderID) async {
+        do {
+            let policy = try await CloudHealthContextPolicy.load(
+                from: dependencies.providerGovernanceRepository,
+                provider: provider
+            )
+            pendingCloudPolicyExpansion = .conversationHistory(provider, policy.snapshot)
+            isConfirmingCloudPolicyExpansion = true
+        } catch {
+            healthAuthorizationError = "无法读取云端聊天记录授权策略：\(safeErrorMessage(error))"
             await refreshProviderGovernance()
         }
     }

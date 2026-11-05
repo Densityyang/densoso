@@ -230,6 +230,7 @@ final class AgentCoordinatorTests: XCTestCase {
                 averageEnergyIntakeKcal: 2_111,
                 averageDailyDeficitKcal: 333,
                 averageProteinGrams: 81,
+                medianWeightKilograms: 47.25,
                 dataCoverage: ["energyIntake": .partial, "proteinGrams": .partial],
                 metricWindowCoverage: [
                     "energyIntake": HealthMetricWindowCoverage(
@@ -254,8 +255,7 @@ final class AgentCoordinatorTests: XCTestCase {
                         authorizationLimited: false,
                         dataAvailabilityLimited: false
                     ),
-                ],
-                medianWeightKilograms: 47.25
+                ]
             ),
             twentyEightDay: HealthContextWindowSummary(
                 windowDays: 28,
@@ -266,6 +266,7 @@ final class AgentCoordinatorTests: XCTestCase {
                 averageEnergyIntakeKcal: 2_080,
                 averageDailyDeficitKcal: 322,
                 averageProteinGrams: 79,
+                medianWeightKilograms: 48.25,
                 dataCoverage: ["energyIntake": .partial, "proteinGrams": .partial],
                 metricWindowCoverage: [
                     "energyIntake": HealthMetricWindowCoverage(
@@ -290,8 +291,7 @@ final class AgentCoordinatorTests: XCTestCase {
                         authorizationLimited: false,
                         dataAvailabilityLimited: false
                     ),
-                ],
-                medianWeightKilograms: 48.25
+                ]
             ),
             targetWeightKilograms: 49.5,
             dailyDeficitGoalKcal: 301,
@@ -975,6 +975,74 @@ final class AgentCoordinatorTests: XCTestCase {
         })
     }
 
+    func testRevokingHealthActivityCancelsRoundUsingOnlyHistoricalUserActivityFact() async throws {
+        let provider = RevocationBlockingTextProvider()
+        let harness = try await Harness(provider: provider)
+        _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthActivity],
+            repository: harness.governance,
+            confirmedAt: Date()
+        )
+        _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+            provider: .deepSeek,
+            allowed: true,
+            repository: harness.governance,
+            confirmedAt: Date()
+        )
+
+        _ = try await harness.session.send(userText: "我今天跑了5公里")
+        let activeRequest = Task { @MainActor in
+            try await harness.session.send(userText: "请继续聊普通话题")
+        }
+        await provider.waitUntilSecondStreamStarts()
+
+        let requestMessages = try XCTUnwrap(provider.recordedRequests().last?.messages)
+        XCTAssertTrue(requestMessages.contains { message in
+            message.content.contains { if case .text("我今天跑了5公里") = $0 { return true }; return false }
+        }, "The active request must contain the historical user fact that requires Activity consent")
+        let activePolicy = try XCTUnwrap(harness.session.cloudHealthContextPolicyForPendingActions())
+        let requestDependencies = AgentSession.outboundConsentDependencies(
+            messages: requestMessages,
+            includesImage: false,
+            includesConversationHistory: true,
+            summary: nil,
+            structuredContext: nil,
+            policy: activePolicy
+        )
+        XCTAssertTrue(requestDependencies.contains(.healthActivity))
+
+        _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+            provider: .deepSeek,
+            allowedClasses: [],
+            repository: harness.governance,
+            changeSource: .settings
+        )
+
+        for _ in 0..<200 {
+            if provider.secondStreamWasTerminated { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let providerStreamWasCancelled = provider.secondStreamWasTerminated
+
+        // If cancellation is broken, release the fake response so the test can
+        // finish and prove that its post-revocation text/tool call was consumed.
+        provider.emitPostRevocationEvents()
+        let result = await activeRequest.result
+
+        XCTAssertTrue(providerStreamWasCancelled, "Revoking an actually sent data class must terminate its active provider stream")
+        XCTAssertEqual(provider.recordedRequests().count, 2, "A revoked active round must not start a retry")
+        XCTAssertFalse(harness.session.streamedText.contains("post-revocation-sentinel"))
+        if case .success = result {
+            XCTFail("A provider response must not complete after its historical data consent is revoked")
+        }
+        let pendingCount = try ModelContext(harness.container)
+            .fetch(FetchDescriptor<PendingActionRecord>())
+            .filter { $0.stateRaw == PendingActionState.pending.rawValue }
+            .count
+        XCTAssertEqual(pendingCount, 0, "A post-revocation tool call must not create a pending action")
+    }
+
     func testCancellationBeforeProviderRoundStillEmitsTypedEvent() async throws {
         let blockingConversation = BlockingConversationRepository()
         let harness = try await Harness(
@@ -1132,6 +1200,12 @@ final class AgentCoordinatorTests: XCTestCase {
             windowDays: 7,
             coverageDays: ["sleep": 7],
             averageSleepMinutes: 420,
+            averageStepCount: nil,
+            averageActiveEnergyKcal: nil,
+            averageEnergyIntakeKcal: nil,
+            averageDailyDeficitKcal: nil,
+            averageProteinGrams: nil,
+            medianWeightKilograms: nil,
             dataCoverage: ["sleep": .complete]
         )
         let summary = HealthContextSummary(
@@ -1257,5 +1331,85 @@ private actor AsyncStartSignal {
     func waitUntilStarted() async {
         if hasStarted { return }
         await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
+private final class RevocationBlockingTextProvider: TextModelProvider, @unchecked Sendable {
+    let descriptor = ProviderDescriptor(
+        id: .deepSeek,
+        model: "revocation-fixture-model",
+        capabilities: [.text, .toolCalling]
+    )
+
+    private let lock = NSLock()
+    private var requests: [ModelRequest] = []
+    private var secondContinuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation?
+    private var didTerminateSecondStream = false
+    private let secondStreamStarted = AsyncStartSignal()
+
+    func stream(_ request: ModelRequest) -> AsyncThrowingStream<ProviderEvent, Error> {
+        let requestNumber = lock.withLock { () -> Int in
+            requests.append(request)
+            return requests.count
+        }
+
+        return AsyncThrowingStream { continuation in
+            if requestNumber == 2 {
+                lock.withLock { secondContinuation = continuation }
+                continuation.onTermination = { [weak self] _ in
+                    guard let self else { return }
+                    self.lock.withLock { self.didTerminateSecondStream = true }
+                }
+            }
+
+            Task {
+                do {
+                    if let gate = request.preSerializationGate {
+                        _ = try await gate { Data("fixture-request".utf8) }
+                    }
+                    try await request.networkAttemptGate?()
+
+                    switch requestNumber {
+                    case 1:
+                        continuation.yield(.textDelta("第一轮已完成"))
+                        continuation.yield(.completed(.completed))
+                        continuation.finish()
+                    case 2:
+                        continuation.yield(.textDelta("撤销前已显示"))
+                        await secondStreamStarted.signal()
+                    default:
+                        continuation.yield(.textDelta("unexpected-retry-sentinel"))
+                        continuation.yield(.completed(.completed))
+                        continuation.finish()
+                    }
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    func recordedRequests() -> [ModelRequest] {
+        lock.withLock { requests }
+    }
+
+    func waitUntilSecondStreamStarts() async {
+        await secondStreamStarted.waitUntilStarted()
+    }
+
+    var secondStreamWasTerminated: Bool {
+        lock.withLock { didTerminateSecondStream }
+    }
+
+    func emitPostRevocationEvents() {
+        let continuation = lock.withLock { secondContinuation }
+        continuation?.yield(.textDelta("post-revocation-sentinel"))
+        continuation?.yield(.toolCall(ToolCall(
+            id: "post-revocation-weight",
+            name: "log_weight",
+            arguments: .object(["kilograms": .number(49), "measuredAt": .null])
+        )))
+        continuation?.yield(.completed(.toolUse))
+        continuation?.finish()
     }
 }

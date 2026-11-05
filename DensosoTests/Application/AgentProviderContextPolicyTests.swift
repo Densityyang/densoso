@@ -917,7 +917,9 @@ final class AgentProviderContextPolicyTests: XCTestCase {
             let oldProvenance = HealthContextPolicyProvenance(
                 provider: providerID,
                 policyRevision: "old-broader-revision",
-                allowedClasses: Set(CloudHealthContextPolicy.dataClasses)
+                allowedClasses: Set(CloudHealthContextPolicy.dataClasses),
+                contentClasses: Set(CloudHealthContextPolicy.dataClasses),
+                hasUnclassifiedHealthContent: false
             )
             let messages = [
                 ModelMessage(role: .user, text: "查看待确认草案。"),
@@ -1106,9 +1108,253 @@ final class AgentProviderContextPolicyTests: XCTestCase {
         XCTAssertFalse(String(describing: filtered).contains("orphan-"))
     }
 
-    private static func historyProvenance() -> HealthContextPolicyProvenance {
+    func testHealthFactClassifierRecordsContentCategoriesIndependentlyOfPolicy() {
+        let cases: [(String, ProviderDataClass)] = [
+            ("HRV 45", .healthBody),
+            ("静息心率 62", .healthBody),
+            ("血压 130/85", .healthBody),
+            ("昨晚睡眠 6 小时", .healthSleep),
+            ("今天走了 8000 步", .healthActivity),
+            ("午餐摄入 600 kcal", .healthNutrition),
+            ("我吃了鸡蛋", .healthNutrition),
+            ("I ate eggs.", .healthNutrition),
+            ("今天感觉压力很大", .healthSubjective),
+            ("My diet is vegetarian.", .healthNutrition),
+        ]
+
+        for (text, expectedClass) in cases {
+            let classification = HealthContentProvenanceClassifier.classify(text)
+            XCTAssertEqual(classification.dataClasses, [expectedClass], "Unexpected category for: \(text)")
+            XCTAssertFalse(classification.hasUnclassifiedHealthContent, "Unclassified fact: \(text)")
+        }
+        XCTAssertTrue(
+            HealthContentProvenanceClassifier.classify("my recovery score is 7").hasUnclassifiedHealthContent
+        )
+        XCTAssertTrue(HealthContentProvenanceClassifier.classify("I have asthma").hasUnclassifiedHealthContent)
+    }
+
+    func testHistoricalHRVDoesNotSurviveWithOnlyConversationHistoryOrActivityConsent() throws {
+        let broadOriginalPolicy = Self.historyProvenance()
+        let history: [ModelMessage] = [
+            ModelMessage(role: .user, text: "HRV 45", healthContextPolicyProvenance: broadOriginalPolicy),
+            ModelMessage(role: .assistant, text: "收到。", healthContextPolicyProvenance: broadOriginalPolicy),
+        ]
+
+        let scenarios: [Set<ProviderDataClass>] = [[], [.healthActivity]]
+        for allowedClasses in scenarios {
+            let policy = CloudHealthContextPolicy(
+                provider: .deepSeek,
+                allowedClasses: allowedClasses,
+                allowsConversationHistory: true
+            )
+            var messages = CloudRequestPolicyGuard.filterConversationHistory(
+                history + [ModelMessage(role: .user, text: "请继续。")],
+                currentTurnStartIndex: history.count,
+                by: policy
+            )
+            messages = CloudRequestPolicyGuard.filterToolResults(in: messages, by: policy)
+            let sentText = messages.flatMap { message in
+                message.content.compactMap { content -> String? in
+                    if case .text(let text) = content { return text }
+                    return nil
+                }
+            }.joined(separator: "\n")
+            XCTAssertFalse(sentText.contains("HRV 45"))
+            XCTAssertFalse(sentText.contains("收到。"))
+        }
+    }
+
+    func testHistoricalUserActivityFactIsRemovedWhenActivityConsentIsDenied() {
+        let provenance = Self.historyProvenance()
+        let facts: [(text: String, requiredClass: ProviderDataClass, otherConsent: ProviderDataClass)] = [
+            ("我今天跑了5公里", .healthActivity, .healthNutrition),
+            ("我昨晚只睡了4小时", .healthSleep, .healthActivity),
+            ("今天吃了两碗饭", .healthNutrition, .healthSleep),
+        ]
+
+        for fact in facts {
+            let history = [
+                ModelMessage(role: .user, text: fact.text, healthContextPolicyProvenance: provenance),
+                ModelMessage(role: .assistant, text: "我记下了。", healthContextPolicyProvenance: provenance),
+            ]
+            let policy = CloudHealthContextPolicy(
+                provider: .deepSeek,
+                allowedClasses: [fact.otherConsent],
+                allowsConversationHistory: true
+            )
+            let filtered = CloudRequestPolicyGuard.filterConversationHistory(
+                history + [ModelMessage(role: .user, text: "继续聊聊。")],
+                currentTurnStartIndex: history.count,
+                by: policy
+            )
+
+            let sentText = filtered.flatMap { message in
+                message.content.compactMap { content -> String? in
+                    if case .text(let text) = content { return text }
+                    return nil
+                }
+            }.joined(separator: "\n")
+            XCTAssertFalse(sentText.contains(fact.text), "Unauthorized historical fact reached the request: \(fact.text)")
+            XCTAssertFalse(sentText.contains("我记下了。"), "The historical turn must be dropped atomically")
+            XCTAssertTrue(sentText.contains("继续聊聊。"))
+
+            let dependencies = AgentSession.outboundConsentDependencies(
+                messages: filtered,
+                includesImage: false,
+                includesConversationHistory: true,
+                summary: nil,
+                structuredContext: nil,
+                policy: policy
+            )
+            XCTAssertFalse(dependencies.contains(fact.requiredClass))
+        }
+    }
+
+    func testAuthorizedHistoricalHealthFactSurvivesAndAddsItsActualConsentDependency() throws {
+        let provenance = Self.historyProvenance()
+        let history = [
+            ModelMessage(role: .user, text: "HRV 45", healthContextPolicyProvenance: provenance),
+            ModelMessage(role: .assistant, text: "收到。", healthContextPolicyProvenance: provenance),
+        ]
         let policy = CloudHealthContextPolicy(
             provider: .deepSeek,
+            allowedClasses: [.healthBody],
+            allowsConversationHistory: true
+        )
+        let messages = CloudRequestPolicyGuard.filterConversationHistory(
+            history + [ModelMessage(role: .user, text: "请继续。")],
+            currentTurnStartIndex: history.count,
+            by: policy
+        )
+        XCTAssertTrue(messages.contains { message in
+            message.content.contains { if case .text("HRV 45") = $0 { return true }; return false }
+        })
+
+        let dependencies = AgentSession.outboundConsentDependencies(
+            messages: messages,
+            includesImage: false,
+            includesConversationHistory: true,
+            summary: nil,
+            structuredContext: nil,
+            policy: policy
+        )
+        XCTAssertTrue(dependencies.contains(.healthBody))
+        XCTAssertTrue(dependencies.contains(.conversationHistory))
+    }
+
+    func testUnclassifiedHistoricalHealthFactFailsClosedWithPartialCategoryConsent() {
+        let provenance = Self.historyProvenance()
+        let history = [
+            ModelMessage(role: .user, text: "my recovery score is 7", healthContextPolicyProvenance: provenance),
+            ModelMessage(role: .assistant, text: "I noted it.", healthContextPolicyProvenance: provenance),
+            ModelMessage(role: .user, text: "Continue.", healthContextPolicyProvenance: provenance),
+        ]
+        let policy = CloudHealthContextPolicy(
+            provider: .deepSeek,
+            allowedClasses: [.healthBody, .healthActivity, .healthSleep, .healthNutrition],
+            allowsConversationHistory: true
+        )
+
+        let filtered = CloudRequestPolicyGuard.filterConversationHistory(
+            history,
+            currentTurnStartIndex: 2,
+            by: policy
+        )
+        let text = filtered.flatMap { message in
+            message.content.compactMap { if case .text(let value) = $0 { return value }; return nil }
+        }.joined(separator: "\n")
+        XCTAssertFalse(text.contains("my recovery score is 7"))
+        XCTAssertFalse(text.contains("I noted it."))
+        XCTAssertTrue(text.contains("Continue."))
+    }
+
+    func testCurrentUserHealthFactRequiresItsDataClassConsent() {
+        let policy = CloudHealthContextPolicy(provider: .qwen, allowedClasses: [])
+        let dependencies = AgentSession.outboundConsentDependencies(
+            messages: [ModelMessage(role: .user, text: "HRV 45")],
+            includesImage: false,
+            includesConversationHistory: false,
+            summary: nil,
+            structuredContext: nil,
+            policy: policy
+        )
+        XCTAssertTrue(dependencies.contains(.healthBody))
+    }
+
+    func testRevokedHistoricalHealthFactIsAbsentFromDeepSeekAndQwenRequestBodies() async throws {
+        let facts: [(text: String, deniedClass: ProviderDataClass, allowedClass: ProviderDataClass)] = [
+            ("HRV 45", .healthBody, .healthActivity),
+            ("我今天跑了5公里", .healthActivity, .healthNutrition),
+            ("我昨晚只睡了4小时", .healthSleep, .healthActivity),
+            ("今天吃了两碗饭", .healthNutrition, .healthSleep),
+        ]
+
+        for providerID in [ProviderID.deepSeek, .qwen] {
+            for fact in facts {
+                let originalProvenance = Self.historyProvenance(provider: providerID)
+                let history = [
+                    ModelMessage(role: .user, text: fact.text, healthContextPolicyProvenance: originalProvenance),
+                    ModelMessage(role: .assistant, text: "收到。", healthContextPolicyProvenance: originalProvenance),
+                ]
+                let policy = CloudHealthContextPolicy(
+                    provider: providerID,
+                    allowedClasses: [fact.allowedClass],
+                    allowsConversationHistory: true
+                )
+                let filtered = CloudRequestPolicyGuard.filterConversationHistory(
+                    history + [ModelMessage(role: .user, text: "请继续。")],
+                    currentTurnStartIndex: history.count,
+                    by: policy
+                )
+                let request = ModelRequest(
+                    requestID: UUID(),
+                    conversationID: UUID(),
+                    systemPrompt: "fixture",
+                    messages: AgentSession.providerFacingMessages(from: filtered),
+                    tools: [],
+                    maxOutputTokens: 64,
+                    thinking: .none,
+                    deadline: Date().addingTimeInterval(30)
+                )
+                let responseData = providerID == .deepSeek
+                    ? try Gate03FixtureLoader.data("deepseek-responses-stream", extension: "sse")
+                    : try Gate03FixtureLoader.data("qwen-text-tool-response")
+                let transport = ScriptedProviderHTTPTransport(steps: [
+                    .response(status: 200, data: responseData),
+                ])
+                if providerID == .deepSeek {
+                    let provider = DeepSeekProvider(
+                        credentialSource: TestCredentialSource(values: [.deepSeek: "fixture-key"]),
+                        transport: transport,
+                        jitter: { _ in 0 }
+                    )
+                    _ = try await collect(provider.stream(request))
+                } else {
+                    let provider = QwenProvider(
+                        endpoint: URL(string: "https://fixture.invalid/chat/completions")!,
+                        credentialSource: TestCredentialSource(values: [.qwen: "fixture-key"]),
+                        transport: transport,
+                        jitter: { _ in 0 }
+                    )
+                    _ = try await collect(provider.stream(request))
+                }
+
+                let recordedRequests = await transport.recordedRequests()
+                let captured = try XCTUnwrap(recordedRequests.first)
+                let body = String(decoding: try XCTUnwrap(captured.httpBody), as: UTF8.self)
+                XCTAssertFalse(
+                    body.contains(fact.text),
+                    "Revoked \(fact.deniedClass.rawValue) history reached \(providerID.rawValue)"
+                )
+                XCTAssertFalse(body.contains("收到。"), "The associated historical turn must be dropped atomically")
+                XCTAssertTrue(body.contains("请继续。"))
+            }
+        }
+    }
+
+    private static func historyProvenance(provider: ProviderID = .deepSeek) -> HealthContextPolicyProvenance {
+        let policy = CloudHealthContextPolicy(
+            provider: provider,
             allowedClasses: Set(CloudHealthContextPolicy.dataClasses),
             allowsConversationHistory: true
         )

@@ -786,6 +786,31 @@ final class HealthIntelligenceTests: XCTestCase {
     func testBriefUsesFourIndependentDomainsTwoRecommendationsAndAggregatedCloudContext() throws {
         let engine = HealthIntelligenceEngine(calendar: calendar)
         let today = try date(2026, 7, 29)
+        let nutritionDomain = HealthDomainResult(
+            domain: .nutrition,
+            status: .attention,
+            currentValue: 2_400,
+            baseline: HealthBaseline(
+                readiness: .mature,
+                validDays: 14,
+                median: 1_800,
+                p10: 1_600,
+                p90: 2_000,
+                mad: 100
+            ),
+            evidenceKeys: ["nutrition.energyIntake.kcal"],
+            dataCoverage: .complete
+        )
+        let nutritionRecommendation = try XCTUnwrap(RecommendationEngine().recommend(
+            domains: [nutritionDomain]
+        ).first)
+        XCTAssertEqual(nutritionRecommendation.requiredDataDomains, [.nutrition])
+        let deficitAwareRecommendation = try XCTUnwrap(RecommendationEngine().recommend(
+            domains: [nutritionDomain],
+            goal: GoalProfile(effectiveFrom: today, dailyDeficitKcal: 400)
+        ).first)
+        XCTAssertEqual(deficitAwareRecommendation.requiredDataDomains, [.nutrition, .activity])
+
         var days: [HealthIntelligenceDay] = []
         for offset in -28 ... -1 {
             let variance = Double((offset + 28) % 5)
