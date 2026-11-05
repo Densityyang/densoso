@@ -295,9 +295,9 @@ final class HealthIntelligenceServiceTests: XCTestCase {
         let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
         let completeResult = try await service.refresh(asOf: reference)
         let complete = try XCTUnwrap(completeResult)
-        XCTAssertEqual(complete.dailyBrief.trainingLoad.dataCoverage, .complete)
-        XCTAssertEqual(complete.dailyBrief.trainingLoad.readiness, .mature)
-        XCTAssertEqual(complete.dailyBrief.trainingLoad.priorTwentyEightDayAverage, 525)
+        XCTAssertEqual(complete.trainingLoad.dataCoverage, .complete)
+        XCTAssertEqual(complete.trainingLoad.readiness, .mature)
+        XCTAssertEqual(complete.trainingLoad.priorTwentyEightDayAverage, 525)
 
         let incompleteDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -2, to: today))
         let previousSnapshot = try XCTUnwrap(snapshotsByDay[incompleteDay])
@@ -325,10 +325,10 @@ final class HealthIntelligenceServiceTests: XCTestCase {
 
         let partialResult = try await service.refresh(asOf: reference)
         let partial = try XCTUnwrap(partialResult)
-        XCTAssertEqual(partial.dailyBrief.trainingLoad.dataCoverage, .partial)
-        XCTAssertEqual(partial.dailyBrief.trainingLoad.readiness, .mature)
-        XCTAssertNil(partial.dailyBrief.trainingLoad.ratio)
-        XCTAssertEqual(partial.dailyBrief.trainingLoad.band, .unavailable)
+        XCTAssertEqual(partial.trainingLoad.dataCoverage, .partial)
+        XCTAssertEqual(partial.trainingLoad.readiness, .mature)
+        XCTAssertNil(partial.trainingLoad.ratio)
+        XCTAssertEqual(partial.trainingLoad.band, .unavailable)
 
         let readModel = HealthIntelligenceReadModel(calendar: calendar)
         let readModelContext = try readModel.healthNarrativeContext(asOf: reference, in: context)

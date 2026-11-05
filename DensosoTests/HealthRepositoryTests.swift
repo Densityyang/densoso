@@ -2171,8 +2171,8 @@ final class HealthRepositoryTests: XCTestCase {
             ))
         }
 
-        insertAvailableSnapshot(on: days[0], hash: "legacy-workout-day-1")
-        insertAvailableSnapshot(on: days[3], hash: "legacy-workout-day-4")
+        try insertAvailableSnapshot(on: days[0], hash: "legacy-workout-day-1")
+        try insertAvailableSnapshot(on: days[3], hash: "legacy-workout-day-4")
         try context.save()
         let repository = HealthRepository(modelContext: context)
         XCTAssertFalse(try repository.hasAvailableHealthReadState(
@@ -2181,8 +2181,8 @@ final class HealthRepositoryTests: XCTestCase {
             through: endDay
         ), "Migrated sparse workout-day states do not prove full daily coverage")
 
-        insertAvailableSnapshot(on: days[1], hash: "full-workout-day-2")
-        insertAvailableSnapshot(on: days[2], hash: "full-workout-day-3")
+        try insertAvailableSnapshot(on: days[1], hash: "full-workout-day-2")
+        try insertAvailableSnapshot(on: days[2], hash: "full-workout-day-3")
         try context.save()
         XCTAssertTrue(try repository.hasAvailableHealthReadState(
             for: .workout,
