@@ -63,6 +63,20 @@ final class HealthNarrativeTests: XCTestCase {
                 "dailyDeficitKcal": .unknown,
                 "proteinGrams": .complete,
                 "bodyMass": .unknown,
+            ],
+            metricWindowCoverage: [
+                "energyIntake": HealthMetricWindowCoverage(
+                    targetWindowStart: Date(timeIntervalSince1970: 1_800_000_000),
+                    targetWindowEnd: Date(timeIntervalSince1970: 1_800_000_000 + 7 * 86_400),
+                    expectedCalendarDays: 7,
+                    actualEarliestDate: Date(timeIntervalSince1970: 1_800_000_000),
+                    validCalendarDays: 1,
+                    missingCalendarDays: 6,
+                    completeRecordDays: 1,
+                    completeValidDays: 1,
+                    authorizationLimited: nil,
+                    dataAvailabilityLimited: nil
+                ),
             ]
         )
         let summary = HealthContextSummary(

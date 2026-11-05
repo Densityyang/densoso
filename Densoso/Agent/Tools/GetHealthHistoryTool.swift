@@ -206,7 +206,7 @@ struct GetHealthHistoryTool: AgentTool {
 
     private static func evidenceKey(_ key: String, matches domain: HealthDomain) -> Bool {
         let normalized = key.lowercased()
-        switch domain {
+        return switch domain {
         case .nutrition: normalized.hasPrefix("nutrition.")
         case .sleep: normalized.hasPrefix("sleep.")
         case .activity: normalized.hasPrefix("activity.") || normalized.hasPrefix("trainingload.")

@@ -986,7 +986,7 @@ final class HealthIntelligenceTests: XCTestCase {
         XCTAssertEqual(summary.sevenDay.averageEnergyIntakeKcal, 1_800)
     }
 
-    func testUnknownHealthKitCoverageRemainsUnknownAndKnownValuesRemainPartial() throws {
+    func testUnknownHealthKitCoverageRemainsUnknownAndSelectedActivityMetricKeepsItsCoverage() throws {
         let today = try date(2026, 10, 20)
         let unknown = HealthReadState.dataUnavailableOrReadScopeUnknown
         let unknownStates = [
@@ -1035,8 +1035,13 @@ final class HealthIntelligenceTests: XCTestCase {
             weightSamplesKilograms: [71.4],
             healthReadStates: partiallyKnownStates
         )]))
-        XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .activity })?.status, .partial)
-        XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .activity })?.currentValue, 5_600)
+        let selectedActivity = try XCTUnwrap(
+            partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .activity })
+        )
+        XCTAssertEqual(selectedActivity.status, .learning)
+        XCTAssertEqual(selectedActivity.dataCoverage, .complete)
+        XCTAssertEqual(selectedActivity.currentValue, 5_600)
+        XCTAssertEqual(selectedActivity.evidenceKeys, [HealthActivityMetric.steps.evidenceKey])
         XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .body })?.status, .partial)
         XCTAssertEqual(partialResult.dailyBrief.healthState?.domains.first(where: { $0.domain == .sleep })?.status, .noData)
         XCTAssertEqual(partialResult.dailyBrief.trainingLoad.dataCoverage, .unknown)
