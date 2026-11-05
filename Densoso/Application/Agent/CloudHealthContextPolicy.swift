@@ -1357,10 +1357,18 @@ enum CloudRequestPolicyGuard {
             return nil
         }
         guard !toolCalls.isEmpty else { return nil }
+        let structureOnlyProvenance = HealthContextPolicyProvenance(
+            provider: policy.provider,
+            policyRevision: policy.revision,
+            allowedClasses: policy.allowedClasses,
+            contentClasses: [],
+            dataClassConsentRevisions: [:],
+            hasUnclassifiedHealthContent: false
+        )
         return ModelMessage(
             role: .assistant,
             content: toolCalls,
-            healthContextPolicyProvenance: message.healthContextPolicyProvenance
+            healthContextPolicyProvenance: structureOnlyProvenance
         )
     }
 

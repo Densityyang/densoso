@@ -2594,6 +2594,19 @@ final class AgentSession {
                 let classification = HealthContentProvenanceClassifier.classify(text)
                 classes.formUnion(classification.dataClasses)
                 unclassified = unclassified || classification.hasUnclassifiedHealthContent
+                if message.role == .assistant,
+                   classification.dataClasses.isEmpty,
+                   message.content.contains(where: { content in
+                       guard case .toolCall(let call) = content else { return false }
+                       return CloudRequestPolicyGuard.isHealthTool(name: call.name)
+                   }),
+                   HealthContextPromptBuilder.containsHealthEntity(in: text) {
+                    // Assistant prose emitted alongside a health tool call can
+                    // contain a health fact that the factual classifier cannot
+                    // safely assign to one category. Keep it fail-closed when
+                    // the turn is replayed under a narrower consent policy.
+                    unclassified = true
+                }
             case .toolResult(let callID, let result):
                 let toolName = conversationHistory.reversed().compactMap { priorMessage in
                     priorMessage.content.compactMap { priorContent -> String? in

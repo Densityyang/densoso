@@ -1499,7 +1499,7 @@ final class AgentCoordinatorTests: XCTestCase {
                 "type": "response.completed",
                 "response": [
                     "id": "resp-privacy-fixture",
-                    "model": "deepseek-fixture",
+                    "model": "deepseek-flash",
                     "status": "completed",
                     "output": [[
                         "type": "message",
@@ -1514,7 +1514,7 @@ final class AgentCoordinatorTests: XCTestCase {
         }
         let response: [String: Any] = [
             "id": "chatcmpl-privacy-fixture",
-            "model": "qwen-fixture",
+            "model": "qwen-flash",
             "choices": [[
                 "message": ["role": "assistant", "content": text],
                 "finish_reason": "stop",

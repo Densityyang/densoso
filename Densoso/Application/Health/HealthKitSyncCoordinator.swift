@@ -1233,11 +1233,17 @@ final class HealthKitSyncCoordinator {
                     uniqueKeysWithValues: availableDays.map { ($0, HealthReadState.available) }
                 )
                 if !canVerifyThroughNow, coverageStart <= throughDay {
-                    // Persist the current day as unknown when the incremental
-                    // query cannot prove HealthKit read scope. A manual workout
-                    // must not turn missing HealthKit coverage into an implicit
-                    // available state.
-                    readStateUpdates[throughDay] = .dataUnavailableOrReadScopeUnknown
+                    // Preserve uncertainty for every queried day when this
+                    // sync cannot establish HealthKit read scope. A manual
+                    // workout or an empty incremental page must not turn the
+                    // wider window into an implicit rest-day signal.
+                    for day in HealthDataWindowPolicy.days(
+                        from: coverageStart,
+                        through: throughDay,
+                        calendar: calendar
+                    ) {
+                        readStateUpdates[day] = .dataUnavailableOrReadScopeUnknown
+                    }
                 }
                 try await repository.applyImportedWorkouts(
                     latestWorkoutsByUUID.values.sorted {
