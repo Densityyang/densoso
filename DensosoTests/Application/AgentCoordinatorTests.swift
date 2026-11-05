@@ -767,20 +767,30 @@ final class AgentCoordinatorTests: XCTestCase {
             XCTAssertTrue(serializedPrompt.contains("\"averageStepCount\":842") || serializedPrompt.contains("\"averageStepCount\": 842"))
             XCTAssertFalse(body.contains("SUBJECTIVE_PRIVATE_275"))
 
-            _ = try await harness.session.send(
-                multimodalRequest: try MultimodalModelRequest(
-                    userText: "请描述这张图片。",
-                    imageJPEG: imageData,
-                    mealEvidence: []
+            let imageRequest = try MultimodalModelRequest(
+                userText: "请描述这张图片。",
+                imageJPEG: imageData,
+                mealEvidence: []
+            )
+            if providerID == .deepSeek {
+                _ = try await harness.session.send(multimodalRequest: imageRequest)
+                let requestsAfterImage = await transport.recordedRequests()
+                XCTAssertEqual(requestsAfterImage.count, 2)
+                let imageBodyData = try XCTUnwrap(requestsAfterImage.last?.httpBody)
+                XCTAssertTrue(
+                    String(decoding: imageBodyData, as: UTF8.self).contains(imageData.base64EncodedString()),
+                    "The authorized image payload should be serialized for DeepSeek"
                 )
-            )
-            let requestsAfterImage = await transport.recordedRequests()
-            XCTAssertEqual(requestsAfterImage.count, 2)
-            let imageBodyData = try XCTUnwrap(requestsAfterImage.last?.httpBody)
-            XCTAssertTrue(
-                String(decoding: imageBodyData, as: UTF8.self).contains(imageData.base64EncodedString()),
-                "The authorized image payload should be serialized for \(providerID.rawValue)"
-            )
+            } else {
+                do {
+                    _ = try await harness.session.send(multimodalRequest: imageRequest)
+                    XCTFail("The generic Qwen chat provider does not support image payloads")
+                } catch {
+                    XCTAssertEqual(error as? ProviderError, .unsupportedCapability(.vision))
+                }
+                let requestsAfterImage = await transport.recordedRequests()
+                XCTAssertEqual(requestsAfterImage.count, 1, "Unsupported Qwen images must not reach HTTP transport")
+            }
         }
     }
 

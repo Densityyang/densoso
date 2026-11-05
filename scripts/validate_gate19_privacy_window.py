@@ -500,7 +500,7 @@ SOURCE_CONTRACTS: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] 
         (
             "beforeNetworkAttempt: {",
             "additionalRequiredClasses: [.speechAudio]",
-            "cloudProvider.transcribe(",
+            "speechProvider.transcribe(",
             "expectedSpeechPolicy",
         ),
         (),
@@ -571,7 +571,7 @@ SOURCE_CONTRACTS: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] 
             "containsUnprovenancedConversationMessage",
             "!containsUnprovenancedConversationMessage",
             "policy.allowsConversationHistory",
-            "healthContextPolicyProvenance: message.healthContextPolicyProvenance",
+            "healthContextPolicyProvenance: provenance",
         ),
         (),
     ),
