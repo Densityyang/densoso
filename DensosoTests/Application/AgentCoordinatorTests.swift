@@ -764,7 +764,14 @@ final class AgentCoordinatorTests: XCTestCase {
                     "Denied aggregate \(field)=\(value) reached the \(providerID.rawValue) prompt"
                 )
             }
-            XCTAssertTrue(serializedPrompt.contains("\"averageStepCount\":842") || serializedPrompt.contains("\"averageStepCount\": 842"))
+            let authorizedStepCount = jsonNumber(named: "averageStepCount", in: serializedPrompt)
+            XCTAssertNotNil(
+                authorizedStepCount,
+                "Authorized activity aggregate should reach the real \(providerID.rawValue) serializer"
+            )
+            if let authorizedStepCount {
+                XCTAssertEqual(authorizedStepCount, 842, accuracy: 0.000_001)
+            }
             XCTAssertFalse(body.contains("SUBJECTIVE_PRIVATE_275"))
 
             let imageRequest = try MultimodalModelRequest(
@@ -777,8 +784,10 @@ final class AgentCoordinatorTests: XCTestCase {
                 let requestsAfterImage = await transport.recordedRequests()
                 XCTAssertEqual(requestsAfterImage.count, 2)
                 let imageBodyData = try XCTUnwrap(requestsAfterImage.last?.httpBody)
+                let imageBody = try JSONSerialization.jsonObject(with: imageBodyData)
+                let serializedStrings = jsonStringValues(in: imageBody)
                 XCTAssertTrue(
-                    String(decoding: imageBodyData, as: UTF8.self).contains(imageData.base64EncodedString()),
+                    serializedStrings.contains("data:image/jpeg;base64,\(imageData.base64EncodedString())"),
                     "The authorized image payload should be serialized for DeepSeek"
                 )
             } else {
@@ -1542,6 +1551,29 @@ final class AgentCoordinatorTests: XCTestCase {
         let messages = try XCTUnwrap(object["messages"] as? [[String: Any]])
         let systemMessage = try XCTUnwrap(messages.first { $0["role"] as? String == "system" })
         return try XCTUnwrap(systemMessage["content"] as? String)
+    }
+
+    private func jsonNumber(named name: String, in text: String) -> Double? {
+        let escapedName = NSRegularExpression.escapedPattern(for: name)
+        let pattern = #"\"\#(escapedName)\"\s*:\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = expression.firstMatch(in: text, range: range),
+              let valueRange = Range(match.range(at: 1), in: text) else { return nil }
+        return Double(text[valueRange])
+    }
+
+    private func jsonStringValues(in value: Any) -> [String] {
+        switch value {
+        case let string as String:
+            [string]
+        case let array as [Any]:
+            array.flatMap { jsonStringValues(in: $0) }
+        case let object as [String: Any]:
+            object.values.flatMap { jsonStringValues(in: $0) }
+        default:
+            []
+        }
     }
 }
 

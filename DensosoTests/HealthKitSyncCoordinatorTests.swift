@@ -3064,12 +3064,20 @@ final class HealthKitSyncCoordinatorTests: XCTestCase {
         let targetStart = try XCTUnwrap(
             HealthDataWindowPolicy.initialBackfillStart(through: Date(), calendar: Calendar.current)
         )
+        let verifiedCoverageDays = HealthDataWindowPolicy.days(
+            from: targetStart,
+            through: Calendar.current.startOfDay(for: Date()),
+            calendar: Calendar.current
+        )
+        let verifiedReadStates: [Date: HealthReadState] = Dictionary(
+            uniqueKeysWithValues: verifiedCoverageDays.map { ($0, .available) }
+        )
         try await repository.applyImportedWorkouts(
             [workout],
             deletedHealthKitUUIDs: [],
             nextAnchorData: Data([1]),
             lookbackStart: targetStart,
-            readStateUpdates: [day: .available]
+            readStateUpdates: verifiedReadStates
         )
         try await repository.applyImportedHealthSamples(
             HealthSamplePage(samples: [sample], nextAnchorData: Data([1]), readState: .available),
