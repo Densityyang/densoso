@@ -305,8 +305,8 @@ final class HistoricalMetricsRecomputeServiceTests: XCTestCase {
         for day in days {
             context.insert(DailyMetrics(
                 date: day,
-                projectionVersion: AlgorithmVersions.dailyMetricsProjection,
                 energyQuality: "stale-weight-projection",
+                projectionVersion: AlgorithmVersions.dailyMetricsProjection,
                 sourceFingerprint: "stale-weight-fingerprint",
                 requiresRecompute: false
             ))
