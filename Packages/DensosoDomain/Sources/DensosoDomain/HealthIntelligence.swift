@@ -1163,7 +1163,7 @@ public enum HealthActivityMetric: String, Codable, CaseIterable, Sendable {
         if let readStates = day.healthReadStates {
             guard readStates[healthMetricID.rawValue] == .available else { return nil }
         }
-        switch self {
+        return switch self {
         case .steps: day.stepCount
         case .exerciseMinutes: day.exerciseMinutes
         case .activeEnergy: day.activeEnergyKcal
@@ -1758,15 +1758,15 @@ public struct HealthIntelligenceEngine: Sendable {
                     : bodyMassCoverage),
         ]
         let domains = domainInputs.map { domain, value, evidenceKey, dataCoverage -> HealthDomainResult in
-            let baseline: HealthBaseline
+            let domainBaseline: HealthBaseline
             if domain == .activity {
-                baseline = selectedActivityTrend?.baseline ?? baseline(for: [], before: currentDay)
+                domainBaseline = selectedActivityTrend?.baseline ?? baseline(for: [], before: currentDay)
             } else {
                 let historicValues = historical.compactMap { day -> (date: Date, value: Double)? in
                     guard let metric = metricValue(domain, from: day, allDays: days) else { return nil }
                     return (calendar.startOfDay(for: day.dayStart), metric)
                 }
-                baseline = baseline(for: historicValues, before: currentDay)
+                domainBaseline = baseline(for: historicValues, before: currentDay)
             }
             let status: HealthDomainStatus
             if dataCoverage == .unknown {
@@ -1775,10 +1775,10 @@ public struct HealthIntelligenceEngine: Sendable {
                 status = .partial
             } else if value == nil {
                 status = .noData
-            } else if baseline.readiness == .noData || baseline.readiness == .learning {
+            } else if domainBaseline.readiness == .noData || domainBaseline.readiness == .learning {
                 status = .learning
-            } else if let value, baseline.isSignificantChange(value) {
-                status = abs(baseline.robustZScore(for: value) ?? 0) >= 3.5 ? .attention : .changed
+            } else if let value, domainBaseline.isSignificantChange(value) {
+                status = abs(domainBaseline.robustZScore(for: value) ?? 0) >= 3.5 ? .attention : .changed
             } else {
                 status = .withinTypicalRange
             }
@@ -1786,7 +1786,7 @@ public struct HealthIntelligenceEngine: Sendable {
                 domain: domain,
                 status: status,
                 currentValue: value,
-                baseline: baseline,
+                baseline: domainBaseline,
                 evidenceKeys: value == nil ? [] : [evidenceKey],
                 dataCoverage: dataCoverage
             )
@@ -1874,17 +1874,17 @@ public struct HealthIntelligenceEngine: Sendable {
         )
         let selectedActivityTrend = activityTrends.first(where: { $0.currentValue != nil })
         let domains: [HealthDomainResult] = HealthDomain.allCases.map { domain in
-            let baseline: HealthBaseline
+            let domainBaseline: HealthBaseline
             let value: Double?
             if domain == .activity {
-                baseline = selectedActivityTrend?.baseline ?? baseline(for: [], before: start)
+                domainBaseline = selectedActivityTrend?.baseline ?? baseline(for: [], before: start)
                 value = selectedActivityTrend?.currentValue
             } else {
                 let values = history.compactMap { day -> (date: Date, value: Double)? in
                     guard let metric = metricValue(domain, from: day, allDays: days) else { return nil }
                     return (calendar.startOfDay(for: day.dayStart), metric)
                 }
-                baseline = baseline(for: values, before: start)
+                domainBaseline = baseline(for: values, before: start)
                 value = current.flatMap { day in
                     domain == .nutrition
                         ? day.recordedEnergyIntakeKcal
@@ -1904,16 +1904,16 @@ public struct HealthIntelligenceEngine: Sendable {
             if coverage == .unknown { status = value == nil ? .unknown : .partial }
             else if coverage == .partial { status = .partial }
             else if value == nil { status = .noData }
-            else if baseline.readiness == .noData || baseline.readiness == .learning { status = .learning }
-            else if let value, baseline.isSignificantChange(value) {
-                status = abs(baseline.robustZScore(for: value) ?? 0) >= 3.5 ? .attention : .changed
+            else if domainBaseline.readiness == .noData || domainBaseline.readiness == .learning { status = .learning }
+            else if let value, domainBaseline.isSignificantChange(value) {
+                status = abs(domainBaseline.robustZScore(for: value) ?? 0) >= 3.5 ? .attention : .changed
             }
             else { status = .withinTypicalRange }
             return HealthDomainResult(
                 domain: domain,
                 status: status,
                 currentValue: value,
-                baseline: baseline,
+                baseline: domainBaseline,
                 evidenceKeys: value == nil ? [] : [
                     domain == .activity
                         ? (selectedActivityTrend?.evidenceKey ?? HealthActivityMetric.steps.evidenceKey)
@@ -2191,7 +2191,7 @@ public struct HealthIntelligenceEngine: Sendable {
         }
         let hasKnownDataAvailabilityGap = expectedDates.contains { date in
             guard let day = daysByStart[date] else { return false }
-            if let healthMetric, let firstAuthorizedDay, date < firstAuthorizedDay { return false }
+            if healthMetric != nil, let firstAuthorizedDay, date < firstAuthorizedDay { return false }
             return !metricHasValue(key, day: day, allDays: allDays)
         }
         let dataAvailabilityLimited = countsAreKnown ? hasKnownDataAvailabilityGap : nil
