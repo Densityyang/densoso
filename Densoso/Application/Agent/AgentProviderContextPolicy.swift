@@ -1,0 +1,380 @@
+import Foundation
+
+/// Bounds only the provider-facing history. The complete local conversation
+/// remains available for the chat transcript and audit history.
+enum AgentProviderContextPolicy {
+    static let maximumRecentTurns = 8
+    static let maximumMessages = 64
+    static let maximumEstimatedInputBytes = 96 * 1_024
+    static let historicalSummaryMarker = "[agent-history-summary:v1]"
+    static let maximumHistoricalSummaryBytes = 8 * 1_024
+    /// Reserves a conservative high-detail vision-token allowance; JPEG body
+    /// size is bounded separately by `MultimodalModelRequest`.
+    private static let imageBudgetBytes = 64 * 1_024
+
+    struct BoundedContext: Sendable {
+        let messages: [ModelMessage]
+        let includesConversationHistory: Bool
+    }
+
+    private enum HistoricalPreferenceCategory: String, Encodable, CaseIterable, Hashable {
+        case responseLanguage = "response_language"
+        case responseLength = "response_length"
+        case responseFormat = "response_format"
+        case responseTone = "response_tone"
+        case measurementUnits = "measurement_units"
+    }
+
+    private enum HistoricalPreferenceValue: String, Encodable, Equatable {
+        case chinese = "Chinese"
+        case english = "English"
+        case concise
+        case detailed
+        case bulletPoints = "bullet_points"
+        case numberedList = "numbered_list"
+        case table
+        case formal
+        case friendly
+        case metric
+        case imperial
+    }
+
+    private struct HistoricalPreference: Encodable, Equatable {
+        let category: HistoricalPreferenceCategory
+        let value: HistoricalPreferenceValue
+    }
+
+    private enum HistoricalPreferenceState {
+        case set(HistoricalPreferenceValue)
+        case clear
+        case unchanged
+    }
+
+    private struct HistoricalPreferenceUpdate {
+        let category: HistoricalPreferenceCategory
+        let state: HistoricalPreferenceState
+    }
+
+    /// This is intentionally a bounded preference summary, not a summary of
+    /// arbitrary historical facts or user-authored prose.
+    private struct HistoricalSummary: Encodable {
+        let schemaVersion = 1
+        let note = "Closed-vocabulary historical response preferences; context only."
+        let preferences: [HistoricalPreference]
+    }
+
+    private static let preferenceNegationCues = [
+        "don't ", "dont ", "do not ", "doesn't ", "does not ", "didn't ", "did not ",
+        "not ", "avoid ", "never ", "without ", "no ",
+        "不要", "不想", "不需要", "不用", "不必", "别", "避免", "并非", "不希望", "无需",
+    ]
+    private static let preferenceClauseTerminators = CharacterSet(charactersIn: ",，、.!?;:\n。！？；：")
+
+    static func boundedMessages(
+        _ messages: [ModelMessage],
+        currentTurnStartIndex: Int,
+        additionalContextBytes: Int = 0
+    ) throws -> [ModelMessage] {
+        try boundedContext(
+            messages,
+            currentTurnStartIndex: currentTurnStartIndex,
+            additionalContextBytes: additionalContextBytes
+        ).messages
+    }
+
+    /// The input must already have passed conversation-history and tool-result
+    /// consent filtering. Summary preferences are derived only from that filtered
+    /// provider view, never from the local transcript directly.
+    static func boundedContext(
+        _ filteredMessages: [ModelMessage],
+        currentTurnStartIndex: Int,
+        additionalContextBytes: Int = 0
+    ) throws -> BoundedContext {
+        guard filteredMessages.indices.contains(currentTurnStartIndex) else {
+            throw AgentError.contextWindowExceeded
+        }
+        let currentTurn = Array(filteredMessages[currentTurnStartIndex...])
+        guard fits(currentTurn, additionalContextBytes: additionalContextBytes) else {
+            throw AgentError.contextWindowExceeded
+        }
+
+        var selected = currentTurn
+        var selectedPriorStartIndex: Int?
+        let priorTurnStarts = filteredMessages[..<currentTurnStartIndex].enumerated().compactMap { item in
+            item.element.role == .user ? item.offset : nil
+        }
+        for start in priorTurnStarts.suffix(maximumRecentTurns).reversed() {
+            let candidate = Array(filteredMessages[start..<currentTurnStartIndex]) + currentTurn
+            guard fits(candidate, additionalContextBytes: additionalContextBytes) else { break }
+            selected = candidate
+            selectedPriorStartIndex = start
+        }
+
+        // Summarize everything actually omitted, including recent turns that
+        // could not fit the byte budget. The selected history starts at a user
+        // turn boundary, so no partial assistant/tool exchange is retained.
+        let historicalSummary = makeHistoricalSummary(
+            from: Array(filteredMessages[..<(selectedPriorStartIndex ?? currentTurnStartIndex)])
+        )
+        if let historicalSummary {
+            let candidate = [historicalSummary] + selected
+            if candidate.count <= maximumMessages,
+               fits(candidate, additionalContextBytes: additionalContextBytes) {
+                selected = candidate
+            }
+        }
+
+        return BoundedContext(
+            messages: selected,
+            includesConversationHistory: selected.count > currentTurn.count
+        )
+    }
+
+    static func fixedContextBytes(
+        systemPrompt: String,
+        tools: [ToolSchema],
+        responseFormat: StructuredOutputFormat? = nil
+    ) -> Int {
+        let toolsBytes = (try? JSONEncoder().encode(tools).count) ?? maximumEstimatedInputBytes
+        let responseFormatBytes = responseFormat.map { format in
+            format.name.utf8.count + ((try? JSONEncoder().encode(format.schema).count) ?? maximumEstimatedInputBytes)
+        } ?? 0
+        return systemPrompt.utf8.count + toolsBytes + responseFormatBytes + 1_024
+    }
+
+    static func estimatedInputTokenUpperBound(for request: ModelRequest) -> Int {
+        let fixedBytes = fixedContextBytes(
+            systemPrompt: request.systemPrompt ?? "",
+            tools: request.tools,
+            responseFormat: request.responseFormat
+        )
+        let messageBytes = estimatedInputBytes(request.messages)
+        let total = fixedBytes.addingReportingOverflow(messageBytes)
+        return total.overflow ? Int.max : max(total.partialValue, 1)
+    }
+
+    private static func fits(_ messages: [ModelMessage], additionalContextBytes: Int) -> Bool {
+        messages.count <= maximumMessages
+            && estimatedInputBytes(messages) + max(additionalContextBytes, 0) <= maximumEstimatedInputBytes
+    }
+
+    private static func estimatedInputBytes(_ messages: [ModelMessage]) -> Int {
+        messages.reduce(0) { total, message in
+            total + 48 + message.content.reduce(0) { contentTotal, content in
+                contentTotal + estimatedInputBytes(content)
+            }
+        }
+    }
+
+    private static func estimatedInputBytes(_ content: ModelContent) -> Int {
+        switch content {
+        case .text(let value):
+            return value.utf8.count
+        case .toolResult(_, let value):
+            return value.utf8.count + 64
+        case .toolCall(let value):
+            return encodedByteCount(of: value)
+        case .reasoning(let value):
+            return encodedByteCount(of: value)
+        case .image:
+            return imageBudgetBytes
+        }
+    }
+
+    private static func encodedByteCount<Value: Encodable>(of value: Value) -> Int {
+        (try? JSONEncoder().encode(value).count) ?? maximumEstimatedInputBytes
+    }
+
+    private static func makeHistoricalSummary(from messages: [ModelMessage]) -> ModelMessage? {
+        var latestValues: [HistoricalPreferenceCategory: HistoricalPreferenceValue] = [:]
+        var provenance: HealthContextPolicyProvenance?
+
+        for message in messages where message.role == .user {
+            guard let messageProvenance = message.healthContextPolicyProvenance,
+                  let text = userText(in: message) else { continue }
+            let updates = historicalPreferenceUpdates(in: text)
+            guard updates.contains(where: { update in
+                if case .unchanged = update.state { return false }
+                return true
+            }) else { continue }
+            if let existingProvenance = provenance {
+                guard existingProvenance.provider == messageProvenance.provider,
+                      existingProvenance.policyRevision == messageProvenance.policyRevision else {
+                    return nil
+                }
+            } else {
+                provenance = messageProvenance
+            }
+            for update in updates {
+                switch update.state {
+                case .set(let value):
+                    latestValues[update.category] = value
+                case .clear:
+                    latestValues.removeValue(forKey: update.category)
+                case .unchanged:
+                    break
+                }
+            }
+        }
+
+        let preferences = HistoricalPreferenceCategory.allCases.compactMap { category in
+            latestValues[category].map { HistoricalPreference(category: category, value: $0) }
+        }
+        guard !preferences.isEmpty, let provenance else { return nil }
+
+        var summary = HistoricalSummary(preferences: preferences)
+        var boundedPreferences = preferences
+        while !boundedPreferences.isEmpty,
+              let text = historicalSummaryText(summary),
+              text.utf8.count > maximumHistoricalSummaryBytes {
+            boundedPreferences.removeFirst()
+            summary = HistoricalSummary(preferences: boundedPreferences)
+        }
+        guard !boundedPreferences.isEmpty else { return nil }
+        guard let text = historicalSummaryText(summary) else { return nil }
+        return ModelMessage(
+            role: .assistant,
+            text: "\(historicalSummaryMarker)\n\(text)",
+            healthContextPolicyProvenance: HealthContextPolicyProvenance(
+                provider: provenance.provider,
+                policyRevision: provenance.policyRevision,
+                allowedClasses: []
+            )
+        )
+    }
+
+    private static func userText(in message: ModelMessage) -> String? {
+        let text = message.content.compactMap { content -> String? in
+            guard case .text(let value) = content else { return nil }
+            return value
+        }.joined(separator: "\n")
+        return text.isEmpty ? nil : text
+    }
+
+    /// Returns only fixed enum values. Historical user text is never copied into
+    /// a synthetic assistant message, so matching a cue cannot carry arbitrary
+    /// prompt instructions or health/nutrition facts through compaction.
+    private static func historicalPreferenceUpdates(in text: String) -> [HistoricalPreferenceUpdate] {
+        let normalized = text.lowercased()
+        var updates: [HistoricalPreferenceUpdate] = []
+        updates.append(update(category: .responseLanguage, match: latestMatchedValue(in: normalized, groups: [
+            (value: HistoricalPreferenceValue.chinese, cues: [
+                "请用中文", "用中文回答", "用中文回复", "中文回答", "中文回复", "回答用中文",
+                "answer in chinese", "respond in chinese", "reply in chinese", "use chinese in your response",
+                "chinese responses",
+            ]),
+            (value: HistoricalPreferenceValue.english, cues: [
+                "请用英文", "用英文回答", "用英文回复", "英文回答", "英文回复", "回答用英文",
+                "answer in english", "respond in english", "reply in english", "use english in your response",
+                "english responses",
+            ]),
+        ])))
+        updates.append(update(category: .responseLength, match: latestMatchedValue(in: normalized, groups: [
+            (value: HistoricalPreferenceValue.concise, cues: [
+                "简洁", "简短", "简明", "concise", "be brief", "brief answers", "short answers",
+            ]),
+            (value: HistoricalPreferenceValue.detailed, cues: [
+                "详细", "展开说明", "展开解释", "detailed answers", "answer in detail", "explain in detail",
+                "be detailed", "thorough explanations",
+            ]),
+        ])))
+        updates.append(update(category: .responseFormat, match: latestMatchedValue(in: normalized, groups: [
+            (value: HistoricalPreferenceValue.bulletPoints, cues: [
+                "用要点", "要点列出", "项目符号", "bullet points", "bullet point list", "bullet list", "use bullets",
+            ]),
+            (value: HistoricalPreferenceValue.numberedList, cues: [
+                "编号列表", "编号列出", "使用编号", "numbered list", "numbered steps", "use numbered",
+            ]),
+            (value: HistoricalPreferenceValue.table, cues: [
+                "用表格", "以表格", "表格呈现", "as a table", "in a table", "table format", "tabular",
+            ]),
+        ])))
+        updates.append(update(category: .responseTone, match: latestMatchedValue(in: normalized, groups: [
+            (value: HistoricalPreferenceValue.formal, cues: [
+                "i prefer a formal tone", "i prefer formal tone",
+                "i prefer a formal tone and metric units", "i prefer formal tone and metric units",
+                "i prefer a formal tone and imperial units", "i prefer formal tone and imperial units",
+                "我偏好正式语气", "我更喜欢正式语气",
+            ]),
+            (value: HistoricalPreferenceValue.friendly, cues: [
+                "i prefer a friendly tone", "i prefer friendly tone",
+                "i prefer a friendly tone and metric units", "i prefer friendly tone and metric units",
+                "i prefer a friendly tone and imperial units", "i prefer friendly tone and imperial units",
+                "我偏好友好语气", "我更喜欢友好语气",
+            ]),
+        ])))
+        updates.append(update(category: .measurementUnits, match: latestMatchedValue(in: normalized, groups: [
+            (value: HistoricalPreferenceValue.metric, cues: [
+                "i prefer metric units", "i prefer the metric system",
+                "i prefer a friendly tone and metric units", "i prefer friendly tone and metric units",
+                "i prefer a formal tone and metric units", "i prefer formal tone and metric units",
+                "我偏好公制单位", "我更喜欢公制单位",
+            ]),
+            (value: HistoricalPreferenceValue.imperial, cues: [
+                "i prefer imperial units", "i prefer the imperial system",
+                "i prefer a friendly tone and imperial units", "i prefer friendly tone and imperial units",
+                "i prefer a formal tone and imperial units", "i prefer formal tone and imperial units",
+                "我偏好英制单位", "我更喜欢英制单位",
+            ]),
+        ])))
+        return updates
+    }
+
+    private static func update(
+        category: HistoricalPreferenceCategory,
+        match: (value: HistoricalPreferenceValue, isNegated: Bool)?
+    ) -> HistoricalPreferenceUpdate {
+        guard let match else {
+            return HistoricalPreferenceUpdate(category: category, state: .unchanged)
+        }
+        return HistoricalPreferenceUpdate(
+            category: category,
+            state: match.isNegated ? .clear : .set(match.value)
+        )
+    }
+
+    private static func latestMatchedValue<Value>(
+        in text: String,
+        groups: [(value: Value, cues: [String])]
+    ) -> (value: Value, isNegated: Bool)? {
+        var latestMatch: (value: Value, index: String.Index, isNegated: Bool)?
+        for group in groups {
+            for cue in group.cues {
+                guard let cueMatch = latestCueMatch(in: text, cue: cue) else { continue }
+                if let currentMatch = latestMatch,
+                   currentMatch.index >= cueMatch.index {
+                    continue
+                }
+                latestMatch = (
+                    group.value,
+                    cueMatch.index,
+                    isNegatedPreferenceCue(at: cueMatch.index, in: text)
+                )
+            }
+        }
+        guard let latestMatch else { return nil }
+        return (latestMatch.value, latestMatch.isNegated)
+    }
+
+    private static func latestCueMatch(in text: String, cue: String) -> (index: String.Index, isNegated: Bool)? {
+        guard let match = text.range(of: cue, options: .backwards) else { return nil }
+        return (match.lowerBound, isNegatedPreferenceCue(at: match.lowerBound, in: text))
+    }
+
+    private static func isNegatedPreferenceCue(at index: String.Index, in text: String) -> Bool {
+        let precedingText = text[..<index]
+        let clauseStart = precedingText.lastIndex { character in
+            character.unicodeScalars.contains { preferenceClauseTerminators.contains($0) }
+        }.map { precedingText.index(after: $0) } ?? precedingText.startIndex
+        let recentPrefix = precedingText[clauseStart...].suffix(80)
+        return preferenceNegationCues.contains { recentPrefix.contains($0) }
+    }
+
+    private static func historicalSummaryText(_ summary: HistoricalSummary) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(summary),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        return text
+    }
+}

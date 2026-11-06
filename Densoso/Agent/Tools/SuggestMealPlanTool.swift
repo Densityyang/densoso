@@ -1,18 +1,18 @@
 import Foundation
-import SwiftData
 
 struct SuggestMealPlanTool: AgentTool {
-    var definition: DeepSeekClient.ToolDef { .make(
+    var definition: ToolSchema { .strictObject(
         name: "suggest_meal_plan",
         description: "根据剩余可摄入热量和用户偏好生成餐单建议。",
         properties: [
-            ("targetCaloriesPerDay", "integer", "每日目标摄入热量(kcal)", true),
-            ("remainingDays", "integer", "剩余天数，默认7", false),
-            ("preferences", "string", "口味偏好/忌口", false),
-        ]
+            "targetCaloriesPerDay": .integer(minimum: 800, maximum: 5_000, description: "每日目标摄入热量(kcal)"),
+            "remainingDays": .integer(minimum: 1, maximum: 30, description: "剩余天数，默认7"),
+            "preferences": .string(maximumLength: 500, description: "口味偏好或忌口"),
+        ],
+        required: ["targetCaloriesPerDay"]
     )}
 
-    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
+    func execute(argumentsJSON: String, context: AgentSession, clientRequestID: UUID) async throws -> String {
         guard let data = argumentsJSON.data(using: .utf8),
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return #"{"error": "参数解析失败"}"#

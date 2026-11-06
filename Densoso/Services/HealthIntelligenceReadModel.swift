@@ -1,0 +1,689 @@
+import DensosoDomain
+import Foundation
+import SwiftData
+
+/// Shared read-only loader and deterministic calculations used by
+/// `HealthProjectionActor` for both Agent reads and explicit brief refreshes.
+struct HealthIntelligenceReadModel: Sendable {
+    static let workoutFetchBatchSize = 64
+    static let weightFetchBatchSize = 64
+    static let schedulePlanFetchBatchSize = 64
+    static let subjectiveCheckInFetchLimit = 128
+    private static let crossSourceWorkoutBoundaryTolerance: TimeInterval = 60
+    private static let crossSourceWorkoutDurationToleranceMinutes = 2.0
+
+    private let calendar: Calendar
+    private let engine: HealthIntelligenceEngine
+
+    init(calendar: Calendar) {
+        self.calendar = calendar
+        self.engine = HealthIntelligenceEngine(calendar: calendar)
+    }
+
+    func healthContextSummary(asOf date: Date, in context: ModelContext) throws -> HealthContextSummary? {
+        let days = try loadDays(through: date, in: context)
+        let plannedWorkout = try plannedWorkoutTomorrow(asOf: date, in: context)
+        return engine.makeDailyBrief(
+            days: days,
+            goals: try goalProfile(asOf: date, in: context),
+            plannedWorkoutTomorrow: plannedWorkout
+        )?.dailyBrief.contextSummary
+    }
+
+    func healthNarrativeContext(asOf date: Date, in context: ModelContext) throws -> HealthNarrativeContext {
+        let subjective = try subjectiveContext(asOf: date, in: context)
+        let days = try loadDays(through: date, in: context)
+        let result = engine.makeDailyBrief(
+            days: days,
+            goals: try goalProfile(asOf: date, in: context),
+            plannedWorkoutTomorrow: try plannedWorkoutTomorrow(asOf: date, in: context)
+        )
+        guard let brief = result?.dailyBrief else {
+            return HealthNarrativeContext(
+                healthState: nil,
+                evidence: [],
+                recommendationCandidates: [],
+                aggregateSummary: nil,
+                subjectiveContext: subjective
+            )
+        }
+        let state = brief.healthState
+        let stateEvidence = (state?.domains ?? []).flatMap { domain in
+            domain.evidenceKeys.map { EvidenceReference(key: $0, source: domain.domain.rawValue) }
+        } + (state?.recovery.evidence ?? [])
+            + (state?.tomorrowGuidance?.reasons ?? [])
+            + brief.vitalTrends.filter { $0.latestMedian != nil }.map {
+                EvidenceReference(key: $0.evidenceKey, source: $0.metric.rawValue)
+            }
+            + brief.activityTrends.compactMap { trend in
+                guard let value = trend.currentValue, value.isFinite,
+                      trend.dataCoverage != .unknown,
+                      trend.status != .unknown, trend.status != .noData,
+                      trend.evidenceKey == trend.metric.evidenceKey,
+                      trend.unit == trend.metric.unit else { return nil }
+                return EvidenceReference(key: trend.evidenceKey, source: HealthDomain.activity.rawValue)
+            }
+        return HealthNarrativeContext(
+            healthState: state,
+            evidence: stateEvidence,
+            recommendationCandidates: brief.recommendations,
+            aggregateSummary: brief.contextSummary,
+            subjectiveContext: subjective,
+            vitalTrends: brief.vitalTrends,
+            activityTrends: brief.activityTrends
+        )
+    }
+
+    func subjectiveContext(asOf date: Date, in context: ModelContext) throws -> SubjectiveHealthContext? {
+        let referenceDate = min(date, Date())
+        let today = calendar.startOfDay(for: referenceDate)
+        let userReportedSource = "userReported"
+        var entries: [SubjectiveHealthEntry] = []
+        for daysBack in 0..<HealthDataWindowPolicy.subjectiveCheckInLookbackDays {
+            guard let dayStart = calendar.date(byAdding: .day, value: -daysBack, to: today),
+                  let nextDayStart = calendar.date(byAdding: .day, value: 1, to: dayStart) else {
+                continue
+            }
+
+            let predicate = #Predicate<DailyCheckInRecord> {
+                $0.occurredAt >= dayStart
+                    && $0.occurredAt < nextDayStart
+                    && $0.occurredAt <= referenceDate
+                    && $0.sourceRaw == userReportedSource
+            }
+            var descriptor = FetchDescriptor<DailyCheckInRecord>(
+                predicate: predicate,
+                sortBy: [
+                    SortDescriptor(\.occurredAt, order: .reverse),
+                    SortDescriptor(\.createdAt, order: .reverse),
+                ]
+            )
+            descriptor.fetchLimit = Self.subjectiveCheckInFetchLimit
+            let candidates = try context.fetch(descriptor).sorted {
+                if $0.occurredAt != $1.occurredAt { return $0.occurredAt > $1.occurredAt }
+                if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+                return $0.id.uuidString > $1.id.uuidString
+            }
+            guard let record = candidates.first(where: {
+                UserReportedEnergy(rawValue: $0.energyRaw) != nil
+                    && UserReportedStress(rawValue: $0.stressRaw) != nil
+                    && SubjectiveSleepQuality(rawValue: $0.subjectiveSleepRaw) != nil
+            }),
+                  let energy = UserReportedEnergy(rawValue: record.energyRaw),
+                  let stress = UserReportedStress(rawValue: record.stressRaw),
+                  let sleep = SubjectiveSleepQuality(rawValue: record.subjectiveSleepRaw) else {
+                continue
+            }
+            entries.append(SubjectiveHealthEntry(
+                dayStart: dayStart,
+                occurredAt: record.occurredAt,
+                energy: energy,
+                stress: stress,
+                subjectiveSleep: sleep,
+                evidenceKey: "userReportedCheckIn.\(record.id.uuidString.lowercased())"
+            ))
+        }
+        guard !entries.isEmpty else { return nil }
+        return SubjectiveHealthContext(asOf: referenceDate, entries: entries)
+    }
+
+    func todayHealthState(asOf date: Date, in context: ModelContext) throws -> HealthStateV2? {
+        let days = try loadDays(through: date, in: context)
+        let plannedWorkout = try plannedWorkoutTomorrow(asOf: date, in: context)
+        return engine.makeDailyBrief(
+            days: days,
+            goals: try goalProfile(asOf: date, in: context),
+            plannedWorkoutTomorrow: plannedWorkout
+        )?.dailyBrief.healthState
+    }
+
+    func healthHistory(
+        from startDate: Date,
+        through endDate: Date,
+        in context: ModelContext
+    ) throws -> [HealthStateHistoryPoint] {
+        let startDay = calendar.startOfDay(for: startDate)
+        let endDay = calendar.startOfDay(for: endDate)
+        guard startDay <= endDay else { throw HealthHistoryQueryError.invalidRange }
+        guard endDay <= calendar.startOfDay(for: Date()) else { throw HealthHistoryQueryError.futureDate }
+        let dayCount = calendar.dateComponents([.day], from: startDay, to: endDay).day ?? -1
+        guard (0..<HealthHistoryQueryError.maximumDays).contains(dayCount) else {
+            throw HealthHistoryQueryError.rangeTooLarge
+        }
+        guard let baselineStart = HealthDataWindowPolicy.analysisStart(through: startDay, calendar: calendar) else {
+            throw HealthHistoryQueryError.invalidRange
+        }
+
+        let days = try loadDays(from: baselineStart, through: endDay, in: context)
+        var points: [HealthStateHistoryPoint] = []
+        for offset in 0...dayCount {
+            guard let targetDay = calendar.date(byAdding: .day, value: offset, to: startDay) else { continue }
+            let inputs = days.filter { calendar.startOfDay(for: $0.dayStart) <= targetDay }
+            guard let brief = engine.makeDailyBrief(
+                days: inputs,
+                goals: try goalProfile(asOf: targetDay, in: context)
+            )?.dailyBrief,
+                  let state = brief.healthState else { continue }
+            points.append(HealthStateHistoryPoint(
+                date: targetDay,
+                state: HealthStateV2(
+                    domains: state.domains,
+                    recovery: state.recovery,
+                    trainingLoad: state.trainingLoad,
+                    tomorrowGuidance: nil
+                ),
+                vitalTrends: brief.vitalTrends.map { HealthVitalTrendContext($0) },
+                activityTrends: brief.activityTrends.map { HealthActivityTrendContext($0) }
+            ))
+        }
+        return points
+    }
+
+    func goalProfile(asOf date: Date, in context: ModelContext) throws -> GoalProfile? {
+        let predicate = #Predicate<GoalProfileRecord> {
+            $0.profileKey == "primary" && $0.effectiveFrom <= date
+        }
+        var descriptor = FetchDescriptor<GoalProfileRecord>(
+            predicate: predicate,
+            sortBy: [SortDescriptor(\GoalProfileRecord.effectiveFrom, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        guard let record = try context.fetch(descriptor).first else { return nil }
+        return GoalProfile(
+            effectiveFrom: record.effectiveFrom,
+            targetWeightKilograms: record.targetWeightKilograms,
+            dailyDeficitKcal: record.dailyDeficitKcal,
+            dailyProteinGrams: record.dailyProteinGrams
+        )
+    }
+
+    func loadDays(through date: Date, in context: ModelContext) throws -> [HealthIntelligenceDay] {
+        let end = calendar.startOfDay(for: date)
+        guard let start = HealthDataWindowPolicy.analysisStart(through: end, calendar: calendar) else { return [] }
+        return try loadDays(from: start, through: end, in: context)
+    }
+
+    func plannedWorkoutTomorrow(asOf date: Date, in context: ModelContext) throws -> Bool? {
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date))
+            ?? calendar.startOfDay(for: date)
+        let end = calendar.date(byAdding: .day, value: 1, to: tomorrow) ?? tomorrow
+        let workoutPlanPrefix = ConfirmedWorkoutPlanEntry.notesPrefix
+        let trainingPlanPrefix = ConfirmedTrainingPlanEntry.notesPrefix
+        let ordinaryEventPredicate = #Predicate<ScheduleEvent> { event in
+            event.startTime >= tomorrow && event.startTime < end
+                && event.notes?.contains(workoutPlanPrefix) != true
+                && event.notes?.contains(trainingPlanPrefix) != true
+        }
+
+        var ordinaryEventDescriptor = FetchDescriptor<ScheduleEvent>(predicate: ordinaryEventPredicate)
+        ordinaryEventDescriptor.fetchLimit = 1
+        let ordinaryEvents = try context.fetch(ordinaryEventDescriptor)
+        let hasOrdinaryEvent = !ordinaryEvents.isEmpty
+
+        let planPredicate = #Predicate<ScheduleEvent> { event in
+            event.startTime >= tomorrow && event.startTime < end
+                && (event.notes?.contains(workoutPlanPrefix) == true
+                    || event.notes?.contains(trainingPlanPrefix) == true)
+        }
+        let planSortDescriptors: [SortDescriptor<ScheduleEvent>] = [
+            SortDescriptor(\ScheduleEvent.startTime),
+            SortDescriptor(\ScheduleEvent.date),
+            SortDescriptor(\ScheduleEvent.createdAt),
+            SortDescriptor(\ScheduleEvent.title),
+            SortDescriptor(\ScheduleEvent.notes),
+        ]
+        var planDescriptor = FetchDescriptor<ScheduleEvent>(
+            predicate: planPredicate,
+            sortBy: planSortDescriptors
+        )
+        planDescriptor.fetchLimit = Self.schedulePlanFetchBatchSize
+        var planOffset = 0
+        var hasPlanEvent = false
+
+        while true {
+            planDescriptor.fetchOffset = planOffset
+            let page = try context.fetch(planDescriptor)
+            guard !page.isEmpty else { break }
+            hasPlanEvent = true
+
+            for event in page {
+                if let entry = ConfirmedWorkoutPlanEntry.decode(notes: event.notes),
+                   entry.state != .terminal {
+                    return true
+                }
+                if let entry = ConfirmedTrainingPlanEntry.decode(notes: event.notes),
+                   entry.state != .terminal {
+                    return true
+                }
+            }
+
+            guard page.count == Self.schedulePlanFetchBatchSize else { break }
+            planOffset += page.count
+        }
+
+        return (hasOrdinaryEvent || hasPlanEvent) ? false : nil
+    }
+
+    private func loadDays(
+        from startDate: Date,
+        through date: Date,
+        in context: ModelContext
+    ) throws -> [HealthIntelligenceDay] {
+        let start = calendar.startOfDay(for: startDate)
+        let end = calendar.startOfDay(for: date)
+        guard start <= end,
+              let dayCount = calendar.dateComponents([.day], from: start, to: end).day,
+              dayCount >= 0,
+              let exclusiveEnd = calendar.date(byAdding: .day, value: 1, to: end) else { return [] }
+
+        let startKey = dayKey(start)
+        let endKey = dayKey(end)
+        let snapshotPredicate = #Predicate<DailyHealthSnapshotRecord> {
+            $0.dayKey >= startKey && $0.dayKey <= endKey
+        }
+        let snapshots = try context.fetch(
+            FetchDescriptor<DailyHealthSnapshotRecord>(
+                predicate: snapshotPredicate,
+                sortBy: [SortDescriptor(\DailyHealthSnapshotRecord.dayKey)]
+            )
+        )
+        let decoder = makeDecoder()
+        var snapshotByDay: [Date: DailyHealthSnapshot] = [:]
+        let currentTimeZoneIdentifier = calendar.timeZone.identifier
+        for record in snapshots {
+            guard let snapshot = try? decoder.decode(DailyHealthSnapshot.self, from: record.payloadData) else { continue }
+            guard record.algorithmVersion == DailyHealthSnapshot.currentAlgorithmVersion,
+                  snapshot.algorithmVersion == DailyHealthSnapshot.currentAlgorithmVersion else {
+                // Old compact summaries cannot be recomputed from the index
+                // alone. The sync rebaseline must repopulate them before they
+                // can be used for health analysis.
+                continue
+            }
+            guard record.timezoneID == currentTimeZoneIdentifier,
+                  snapshot.timezoneIdentifier == currentTimeZoneIdentifier else {
+                // A row produced in another timezone may have a dayKey that no
+                // longer describes the payload's local day. The foreground
+                // rebaseline rewrites in-window rows before they are read again.
+                continue
+            }
+            let day = calendar.startOfDay(for: snapshot.dayStart)
+            guard day >= start && day <= end,
+                  dayKey(day) == record.dayKey else { continue }
+            snapshotByDay[day] = snapshot
+        }
+
+        let metricsPredicate = #Predicate<DailyMetrics> {
+            $0.date >= start && $0.date < exclusiveEnd
+        }
+        let dailyMetrics = try context.fetch(
+            FetchDescriptor<DailyMetrics>(
+                predicate: metricsPredicate,
+                sortBy: [SortDescriptor(\DailyMetrics.date)]
+            )
+        )
+        var metricsByDay: [Date: DailyMetrics] = [:]
+        for metric in dailyMetrics {
+            let day = calendar.startOfDay(for: metric.date)
+            if day >= start && day <= end { metricsByDay[day] = metric }
+        }
+
+        let weightPredicate = #Predicate<WeightRecord> {
+            $0.measuredAt >= start && $0.measuredAt < exclusiveEnd
+        }
+        let weightSortBy = [
+            SortDescriptor(\WeightRecord.measuredAt),
+            SortDescriptor(\WeightRecord.id),
+        ]
+        var localWeights: [WeightRecord] = []
+        var weightCursor: WeightCursor?
+        while true {
+            let predicate: Predicate<WeightRecord>
+            if let weightCursor {
+                let cursorMeasuredAt = weightCursor.measuredAt
+                let cursorID = weightCursor.id
+                predicate = #Predicate<WeightRecord> { record in
+                    record.measuredAt >= start && record.measuredAt < exclusiveEnd
+                        && (record.measuredAt > cursorMeasuredAt
+                            || (record.measuredAt == cursorMeasuredAt && record.id > cursorID))
+                }
+            } else {
+                predicate = weightPredicate
+            }
+            var descriptor = FetchDescriptor<WeightRecord>(predicate: predicate, sortBy: weightSortBy)
+            descriptor.fetchLimit = Self.weightFetchBatchSize
+            let batch = try context.fetch(descriptor)
+            guard let last = batch.last else { break }
+            localWeights.append(contentsOf: batch)
+            weightCursor = WeightCursor(measuredAt: last.measuredAt, id: last.id)
+        }
+        let weightsByDay = Dictionary(grouping: localWeights, by: { calendar.startOfDay(for: $0.measuredAt) })
+        let workoutPredicate = #Predicate<WorkoutRecord> {
+            $0.date >= start && $0.date < exclusiveEnd
+        }
+        let workoutSortBy = [
+            SortDescriptor(\WorkoutRecord.date),
+            SortDescriptor(\WorkoutRecord.id),
+        ]
+        var workoutRecords: [WorkoutRecord] = []
+        var workoutCursor: WorkoutCursor?
+        while true {
+            let predicate: Predicate<WorkoutRecord>
+            if let workoutCursor {
+                let cursorDate = workoutCursor.date
+                let cursorID = workoutCursor.id
+                predicate = #Predicate<WorkoutRecord> { record in
+                    record.date >= start && record.date < exclusiveEnd
+                        && (record.date > cursorDate
+                            || (record.date == cursorDate && record.id > cursorID))
+                }
+            } else {
+                predicate = workoutPredicate
+            }
+            var descriptor = FetchDescriptor<WorkoutRecord>(predicate: predicate, sortBy: workoutSortBy)
+            descriptor.fetchLimit = Self.workoutFetchBatchSize
+            let batch = try context.fetch(descriptor)
+            guard let last = batch.last else { break }
+            workoutRecords.append(contentsOf: batch)
+            workoutCursor = WorkoutCursor(date: last.date, id: last.id)
+        }
+        let effortScoresByWorkoutID = Self.availableWorkoutEffortScores(in: snapshotByDay)
+        let trainingWorkouts = Self.canonicalTrainingWorkouts(
+            workoutRecords,
+            effortScoresByWorkoutID: effortScoresByWorkoutID
+        )
+        let workoutsByDay = Dictionary(grouping: trainingWorkouts, by: { calendar.startOfDay(for: $0.startedAt) })
+        var queryStartByMetric: [String: Date] = [:]
+        for cursor in try context.fetch(FetchDescriptor<HealthKitImportCursor>()) {
+            if let lookbackStart = cursor.lookbackStart {
+                let metricKey = cursor.stream == "workouts"
+                    ? HealthMetricID.workout.rawValue
+                    : cursor.stream
+                queryStartByMetric[metricKey] = lookbackStart
+            }
+        }
+        var days: [HealthIntelligenceDay] = []
+        for offset in 0...dayCount {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: start) else { continue }
+            let dayStart = calendar.startOfDay(for: day)
+            guard dayStart >= start && dayStart <= end else { continue }
+            let snapshot = snapshotByDay[dayStart]
+            let sampleSummary = snapshot?.healthKitSampleSummary
+            let projectionMetrics: [HealthMetricID] = [
+                .workout, .workoutEffort, .stepCount, .activeEnergy, .exerciseMinutes,
+                .sleepAnalysis, .heartRate, .restingHeartRate, .heartRateVariabilitySDNN,
+                .respiratoryRate, .bodyMass, .wristTemperature,
+            ]
+            var projectionReadStates = snapshot?.healthReadStates ?? [:]
+            for metric in projectionMetrics where projectionReadStates[metric.rawValue] == nil {
+                projectionReadStates[metric.rawValue] = .dataUnavailableOrReadScopeUnknown
+            }
+            if let sleep = sampleSummary?.sleep,
+               sleep.algorithmVersion != AlgorithmVersions.healthIntelligence {
+                projectionReadStates[HealthMetricID.sleepAnalysis.rawValue] = .dataUnavailableOrReadScopeUnknown
+            }
+            func availableAggregate(_ metric: HealthMetricID) -> HealthMetricSampleAggregate? {
+                guard projectionReadStates[metric.rawValue] == .available else { return nil }
+                return sampleSummary?.aggregate(for: metric)
+            }
+            func dailyRepresentative(_ metric: HealthMetricID) -> [Double] {
+                guard let value = availableAggregate(metric)?.representativeValue else { return [] }
+                return [value]
+            }
+            let bodyMassReadState = projectionReadStates[HealthMetricID.bodyMass.rawValue]
+            let localWeightPoints = (weightsByDay[dayStart] ?? [])
+                .filter { $0.source != "healthKit" || bodyMassReadState == .available }
+                .map { (date: $0.measuredAt, value: $0.kilograms) }
+            let healthWeightPoints: [(date: Date, value: Double)]
+            if let aggregate = availableAggregate(.bodyMass),
+               let date = aggregate.latestSampleAt,
+               let value = aggregate.latestValue {
+                healthWeightPoints = [(date: date, value: value)]
+            } else {
+                healthWeightPoints = []
+            }
+            var weightPoints = localWeightPoints + healthWeightPoints
+            if weightPoints.isEmpty,
+               bodyMassReadState == .available,
+               let fallbackWeight = snapshot?.weightKilograms {
+                weightPoints = [(date: dayStart, value: fallbackWeight)]
+            }
+            let weightSamples = weightPoints.sorted { $0.date < $1.date }.map { $0.value }
+            // Import-boundary validation is performed before an individual
+            // HealthKit workout is persisted. The daily read state describes
+            // completeness of the whole day's query; an unknown or partial
+            // query must not hide a workout whose individual record is known.
+            let workouts = workoutsByDay[dayStart] ?? []
+            let metric = metricsByDay[dayStart]
+            let metricReadResult = metric.map(DailyMetricsReadModelMapper.make)
+            let proteinGrams = metricReadResult?.proteinG.value
+            let energyIntake = metricReadResult?.intake.value?.likely
+            let nutritionRecordStatus = metricReadResult?.nutritionRecordStatus ?? .unknown
+            let dailyDeficit = nutritionRecordStatus == .complete
+                && projectionReadStates[HealthMetricID.activeEnergy.rawValue] == .available
+                ? metricReadResult?.deficit.value?.likely
+                : nil
+            days.append(HealthIntelligenceDay(
+                dayStart: dayStart,
+                energyIntakeKcal: energyIntake,
+                proteinGrams: proteinGrams,
+                dailyDeficitKcal: dailyDeficit,
+                activeEnergyKcal: projectionReadStates[HealthMetricID.activeEnergy.rawValue] == .available
+                    ? snapshot?.activeEnergyKcal
+                    : nil,
+                stepCount: projectionReadStates[HealthMetricID.stepCount.rawValue] == .available
+                    ? snapshot?.stepCount
+                    : nil,
+                exerciseMinutes: projectionReadStates[HealthMetricID.exerciseMinutes.rawValue] == .available
+                    ? snapshot?.exerciseMinutes
+                    : nil,
+                weightSamplesKilograms: weightSamples,
+                sleepSamples: [],
+                sleepSummary: projectionReadStates[HealthMetricID.sleepAnalysis.rawValue] == .available
+                        && sampleSummary?.sleep?.algorithmVersion == AlgorithmVersions.healthIntelligence
+                    ? sampleSummary?.sleep
+                    : nil,
+                heartRateSamples: dailyRepresentative(.heartRate),
+                restingHeartRateSamples: dailyRepresentative(.restingHeartRate),
+                heartRateVariabilitySamples: dailyRepresentative(.heartRateVariabilitySDNN),
+                respiratoryRateSamples: dailyRepresentative(.respiratoryRate),
+                wristTemperatureSamples: dailyRepresentative(.wristTemperature),
+                workouts: workouts,
+                healthReadStates: projectionReadStates,
+                healthQueryStartByMetric: queryStartByMetric,
+                nutritionRecordStatus: nutritionRecordStatus,
+                nutritionIntakeAvailability: metricReadResult?.intake.availability ?? .unavailable,
+                nutritionProteinAvailability: metricReadResult?.proteinG.availability ?? .unavailable,
+                allRecordedMealsHaveEvidence: metricReadResult?.allRecordedMealsHaveEvidence
+            ))
+        }
+        return days
+    }
+
+    private func dayKey(_ date: Date) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+    }
+
+    private static func availableWorkoutEffortScores(
+        in snapshotsByDay: [Date: DailyHealthSnapshot]
+    ) -> [UUID: Double] {
+        var scores: [UUID: Double] = [:]
+        for snapshot in snapshotsByDay.values
+        where snapshot.healthReadStates?[HealthMetricID.workoutEffort.rawValue] == .available {
+            guard let summary = snapshot.healthKitSampleSummary,
+                  summary.aggregate(for: .workoutEffort) != nil else { continue }
+            for effort in summary.workoutEffort
+            where effort.score.isFinite && (1...10).contains(effort.score) {
+                scores[effort.workoutRecordID] = effort.score
+            }
+        }
+        return scores
+    }
+
+    private static func canonicalTrainingWorkouts(
+        _ records: [WorkoutRecord],
+        effortScoresByWorkoutID: [UUID: Double]
+    ) -> [TrainingWorkoutInput] {
+        var recordsBySessionID: [UUID: [WorkoutRecord]] = [:]
+        var recordsWithoutSessionID: [WorkoutRecord] = []
+        for record in records {
+            guard let logicalSessionID = record.logicalSessionID else {
+                recordsWithoutSessionID.append(record)
+                continue
+            }
+            recordsBySessionID[logicalSessionID, default: []].append(record)
+        }
+
+        let orderedRecordsWithoutSessionID = recordsWithoutSessionID.sorted {
+            $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date
+        }
+        var crossSourceDuplicateClusters: [[WorkoutRecord]] = []
+        for record in orderedRecordsWithoutSessionID {
+            if let clusterIndex = crossSourceDuplicateClusters.firstIndex(where: { cluster in
+                cluster.allSatisfy { areHighConfidenceCrossSourceDuplicates(record, $0) }
+            }) {
+                crossSourceDuplicateClusters[clusterIndex].append(record)
+            } else {
+                crossSourceDuplicateClusters.append([record])
+            }
+        }
+
+        let sessionClusters = Array(recordsBySessionID.values) + crossSourceDuplicateClusters
+        let canonicalRecords = sessionClusters.compactMap { sessionRecords in
+            sessionRecords.sorted { lhs, rhs in
+                Self.preferredTrainingWorkout(
+                    lhs,
+                    over: rhs,
+                    effortScoresByWorkoutID: effortScoresByWorkoutID
+                )
+            }.first
+        }
+        return canonicalRecords.sorted {
+            $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date
+        }.map { record in
+            TrainingWorkoutInput(
+                startedAt: record.date,
+                durationMinutes: Double(record.durationMinutes),
+                effortScore: effortScoresByWorkoutID[record.id],
+                // Older imported rows may still carry the schema's historical
+                // `moderate` default. HealthKit does not measure subjective
+                // effort, so only user-entered workouts may use stored manual
+                // intensity as an estimate.
+                intensity: record.healthKitUUID == nil ? record.intensity : "unknown"
+            )
+        }
+    }
+
+    private static func areHighConfidenceCrossSourceDuplicates(
+        _ lhs: WorkoutRecord,
+        _ rhs: WorkoutRecord
+    ) -> Bool {
+        let healthKitOrigins: Set<String> = [
+            WorkoutOrigin.watchHealthKit.rawValue,
+            WorkoutOrigin.externalHealthKit.rawValue,
+        ]
+        guard healthKitOrigins.contains(lhs.workoutOrigin),
+              healthKitOrigins.contains(rhs.workoutOrigin),
+              let lhsSource = lhs.sourceBundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              let rhsSource = rhs.sourceBundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !lhsSource.isEmpty,
+              !rhsSource.isEmpty,
+              lhsSource != rhsSource else { return false }
+
+        let lhsType = lhs.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let rhsType = rhs.type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lhsType.isEmpty,
+              lhsType == rhsType,
+              lhs.durationMinutes > 0,
+              rhs.durationMinutes > 0,
+              abs(lhs.date.timeIntervalSince(rhs.date)) <= crossSourceWorkoutBoundaryTolerance,
+              abs(
+                lhs.date.addingTimeInterval(Double(lhs.durationMinutes) * 60)
+                    .timeIntervalSince(rhs.date.addingTimeInterval(Double(rhs.durationMinutes) * 60))
+              ) <= crossSourceWorkoutBoundaryTolerance,
+              abs(Double(lhs.durationMinutes) - Double(rhs.durationMinutes))
+                <= crossSourceWorkoutDurationToleranceMinutes else { return false }
+        return true
+    }
+
+    private static func preferredTrainingWorkout(
+        _ candidate: WorkoutRecord,
+        over current: WorkoutRecord,
+        effortScoresByWorkoutID: [UUID: Double]
+    ) -> Bool {
+        let candidateHasEffort = candidate.durationMinutes > 0 && effortScoresByWorkoutID[candidate.id] != nil
+        let currentHasEffort = current.durationMinutes > 0 && effortScoresByWorkoutID[current.id] != nil
+        if candidateHasEffort != currentHasEffort { return candidateHasEffort }
+
+        func qualityRank(_ rawValue: String) -> Int {
+            switch rawValue {
+            case WorkoutDataQuality.complete.rawValue: return 2
+            case WorkoutDataQuality.partial.rawValue: return 1
+            case WorkoutDataQuality.unavailable.rawValue: return 0
+            default: return -1
+            }
+        }
+        let candidateQuality = qualityRank(candidate.dataQuality)
+        let currentQuality = qualityRank(current.dataQuality)
+        if candidateQuality != currentQuality { return candidateQuality > currentQuality }
+        if candidate.durationMinutes != current.durationMinutes {
+            return candidate.durationMinutes > current.durationMinutes
+        }
+        return candidate.id.uuidString < current.id.uuidString
+    }
+
+    private func makeDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        return decoder
+    }
+
+}
+
+private struct WorkoutCursor {
+    let date: Date
+    let id: UUID
+}
+
+private struct WeightCursor {
+    let measuredAt: Date
+    let id: UUID
+}
+
+struct HealthStateHistoryPoint: Equatable, Sendable {
+    let date: Date
+    let state: HealthStateV2
+    let vitalTrends: [HealthVitalTrendContext]
+    let activityTrends: [HealthActivityTrendContext]
+
+    init(
+        date: Date,
+        state: HealthStateV2,
+        vitalTrends: [HealthVitalTrendContext] = [],
+        activityTrends: [HealthActivityTrendContext] = []
+    ) {
+        self.date = date
+        self.state = state
+        self.vitalTrends = vitalTrends
+        self.activityTrends = activityTrends
+    }
+}
+
+enum HealthHistoryQueryError: Error, LocalizedError, Equatable {
+    static let maximumDays = 14
+
+    case invalidRange
+    case rangeTooLarge
+    case futureDate
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidRange:
+            "健康历史日期范围无效。"
+        case .rangeTooLarge:
+            "健康状态历史一次最多查询 14 天。"
+        case .futureDate:
+            "健康状态历史不能查询未来日期。"
+        }
+    }
+}

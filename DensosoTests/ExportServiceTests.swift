@@ -1,15 +1,877 @@
+import DensosoDomain
 import SwiftData
 import XCTest
 @testable import Densoso
 
 @MainActor
 final class ExportServiceTests: XCTestCase {
+    func testLifecycleCoordinatorDrainsNestedMutationAndEntersRecoveryReadOnly() async throws {
+        let barrier = PersistenceOperationBarrier()
+        let activeMutation = try await barrier.acquireMutationOperation()
+        let restoreTask = Task { @MainActor in
+            try await barrier.acquireRestoreOperation()
+        }
+
+        await barrier.waitUntilRestoreIsQueued()
+        XCTAssertEqual(barrier.state, .quiescing)
+
+        // Existing work can finish nested persistence calls after restore has
+        // stopped admitting new top-level operations.
+        let nestedMutation = try await barrier.withLease(activeMutation) {
+            let firstNestedMutation = try await barrier.acquireMutationOperation()
+            let deeplyNestedMutation = try await barrier.withLease(firstNestedMutation) {
+                try await barrier.acquireMutationOperation()
+            }
+            barrier.release(deeplyNestedMutation)
+            return firstNestedMutation
+        }
+        barrier.release(nestedMutation)
+        barrier.release(activeMutation)
+
+        let restoreLease = try await restoreTask.value
+        XCTAssertEqual(barrier.state, .exclusiveRestore)
+        do {
+            _ = try await barrier.acquireAgentExecutionOperation()
+            XCTFail("New Agent execution must be rejected while Restore owns the store")
+        } catch {
+            XCTAssertEqual(error as? PersistenceLifecycleError, .restoreInProgress)
+        }
+        do {
+            _ = try await barrier.acquireOutboxOperation()
+            XCTFail("New Outbox sends must be rejected while Restore owns the store")
+        } catch {
+            XCTAssertEqual(error as? PersistenceLifecycleError, .restoreInProgress)
+        }
+        barrier.requireRecovery()
+        barrier.release(restoreLease)
+        XCTAssertEqual(barrier.state, .recoveryRequired)
+
+        do {
+            _ = try await barrier.acquireMutationOperation()
+            XCTFail("Recovery-required lifecycle must reject new writes")
+        } catch {
+            XCTAssertEqual(error as? PersistenceLifecycleError, .recoveryRequired)
+        }
+    }
+
+    func testCancelledRestoreWaiterReopensOperationAdmission() async throws {
+        let barrier = PersistenceOperationBarrier()
+        let activeMutation = try await barrier.acquireMutationOperation()
+        let restoreTask = Task { @MainActor in
+            try await barrier.acquireRestoreOperation()
+        }
+
+        await barrier.waitUntilRestoreIsQueued()
+        restoreTask.cancel()
+        do {
+            _ = try await restoreTask.value
+            XCTFail("Cancelled restore request must not acquire the store")
+        } catch is CancellationError {
+            // Expected.
+        }
+
+        XCTAssertEqual(barrier.state, .normal)
+        barrier.release(activeMutation)
+    }
+
+    func testOutboxBlockedDuringRestoreWaitsForExternalHealthWrite() async throws {
+        let previousConnectionPreference = HealthKitConnectionPreference.hasRequestedAuthorization
+        HealthKitConnectionPreference.hasRequestedAuthorization = true
+        defer { HealthKitConnectionPreference.hasRequestedAuthorization = previousConnectionPreference }
+
+        let (container, context) = try makeContext()
+        let barrier = PersistenceOperationBarrier()
+        let service = ExportService(persistenceOperationBarrier: barrier)
+        let backupURL = try await service.exportJSON(context: context)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let meal = MealRecord(
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            totalCaloriesKcal: 520,
+            energyLikelyKcal: 520
+        )
+        context.insert(meal)
+        context.insert(HealthSyncOutboxEntry(operation: "upsertMeal", recordID: meal.id))
+        try context.save()
+
+        let healthStore = FakeHealthStoreClient()
+        await healthStore.blockNextHealthWrite()
+        let worker = HealthSyncOutboxWorker(
+            healthStore: healthStore,
+            modelContainer: container,
+            persistenceOperationBarrier: barrier
+        )
+        var workerReturned = false
+        let workerTask = Task {
+            await worker.processPending(in: context)
+            workerReturned = true
+        }
+        await healthStore.waitUntilHealthWriteIsBlocked()
+
+        var restoreReturned = false
+        let restoreTask = Task {
+            let summary = try await service.restoreJSON(url: backupURL, context: context)
+            restoreReturned = true
+            return summary
+        }
+        await barrier.waitUntilRestoreIsQueued()
+        XCTAssertFalse(restoreReturned)
+
+        await healthStore.resumeBlockedHealthWrite()
+        await workerTask.value
+        _ = try await restoreTask.value
+        XCTAssertTrue(workerReturned)
+
+        let persistedContext = ModelContext(container)
+        XCTAssertTrue(try persistedContext.fetch(FetchDescriptor<MealRecord>()).isEmpty)
+        XCTAssertTrue(try persistedContext.fetch(FetchDescriptor<HealthSyncOutboxEntry>()).isEmpty)
+        let successfulWrites = await healthStore.successfulWritesSnapshot()
+        XCTAssertEqual(successfulWrites.count, 1)
+    }
+
+    func testFullV14RestoreClearsToolJournalAndHealthKitSampleIndexes() async throws {
+        let (sourceContainer, source) = try makeFullV14Context()
+        _ = sourceContainer
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        source.insert(MealRecord(date: date, totalCaloriesKcal: 510))
+        try source.save()
+        // Restore uses a process-wide persistence barrier in production. Keep
+        // this restore test independent from unrelated test activity.
+        let service = ExportService(persistenceOperationBarrier: PersistenceOperationBarrier())
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let (targetContainer, target) = try makeFullV14Context()
+        let oldRequestID = UUID()
+        let oldConversationID = UUID()
+        let oldActionID = UUID()
+        let journalEntry = ToolExecutionJournalEntry(
+            invocationID: "old-restore-invocation",
+            requestID: oldRequestID,
+            conversationID: oldConversationID,
+            logicalRound: 0,
+            callIndex: 0,
+            toolCallID: "old-tool-call",
+            toolName: "log_meal",
+            argumentsHash: "old-hash",
+            requestTimeAnchor: date,
+            state: .prepared,
+            preparedPayloadData: Data("old-prepared-payload".utf8),
+            pendingActionID: oldActionID,
+            resultData: nil,
+            createdAt: date,
+            updatedAt: date,
+            completedAt: nil
+        )
+        target.insert(ToolExecutionJournalRecord(journalEntry))
+        target.insert(HealthKitSampleIndexRecord(
+            sampleID: UUID(),
+            stream: HealthMetricID.stepCount.rawValue,
+            dayKey: "2026-11-01",
+            startDate: date,
+            endDate: date,
+            needsRequery: true,
+            pendingDayKeys: ["2026-11-01", "2026-11-02"],
+            isTombstoned: true
+        ))
+        target.insert(HealthKitImportCursor(stream: "stepCount", anchorData: Data([1, 2, 3])))
+        let oldSnapshotEncoder = JSONEncoder()
+        oldSnapshotEncoder.dateEncodingStrategy = .millisecondsSince1970
+        let oldSnapshot = DailyHealthSnapshot(
+            dayStart: date,
+            timezoneIdentifier: "UTC",
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        target.insert(DailyHealthSnapshotRecord(
+            dayKey: "2026-11-01",
+            timezoneID: "UTC",
+            payloadData: try oldSnapshotEncoder.encode(oldSnapshot),
+            snapshotHash: "old-snapshot",
+            algorithmVersion: oldSnapshot.algorithmVersion
+        ))
+        target.insert(MealRecord(date: date, totalCaloriesKcal: 999))
+        try target.save()
+
+        _ = try await service.restoreJSON(url: backupURL, context: target)
+
+        let persisted = ModelContext(targetContainer)
+        XCTAssertEqual(try persisted.fetchCount(FetchDescriptor<ToolExecutionJournalRecord>()), 0)
+        XCTAssertEqual(try persisted.fetchCount(FetchDescriptor<HealthKitSampleIndexRecord>()), 0)
+        XCTAssertEqual(try persisted.fetchCount(FetchDescriptor<HealthKitImportCursor>()), 0)
+        XCTAssertEqual(try persisted.fetchCount(FetchDescriptor<DailyHealthSnapshotRecord>()), 0)
+        XCTAssertEqual(try persisted.fetch(FetchDescriptor<MealRecord>()).map(\.totalCaloriesKcal), [510])
+        let confirmationRepository = SwiftDataConfirmationRepository(modelContainer: targetContainer)
+        let restoredJournal = try await confirmationRepository.toolExecutionJournal(
+            requestID: oldRequestID,
+            conversationID: oldConversationID
+        )
+        XCTAssertTrue(restoredJournal.isEmpty)
+    }
+
+    func testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied() async throws {
+        let (sourceContainer, source) = try makeContext()
+        let sourceGovernance = SwiftDataProviderGovernanceRepository(modelContainer: sourceContainer)
+        let policyVersionSentinel = "PRIVATE-CLOUD-POLICY-SENTINEL"
+        for provider in [ProviderID.deepSeek, .qwen] {
+            _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+                provider: provider,
+                allowedClasses: Set(CloudHealthContextPolicy.dataClasses),
+                repository: sourceGovernance,
+                confirmedAt: Date(),
+                changeSource: .settings
+            )
+            for dataClass in CloudHealthContextPolicy.dataClasses {
+                try await sourceGovernance.setConsent(
+                    provider: provider,
+                    dataClass: dataClass,
+                    granted: true,
+                    policyVersion: policyVersionSentinel
+                )
+            }
+        }
+
+        let service = ExportService(persistenceOperationBarrier: PersistenceOperationBarrier())
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let backupText = String(decoding: try Data(contentsOf: backupURL), as: UTF8.self)
+        XCTAssertFalse(backupText.contains("ConsentRecord"))
+        XCTAssertFalse(backupText.contains("consentKey"))
+        XCTAssertFalse(backupText.contains(policyVersionSentinel))
+
+        let (targetContainer, target) = try makeContext()
+        _ = try await service.restoreJSON(url: backupURL, context: target)
+        let restoredGovernance = SwiftDataProviderGovernanceRepository(modelContainer: targetContainer)
+        for provider in [ProviderID.deepSeek, .qwen] {
+            for dataClass in CloudHealthContextPolicy.dataClasses {
+                let isGranted = try await restoredGovernance.isConsentGranted(
+                    provider: provider,
+                    dataClass: dataClass
+                )
+                XCTAssertFalse(
+                    isGranted,
+                    "A backup restore without a cloud policy must leave \(provider.rawValue)/\(dataClass.rawValue) denied"
+                )
+            }
+        }
+    }
+
+    func testRestoreInvalidatesCloudHealthAuthorizationAlreadyPresentInTargetStore() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let service = ExportService(persistenceOperationBarrier: PersistenceOperationBarrier())
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let (targetContainer, target) = try makeContext()
+        let targetGovernance = SwiftDataProviderGovernanceRepository(modelContainer: targetContainer)
+        for provider in [ProviderID.deepSeek, .qwen] {
+            _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+                provider: provider,
+                allowedClasses: Set(CloudHealthContextPolicy.dataClasses),
+                repository: targetGovernance,
+                confirmedAt: Date(),
+                changeSource: .settings
+            )
+            _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+                provider: provider,
+                allowed: true,
+                repository: targetGovernance,
+                confirmedAt: Date(),
+                changeSource: .settings
+            )
+        }
+
+        _ = try await service.restoreJSON(url: backupURL, context: target)
+
+        for provider in [ProviderID.deepSeek, .qwen] {
+            let restoredPolicy = try await CloudHealthContextPolicy.load(
+                from: targetGovernance,
+                provider: provider
+            )
+            XCTAssertTrue(restoredPolicy.allowedClasses.isEmpty)
+            XCTAssertFalse(restoredPolicy.allowsConversationHistory)
+            XCTAssertTrue(restoredPolicy.snapshot.allowedClasses.isEmpty)
+            XCTAssertEqual(restoredPolicy.snapshot.state, .needsReconfirmation)
+            XCTAssertEqual(restoredPolicy.snapshot.changeSource, .backupRestore)
+
+            for dataClass in CloudHealthContextPolicy.dataClasses + [.conversationHistory] {
+                let isGranted = try await targetGovernance.isConsentGranted(
+                    provider: provider,
+                    dataClass: dataClass
+                )
+                XCTAssertFalse(
+                    isGranted,
+                    "Restoring a backup must revoke \(provider.rawValue)/\(dataClass.rawValue) until reconfirmed"
+                )
+            }
+        }
+    }
+
+    func testRestoreDeduplicatesWorkoutRecordsByHealthKitUUID() async throws {
+        let (sourceContainer, source) = try makeContext()
+        let healthKitUUID = UUID()
+        let preferred = WorkoutRecord(
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            type: "running",
+            durationMinutes: 30,
+            healthKitUUID: healthKitUUID,
+            workoutOrigin: "healthKit"
+        )
+        preferred.id = UUID(uuidString: "00000000-0000-0000-0000-000000000a11")!
+        preferred.createdAt = Date(timeIntervalSince1970: 1_600_000_000)
+        let duplicate = WorkoutRecord(
+            date: Date(timeIntervalSince1970: 1_700_000_100),
+            type: "running",
+            durationMinutes: 31,
+            healthKitUUID: healthKitUUID,
+            workoutOrigin: "healthKit"
+        )
+        duplicate.id = UUID(uuidString: "00000000-0000-0000-0000-000000000a12")!
+        duplicate.createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        source.insert(preferred)
+        source.insert(duplicate)
+        try source.save()
+
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let (targetContainer, target) = try makeContext()
+
+        let summary = try await service.restoreJSON(url: backupURL, context: target)
+
+        let persistedContext = ModelContext(targetContainer)
+        let restored = try persistedContext.fetch(FetchDescriptor<WorkoutRecord>())
+        XCTAssertEqual(restored.count, 1)
+        XCTAssertEqual(restored.first?.id, preferred.id)
+        XCTAssertEqual(restored.first?.healthKitUUID, healthKitUUID)
+        XCTAssertEqual(summary.workouts, 1)
+        _ = sourceContainer
+    }
+
+    func testRestoreDiscardsActionsAndReceiptsFromReplacedDataset() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let (_, target) = try makeContext()
+        let now = Date()
+        let pendingActionID = UUID()
+        target.insert(PendingActionRecord(
+            id: pendingActionID,
+            idempotencyKey: "pre-restore-pending-action",
+            actionTypeRaw: ActionType.weight.rawValue,
+            canonicalPayloadData: Data("old-canonical-payload".utf8),
+            payloadData: Data("old-payload".utf8),
+            clientRequestID: UUID(),
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(60 * 60)
+        ))
+        target.insert(CommittedActionReceiptRecord(
+            actionID: UUID(),
+            idempotencyKey: "pre-restore-committed-action",
+            actionTypeRaw: ActionType.weight.rawValue,
+            localRecordID: UUID(),
+            outboxIDsData: Data("[]".utf8),
+            committedAt: now,
+            healthSyncStateRaw: HealthSyncState.notApplicable.rawValue
+        ))
+        try target.save()
+
+        _ = try await service.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<PendingActionRecord>()), 0)
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<CommittedActionReceiptRecord>()), 0)
+    }
+
+    func testBackupRoundTripsAgentRequestLedgerWithoutRestoringResumableRequests() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000971")!
+        let completedRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000972")!
+        let interruptedRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000973")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        source.insert(AgentRequestRecord(
+            requestID: completedRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            providerRoundsUsed: 2,
+            toolCallsUsed: 1,
+            inputTokens: 120,
+            outputTokens: 36,
+            stateRaw: AgentRequestState.completed.rawValue,
+            updatedAt: startedAt.addingTimeInterval(30)
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: interruptedRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt.addingTimeInterval(60),
+            absoluteDeadline: startedAt.addingTimeInterval(360),
+            maximumProviderRounds: 5,
+            maximumToolCalls: 10,
+            providerRoundsUsed: 1,
+            resumeCount: 1,
+            containsTransientImage: true,
+            stateRaw: AgentRequestState.interrupted.rawValue,
+            updatedAt: startedAt.addingTimeInterval(90)
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: completedRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000,
+            reservedCostMicros: 8_000,
+            currency: "USD",
+            providerRaw: ProviderID.deepSeek.rawValue,
+            model: "deepseek-flash",
+            pricingVersion: "2026-10",
+            costStateRaw: AgentCostBudgetState.estimated.rawValue,
+            lastReservedProviderRound: 2,
+            lastReservedCostMicros: 4_000,
+            updatedAt: startedAt.addingTimeInterval(30)
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: interruptedRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 60_000,
+            reservedCostMicros: 3_000,
+            currency: "USD",
+            providerRaw: ProviderID.deepSeek.rawValue,
+            model: "deepseek-flash",
+            pricingVersion: "2026-10",
+            costStateRaw: AgentCostBudgetState.estimated.rawValue,
+            lastReservedProviderRound: 1,
+            lastReservedCostMicros: 3_000,
+            updatedAt: startedAt.addingTimeInterval(90)
+        ))
+        source.insert(MessageRecord(
+            conversationID: conversationID,
+            roleRaw: ModelRole.user.rawValue,
+            contentData: Data("TRANSCRIPT-MUST-NOT-ENTER-BACKUP".utf8),
+            ordinal: 0,
+            requestID: completedRequestID
+        ))
+        try source.save()
+
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let backupText = String(decoding: try Data(contentsOf: backupURL), as: UTF8.self)
+        let normalizedBackupText = backupText.lowercased()
+        XCTAssertTrue(normalizedBackupText.contains(completedRequestID.uuidString.lowercased()))
+        XCTAssertTrue(normalizedBackupText.contains(interruptedRequestID.uuidString.lowercased()))
+        XCTAssertFalse(normalizedBackupText.contains("transcript-must-not-enter-backup"))
+
+        let (_, target) = try makeContext()
+        let summary = try await service.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(summary.agentRequests, 2)
+        XCTAssertEqual(summary.agentRequestCostBudgets, 2)
+        let restoredRequests = try target.fetch(FetchDescriptor<AgentRequestRecord>())
+        XCTAssertEqual(restoredRequests.count, 2)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: restoredRequests.map { ($0.requestID, $0.stateRaw) }),
+            [
+                completedRequestID: AgentRequestState.completed.rawValue,
+                interruptedRequestID: AgentRequestState.failed.rawValue,
+            ]
+        )
+        let restoredByID = Dictionary(uniqueKeysWithValues: restoredRequests.map { ($0.requestID, $0) })
+        let restoredCompleted = try XCTUnwrap(restoredByID[completedRequestID])
+        XCTAssertEqual(restoredCompleted.absoluteDeadline, startedAt.addingTimeInterval(300))
+        XCTAssertEqual(restoredCompleted.maximumProviderRounds, 4)
+        XCTAssertEqual(restoredCompleted.maximumToolCalls, 8)
+        XCTAssertEqual(restoredCompleted.providerRoundsUsed, 2)
+        XCTAssertEqual(restoredCompleted.toolCallsUsed, 1)
+        XCTAssertEqual(restoredCompleted.inputTokens, 120)
+        XCTAssertEqual(restoredCompleted.cachedInputTokens, 0)
+        XCTAssertEqual(restoredCompleted.outputTokens, 36)
+        XCTAssertEqual(restoredCompleted.reasoningTokens, 0)
+        XCTAssertEqual(restoredCompleted.updatedAt, startedAt.addingTimeInterval(30))
+        let restoredInterrupted = try XCTUnwrap(restoredByID[interruptedRequestID])
+        XCTAssertEqual(restoredInterrupted.resumeCount, 1)
+        XCTAssertTrue(restoredInterrupted.containsTransientImage)
+        let restoredBudgets = try target.fetch(FetchDescriptor<AgentRequestCostBudgetRecord>())
+        XCTAssertEqual(restoredBudgets.count, 2)
+        let restoredBudgetsByID = Dictionary(uniqueKeysWithValues: restoredBudgets.map { ($0.requestID, $0) })
+        let restoredCompletedBudget = try XCTUnwrap(restoredBudgetsByID[completedRequestID])
+        XCTAssertEqual(restoredCompletedBudget.maximumCostMicros, 50_000)
+        XCTAssertEqual(restoredCompletedBudget.reservedCostMicros, 8_000)
+        XCTAssertEqual(restoredCompletedBudget.currency, "USD")
+        XCTAssertEqual(restoredCompletedBudget.providerRaw, ProviderID.deepSeek.rawValue)
+        XCTAssertEqual(restoredCompletedBudget.model, "deepseek-flash")
+        XCTAssertEqual(restoredCompletedBudget.pricingVersion, "2026-10")
+        XCTAssertEqual(restoredCompletedBudget.costStateRaw, AgentCostBudgetState.estimated.rawValue)
+        XCTAssertEqual(restoredCompletedBudget.lastReservedProviderRound, 2)
+        XCTAssertEqual(restoredCompletedBudget.lastReservedCostMicros, 4_000)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: restoredBudgets.map { ($0.requestID, $0.reservedCostMicros) }),
+            [completedRequestID: 8_000, interruptedRequestID: 3_000]
+        )
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<MessageRecord>()), 0)
+    }
+
+    func testRestoreQuarantinesInvalidAgentRequestWithoutDroppingValidLedgerRows() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000974")!
+        let validRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000975")!
+        let invalidRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000976")!
+        let invalidCostRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000977")!
+        let overLimitRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000978")!
+        let invalidTokenUsageRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000981")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_100_000)
+        source.insert(AgentRequestRecord(
+            requestID: validRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: invalidRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            stateRaw: "unsupported-state"
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: invalidCostRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: overLimitRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            providerRoundsUsed: 5,
+            toolCallsUsed: 9,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: invalidTokenUsageRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            inputTokens: 10,
+            cachedInputTokens: 11,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: invalidRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: invalidCostRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000,
+            costStateRaw: "unsupported-cost-state"
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: validRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000,
+            reservedCostMicros: 60_000,
+            currency: "USD",
+            providerRaw: ProviderID.deepSeek.rawValue,
+            model: "deepseek-flash",
+            pricingVersion: "2026-10",
+            costStateRaw: AgentCostBudgetState.estimated.rawValue,
+            lastReservedProviderRound: 1,
+            lastReservedCostMicros: 60_000
+        ))
+        try source.save()
+
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let (_, target) = try makeContext()
+
+        let summary = try await service.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(summary.agentRequests, 2)
+        XCTAssertEqual(summary.agentRequestCostBudgets, 0)
+        XCTAssertEqual(
+            Set(summary.quarantinedAgentRequestIDs),
+            Set([invalidRequestID, overLimitRequestID, invalidTokenUsageRequestID])
+        )
+        XCTAssertEqual(
+            Set(summary.quarantinedAgentRequestCostBudgetIDs),
+            Set([invalidRequestID, invalidCostRequestID, validRequestID])
+        )
+        XCTAssertEqual(
+            Set(summary.quarantinedAgentLedgerEntries),
+            Set([
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .request,
+                    requestID: invalidRequestID,
+                    reason: .unsupportedRequestState
+                ),
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .request,
+                    requestID: overLimitRequestID,
+                    reason: .invalidCounter
+                ),
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .request,
+                    requestID: invalidTokenUsageRequestID,
+                    reason: .invalidCounter
+                ),
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .costBudget,
+                    requestID: invalidRequestID,
+                    reason: .missingRequest
+                ),
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .costBudget,
+                    requestID: invalidCostRequestID,
+                    reason: .unsupportedCostState
+                ),
+                ExportService.QuarantinedAgentLedgerEntry(
+                    recordType: .costBudget,
+                    requestID: validRequestID,
+                    reason: .invalidCounter
+                ),
+            ])
+        )
+        let restoredRequests = try target.fetch(FetchDescriptor<AgentRequestRecord>())
+        XCTAssertEqual(
+            Set(restoredRequests.map(\.requestID)),
+            Set([validRequestID, invalidCostRequestID])
+        )
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<AgentRequestCostBudgetRecord>()), 0)
+    }
+
+    func testRestoreQuarantinesEntireDuplicateAgentLedgerGroups() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000978")!
+        let duplicateRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000979")!
+        let validRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000980")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_200_000)
+        source.insert(AgentRequestRecord(
+            requestID: duplicateRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestRecord(
+            requestID: validRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(300),
+            maximumProviderRounds: 4,
+            maximumToolCalls: 8,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        source.insert(AgentRequestCostBudgetRecord(
+            requestID: validRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000,
+            reservedCostMicros: 1_000,
+            costStateRaw: AgentCostBudgetState.estimated.rawValue
+        ))
+        try source.save()
+
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let originalDocument = try JSONDecoder().decode(
+            ExportService.BackupDocument.self,
+            from: Data(contentsOf: backupURL)
+        )
+        let rootObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: backupURL)) as? [String: Any]
+        )
+        var payloadObject = try XCTUnwrap(rootObject["payload"] as? [String: Any])
+        var requestEntries = try XCTUnwrap(payloadObject["agentRequests"] as? [[String: Any]])
+        let duplicateRequestEntry = try XCTUnwrap(requestEntries.first {
+            ($0["requestID"] as? String)?.lowercased() == duplicateRequestID.uuidString.lowercased()
+        })
+        requestEntries.append(duplicateRequestEntry)
+        payloadObject["agentRequests"] = requestEntries
+        var budgetEntries = try XCTUnwrap(payloadObject["agentRequestCostBudgets"] as? [[String: Any]])
+        let duplicateBudgetEntry = try XCTUnwrap(budgetEntries.first)
+        budgetEntries.append(duplicateBudgetEntry)
+        payloadObject["agentRequestCostBudgets"] = budgetEntries
+        let modifiedPayloadData = try JSONSerialization.data(withJSONObject: payloadObject)
+        let modifiedPayload = try JSONDecoder().decode(
+            ExportService.BackupPayload.self,
+            from: modifiedPayloadData
+        )
+        let duplicatedDocument = ExportService.BackupDocument(
+            formatVersion: originalDocument.formatVersion,
+            checksum: try service.checksum(for: modifiedPayload),
+            payload: modifiedPayload
+        )
+        try JSONEncoder().encode(duplicatedDocument).write(to: backupURL, options: .atomic)
+        let (_, target) = try makeContext()
+
+        let summary = try await service.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(summary.agentRequests, 1)
+        XCTAssertEqual(summary.agentRequestCostBudgets, 0)
+        XCTAssertEqual(summary.quarantinedAgentRequestIDs, [duplicateRequestID])
+        XCTAssertEqual(summary.quarantinedAgentRequestCostBudgetIDs, [validRequestID])
+        XCTAssertEqual(summary.quarantinedAgentLedgerEntries.count, 4)
+        XCTAssertTrue(summary.quarantinedAgentLedgerEntries.allSatisfy { $0.reason == .duplicateIdentifier })
+    }
+
+    func testBackupExportPagesMealHistoryAcross64RowBoundary() async throws {
+        let (container, source) = try makeContext()
+        _ = container
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var expectedIDs: [UUID] = []
+        for index in 0..<65 {
+            let id = UUID()
+            source.insert(MealRecord(
+                id: id,
+                date: start.addingTimeInterval(TimeInterval(index)),
+                totalCaloriesKcal: index,
+                sourceActionKey: "backup-page-\(index)"
+            ))
+            expectedIDs.append(id)
+        }
+        try source.save()
+
+        let url = try await ExportService().exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let document = try JSONDecoder().decode(
+            ExportService.BackupDocument.self,
+            from: Data(contentsOf: url)
+        )
+
+        XCTAssertEqual(document.payload.mealRecords.count, 65)
+        XCTAssertEqual(document.payload.mealRecords.map(\.id), expectedIDs)
+    }
+
+    func testRestorePagesInterruptedRequestHistoryAcross64RowBoundary() async throws {
+        let schema = Schema(versionedSchema: DensosoSchemaV12.self)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let source = ModelContext(container)
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let target = ModelContext(container)
+        let conversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000961")!
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        for index in 0..<65 {
+            let requestID = UUID()
+            target.insert(AgentRequestRecord(
+                requestID: requestID,
+                conversationID: conversationID,
+                startedAt: startedAt.addingTimeInterval(TimeInterval(index)),
+                absoluteDeadline: startedAt.addingTimeInterval(TimeInterval(index + 45)),
+                maximumProviderRounds: 5,
+                maximumToolCalls: 8,
+                stateRaw: AgentRequestState.interrupted.rawValue
+            ))
+            target.insert(MessageRecord(
+                conversationID: conversationID,
+                roleRaw: ModelRole.user.rawValue,
+                contentData: Data("unfinished-\(index)".utf8),
+                ordinal: index,
+                requestID: requestID
+            ))
+        }
+        let completedRequestID = UUID()
+        target.insert(AgentRequestRecord(
+            requestID: completedRequestID,
+            conversationID: conversationID,
+            startedAt: startedAt,
+            absoluteDeadline: startedAt.addingTimeInterval(45),
+            maximumProviderRounds: 5,
+            maximumToolCalls: 8,
+            stateRaw: AgentRequestState.completed.rawValue
+        ))
+        target.insert(AgentRequestCostBudgetRecord(
+            requestID: completedRequestID,
+            conversationID: conversationID,
+            maximumCostMicros: 50_000
+        ))
+        target.insert(MessageRecord(
+            conversationID: conversationID,
+            roleRaw: ModelRole.assistant.rawValue,
+            contentData: Data("completed-history".utf8),
+            ordinal: 65,
+            requestID: completedRequestID
+        ))
+        target.insert(MessageRecord(
+            conversationID: conversationID,
+            roleRaw: ModelRole.assistant.rawValue,
+            contentData: Data("legacy-history".utf8),
+            ordinal: 66
+        ))
+        try target.save()
+
+        _ = try await service.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<AgentRequestRecord>()), 0)
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<AgentRequestCostBudgetRecord>()), 0)
+        let restoredMessages = try target.fetch(FetchDescriptor<MessageRecord>())
+        XCTAssertEqual(Set(restoredMessages.map { String(decoding: $0.contentData, as: UTF8.self) }), Set([
+            "completed-history", "legacy-history",
+        ]))
+    }
+
     func testRestoreReprojectsDerivedMetricsInsteadOfTrustingSerializedMetrics() async throws {
         let (sourceContainer, source) = try makeContext()
         _ = sourceContainer
         let date = Date(timeIntervalSince1970: 1_700_000_000)
-        source.insert(UserProfile())
-        source.insert(MealRecord(date: date, totalCaloriesKcal: 640, proteinG: 32, fatG: 20, carbsG: 72))
+        let profile = UserProfile(dateOfBirth: Calendar.current.date(byAdding: .year, value: -30, to: Date())!)
+        source.insert(profile)
+        let evidence = Data("gate05-evidence".utf8)
+        let meal = MealRecord(
+            date: date,
+            totalCaloriesKcal: 640,
+            proteinG: 32,
+            fatG: 20,
+            carbsG: 72,
+            sourceActionKey: "gate05-source-action",
+            energyLowKcal: 520,
+            energyLikelyKcal: 640,
+            energyHighKcal: 780,
+            proteinLowG: nil,
+            proteinLikelyG: nil,
+            proteinHighG: nil,
+            evidenceData: evidence
+        )
+        meal.dishes = [
+            DishEntry(
+                dishName: "fixture dish",
+                estimatedCaloriesKcal: 640,
+                portionLowG: 120,
+                portionLikelyG: 180,
+                portionHighG: 260,
+                evidenceData: evidence,
+                algorithmVersion: "meal-estimator-v1"
+            )
+        ]
+        source.insert(meal)
         let healthKitUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000030")!
         let workout = WorkoutRecord(
             date: date,
@@ -29,6 +891,11 @@ final class ExportServiceTests: XCTestCase {
         let service = ExportService()
         let url = try await service.exportJSON(context: source)
         defer { try? FileManager.default.removeItem(at: url) }
+        let exportedDocument = try JSONDecoder().decode(
+            ExportService.BackupDocument.self,
+            from: Data(contentsOf: url)
+        )
+        XCTAssertEqual(exportedDocument.formatVersion, 8)
 
         let (targetContainer, target) = try makeContext()
         _ = targetContainer
@@ -42,9 +909,18 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(summary.workouts, 1)
         XCTAssertEqual(meals.count, 1)
         XCTAssertEqual(meals[0].totalCaloriesKcal, 640)
+        XCTAssertEqual(meals[0].sourceActionKey, "gate05-source-action")
+        XCTAssertEqual(meals[0].energyLowKcal, 520)
+        XCTAssertNil(meals[0].proteinLikelyG)
+        XCTAssertEqual(meals[0].evidenceData, evidence)
+        XCTAssertEqual(meals[0].dishes.first?.portionLikelyG, 180)
+        XCTAssertEqual(meals[0].dishes.first?.algorithmVersion, "meal-estimator-v1")
         XCTAssertEqual(metrics.count, 1)
-        XCTAssertEqual(metrics[0].totalIntakeKcal, 640)
-        XCTAssertEqual(metrics[0].activeCaloriesKcal, 130)
+        XCTAssertEqual(metrics[0].totalIntakeKcal, 0)
+        // Workout energy is descriptive in Phase 6; it is not daily active energy.
+        // A current profile revision cannot be projected backward into 2023.
+        XCTAssertEqual(metrics[0].activeCaloriesKcal, 0)
+        XCTAssertEqual(metrics[0].energyQuality, "unavailable")
         let workouts = try target.fetch(FetchDescriptor<WorkoutRecord>())
         XCTAssertEqual(workouts.count, 1)
         XCTAssertEqual(workouts[0].healthKitUUID, healthKitUUID)
@@ -81,11 +957,640 @@ final class ExportServiceTests: XCTestCase {
         XCTAssertEqual(meals[0].totalCaloriesKcal, 777)
     }
 
+    func testProjectionFailureKeepsRestoreCommittedAndReportsPendingDay() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let date = Date()
+        source.insert(MealRecord(date: date, totalCaloriesKcal: 400))
+        try source.save()
+
+        let exportService = ExportService()
+        let backupURL = try await exportService.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+
+        let (_, target) = try makeContext()
+        let restoreService = ExportService(willSaveProjection: {
+            throw ExportProjectionSaveError.injected
+        })
+        let summary = try await restoreService.restoreJSON(url: backupURL, context: target)
+
+        XCTAssertEqual(try target.fetch(FetchDescriptor<MealRecord>()).map(\.totalCaloriesKcal), [400])
+        XCTAssertEqual(summary.meals, 1)
+        XCTAssertEqual(summary.pendingProjectionDays, 1)
+        let day = Calendar.current.startOfDay(for: date)
+        let predicate = #Predicate<DailyMetrics> { $0.date == day }
+        let metric = try XCTUnwrap(target.fetch(FetchDescriptor<DailyMetrics>(predicate: predicate)).first)
+        XCTAssertTrue(metric.requiresRecompute)
+    }
+
+    func testRestoreRejectsInvalidUserPreferenceBackupFields() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        source.insert(UserPreferenceRecord(
+            sourceActionKey: "confirmed-preference-validation",
+            categoryRaw: UserPreferenceCategory.food.rawValue,
+            statement: "不吃香菜",
+            sourceRaw: UserPreferenceSource.userReported.rawValue
+        ))
+        try source.save()
+
+        let service = ExportService()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let originalObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: backupURL)) as? [String: Any]
+        )
+        let (targetContainer, target) = try makeContext()
+        _ = targetContainer
+        target.insert(MealRecord(totalCaloriesKcal: 777))
+        try target.save()
+
+        let invalidValues: [(String, Any)] = [
+            ("sourceRaw", "healthKit"),
+            ("categoryRaw", "healthKit"),
+            ("statement", String(repeating: "x", count: 501)),
+        ]
+        for (field, value) in invalidValues {
+            var payloadObject = try XCTUnwrap(originalObject["payload"] as? [String: Any])
+            var preferences = try XCTUnwrap(payloadObject["userPreferences"] as? [[String: Any]])
+            preferences[0][field] = value
+            payloadObject["userPreferences"] = preferences
+
+            let payloadData = try JSONSerialization.data(withJSONObject: payloadObject, options: [.sortedKeys])
+            let payload = try JSONDecoder().decode(ExportService.BackupPayload.self, from: payloadData)
+            let document = ExportService.BackupDocument(
+                formatVersion: 5,
+                checksum: try service.checksum(for: payload),
+                payload: payload
+            )
+            let invalidURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("invalid-preference-backup-\(UUID().uuidString).json")
+            try JSONEncoder().encode(document).write(to: invalidURL)
+
+            do {
+                _ = try await service.restoreJSON(url: invalidURL, context: target)
+                XCTFail("Expected invalid preference field \(field) to be rejected")
+            } catch {
+                XCTAssertEqual(error as? ExportService.BackupError, .invalidUserPreference)
+            }
+            try? FileManager.default.removeItem(at: invalidURL)
+        }
+
+        XCTAssertEqual(try target.fetch(FetchDescriptor<MealRecord>()).first?.totalCaloriesKcal, 777)
+    }
+
+    func testLegacyV2DishPayloadDecodesWithNilGate5Ranges() throws {
+        let legacyJSON = Data(
+            #"{"dishName":"legacy","cookingMethod":"steam","ingredientJSON":"[]","estimatedCaloriesKcal":100,"estimatedProteinG":0,"estimatedFatG":0,"estimatedCarbsG":0,"confidenceScore":0.5,"userCorrectionFactor":null,"createdAt":0}"#.utf8
+        )
+
+        let dish = try JSONDecoder().decode(
+            ExportService.BackupPayload.DishExport.self,
+            from: legacyJSON
+        )
+
+        XCTAssertNil(dish.id)
+        XCTAssertNil(dish.energyLowKcal)
+        XCTAssertNil(dish.portionLikelyG)
+        XCTAssertNil(dish.evidenceData)
+    }
+
+    func testLegacyV2BackupStillRestoresAfterGate5EvidenceFieldsWereAdded() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let profile = UserProfile(
+            biologicalSex: "female",
+            dateOfBirth: Date(timeIntervalSince1970: 631_152_000),
+            heightCm: 165,
+            weightKg: 70.5,
+            activityLevel: "moderate"
+        )
+        profile.profileNeedsCompletion = false
+        source.insert(profile)
+        source.insert(MealRecord(totalCaloriesKcal: 350, proteinG: 12, fatG: 8, carbsG: 54))
+        try source.save()
+
+        let service = ExportService()
+        let currentURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: currentURL) }
+        let currentObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: currentURL)) as? [String: Any]
+        )
+        var legacyPayloadObject = try XCTUnwrap(currentObject["payload"] as? [String: Any])
+        for key in [
+            "weightRecords", "goalProfiles", "dailyHealthSnapshots", "scheduleEvents",
+            "dailyBriefs", "weeklyBriefs",
+        ] {
+            legacyPayloadObject.removeValue(forKey: key)
+        }
+        var legacyMeals = try XCTUnwrap(legacyPayloadObject["mealRecords"] as? [[String: Any]])
+        for index in legacyMeals.indices {
+            for key in [
+                "sourceActionKey", "energyLowKcal", "energyLikelyKcal", "energyHighKcal",
+                "proteinLowG", "proteinLikelyG", "proteinHighG", "fatLowG", "fatLikelyG",
+                "fatHighG", "carbsLowG", "carbsLikelyG", "carbsHighG", "evidenceData",
+            ] {
+                legacyMeals[index].removeValue(forKey: key)
+            }
+            if var dishes = legacyMeals[index]["dishes"] as? [[String: Any]] {
+                for dishIndex in dishes.indices {
+                    for key in [
+                        "id", "energyLowKcal", "energyLikelyKcal", "energyHighKcal",
+                        "proteinLowG", "proteinLikelyG", "proteinHighG", "fatLowG",
+                        "fatLikelyG", "fatHighG", "carbsLowG", "carbsLikelyG",
+                        "carbsHighG", "portionLowG", "portionLikelyG", "portionHighG",
+                        "evidenceData", "algorithmVersion",
+                    ] {
+                        dishes[dishIndex].removeValue(forKey: key)
+                    }
+                }
+                legacyMeals[index]["dishes"] = dishes
+            }
+        }
+        legacyPayloadObject["mealRecords"] = legacyMeals
+        let payloadData = try JSONSerialization.data(
+            withJSONObject: legacyPayloadObject,
+            options: [.sortedKeys]
+        )
+        let legacyPayload = try JSONDecoder().decode(
+            ExportService.BackupPayload.self,
+            from: payloadData
+        )
+        let legacyDocument = ExportService.BackupDocument(
+            formatVersion: 2,
+            checksum: try service.checksum(for: legacyPayload),
+            payload: legacyPayload
+        )
+        let legacyURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gate05-legacy-v2-\(UUID().uuidString.lowercased()).json")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(legacyDocument).write(to: legacyURL)
+        defer { try? FileManager.default.removeItem(at: legacyURL) }
+
+        let (targetContainer, target) = try makeContext()
+        _ = targetContainer
+        let summary = try await service.restoreJSON(url: legacyURL, context: target)
+
+        XCTAssertEqual(summary.meals, 1)
+        let restored = try XCTUnwrap(target.fetch(FetchDescriptor<MealRecord>()).first)
+        XCTAssertEqual(restored.totalCaloriesKcal, 350)
+        XCTAssertEqual(restored.energyLowKcal, 350)
+        XCTAssertEqual(restored.energyHighKcal, 350)
+    }
+
+    func testLegacyV3BackupStillRestoresMealEvidenceAfterHealthDataWasAdded() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let evidence = Data("v3-evidence".utf8)
+        source.insert(MealRecord(
+            totalCaloriesKcal: 410,
+            proteinG: 18,
+            fatG: 12,
+            carbsG: 51,
+            energyLikelyKcal: 410,
+            evidenceData: evidence
+        ))
+        try source.save()
+
+        let service = ExportService()
+        let currentURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: currentURL) }
+        let currentObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: currentURL)) as? [String: Any]
+        )
+        var v3PayloadObject = try XCTUnwrap(currentObject["payload"] as? [String: Any])
+        for key in [
+            "weightRecords", "goalProfiles", "dailyHealthSnapshots", "scheduleEvents",
+            "dailyBriefs", "weeklyBriefs", "weeklyReports",
+        ] {
+            v3PayloadObject.removeValue(forKey: key)
+        }
+        let payloadData = try JSONSerialization.data(withJSONObject: v3PayloadObject, options: [.sortedKeys])
+        let payload = try JSONDecoder().decode(ExportService.BackupPayload.self, from: payloadData)
+        let v3Document = ExportService.BackupDocument(
+            formatVersion: 3,
+            checksum: try service.checksum(for: payload),
+            payload: payload
+        )
+        let v3URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gate09-legacy-v3-\(UUID().uuidString.lowercased()).json")
+        try JSONEncoder().encode(v3Document).write(to: v3URL)
+        defer { try? FileManager.default.removeItem(at: v3URL) }
+
+        let (targetContainer, target) = try makeContext()
+        _ = targetContainer
+        let summary = try await service.restoreJSON(url: v3URL, context: target)
+
+        XCTAssertEqual(summary.meals, 1)
+        let restored = try XCTUnwrap(target.fetch(FetchDescriptor<MealRecord>()).first)
+        XCTAssertEqual(restored.totalCaloriesKcal, 410)
+        XCTAssertEqual(restored.energyLikelyKcal, 410)
+        XCTAssertEqual(restored.evidenceData, evidence)
+    }
+
+    func testV5BackupRestoresProfileHistoryAndHealthDataWithoutSyncQueueState() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        source.insert(UserProfile())
+        source.insert(WeightRecord(
+            sourceActionKey: "v4-weight-action",
+            measuredAt: date,
+            kilograms: 70.5
+        ))
+        source.insert(DailyMetrics(
+            date: date,
+            energyQuality: "observed",
+            projectionVersion: "energy-accounting-v2",
+            sourceFingerprint: "fixture-fingerprint"
+        ))
+        source.insert(ProfileRevisionRecord(
+            profileKey: "primary",
+            effectiveFrom: date,
+            dateOfBirth: Date(timeIntervalSince1970: 631_152_000),
+            biologicalSex: "female",
+            heightCm: 165,
+            weightKg: 70.5,
+            activityLevel: "moderate",
+            source: "userEdited"
+        ))
+        source.insert(GoalProfileRecord(
+            profileKey: "primary",
+            targetWeightKilograms: 68,
+            dailyDeficitKcal: 350,
+            dailyProteinGrams: 90,
+            effectiveFrom: date
+        ))
+        source.insert(DailyCheckInRecord(
+            sourceActionKey: "confirmed-checkin-export",
+            occurredAt: date,
+            energyRaw: "low",
+            stressRaw: "elevated",
+            subjectiveSleepRaw: "poor",
+            note: "user-reported check-in",
+            sourceRaw: "userReported"
+        ))
+        source.insert(UserPreferenceRecord(
+            sourceActionKey: "confirmed-preference-export",
+            categoryRaw: UserPreferenceCategory.food.rawValue,
+            statement: "不吃香菜",
+            sourceRaw: UserPreferenceSource.userReported.rawValue,
+            createdAt: date
+        ))
+        source.insert(MealRecord(
+            date: date,
+            totalCaloriesKcal: 440,
+            sourceActionKey: "confirmed-meal-action"
+        ))
+        let priorKey = try XCTUnwrap(MealPortionPriorStorageKey.make(
+            foodID: "rice-id",
+            foodName: "米饭",
+            unit: "碗"
+        ))
+        source.insert(PersonalMealPortionPriorRecord(
+            priorKey: priorKey,
+            foodID: "rice-id",
+            foodName: "米饭",
+            unit: "碗",
+            p10Grams: 150,
+            p50Grams: 180,
+            p90Grams: 210,
+            sourceActionKey: "confirmed-meal-action",
+            createdAt: date,
+            updatedAt: date
+        ))
+        let portionContributionPayload = MealPortionContributionPayload(
+            foodID: "rice-id",
+            foodName: "米饭",
+            unit: "碗",
+            p10Grams: 150,
+            p50Grams: 180,
+            p90Grams: 210
+        )
+        source.insert(MealPriorContributionRecord(
+            contributionKey: "portion:\(priorKey):confirmed-meal-action",
+            sourceActionKey: "confirmed-meal-action",
+            priorKey: priorKey,
+            kindRaw: MealPriorContributionKind.portion.rawValue,
+            payloadData: try JSONEncoder().encode(portionContributionPayload),
+            observationWeight: 1,
+            createdAt: date,
+            updatedAt: date
+        ))
+        let dishIngredient = try XCTUnwrap(PersonalMealDishIngredientPrior(
+            foodID: "rice-id",
+            name: "米饭",
+            lowGrams: 150,
+            likelyGrams: 180,
+            highGrams: 210,
+            preparation: .cooked,
+            massBasis: .cooked,
+            sourceID: "cn-food-table",
+            sourceRecordID: "rice-cooked-001",
+            sourceVersion: "food-table-2026-01",
+            licenseStatus: "verified"
+        ))
+        let dishKey = try XCTUnwrap(MealDishPriorStorageKey.make(
+            dishName: "盖饭",
+            cookingMethod: "stirFry",
+            ingredients: [dishIngredient]
+        ))
+        let dishIngredientEncoder = JSONEncoder()
+        dishIngredientEncoder.outputFormatting = [.sortedKeys]
+        source.insert(PersonalMealDishPriorRecord(
+            priorKey: dishKey.priorKey,
+            dishKey: dishKey.dishKey,
+            dishName: "盖饭",
+            cookingMethodKey: dishKey.cookingMethodKey,
+            cookingMethod: "stirFry",
+            ingredientsJSON: String(data: try dishIngredientEncoder.encode([dishIngredient]), encoding: .utf8)!,
+            observationCount: 0,
+            isUserManaged: true,
+            sourceActionKey: nil,
+            createdAt: date,
+            updatedAt: date
+        ))
+        let unconfirmedPreference = ActionPayload.userPreference(UserPreference(
+            category: .communication,
+            statement: "未确认的偏好",
+            createdAt: date
+        ))
+        let pendingEncoder = JSONEncoder()
+        pendingEncoder.dateEncodingStrategy = .millisecondsSince1970
+        source.insert(PendingActionRecord(
+            idempotencyKey: "unconfirmed-preference-export",
+            actionTypeRaw: ActionType.userPreference.rawValue,
+            canonicalPayloadData: try unconfirmedPreference.canonicalData(),
+            payloadData: try pendingEncoder.encode(unconfirmedPreference),
+            clientRequestID: UUID(),
+            createdAt: date,
+            expiresAt: date.addingTimeInterval(3_600)
+        ))
+        let day = Calendar.current.startOfDay(for: date)
+        let dayParts = Calendar.current.dateComponents([.year, .month, .day], from: day)
+        let dayKey = String(format: "%04d-%02d-%02d", dayParts.year ?? 0, dayParts.month ?? 0, dayParts.day ?? 0)
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: Calendar.current.timeZone.identifier,
+            energyIntakeKcal: try EstimateRange(low: 450, likely: 500, high: 600),
+            stepCount: 7_000,
+            algorithmVersion: "v3"
+        )
+        let snapshotEncoder = JSONEncoder()
+        snapshotEncoder.dateEncodingStrategy = .millisecondsSince1970
+        source.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey,
+            timezoneID: snapshot.timezoneIdentifier,
+            payloadData: try snapshotEncoder.encode(snapshot),
+            snapshotHash: "v4-health-hash",
+            algorithmVersion: "v3"
+        ))
+        source.insert(ScheduleEvent(
+            date: date,
+            title: "药物提醒",
+            notes: "ordinary user schedule",
+            startTime: date
+        ))
+        source.insert(DailyBriefRecord(
+            cacheKey: "daily:\(dayKey)",
+            dayKey: dayKey,
+            snapshotHash: "v4-health-hash",
+            algorithmVersion: "health-intelligence-v1",
+            payloadData: Data("daily-brief".utf8)
+        ))
+        source.insert(WeeklyBriefRecord(
+            cacheKey: "weekly:\(dayKey)",
+            weekKey: dayKey,
+            snapshotHash: "v4-week-hash",
+            algorithmVersion: "health-intelligence-v1",
+            payloadData: Data("weekly-brief".utf8)
+        ))
+        source.insert(HealthSyncOutboxEntry(
+            operation: "upsertWeight",
+            recordID: UUID(),
+            idempotencyKey: "source-outbox"
+        ))
+        source.insert(HealthKitImportCursor(stream: "bodyMass", anchorData: Data([1]))
+        )
+        try source.save()
+
+        let service = ExportService()
+        let url = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let exported = try JSONDecoder().decode(
+            ExportService.BackupDocument.self,
+            from: Data(contentsOf: url)
+        )
+        XCTAssertEqual(exported.formatVersion, 8)
+        XCTAssertEqual(exported.payload.weightRecords?.count, 1)
+        XCTAssertEqual(exported.payload.profileRevisions?.count, 1)
+        XCTAssertEqual(exported.payload.dailyMetricsProjection?.first?.sourceFingerprint, "fixture-fingerprint")
+        XCTAssertEqual(exported.payload.dailyHealthSnapshots?.count, 1)
+        XCTAssertEqual(exported.payload.goalProfiles?.count, 1)
+        XCTAssertEqual(exported.payload.dailyCheckIns?.count, 1)
+        XCTAssertEqual(exported.payload.userPreferences?.count, 1)
+        XCTAssertEqual(exported.payload.mealPortionPriors?.count, 1)
+        XCTAssertEqual(exported.payload.mealDishPriors?.count, 1)
+        XCTAssertEqual(exported.payload.mealPriorContributions?.count, 1)
+        XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("未确认的偏好"))
+        XCTAssertEqual(exported.payload.dailyBriefs?.count, 1)
+        XCTAssertEqual(exported.payload.weeklyBriefs?.count, 1)
+        XCTAssertEqual(exported.payload.scheduleEvents?.count, 1)
+
+        let (targetContainer, target) = try makeContext()
+        _ = targetContainer
+        target.insert(HealthSyncOutboxEntry(operation: "upsertMeal", recordID: UUID()))
+        target.insert(HealthKitImportCursor(stream: "workouts", anchorData: Data([9])))
+        let interruptedRequestID = UUID(uuidString: "00000000-0000-0000-0000-000000000951")!
+        let requestConversationID = UUID(uuidString: "00000000-0000-0000-0000-000000000952")!
+        target.insert(ConversationRecord(id: requestConversationID))
+        target.insert(AgentRequestRecord(
+            requestID: interruptedRequestID,
+            conversationID: requestConversationID,
+            startedAt: date,
+            absoluteDeadline: date.addingTimeInterval(45),
+            maximumProviderRounds: 5,
+            maximumToolCalls: 8,
+            providerRoundsUsed: 1,
+            stateRaw: AgentRequestState.interrupted.rawValue
+        ))
+        target.insert(MessageRecord(
+            conversationID: requestConversationID,
+            roleRaw: ModelRole.user.rawValue,
+            contentData: Data("not-part-of-backup".utf8),
+            ordinal: 0,
+            requestID: interruptedRequestID
+        ))
+        try target.save()
+        let summary = try await service.restoreJSON(url: url, context: target)
+
+        XCTAssertEqual(summary.weights, 1)
+        XCTAssertEqual(summary.healthDays, 1)
+        XCTAssertEqual(summary.dailyCheckIns, 1)
+        XCTAssertEqual(summary.mealPortionPriors, 1)
+        XCTAssertEqual(summary.mealDishPriors, 1)
+        let restoredContribution = try XCTUnwrap(target.fetch(FetchDescriptor<MealPriorContributionRecord>()).first)
+        XCTAssertEqual(restoredContribution.sourceActionKey, "confirmed-meal-action")
+        XCTAssertEqual(restoredContribution.priorKey, priorKey)
+        let restoredPrior = try XCTUnwrap(target.fetch(FetchDescriptor<PersonalMealPortionPriorRecord>()).first)
+        XCTAssertEqual(restoredPrior.foodName, "米饭")
+        XCTAssertEqual(restoredPrior.p50Grams, 180, accuracy: 0.001)
+        let restoredDishPrior = try XCTUnwrap(target.fetch(FetchDescriptor<PersonalMealDishPriorRecord>()).first)
+        XCTAssertEqual(restoredDishPrior.dishName, "盖饭")
+        XCTAssertTrue(restoredDishPrior.isUserManaged)
+        let restoredDishIngredients = try JSONDecoder().decode(
+            [PersonalMealDishIngredientPrior].self,
+            from: Data(restoredDishPrior.ingredientsJSON.utf8)
+        )
+        XCTAssertEqual(restoredDishIngredients.first?.massBasis, .cooked)
+        XCTAssertEqual(restoredDishIngredients.first?.sourceRecordID, "rice-cooked-001")
+        XCTAssertEqual(summary.userPreferences, 1)
+        XCTAssertEqual(summary.scheduledPlans, 0)
+        XCTAssertEqual(try target.fetch(FetchDescriptor<WeightRecord>()).first?.kilograms, 70.5)
+        XCTAssertEqual(try target.fetch(FetchDescriptor<WeightRecord>()).first?.confidence, 0.9)
+        XCTAssertEqual(try target.fetch(FetchDescriptor<ProfileRevisionRecord>()).first?.heightCm, 165)
+        XCTAssertEqual(try target.fetch(FetchDescriptor<GoalProfileRecord>()).first?.dailyProteinGrams, 90)
+        let restoredCheckIn = try XCTUnwrap(target.fetch(FetchDescriptor<DailyCheckInRecord>()).first)
+        XCTAssertEqual(restoredCheckIn.energyRaw, "low")
+        XCTAssertEqual(restoredCheckIn.stressRaw, "elevated")
+        XCTAssertEqual(restoredCheckIn.subjectiveSleepRaw, "poor")
+        XCTAssertEqual(restoredCheckIn.sourceRaw, "userReported")
+        let restoredPreference = try XCTUnwrap(target.fetch(FetchDescriptor<UserPreferenceRecord>()).first)
+        XCTAssertEqual(restoredPreference.categoryRaw, "food")
+        XCTAssertEqual(restoredPreference.statement, "不吃香菜")
+        XCTAssertEqual(restoredPreference.sourceRaw, "userReported")
+        XCTAssertEqual(try target.fetch(FetchDescriptor<ScheduleEvent>()).first?.title, "药物提醒")
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<HealthSyncOutboxEntry>()), 0)
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<HealthKitImportCursor>()), 0)
+        XCTAssertEqual(try target.fetchCount(FetchDescriptor<AgentRequestRecord>()), 0)
+        XCTAssertEqual(
+            try target.fetch(FetchDescriptor<MessageRecord>()).filter { $0.requestID == interruptedRequestID }.count,
+            0
+        )
+        XCTAssertEqual(try target.fetch(FetchDescriptor<DailyBriefRecord>()).first?.payloadData, Data("daily-brief".utf8))
+    }
+
+    func testConfirmedTrainingPlanBackupRoundTripsScheduleNotesAndCountsPlan() async throws {
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let tomorrow = start.addingTimeInterval(24 * 60 * 60)
+        let draft = TrainingPlanDraft(
+            name: "两日训练",
+            createdAt: start,
+            sessions: [
+                TrainingSessionDraft(
+                    date: start,
+                    activity: .running,
+                    goal: .timeMinutes(30),
+                    location: .outdoor,
+                    recommendedIntensity: .easy,
+                    reason: "轻松跑"
+                ),
+                TrainingSessionDraft(date: tomorrow, activity: nil, reason: "休息日"),
+            ]
+        )
+        let entry = ConfirmedTrainingPlanEntry(
+            actionID: UUID(),
+            idempotencyKey: "backup-training-plan",
+            draft: draft
+        )
+        let notes = try entry.encodedNotes()
+        source.insert(ScheduleEvent(date: start, title: draft.name, notes: notes, startTime: start))
+        try source.save()
+
+        let service = ExportService()
+        let url = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let document = try JSONDecoder().decode(
+            ExportService.BackupDocument.self,
+            from: Data(contentsOf: url)
+        )
+        XCTAssertEqual(document.payload.scheduleEvents?.first?.notes, notes)
+
+        let (targetContainer, target) = try makeContext()
+        _ = targetContainer
+        let summary = try await service.restoreJSON(url: url, context: target)
+        let restoredEvent = try XCTUnwrap(target.fetch(FetchDescriptor<ScheduleEvent>()).first)
+        XCTAssertEqual(summary.scheduledPlans, 1)
+        XCTAssertEqual(restoredEvent.notes, notes)
+        XCTAssertEqual(ConfirmedTrainingPlanEntry.decode(notes: restoredEvent.notes)?.draft, draft)
+    }
+
+    func testRestoreRejectsMalformedOrInvalidConfirmedTrainingPlanBeforeReplacingData() async throws {
+        let service = ExportService()
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let (sourceContainer, source) = try makeContext()
+        _ = sourceContainer
+        source.insert(ScheduleEvent(date: date, title: "source schedule", notes: "ordinary", startTime: date))
+        try source.save()
+        let backupURL = try await service.exportJSON(context: source)
+        defer { try? FileManager.default.removeItem(at: backupURL) }
+        let originalObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: backupURL)) as? [String: Any]
+        )
+
+        let (targetContainer, target) = try makeContext()
+        _ = targetContainer
+        target.insert(MealRecord(date: date, totalCaloriesKcal: 777))
+        target.insert(ScheduleEvent(date: date, title: "preserve me", notes: "target", startTime: date))
+        try target.save()
+        let invalidDraft = TrainingPlanDraft(name: "", createdAt: date, sessions: [])
+        let invalidEntry = ConfirmedTrainingPlanEntry(
+            actionID: UUID(),
+            idempotencyKey: "invalid-training-plan",
+            draft: invalidDraft
+        )
+
+        for invalidNotes in [
+            ConfirmedTrainingPlanEntry.notesPrefix + "not-base64",
+            try invalidEntry.encodedNotes(),
+        ] {
+            var payloadObject = try XCTUnwrap(originalObject["payload"] as? [String: Any])
+            var scheduleEvents = try XCTUnwrap(payloadObject["scheduleEvents"] as? [[String: Any]])
+            scheduleEvents[0]["notes"] = invalidNotes
+            payloadObject["scheduleEvents"] = scheduleEvents
+            let payloadData = try JSONSerialization.data(withJSONObject: payloadObject, options: [.sortedKeys])
+            let payload = try JSONDecoder().decode(ExportService.BackupPayload.self, from: payloadData)
+            let document = ExportService.BackupDocument(
+                formatVersion: 5,
+                checksum: try service.checksum(for: payload),
+                payload: payload
+            )
+            let invalidURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("invalid-training-plan-backup-\(UUID().uuidString).json")
+            try JSONEncoder().encode(document).write(to: invalidURL)
+
+            do {
+                _ = try await service.restoreJSON(url: invalidURL, context: target)
+                XCTFail("Expected invalid training plan entry to be rejected")
+            } catch {
+                XCTAssertEqual(error as? ExportService.BackupError, .invalidTrainingPlan)
+            }
+            try? FileManager.default.removeItem(at: invalidURL)
+            XCTAssertEqual(try target.fetch(FetchDescriptor<MealRecord>()).first?.totalCaloriesKcal, 777)
+            XCTAssertEqual(try target.fetch(FetchDescriptor<ScheduleEvent>()).first?.title, "preserve me")
+        }
+    }
+
     private func makeContext() throws -> (ModelContainer, ModelContext) {
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
         let container = try ModelContainer(
-            for: UserProfile.self, MealRecord.self, DishEntry.self, WorkoutRecord.self, DailyMetrics.self, HealthSyncOutboxEntry.self, HealthKitImportCursor.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
         )
         return (container, ModelContext(container))
     }
+
+    private func makeFullV14Context() throws -> (ModelContainer, ModelContext) {
+        let schema = Schema(versionedSchema: DensosoSchemaV15.self)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        return (container, ModelContext(container))
+    }
+}
+
+private enum ExportProjectionSaveError: Error {
+    case injected
 }

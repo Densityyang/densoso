@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import DensosoDomain
 
 /// First launch remains a local-first, explicit-consent flow. The visual steps
 /// reorganize the existing fields without changing persistence semantics.
@@ -15,13 +16,23 @@ struct OnboardingView: View {
 
     @State private var step: Step = .intelligence
     @State private var apiKey = ""
+    @State private var qwenAPIKey = ""
+    @State private var qwenWorkspaceID = ""
+    @State private var cloudTextConsent = false
+    @State private var qwenSpeechConsent = false
+    @State private var cloudHealthContextClasses: Set<ProviderDataClass> = []
+    @State private var cloudConversationHistoryConsent = false
     @State private var name = ""
-    @State private var sex = "male"
-    @State private var height = "170"
-    @State private var weight = "70"
-    @State private var activity = "sedentary"
-    @State private var deficitTarget = "500"
-    @State private var intelligenceMode: IntelligenceMode = .localOnly
+    @State private var sex = ""
+    @State private var dateOfBirth: Date?
+    @State private var dateOfBirthDraft = Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date()
+    @State private var hasEditedDateOfBirth = false
+    @State private var showingDateOfBirthPicker = false
+    @State private var height = ""
+    @State private var weight = ""
+    @State private var activity = ""
+    @State private var deficitTarget = ""
+    @State private var intelligenceMode: IntelligenceMode = .cloudDeepSeek
     @State private var errorMessage: String?
     @State private var isSaving = false
 
@@ -90,7 +101,8 @@ struct OnboardingView: View {
                             }
                         }
                         .disabled(
-                            (step == .intelligence && intelligenceMode == .cloudDeepSeek && apiKey.isEmpty)
+                            (step == .intelligence && !cloudConfigurationIsValid)
+                                || (step == .profile && !profileFieldsAreValid)
                                 || isSaving
                         )
                     }
@@ -98,6 +110,35 @@ struct OnboardingView: View {
             .orbitScrollBackground()
             .navigationTitle("欢迎使用 densoso")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showingDateOfBirthPicker) {
+                NavigationStack {
+                    Form {
+                        DatePicker(
+                            "出生日期",
+                            selection: $dateOfBirthDraft,
+                            in: ...Date(),
+                            displayedComponents: .date
+                        )
+                    }
+                    .navigationTitle("选择出生日期")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("取消") { showingDateOfBirthPicker = false }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("保存") {
+                                dateOfBirth = dateOfBirthDraft
+                                showingDateOfBirthPicker = false
+                            }
+                            .disabled(!hasEditedDateOfBirth)
+                        }
+                    }
+                    .onChange(of: dateOfBirthDraft) { _, _ in
+                        hasEditedDateOfBirth = true
+                    }
+                }
+            }
             .toolbar {
                 if step == .profile {
                     ToolbarItem(placement: .topBarLeading) {
@@ -116,6 +157,7 @@ struct OnboardingView: View {
             Picker("处理方式", selection: $intelligenceMode) {
                 Text("设备端").tag(IntelligenceMode.localOnly)
                 Text("DeepSeek").tag(IntelligenceMode.cloudDeepSeek)
+                Text("Qwen").tag(IntelligenceMode.cloudQwen)
             }
             .pickerStyle(.segmented)
 
@@ -138,6 +180,60 @@ struct OnboardingView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+            Section("云端同意") {
+                Toggle("同意上传我主动提交的健康文字", isOn: $cloudTextConsent)
+                Text("只包含当前主动提交的文字；不会自动上传图片、音频或后台健康数据。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Toggle("允许发送此前与云端助手的聊天记录", isOn: $cloudConversationHistoryConsent)
+                Text("这是独立权限，默认关闭；不影响本轮你主动提交的文字。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                healthContextConsentControls
+            }
+        } else if intelligenceMode == .cloudQwen {
+            Section("Qwen Model Studio") {
+                SecureField("输入 Model Studio Key", text: $qwenAPIKey)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Workspace ID", text: $qwenWorkspaceID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Text("北京区域可选文本和单次 Qwen ASR；Qwen 开放照片在质量门禁完成前不可用，照片默认走 DeepSeek 并需单独授权。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Section("云端同意") {
+                Toggle("同意上传我主动提交的健康文字", isOn: $cloudTextConsent)
+                Toggle("同意在本地转写失败时上传单次临时音频", isOn: $qwenSpeechConsent)
+                Toggle("允许发送此前与云端助手的聊天记录", isOn: $cloudConversationHistoryConsent)
+                Text("这是独立权限，默认关闭；不影响本轮你主动提交的文字。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                healthContextConsentControls
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var healthContextConsentControls: some View {
+        Text("历史健康汇总默认关闭。只勾选你明确同意用于后续云端请求的类别；保存后可在设置中随时撤销。")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        ForEach(CloudHealthContextPolicy.dataClasses, id: \.self) { dataClass in
+            Toggle(
+                "允许上传\(dataClass.healthContextTitle ?? "健康")历史汇总",
+                isOn: Binding(
+                    get: { cloudHealthContextClasses.contains(dataClass) },
+                    set: { granted in
+                        if granted {
+                            cloudHealthContextClasses.insert(dataClass)
+                        } else {
+                            cloudHealthContextClasses.remove(dataClass)
+                        }
+                    }
+                )
+            )
         }
     }
 
@@ -146,9 +242,20 @@ struct OnboardingView: View {
         Section("基础资料") {
             TextField("怎么称呼你", text: $name)
             Picker("性别", selection: $sex) {
+                Text("请选择").tag("")
                 Text("男").tag("male")
                 Text("女").tag("female")
                 Text("其他").tag("other")
+            }
+            Button {
+                dateOfBirthDraft = dateOfBirth ?? (Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date())
+                hasEditedDateOfBirth = false
+                showingDateOfBirthPicker = true
+            } label: {
+                LabeledContent(
+                    "出生日期",
+                    value: dateOfBirth?.formatted(date: .abbreviated, time: .omitted) ?? "请选择"
+                )
             }
             TextField("身高 (cm)", text: $height)
                 .keyboardType(.decimalPad)
@@ -158,6 +265,7 @@ struct OnboardingView: View {
 
         Section("目标") {
             Picker("日常活动量", selection: $activity) {
+                Text("请选择").tag("")
                 Text("久坐不动").tag("sedentary")
                 Text("轻度活动").tag("light")
                 Text("中度活动").tag("moderate")
@@ -166,7 +274,24 @@ struct OnboardingView: View {
             }
             TextField("每日目标缺口 (kcal)", text: $deficitTarget)
                 .keyboardType(.numberPad)
+            Text("出生日期、身高、体重和日常活动量用于估算能量；数据缺失时不会生成虚假的消耗值。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
+    }
+
+    private var profileFieldsAreValid: Bool {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              dateOfBirth != nil,
+              ["male", "female", "other"].contains(sex),
+              let heightValue = Double(height), (80...250).contains(heightValue),
+              let weightValue = Double(weight), (20...500).contains(weightValue),
+              ["sedentary", "light", "moderate", "active", "veryActive"].contains(activity),
+              let targetValue = Int(deficitTarget), (0...5_000).contains(targetValue)
+        else {
+            return false
+        }
+        return true
     }
 
     private var intelligenceExplanation: String {
@@ -175,36 +300,152 @@ struct OnboardingView: View {
             "餐食与训练文字保留在本机。设备端能力不可用时会安全回退，输入不会自动上传或保存。"
         case .cloudDeepSeek:
             "仅把你主动提交的文字发送给 DeepSeek；写入健康数据仍需再次确认。"
+        case .cloudQwen:
+            "仅把你主动提交的文字发送给显式选择的 Qwen；不会静默切换到其他供应商。"
+        }
+    }
+
+    private var cloudConfigurationIsValid: Bool {
+        switch intelligenceMode {
+        case .localOnly:
+            true
+        case .cloudDeepSeek:
+            !apiKey.isEmpty && cloudTextConsent
+        case .cloudQwen:
+            !qwenAPIKey.isEmpty
+                && !qwenWorkspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && cloudTextConsent
         }
     }
 
     private func save() async {
+        guard profileFieldsAreValid,
+              let birthDate = dateOfBirth,
+              let heightValue = Double(height),
+              let weightValue = Double(weight),
+              let targetValue = Int(deficitTarget)
+        else {
+            errorMessage = "请补全称呼、出生日期、性别、身高、体重、活动水平和目标。"
+            return
+        }
         isSaving = true
         errorMessage = nil
         defer { isSaving = false }
 
         do {
+            let operationBarrier = PersistenceOperationBarrier.shared
+            let operationLease = try await operationBarrier.acquireMutationOperation()
+            defer { operationBarrier.release(operationLease) }
             if intelligenceMode == .cloudDeepSeek {
                 try KeychainStore.shared.saveAPIKey(apiKey)
+                try await dependencies.providerGovernanceRepository.setConsent(
+                    provider: .deepSeek,
+                    dataClass: .healthText,
+                    granted: true,
+                    policyVersion: "cloud-health-text-v1"
+                )
+            } else if intelligenceMode == .cloudQwen {
+                try KeychainStore.shared.saveModelStudioAPIKey(qwenAPIKey)
+                dependencies.providerConfiguration.qwenWorkspaceID = qwenWorkspaceID
+                dependencies.providerConfiguration.qwenSpeechFallbackEnabled = qwenSpeechConsent
+                try await dependencies.providerGovernanceRepository.setConsent(
+                    provider: .qwen,
+                    dataClass: .healthText,
+                    granted: true,
+                    policyVersion: "cloud-health-text-v1"
+                )
+                try await dependencies.providerGovernanceRepository.setConsent(
+                    provider: .qwen,
+                    dataClass: .speechAudio,
+                    granted: qwenSpeechConsent,
+                    policyVersion: "qwen-single-audio-v1"
+                )
             }
-            dependencies.intelligencePreferences.mode = intelligenceMode
-
-            let profile = UserProfile(
-                name: name,
-                biologicalSex: sex,
-                dateOfBirth: Date(timeIntervalSince1970: 0),
-                heightCm: Double(height) ?? 170,
-                weightKg: Double(weight) ?? 70,
-                activityLevel: activity,
-                dailyDeficitTarget: Int(deficitTarget) ?? 500
-            )
-            modelContext.insert(profile)
-            try modelContext.save()
+            if intelligenceMode != .localOnly {
+                let provider: ProviderID = intelligenceMode == .cloudDeepSeek ? .deepSeek : .qwen
+                if cloudHealthContextClasses.isEmpty {
+                    let currentPolicy = try await CloudHealthContextPolicy.load(
+                        from: dependencies.providerGovernanceRepository,
+                        provider: provider
+                    )
+                    if !currentPolicy.allowedClasses.isEmpty {
+                        _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+                            provider: provider,
+                            allowedClasses: [],
+                            repository: dependencies.providerGovernanceRepository,
+                            changeSource: .onboarding
+                        )
+                    }
+                } else {
+                    _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+                        provider: provider,
+                        allowedClasses: cloudHealthContextClasses,
+                        repository: dependencies.providerGovernanceRepository,
+                        confirmedAt: Date(),
+                        changeSource: .onboarding
+                    )
+                }
+                if cloudConversationHistoryConsent {
+                    _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+                        provider: provider,
+                        allowed: true,
+                        repository: dependencies.providerGovernanceRepository,
+                        confirmedAt: Date(),
+                        changeSource: .onboarding
+                    )
+                }
+            }
+            let now = Date()
+            let profile = try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
+                try Task.checkCancellation()
+                dependencies.intelligencePreferences.mode = intelligenceMode
+                let profile = UserProfile(
+                    name: name,
+                    biologicalSex: sex,
+                    dateOfBirth: birthDate,
+                    heightCm: heightValue,
+                    weightKg: weightValue,
+                    activityLevel: activity,
+                    dailyDeficitTarget: targetValue
+                )
+                profile.profileNeedsCompletion = false
+                profile.profileKey = "primary"
+                profile.updatedAt = now
+                modelContext.insert(profile)
+                modelContext.insert(
+                    ProfileRevisionRecord(
+                        profileKey: profile.profileKey,
+                        effectiveFrom: now,
+                        dateOfBirth: birthDate,
+                        biologicalSex: sex,
+                        heightCm: heightValue,
+                        weightKg: weightValue,
+                        activityLevel: activity,
+                        source: "onboarding",
+                        createdAt: now
+                    )
+                )
+                modelContext.insert(
+                    WeightRecord(
+                        sourceActionKey: "onboarding-initial-weight-\(UUID().uuidString.lowercased())",
+                        measuredAt: now,
+                        kilograms: weightValue,
+                        source: "manual",
+                        algorithmVersion: "weight-v2",
+                        confidence: 0.9
+                    )
+                )
+                try modelContext.save()
+                return profile
+            }
 
             appState.isOnboarded = true
             appState.userProfile = profile
         } catch {
-            errorMessage = "保存失败：\(error.localizedDescription)"
+            errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .actionConflictFallback
+            ).userMessage
         }
     }
 }

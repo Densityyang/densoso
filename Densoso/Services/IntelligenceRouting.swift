@@ -4,11 +4,13 @@ import Speech
 enum IntelligenceMode: String, CaseIterable, Sendable {
     case localOnly
     case cloudDeepSeek
+    case cloudQwen
 }
 
 enum IntelligencePath: Equatable, Sendable {
     case localOnDevice
     case cloudDeepSeek
+    case cloudQwen
     case manual
 }
 
@@ -46,8 +48,56 @@ struct IntelligenceRoutingPolicy: Sendable {
         switch mode {
         case .cloudDeepSeek:
             .cloudDeepSeek
+        case .cloudQwen:
+            .cloudQwen
         case .localOnly:
             capabilities.onDeviceLanguageModelAvailable ? .localOnDevice : .manual
+        }
+    }
+}
+
+@MainActor
+protocol ProviderSelecting: AnyObject {
+    func provider(for mode: IntelligenceMode) throws -> any TextModelProvider
+}
+
+@MainActor
+final class ProviderRegistry: ProviderSelecting {
+    private let credentialSource: any ProviderCredentialSource
+    private let configuration: ProviderConfigurationPreferences
+    private let transport: any ProviderHTTPTransport
+    private let logSink: any ProviderLogSink
+
+    init(
+        credentialSource: any ProviderCredentialSource = KeychainStore.shared,
+        configuration: ProviderConfigurationPreferences,
+        transport: any ProviderHTTPTransport = URLSessionProviderTransport(),
+        logSink: any ProviderLogSink = NoOpProviderLogSink()
+    ) {
+        self.credentialSource = credentialSource
+        self.configuration = configuration
+        self.transport = transport
+        self.logSink = logSink
+    }
+
+    func provider(for mode: IntelligenceMode) throws -> any TextModelProvider {
+        switch mode {
+        case .cloudDeepSeek:
+            return DeepSeekProvider(
+                credentialSource: credentialSource,
+                transport: transport,
+                logSink: logSink
+            )
+        case .cloudQwen:
+            return QwenProvider(
+                endpoint: try configuration.qwenEndpoint(),
+                capabilities: configuration.qwenRegion.phase3Capabilities,
+                credentialSource: credentialSource,
+                transport: transport,
+                logSink: logSink
+            )
+        case .localOnly:
+            throw ProviderError.unsupportedCapability(.text)
         }
     }
 }
@@ -56,12 +106,13 @@ struct IntelligenceRoutingPolicy: Sendable {
 @Observable
 final class IntelligencePreferences {
     private static let modeKey = "intelligenceMode"
+    static let defaultMode = IntelligenceMode.cloudDeepSeek
 
     var mode: IntelligenceMode {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey) }
     }
 
     init() {
-        mode = IntelligenceMode(rawValue: UserDefaults.standard.string(forKey: Self.modeKey) ?? "") ?? .localOnly
+        mode = IntelligenceMode(rawValue: UserDefaults.standard.string(forKey: Self.modeKey) ?? "") ?? Self.defaultMode
     }
 }

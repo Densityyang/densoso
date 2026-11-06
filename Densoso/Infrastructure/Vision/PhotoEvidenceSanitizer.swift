@@ -11,9 +11,23 @@ enum PhotoEvidenceSanitizer {
         case unableToEncode
     }
 
-    static func sanitizedJPEG(from imageData: Data, compressionQuality: CGFloat = 0.9) throws -> Data {
-        guard let source = CGImageSourceCreateWithData(imageData as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+    static func sanitizedJPEG(
+        from imageData: Data,
+        maximumPixelSize: Int = 1_280,
+        compressionQuality: CGFloat = 0.75
+    ) throws -> Data {
+        guard maximumPixelSize > 0,
+              let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(
+                  source,
+                  0,
+                  [
+                      kCGImageSourceCreateThumbnailFromImageAlways: true,
+                      kCGImageSourceCreateThumbnailWithTransform: true,
+                      kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+                      kCGImageSourceShouldCacheImmediately: true,
+                  ] as CFDictionary
+              ) else {
             throw SanitizationError.unreadableImage
         }
 
@@ -29,7 +43,11 @@ enum PhotoEvidenceSanitizer {
         CGImageDestinationAddImage(
             destination,
             image,
-            [kCGImageDestinationLossyCompressionQuality: compressionQuality] as CFDictionary
+            [
+                kCGImageDestinationLossyCompressionQuality: min(max(compressionQuality, 0), 1),
+                kCGImageMetadataShouldExcludeGPS: true,
+                kCGImageMetadataShouldExcludeXMP: true,
+            ] as CFDictionary
         )
         guard CGImageDestinationFinalize(destination) else {
             throw SanitizationError.unableToEncode

@@ -17,15 +17,40 @@ enum KeychainError: Error, LocalizedError {
     }
 }
 
-final class KeychainStore {
+final class KeychainStore: @unchecked Sendable {
     nonisolated(unsafe) static let shared = KeychainStore()
 
     private let service = "com.densoso.keychain"
-    private let apiKeyAccount = "deepseek_api_key"
+    private let deepSeekAPIKeyAccount = "deepseek_api_key"
+    private let modelStudioAPIKeyAccount = "model_studio_api_key"
 
     private init() {}
 
     func saveAPIKey(_ key: String) throws {
+        try saveCredential(key, account: deepSeekAPIKeyAccount)
+    }
+
+    func readAPIKey() throws -> String? {
+        try readCredential(account: deepSeekAPIKeyAccount)
+    }
+
+    func deleteAPIKey() throws {
+        try deleteCredential(account: deepSeekAPIKeyAccount)
+    }
+
+    func saveModelStudioAPIKey(_ key: String) throws {
+        try saveCredential(key, account: modelStudioAPIKeyAccount)
+    }
+
+    func readModelStudioAPIKey() throws -> String? {
+        try readCredential(account: modelStudioAPIKeyAccount)
+    }
+
+    func deleteModelStudioAPIKey() throws {
+        try deleteCredential(account: modelStudioAPIKeyAccount)
+    }
+
+    private func saveCredential(_ key: String, account: String) throws {
         guard let data = key.data(using: .utf8) else {
             throw KeychainError.conversionFailed
         }
@@ -33,7 +58,7 @@ final class KeychainStore {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: apiKeyAccount,
+            kSecAttrAccount as String: account,
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
@@ -43,7 +68,7 @@ final class KeychainStore {
             let updateQuery: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: service,
-                kSecAttrAccount as String: apiKeyAccount
+                kSecAttrAccount as String: account
             ]
             let attributesToUpdate: [String: Any] = [
                 kSecValueData as String: data
@@ -57,11 +82,11 @@ final class KeychainStore {
         }
     }
 
-    func readAPIKey() throws -> String? {
+    private func readCredential(account: String) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: apiKeyAccount,
+            kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -84,11 +109,11 @@ final class KeychainStore {
         return key
     }
 
-    func deleteAPIKey() throws {
+    private func deleteCredential(account: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: apiKeyAccount
+            kSecAttrAccount as String: account
         ]
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {

@@ -1,0 +1,112 @@
+[
+  {
+    "id": "synthetic:rice:cooked",
+    "name": "米饭(熟)",
+    "aliases": ["熟米饭", "白米饭", "米饭", "一碗米饭", "蒸米饭", "白饭", "熟白米", "米饭熟", "软米饭", "家常米饭"],
+    "preparation": "cooked",
+    "category": "staple",
+    "edibleFraction": 1,
+    "nutrients": {"energyKcalPer100Grams": 116, "proteinGramsPer100Grams": 2.6, "fatGramsPer100Grams": 0.3, "carbohydrateGramsPer100Grams": 25.9},
+    "isCookedComposite": false,
+    "sourceVersion": "gate05-synthetic-v1"
+  },
+  {
+    "id": "synthetic:rice:raw",
+    "name": "大米(生)",
+    "aliases": ["生大米", "大米", "未煮大米", "生米", "白米生重", "大米生", "干大米", "生白米", "称重大米", "大米原料"],
+    "preparation": "raw",
+    "category": "staple",
+    "edibleFraction": 1,
+    "nutrients": {"energyKcalPer100Grams": 346, "proteinGramsPer100Grams": 7.4, "fatGramsPer100Grams": 0.8, "carbohydrateGramsPer100Grams": 77.9},
+    "isCookedComposite": false,
+    "sourceVersion": "gate05-synthetic-v1"
+  },
+  {
+    "id": "synthetic:chicken:raw",
+    "name": "鸡胸肉(生)",
+    "aliases": ["生鸡胸", "鸡胸生肉", "未熟鸡胸", "鸡胸肉生重", "生鸡胸肉", "鸡胸原料", "鲜鸡胸", "生的鸡胸", "鸡胸肉原重", "白肉鸡胸生"],
+    "preparation": "raw",
+    "category": "protein",
+    "edibleFraction": 1,
+    "nutrients": {"energyKcalPer100Grams": 133, "proteinGramsPer100Grams": 19.4, "fatGramsPer100Grams": 5, "carbohydrateGramsPer100Grams": 2.5},
+    "isCookedComposite": false,
+    "sourceVersion": "gate05-synthetic-v1"
+  },
+  {
+    "id": "synthetic:chicken:cooked",
+    "name": "鸡胸肉(熟)",
+    "aliases": ["熟鸡胸", "煮鸡胸", "烤鸡胸", "鸡胸熟肉", "熟鸡胸肉", "即食鸡胸", "水煮鸡胸", "煎鸡胸", "鸡胸肉熟重", "已熟鸡胸"],
+    "preparation": "cooked",
+    "category": "protein",
+    "edibleFraction": 1,
+    "nutrients": {"energyKcalPer100Grams": 165, "proteinGramsPer100Grams": 31, "fatGramsPer100Grams": 3.6, "carbohydrateGramsPer100Grams": 0},
+    "isCookedComposite": false,
+    "sourceVersion": "gate05-synthetic-v1"
+  },
+  {
+    "id": "synthetic:tofu:plain",
+    "name": "北豆腐",
+    "aliases": ["豆腐", "老豆腐", "白豆腐", "北方豆腐", "硬豆腐", "原味豆腐", "豆腐块", "鲜豆腐", "普通豆腐", "豆制品豆腐"],
+    "preparation": "unknown",
+    "category": "protein",
+    "edibleFraction": 1,
+    "nutrients": {"energyKcalPer100Grams": 98, "proteinGramsPer100Grams": 12.2, "fatGramsPer100Grams": 4.8, "carbohydrateGramsPer100Grams": 2},
+    "isCookedComposite": false,
+    "sourceVersion": "gate05-synthetic-v1"
+  },
+  {
+    "id": "synthetic:tofu:braised",
+    "name": "红烧豆腐",
+    "aliases": ["烧豆腐", "家常红烧豆腐", "红烧豆腐块", "酱烧豆腐", "熟红烧豆腐", "红烧老豆腐", "红烧北豆腐", "豆腐红烧", "红烧豆腐成菜", "一盘红烧豆腐"],
+    "preparation": "cooked",
+    "category": "preparedDish",
+    "edibleFraction": 1,
+    "nutrients": {"energyKcalPer100Grams": 150, "proteinGramsPer100Grams": 8, "fatGramsPer100Grams": 10, "carbohydrateGramsPer100Grams": 5},
+    "isCookedComposite": true,
+    "sourceVersion": "gate05-synthetic-v1"
+  },
+  {
+    "id": "synthetic:apple",
+    "name": "苹果",
+    "aliases": ["红苹果", "青苹果", "鲜苹果", "苹果果肉", "一个苹果", "切片苹果", "水果苹果", "脆苹果", "甜苹果", "去核苹果"],
+    "preparation": "raw",
+    "category": "fruit",
+    "edibleFraction": 0.76,
+    "nutrients": {"energyKcalPer100Grams": 52, "proteinGramsPer100Grams": 0.2, "fatGramsPer100Grams": 0.2, "carbohydrateGramsPer100Grams": 13.5},
+    "isCookedComposite": false,
+    "sourceVersion": "gate05-synthetic-v1"
+  },
+  {
+    "id": "synthetic:banana",
+    "name": "香蕉",
+    "aliases": ["一根香蕉", "鲜香蕉", "香蕉果肉", "黄香蕉", "水果香蕉", "熟香蕉", "去皮香蕉", "甜香蕉", "香蕉一根", "普通香蕉"],
+    "preparation": "raw",
+    "category": "fruit",
+    "edibleFraction": 0.59,
+    "nutrients": {"energyKcalPer100Grams": 91, "proteinGramsPer100Grams": 1.4, "fatGramsPer100Grams": 0.2, "carbohydrateGramsPer100Grams": 22},
+    "isCookedComposite": false,
+    "sourceVersion": "gate05-synthetic-v1"
+  },
+  {
+    "id": "synthetic:noodles:cooked",
+    "name": "面条(熟)",
+    "aliases": ["熟面条", "煮面", "一碗面", "白面条", "汤面面条", "面条熟重", "水煮面条", "普通熟面", "熟挂面", "面条成品"],
+    "preparation": "cooked",
+    "category": "staple",
+    "edibleFraction": 1,
+    "nutrients": {"energyKcalPer100Grams": 110, "proteinGramsPer100Grams": 3.5, "fatGramsPer100Grams": 0.5, "carbohydrateGramsPer100Grams": 22},
+    "isCookedComposite": false,
+    "sourceVersion": "gate05-synthetic-v1"
+  },
+  {
+    "id": "synthetic:oil",
+    "name": "食用油",
+    "aliases": ["花生油", "植物油", "炒菜油", "烹饪油", "菜籽油", "大豆油", "调和油", "油脂", "食用植物油", "厨房用油"],
+    "preparation": "unknown",
+    "category": "oil",
+    "edibleFraction": 1,
+    "nutrients": {"energyKcalPer100Grams": 899, "proteinGramsPer100Grams": 0, "fatGramsPer100Grams": 99.9, "carbohydrateGramsPer100Grams": 0},
+    "isCookedComposite": false,
+    "sourceVersion": "gate05-synthetic-v1"
+  }
+]

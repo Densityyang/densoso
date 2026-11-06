@@ -1,13 +1,41 @@
+import DensosoDomain
 import Foundation
 import GRDB
 
 /// 本地食材库（只读 SQLite + FTS5）
 final class FoodDatabase {
+    private struct FoodCompositionSourceRecord: Decodable {
+        let nutrientBasis: String?
+        let massBasis: String?
+        let dataQuality: String?
+        let sourceName: String?
+        let sourceDataType: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case nutrientBasis
+            case massBasis
+            case dataQuality
+            case sourceName
+            case sourceDataType
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            nutrientBasis = try? values.decodeIfPresent(String.self, forKey: .nutrientBasis)
+            massBasis = try? values.decodeIfPresent(String.self, forKey: .massBasis)
+            dataQuality = try? values.decodeIfPresent(String.self, forKey: .dataQuality)
+            sourceName = try? values.decodeIfPresent(String.self, forKey: .sourceName)
+            sourceDataType = try? values.decodeIfPresent(String.self, forKey: .sourceDataType)
+        }
+    }
+
     struct FoodMatch {
         let item: FoodItem
         let score: Double
     }
     private let dbQueue: DatabaseQueue
+    private let catalogCacheLock = NSLock()
+    private var catalogEntriesCache: [FoodCatalogEntry]?
 
     init() throws {
         guard let dbURL = Bundle.main.url(forResource: "food_composition", withExtension: "db") else {
@@ -36,13 +64,23 @@ final class FoodDatabase {
                 t.primaryKey("id", .integer)
                 t.column("name", .text).notNull()
                 t.column("alias", .text)
+                t.column("preparation", .text)
+                t.column("isCookedComposite", .integer)
                 t.column("category", .text).notNull()
                 t.column("edible", .integer).notNull().defaults(to: 100)
                 t.column("energyKcal", .integer).notNull()
-                t.column("proteinG", .double).notNull().defaults(to: 0)
-                t.column("fatG", .double).notNull().defaults(to: 0)
-                t.column("carbohydrateG", .double).notNull().defaults(to: 0)
+                t.column("proteinG", .double)
+                t.column("fatG", .double)
+                t.column("carbohydrateG", .double)
                 t.column("fiberG", .double)
+                t.column("energyRaw", .text)
+                t.column("energyUnit", .text)
+                t.column("sourceID", .text)
+                t.column("sourceRecordID", .text)
+                t.column("sourceVersion", .text)
+                t.column("licenseStatus", .text)
+                t.column("sourceRecordJSON", .text)
+                t.column("importWarningsJSON", .text)
             }
             try db.create(index: "idx_food_name", on: "food_items", columns: ["name"])
             try db.create(index: "idx_food_category", on: "food_items", columns: ["category"])
@@ -156,6 +194,54 @@ final class FoodDatabase {
         try dbQueue.read { db in
             try String.fetchAll(db, sql: "SELECT DISTINCT category FROM food_items ORDER BY category")
         }
+    }
+
+    func catalogEntries() throws -> [FoodCatalogEntry] {
+        catalogCacheLock.lock()
+        defer { catalogCacheLock.unlock() }
+        if let catalogEntriesCache { return catalogEntriesCache }
+
+        let items = try dbQueue.read { db in try FoodItem.order(Column("id")).fetchAll(db) }
+        let entries = items.map { item in
+            let sourceRecord = item.sourceRecordJSON
+                .flatMap { $0.data(using: .utf8) }
+                .flatMap { try? JSONDecoder().decode(FoodCompositionSourceRecord.self, from: $0) }
+            let importWarnings = item.importWarningsJSON
+                .flatMap { $0.data(using: .utf8) }
+                .flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+            return FoodCatalogEntry(
+                id: "food:\(item.id)",
+                localFoodID: String(item.id),
+                name: item.name,
+                aliases: (item.alias ?? "")
+                    .split(separator: "|")
+                    .map(String.init),
+                preparation: FoodPreparation(rawValue: item.preparation ?? "") ?? .unknown,
+                category: item.category,
+                edibleFraction: Double(item.edible) / 100,
+                nutrients: FoodNutrientProfile(
+                    energyKcalPer100Grams: Double(item.energyKcal),
+                    proteinGramsPer100Grams: item.proteinG,
+                    fatGramsPer100Grams: item.fatG,
+                    carbohydrateGramsPer100Grams: item.carbohydrateG
+                ),
+                isCookedComposite: item.isCookedComposite == true,
+                sourceVersion: item.sourceVersion ?? "unknown-food-data-version",
+                sourceID: item.sourceID,
+                sourceRecordID: item.sourceRecordID,
+                licenseStatus: item.licenseStatus,
+                dataQuality: sourceRecord?.dataQuality,
+                nutrientBasis: sourceRecord?.nutrientBasis,
+                massBasis: sourceRecord?.massBasis,
+                energyRaw: item.energyRaw,
+                energyUnit: item.energyUnit,
+                sourceName: sourceRecord?.sourceName,
+                sourceDataType: sourceRecord?.sourceDataType,
+                importWarnings: importWarnings
+            )
+        }
+        catalogEntriesCache = entries
+        return entries
     }
 
     var count: Int {

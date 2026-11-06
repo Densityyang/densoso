@@ -1,0 +1,13 @@
+{
+  "model": "qwen3.7-flash-2026-07-15",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"labels\":[\"米饭\"],\"isOccluded\":false,\"foodID\":\"food:2\"}"
+      }
+    }
+  ]
+}
