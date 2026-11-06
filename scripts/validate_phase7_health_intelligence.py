@@ -126,14 +126,15 @@ def main() -> int:
     normalized_read_model = " ".join(read_model.split())
     available_gated_deficit = " ".join(
         """
-        let dailyDeficit = projectionReadStates[HealthMetricID.activeEnergy.rawValue] == .available
+        let dailyDeficit = nutritionRecordStatus == .complete
+            && projectionReadStates[HealthMetricID.activeEnergy.rawValue] == .available
             ? metricReadResult?.deficit.value?.likely
             : nil
         """.split()
     )
     if available_gated_deficit not in normalized_read_model:
         errors.append(
-            "daily deficit must be read from canonical metrics only when active-energy read state is available"
+            "daily deficit must require complete nutrition and available active-energy state before reading canonical metrics"
         )
     if "MealRecord" in read_model or "mealPredicate" in read_model:
         errors.append("HealthIntelligence must consume canonical DailyMetrics instead of summing meals again")
