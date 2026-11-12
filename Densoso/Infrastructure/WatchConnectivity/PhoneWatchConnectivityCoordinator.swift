@@ -58,6 +58,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     @ObservationIgnored private var isResumingPendingCommands = false
     @ObservationIgnored private var needsAnotherResumePass = false
     @ObservationIgnored private var modelContextSaveObserver: NSObjectProtocol?
+    @ObservationIgnored private var applicationContextRefreshTask: Task<Void, Never>?
     private var snapshotRefreshOverride: WatchSnapshotRefreshState?
     private static let snapshotRevisionDefaultsKey = "densoso.watch.snapshot.revision.v1"
 
@@ -92,13 +93,28 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
             queue: .main
         ) { [weak self] notification in
             guard Self.shouldRefreshContext(for: notification) else { return }
-            Task { @MainActor [weak self] in self?.refreshApplicationContext() }
+            Task { @MainActor [weak self] in self?.scheduleApplicationContextRefresh() }
         }
     }
 
     deinit {
+        applicationContextRefreshTask?.cancel()
         if let modelContextSaveObserver {
             NotificationCenter.default.removeObserver(modelContextSaveObserver)
+        }
+    }
+
+    private func scheduleApplicationContextRefresh() {
+        applicationContextRefreshTask?.cancel()
+        applicationContextRefreshTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.applicationContextRefreshTask = nil
+            self.refreshApplicationContext()
         }
     }
 

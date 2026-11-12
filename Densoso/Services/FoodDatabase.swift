@@ -107,29 +107,31 @@ final class FoodDatabase {
     }
 
     func searchByPrefix(_ prefix: String, limit: Int = 20) throws -> [FoodItem] {
-        let sanitized = sanitizeLikeToken(prefix)
-        guard !sanitized.isEmpty else { return [] }
+        let escaped = escapeLikeToken(prefix)
+        guard !escaped.isEmpty else { return [] }
+        let primaryPattern = "\(escaped)%"
+        let secondaryPattern = "%|\(escaped)%"
         return try dbQueue.read { db in
             try FoodItem
                 .filter(
-                    Column("name").like("\(sanitized)%") ||
-                    Column("alias").like("\(sanitized)%") ||
-                    Column("alias").like("%|\(sanitized)%")
+                    sql: "(name LIKE ? ESCAPE '\\' OR alias LIKE ? ESCAPE '\\' OR alias LIKE ? ESCAPE '\\')",
+                    arguments: [primaryPattern, primaryPattern, secondaryPattern]
                 )
                 .limit(limit)
                 .fetchAll(db)
         }
     }
 
-    /// 模糊搜索（包含子串匹配）—— GRDB 参数化查询，移除用户输入中的 SQL LIKE 通配符
+    /// 模糊搜索（包含子串匹配）—— GRDB 参数化查询，并将用户输入中的 LIKE 通配符按字面匹配。
     func search(query: String, limit: Int = 10) throws -> [FoodItem] {
-        let sanitized = sanitizeLikeToken(query)
-        guard !sanitized.isEmpty else { return [] }
+        let escaped = escapeLikeToken(query)
+        guard !escaped.isEmpty else { return [] }
+        let pattern = "%\(escaped)%"
         return try dbQueue.read { db in
             try FoodItem
                 .filter(
-                    Column("name").like("%\(sanitized)%") ||
-                    Column("alias").like("%\(sanitized)%")
+                    sql: "(name LIKE ? ESCAPE '\\' OR alias LIKE ? ESCAPE '\\')",
+                    arguments: [pattern, pattern]
                 )
                 .order(Column("category"))
                 .limit(limit)
@@ -165,11 +167,12 @@ final class FoodDatabase {
         return Array(ranked.prefix(max(0, limit)))
     }
 
-    private func sanitizeLikeToken(_ value: String) -> String {
+    private func escapeLikeToken(_ value: String) -> String {
         value
-            .replacingOccurrences(of: "%", with: "")
-            .replacingOccurrences(of: "_", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
     }
 
     private func normalize(_ value: String) -> String {

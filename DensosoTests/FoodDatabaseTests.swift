@@ -66,7 +66,7 @@ final class FoodDatabaseTests: XCTestCase {
         XCTAssertEqual(entry.importWarnings, ["fixture review warning"])
     }
 
-    func testPipeSeparatedSecondaryAliasesRankAsExactAndPrefixMatchesAndSanitizeWildcards() throws {
+    func testPipeSeparatedAliasesRankExactlyAndLikeWildcardsAreEscaped() throws {
         let multiAliasSeed = Data(
             #"""
             [
@@ -81,6 +81,24 @@ final class FoodDatabaseTests: XCTestCase {
                 "energyUnit": "kcal/100g",
                 "sourceID": "fixture-food-source",
                 "sourceRecordID": "fixture-tomato",
+                "sourceVersion": "fixture-v1",
+                "licenseStatus": "verified",
+                "proteinG": 0.9,
+                "fatG": 0.2,
+                "carbohydrateG": 4.0,
+                "fiberG": 1.2
+              },
+              {
+                "id": 2,
+                "name": "百分%食品",
+                "alias": "_下划线|反\\斜线",
+                "category": "其他",
+                "edible": 100,
+                "energyKcal": 19,
+                "energyRaw": "19",
+                "energyUnit": "kcal/100g",
+                "sourceID": "fixture-food-source",
+                "sourceRecordID": "fixture-wildcard-food",
                 "sourceVersion": "fixture-v1",
                 "licenseStatus": "verified",
                 "proteinG": 0.9,
@@ -104,8 +122,9 @@ final class FoodDatabaseTests: XCTestCase {
         let prefixItems = try database.searchByPrefix("西红")
         XCTAssertEqual(prefixItems.map(\.name), ["牛番茄"])
 
-        XCTAssertTrue(try database.search(query: "%").isEmpty)
-        XCTAssertTrue(try database.searchByPrefix("_").isEmpty)
+        XCTAssertEqual(try database.search(query: "%").map(\.name), ["百分%食品"])
+        XCTAssertEqual(try database.searchByPrefix("_").map(\.name), ["百分%食品"])
+        XCTAssertEqual(try database.search(query: "\\").map(\.name), ["百分%食品"])
     }
 
     private var seedData: Data {

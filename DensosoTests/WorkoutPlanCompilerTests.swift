@@ -52,6 +52,12 @@ final class WorkoutPlanCompilerTests: XCTestCase {
         XCTAssertThrowsError(try WorkoutPlanCompiler().validate(unscheduled)) {
             XCTAssertEqual($0 as? WorkoutPlanCompileError, .scheduleDateRequired)
         }
+
+        XCTAssertThrowsError(
+            try WorkoutPlanCompiler().validate(valid, asOf: valid.scheduledAt!)
+        ) {
+            XCTAssertEqual($0 as? WorkoutPlanCompileError, .scheduleDateInPast)
+        }
     }
 
     func testLegacyStrengthPlanIsRejectedAndNotCompiledAsAWorkout() {

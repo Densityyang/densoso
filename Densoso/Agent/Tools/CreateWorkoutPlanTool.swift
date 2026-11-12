@@ -53,7 +53,7 @@ struct CreateWorkoutPlanTool: ConfirmationRequiredTool {
             scheduledAt: scheduledAt
         )
         do {
-            try WorkoutPlanCompiler().validate(draft)
+            try WorkoutPlanCompiler().validate(draft, asOf: context.currentToolTimeAnchor)
         } catch {
             throw DraftError.invalidWorkoutPlan
         }

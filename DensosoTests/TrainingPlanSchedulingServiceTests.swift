@@ -123,6 +123,65 @@ final class TrainingPlanSchedulingServiceTests: XCTestCase {
         XCTAssertEqual(Set(updated.scheduledSessionIDs), Set([pastScheduledSessionID, futurePendingSessionID]))
     }
 
+    func testRetrySkipsExpiredUnscheduledSessionAndSchedulesLaterFutureSession() async throws {
+        let (container, service, client) = try makeService()
+        let actionID = UUID()
+        let now = Date()
+        let expiredSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000601")!
+        let futureSessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000602")!
+        let draft = TrainingPlanDraft(
+            name: "跳过过期课次计划",
+            createdAt: now.addingTimeInterval(-172_800),
+            sessions: [
+                TrainingSessionDraft(
+                    id: expiredSessionID,
+                    date: now.addingTimeInterval(-3_600),
+                    activity: .walking,
+                    goal: .timeMinutes(30),
+                    location: .outdoor,
+                    recommendedIntensity: .easy,
+                    reason: "已过期且尚未调度的步行。"
+                ),
+                TrainingSessionDraft(
+                    id: futureSessionID,
+                    date: now.addingTimeInterval(86_400),
+                    activity: .running,
+                    goal: .timeMinutes(25),
+                    location: .outdoor,
+                    recommendedIntensity: .easy,
+                    reason: "仍可调度的次日慢跑。"
+                ),
+            ]
+        )
+        let context = ModelContext(container)
+        let entry = ConfirmedTrainingPlanEntry(
+            actionID: actionID,
+            idempotencyKey: "expired-retry-\(actionID.uuidString.lowercased())",
+            draft: draft,
+            state: .retryable
+        )
+        context.insert(
+            ScheduleEvent(
+                date: draft.createdAt,
+                title: draft.name,
+                notes: try entry.encodedNotes(),
+                startTime: draft.createdAt
+            )
+        )
+        try context.save()
+
+        try await service.scheduleConfirmedPlan(actionID: actionID)
+
+        XCTAssertEqual(client.scheduledPlanIDs, Set([futureSessionID]))
+        let updated = try XCTUnwrap(
+            try ModelContext(container).fetch(FetchDescriptor<ScheduleEvent>())
+                .compactMap { ConfirmedTrainingPlanEntry.decode(notes: $0.notes) }
+                .first
+        )
+        XCTAssertEqual(updated.state, .scheduled)
+        XCTAssertEqual(updated.scheduledSessionIDs, [futureSessionID])
+    }
+
     func testConfirmedPlanHistoryPagesAcrossThe64EventBoundary() async throws {
         let (container, service, client) = try makeService()
         let context = ModelContext(container)

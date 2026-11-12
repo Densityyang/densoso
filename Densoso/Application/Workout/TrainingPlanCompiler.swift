@@ -57,18 +57,19 @@ struct TrainingPlanCompiler {
 
     func compile(
         _ draft: TrainingPlanDraft,
-        excludingScheduledSessionIDs scheduledSessionIDs: Set<UUID> = []
+        excludingScheduledSessionIDs scheduledSessionIDs: Set<UUID> = [],
+        asOf now: Date = Date()
     ) throws -> CompiledTrainingPlan {
         if let validationError = draft.validationError {
             throw TrainingPlanCompileError.invalidDraft(validationError)
         }
-        guard draft.sessions
-            .filter({ !$0.isRestDay && !scheduledSessionIDs.contains($0.id) })
-            .allSatisfy({ $0.date > Date() }) else {
-            throw TrainingPlanCompileError.sessionInPast
-        }
 
         let sessions = try draft.sessions
+            .filter { session in
+                !session.isRestDay
+                    && !scheduledSessionIDs.contains(session.id)
+                    && session.date > now
+            }
             .sorted {
                 if $0.date != $1.date { return $0.date < $1.date }
                 return $0.id.uuidString < $1.id.uuidString
@@ -90,7 +91,7 @@ struct TrainingPlanCompiler {
                 )
                 return CompiledTrainingSession(
                     draft: session,
-                    workoutPlan: try workoutPlanCompiler.compile(singleSessionDraft)
+                    workoutPlan: try workoutPlanCompiler.compile(singleSessionDraft, asOf: now)
                 )
             }
 

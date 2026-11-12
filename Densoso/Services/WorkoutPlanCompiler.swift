@@ -13,6 +13,7 @@ enum WorkoutPlanCompileError: Equatable, SharedErrorDescribing {
     case unsupportedActivity
     case unsupportedGoal
     case scheduleDateRequired
+    case scheduleDateInPast
     case scheduleAuthorizationDenied
     case schedulingUnavailable
     case confirmedPlanNotFound
@@ -41,7 +42,7 @@ enum WorkoutPlanCompileError: Equatable, SharedErrorDescribing {
                 reason: .workoutPlanConflict
             )
         case .emptyName, .invalidTimeGoal, .invalidDistanceGoal, .invalidLegacyStrengthData,
-             .unsupportedActivity, .unsupportedGoal, .scheduleDateRequired:
+             .unsupportedActivity, .unsupportedGoal, .scheduleDateRequired, .scheduleDateInPast:
             SharedErrorDescriptor(
                 code: .toolArgumentsInvalid,
                 userMessage: "训练计划暂时无法安排，请检查计划内容后重试。",
@@ -64,7 +65,7 @@ private func workoutPlanIsAlreadyScheduled(_ planID: UUID) async -> Bool {
 /// Validates and compiles a user-confirmed single-goal draft into WorkoutKit.
 /// Legacy set fields are rejected and are never passed to Apple's scheduler.
 struct WorkoutPlanCompiler {
-    func validate(_ draft: WorkoutPlanDraft) throws {
+    func validate(_ draft: WorkoutPlanDraft, asOf referenceDate: Date = Date()) throws {
         guard !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw WorkoutPlanCompileError.emptyName
         }
@@ -74,8 +75,11 @@ struct WorkoutPlanCompiler {
         guard draft.strengthSets.isEmpty else {
             throw WorkoutPlanCompileError.invalidLegacyStrengthData
         }
-        guard draft.scheduledAt != nil else {
+        guard let scheduledAt = draft.scheduledAt else {
             throw WorkoutPlanCompileError.scheduleDateRequired
+        }
+        guard scheduledAt > referenceDate else {
+            throw WorkoutPlanCompileError.scheduleDateInPast
         }
 
         switch draft.goal {
@@ -101,8 +105,8 @@ struct WorkoutPlanCompiler {
         }
     }
 
-    func compile(_ draft: WorkoutPlanDraft) throws -> WorkoutPlan {
-        try validate(draft)
+    func compile(_ draft: WorkoutPlanDraft, asOf referenceDate: Date = Date()) throws -> WorkoutPlan {
+        try validate(draft, asOf: referenceDate)
 
         let activity = healthKitActivity(for: draft.activity)
         let location = healthKitLocation(for: draft.location)

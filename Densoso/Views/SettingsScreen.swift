@@ -1052,9 +1052,7 @@ struct SettingsScreen: View {
 
             let restoredProfile = try? UserProfileSingletonPolicy.primary(in: modelContext)
             appState.userProfile = restoredProfile
-            if restoredProfile != nil {
-                appState.isOnboarded = true
-            }
+            appState.isOnboarded = restoredProfile != nil
             await loadGoalFields()
             await refreshProviderGovernance()
 
