@@ -57,7 +57,7 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
     @ObservationIgnored private var processingMessageIDs = Set<UUID>()
     @ObservationIgnored private var isResumingPendingCommands = false
     @ObservationIgnored private var needsAnotherResumePass = false
-    @ObservationIgnored private var modelContextSaveObserver: NSObjectProtocol?
+    @ObservationIgnored nonisolated(unsafe) private var modelContextSaveObserver: NSObjectProtocol?
     @ObservationIgnored private var applicationContextRefreshTask: Task<Void, Never>?
     private var snapshotRefreshOverride: WatchSnapshotRefreshState?
     private static let snapshotRevisionDefaultsKey = "densoso.watch.snapshot.revision.v1"
