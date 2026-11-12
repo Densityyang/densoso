@@ -98,8 +98,8 @@ final class TrainingPlanSchedulingServiceTests: XCTestCase {
             actionID: actionID,
             idempotencyKey: "partial-retry-\(actionID.uuidString.lowercased())",
             draft: draft,
-            state: .retryable,
-            scheduledSessionIDs: [pastScheduledSessionID]
+            scheduledSessionIDs: [pastScheduledSessionID],
+            state: .retryable
         )
         context.insert(
             ScheduleEvent(
