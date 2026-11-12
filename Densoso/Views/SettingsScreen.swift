@@ -1066,9 +1066,22 @@ struct SettingsScreen: View {
                 }
             } else {
                 let healthRepository = HealthRepository(modelContext: modelContext)
-                await dependencies.healthKitSyncCoordinator.purgeUnauthorizedHealthSnapshotIfNeeded(
-                    using: healthRepository
-                )
+                let healthContextExportGate = dependencies.healthContextExportGate
+                let foregroundPurgeHoldToken = healthContextExportGate.ensureForegroundPurgeHold()
+                do {
+                    _ = try await dependencies.healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(
+                        using: healthRepository
+                    )
+                    healthContextExportGate.releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(
+                        foregroundPurgeHoldToken,
+                        healthKitCacheMayRemain: false
+                    )
+                    if healthContextExportGate.isOpen {
+                        dependencies.healthIntelligenceService.allowBriefRefreshAfterSuccessfulHealthSnapshotPurge()
+                    }
+                } catch {
+                    warnings.append("备份数据已恢复，但未授权的 Apple 健康数据缓存尚未清理；健康数据云端导出保持关闭，系统会稍后重试。")
+                }
             }
             await refreshDiagnostics()
             dependencies.watchConnectivityCoordinator.refreshApplicationContext()
