@@ -42,6 +42,11 @@ actor SwiftDataProviderGovernanceRepository: ProviderGovernanceRepository, Cloud
         descriptor.fetchLimit = 1
         do {
             let existingRecord = try modelContext.fetch(descriptor).first
+            if let existingRecord,
+               existingRecord.granted == granted,
+               existingRecord.policyVersion == policyVersion {
+                return
+            }
             let now = max(
                 Date(),
                 (existingRecord?.decidedAt ?? .distantPast).addingTimeInterval(0.001)

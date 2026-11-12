@@ -54,13 +54,13 @@ struct CreateTrainingPlanTool: ConfirmationRequiredTool {
               let arguments = try? JSONDecoder().decode(Arguments.self, from: data) else {
             throw ProviderError.schemaViolation(path: "trainingPlan")
         }
+        let now = context.currentToolTimeAnchor
         let sessions = try arguments.sessions.map(makeSession)
-        let draft = TrainingPlanDraft(name: arguments.name, sessions: sessions)
+        let draft = TrainingPlanDraft(name: arguments.name, createdAt: now, sessions: sessions)
         guard draft.validationError == nil else {
             throw ProviderError.schemaViolation(path: "trainingPlan")
         }
         let calendar = Calendar.current
-        let now = Date()
         let today = calendar.startOfDay(for: now)
         guard let latestDate = calendar.date(byAdding: .day, value: 31, to: today),
               sessions.allSatisfy({
@@ -73,8 +73,15 @@ struct CreateTrainingPlanTool: ConfirmationRequiredTool {
         return .trainingPlan(draft)
     }
 
+    private static func parseISO8601Date(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)
+    }
+
     private func makeSession(_ arguments: SessionArguments) throws -> TrainingSessionDraft {
-        guard let date = ISO8601DateFormatter().date(from: arguments.date) else {
+        guard let date = Self.parseISO8601Date(arguments.date) else {
             throw ProviderError.schemaViolation(path: "trainingPlan.sessions.date")
         }
 

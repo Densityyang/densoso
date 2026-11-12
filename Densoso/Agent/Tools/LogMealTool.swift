@@ -13,6 +13,13 @@ struct LogMealTool: ConfirmationRequiredTool {
         self.recipePriorCatalogOverride = recipePriorCatalog
     }
 
+    private static func parseISO8601Date(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)
+    }
+
     var definition: ToolSchema {
         .strictObject(
             name: "log_meal",
@@ -110,7 +117,7 @@ struct LogMealTool: ConfirmationRequiredTool {
 
         let date: Date
         if let occurredAt = arguments.occurredAt {
-            guard let parsed = ISO8601DateFormatter().date(from: occurredAt) else {
+            guard let parsed = Self.parseISO8601Date(occurredAt) else {
                 throw DraftError.invalidMeal
             }
             date = parsed

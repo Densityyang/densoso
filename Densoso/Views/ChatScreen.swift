@@ -120,6 +120,9 @@ struct ChatScreen: View {
             .onChange(of: dependencies.agentSession.restoredVisibleMessages.count) { _, _ in
                 hydratePersistedMessagesIfNeeded()
             }
+            .onChange(of: dependencies.agentSession.restoredMessagesRevision) { _, _ in
+                hydratePersistedMessagesIfNeeded(forceReload: true)
+            }
             .onChange(of: dependencies.watchConnectivityCoordinator.pendingTranscriptRevision) { _, _ in
                 restorePendingWatchTranscript()
             }
@@ -560,7 +563,24 @@ struct ChatScreen: View {
         addMessage(text: "已收到系统语音转写草稿并加入文字输入框，请检查编辑；尚未保存任何餐食记录。", isUser: false)
     }
 
-    private func hydratePersistedMessagesIfNeeded() {
+    private func hydratePersistedMessagesIfNeeded(forceReload: Bool = false) {
+        if forceReload {
+            if dependencies.agentSession.restoredVisibleMessages.isEmpty {
+                messages = [
+                    ChatMessage(
+                        text: "你好，我是 densoso。使用语音或文字告诉我你吃了什么、练了什么。",
+                        isUser: false
+                    )
+                ]
+                didHydratePersistedMessages = false
+            } else {
+                messages = dependencies.agentSession.restoredVisibleMessages.map {
+                    ChatMessage(text: $0.text, isUser: $0.isUser)
+                }
+                didHydratePersistedMessages = true
+            }
+            return
+        }
         guard !didHydratePersistedMessages,
               !dependencies.agentSession.restoredVisibleMessages.isEmpty else {
             return

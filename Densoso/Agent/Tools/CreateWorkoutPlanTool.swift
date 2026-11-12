@@ -34,7 +34,7 @@ struct CreateWorkoutPlanTool: ConfirmationRequiredTool {
               !arguments.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DraftError.invalidWorkoutPlan
         }
-        guard let scheduledAt = ISO8601DateFormatter().date(from: arguments.scheduledAt) else {
+        guard let scheduledAt = Self.parseISO8601Date(arguments.scheduledAt) else {
             throw DraftError.invalidWorkoutPlan
         }
         let goal: WorkoutPlanDraft.Goal
@@ -45,15 +45,26 @@ struct CreateWorkoutPlanTool: ConfirmationRequiredTool {
         } else {
             goal = .open
         }
-        return .workoutPlan(
-            WorkoutPlanDraft(
-                name: arguments.name,
-                activity: activity,
-                location: location,
-                goal: goal,
-                scheduledAt: scheduledAt
-            )
+        let draft = WorkoutPlanDraft(
+            name: arguments.name,
+            activity: activity,
+            location: location,
+            goal: goal,
+            scheduledAt: scheduledAt
         )
+        do {
+            try WorkoutPlanCompiler().validate(draft)
+        } catch {
+            throw DraftError.invalidWorkoutPlan
+        }
+        return .workoutPlan(draft)
+    }
+
+    private static func parseISO8601Date(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)
     }
 
     private struct Arguments: Decodable {

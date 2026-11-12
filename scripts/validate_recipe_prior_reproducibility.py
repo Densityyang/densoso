@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +79,12 @@ def main() -> int:
         default=Path("gate17-recipe-reproducibility.json"),
         help="write a machine-readable comparison report here",
     )
+    parser.add_argument(
+        "--source-repo",
+        type=Path,
+        default=None,
+        help="optional pre-cloned HowToCook repository path to avoid network clone",
+    )
     args = parser.parse_args()
 
     report: dict[str, Any] = {
@@ -90,37 +98,69 @@ def main() -> int:
         report["licenseSPDX"] = source["licenseSPDX"]
         with tempfile.TemporaryDirectory(prefix="densoso-recipe-priors-") as temporary_directory:
             temporary = Path(temporary_directory)
-            source_repository = temporary / "HowToCook"
-            clone = subprocess.run(
-                [
-                    "git",
-                    "clone",
-                    "--filter=blob:none",
-                    "--no-checkout",
-                    source["sourceURL"] + ".git",
-                    str(source_repository),
-                ],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
+            configured_repo = args.source_repo or (
+                Path(os.environ["HOWTOCOOK_SOURCE_REPO"])
+                if os.environ.get("HOWTOCOOK_SOURCE_REPO")
+                else None
             )
-            if clone.returncode != 0:
-                raise RuntimeError(f"pinned upstream clone failed: {clone.stderr.strip()[-2000:]}")
-            fetch = subprocess.run(
-                ["git", "-C", str(source_repository), "fetch", "--depth=1", "origin", source["sourceVersion"]],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-            )
-            if fetch.returncode != 0:
-                raise RuntimeError(f"pinned upstream fetch failed: {fetch.stderr.strip()[-2000:]}")
-            run_git(source_repository, "sparse-checkout", "init", "--cone")
-            run_git(source_repository, "sparse-checkout", "set", "dishes")
-            run_git(source_repository, "checkout", "--detach", source["sourceVersion"])
+            if configured_repo is not None:
+                source_repository = configured_repo.resolve()
+                head = run_git(source_repository, "rev-parse", "HEAD")
+                if head != source["sourceVersion"]:
+                    raise RuntimeError(
+                        f"pre-cloned source repository HEAD {head} does not match pinned {source['sourceVersion']}"
+                    )
+            else:
+                source_repository = temporary / "HowToCook"
+                last_clone_error = ""
+                for attempt in range(3):
+                    if source_repository.exists():
+                        subprocess.run(["rm", "-rf", str(source_repository)], check=False)
+                    clone = subprocess.run(
+                        [
+                            "git",
+                            "clone",
+                            "--filter=blob:none",
+                            "--no-checkout",
+                            source["sourceURL"] + ".git",
+                            str(source_repository),
+                        ],
+                        check=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        encoding="utf-8",
+                    )
+                    if clone.returncode == 0:
+                        last_clone_error = ""
+                        break
+                    last_clone_error = clone.stderr.strip()[-2000:]
+                    if attempt < 2:
+                        time.sleep(1.0 * (2 ** attempt))
+                if last_clone_error:
+                    raise RuntimeError(f"pinned upstream clone failed: {last_clone_error}")
+
+                last_fetch_error = ""
+                for attempt in range(3):
+                    fetch = subprocess.run(
+                        ["git", "-C", str(source_repository), "fetch", "--depth=1", "origin", source["sourceVersion"]],
+                        check=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        encoding="utf-8",
+                    )
+                    if fetch.returncode == 0:
+                        last_fetch_error = ""
+                        break
+                    last_fetch_error = fetch.stderr.strip()[-2000:]
+                    if attempt < 2:
+                        time.sleep(1.0 * (2 ** attempt))
+                if last_fetch_error:
+                    raise RuntimeError(f"pinned upstream fetch failed: {last_fetch_error}")
+                run_git(source_repository, "sparse-checkout", "init", "--cone")
+                run_git(source_repository, "sparse-checkout", "set", "dishes")
+                run_git(source_repository, "checkout", "--detach", source["sourceVersion"])
 
             generated_catalog = temporary / "recipe_priors.json"
             generated_import_report = temporary / "recipe_prior_import_report.json"

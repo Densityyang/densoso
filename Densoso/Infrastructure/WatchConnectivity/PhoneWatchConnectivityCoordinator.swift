@@ -90,8 +90,39 @@ final class PhoneWatchConnectivityCoordinator: NSObject, WCSessionDelegate {
             forName: ModelContext.didSave,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
+            guard Self.shouldRefreshContext(for: notification) else { return }
             Task { @MainActor [weak self] in self?.refreshApplicationContext() }
+        }
+    }
+
+    deinit {
+        if let modelContextSaveObserver {
+            NotificationCenter.default.removeObserver(modelContextSaveObserver)
+        }
+    }
+
+    nonisolated private static func shouldRefreshContext(for notification: Notification) -> Bool {
+        guard let userInfo = notification.userInfo, !userInfo.isEmpty else { return true }
+        if userInfo[ModelContext.NotificationKey.invalidatedAllIdentifiers] != nil {
+            return true
+        }
+        let relevantTypes: Set<String> = [
+            Schema.entityName(for: DailyBriefRecord.self),
+            Schema.entityName(for: PendingActionRecord.self),
+            Schema.entityName(for: ScheduleEvent.self),
+            Schema.entityName(for: ConfirmedPlanSessionIndexRecord.self),
+            Schema.entityName(for: CommittedActionReceiptRecord.self),
+            Schema.entityName(for: UserProfile.self),
+        ]
+        let keys: [ModelContext.NotificationKey] = [
+            .insertedIdentifiers,
+            .updatedIdentifiers,
+            .deletedIdentifiers,
+        ]
+        return keys.contains { key in
+            guard let identifiers = userInfo[key] as? Set<PersistentIdentifier> else { return false }
+            return identifiers.contains { relevantTypes.contains($0.entityName) }
         }
     }
 

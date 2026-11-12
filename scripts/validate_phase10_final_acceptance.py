@@ -26,6 +26,7 @@ RESULT_TO_STATUS = {
     "success": "PASS",
     "failure": "FAIL",
     "cancelled": "BLOCKED",
+    "abandoned": "BLOCKED",
     "skipped": "NOT RUN",
 }
 
@@ -74,6 +75,8 @@ def main() -> int:
                 reason = "upstream GitHub Actions job failed"
             elif result == "cancelled":
                 reason = "upstream GitHub Actions job was cancelled"
+            elif result == "abandoned":
+                reason = "upstream GitHub Actions job was abandoned before completing"
             else:
                 reason = "upstream GitHub Actions job was skipped"
             errors.append(f"Gate {number} ({name}) is {status}: {reason}")

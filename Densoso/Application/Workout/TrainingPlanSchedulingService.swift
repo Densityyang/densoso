@@ -271,7 +271,10 @@ final class TrainingPlanSchedulingService {
 
         let compiled: CompiledTrainingPlan
         do {
-            compiled = try compiler.compile(entry.draft)
+            compiled = try compiler.compile(
+                entry.draft,
+                excludingScheduledSessionIDs: Set(entry.scheduledSessionIDs)
+            )
         } catch {
             entry.state = .terminal
             entry.lastError = SharedErrorDescriptor.mapped(

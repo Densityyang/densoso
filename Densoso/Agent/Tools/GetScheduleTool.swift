@@ -15,8 +15,7 @@ struct GetScheduleTool: AgentTool {
             return #"{"error": "日期参数缺失"}"#
         }
 
-        let formatter = ISO8601DateFormatter()
-        guard let targetDate = formatter.date(from: dateStr) else {
+        guard let targetDate = Self.parseISO8601Date(dateStr) else {
             return #"{"error": "日期格式错误"}"#
         }
 
@@ -35,5 +34,12 @@ struct GetScheduleTool: AgentTool {
         let resp: [String: Any] = ["date": dateStr, "events": eventList, "count": eventList.count]
         let respData = try JSONSerialization.data(withJSONObject: resp)
         return String(data: respData, encoding: .utf8) ?? "{}"
+    }
+
+    private static func parseISO8601Date(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)
     }
 }

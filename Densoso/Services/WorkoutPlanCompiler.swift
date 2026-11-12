@@ -88,10 +88,6 @@ struct WorkoutPlanCompiler {
                 throw WorkoutPlanCompileError.invalidDistanceGoal
             }
         }
-    }
-
-    func compile(_ draft: WorkoutPlanDraft) throws -> WorkoutPlan {
-        try validate(draft)
 
         let activity = healthKitActivity(for: draft.activity)
         let location = healthKitLocation(for: draft.location)
@@ -103,6 +99,14 @@ struct WorkoutPlanCompiler {
         guard SingleGoalWorkout.supportsGoal(goal, activity: activity, location: location) else {
             throw WorkoutPlanCompileError.unsupportedGoal
         }
+    }
+
+    func compile(_ draft: WorkoutPlanDraft) throws -> WorkoutPlan {
+        try validate(draft)
+
+        let activity = healthKitActivity(for: draft.activity)
+        let location = healthKitLocation(for: draft.location)
+        let goal = workoutGoal(for: draft.goal)
 
         let workout = SingleGoalWorkout(activity: activity, location: location, goal: goal)
         return WorkoutPlan(.goal(workout), id: draft.id)
@@ -266,6 +270,20 @@ final class WorkoutPlanSchedulingService {
             try ConfirmedPlanSessionIndexRepository.replace(workoutPlan: entry, in: context)
             try context.save()
             lastError = nil
+        } catch let error as WorkoutPlanCompileError {
+            entry.state = .terminal
+            entry.lastError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .workoutKitUnavailableFallback
+            ).userMessage
+            event.notes = try entry.encodedNotes()
+            try ConfirmedPlanSessionIndexRepository.replace(workoutPlan: entry, in: context)
+            try context.save()
+            lastError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .workoutKitUnavailableFallback
+            ).userMessage
+            throw error
         } catch {
             entry.state = .retryable
             entry.lastError = SharedErrorDescriptor.mapped(

@@ -140,7 +140,6 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
                     guard let replyData = reply["densoso.watch.payload"] as? Data else {
                         Task { @MainActor in
                             guard let self else { return }
-                            self.dispatchedIDs.remove(envelope.messageID)
                             self.statusMessage = "iPhone 未确认消息已本地接收，已转入离线队列。"
                             self.session.transferUserInfo(["densoso.watch.payload": data])
                         }
@@ -152,7 +151,6 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
                     let errorMessage = error.localizedDescription
                     Task { @MainActor in
                         guard let self else { return }
-                        self.dispatchedIDs.remove(envelope.messageID)
                         self.statusMessage = "即时消息未送达，已转入离线队列。\(errorMessage)"
                         self.session.transferUserInfo(["densoso.watch.payload": data])
                     }
@@ -247,6 +245,7 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
     ) {
         let isActivated = activationState == .activated
         let isReachable = session.isReachable
+        let receivedContextData = session.receivedApplicationContext[Self.payloadKey] as? Data
         let errorMessage = error?.localizedDescription
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -255,6 +254,9 @@ final class WatchConnectivityClient: NSObject, WCSessionDelegate {
             if let errorMessage { self.statusMessage = errorMessage }
             else { self.statusMessage = self.isReachable ? "已连接 iPhone。" : "iPhone 暂不可达；可离线排队。" }
             if self.isActivated {
+                if let receivedContextData {
+                    self.receive(receivedContextData)
+                }
                 self.dispatchedIDs.removeAll()
                 self.dispatchPendingMessages()
             }

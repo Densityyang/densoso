@@ -66,6 +66,48 @@ final class FoodDatabaseTests: XCTestCase {
         XCTAssertEqual(entry.importWarnings, ["fixture review warning"])
     }
 
+    func testPipeSeparatedSecondaryAliasesRankAsExactAndPrefixMatchesAndSanitizeWildcards() throws {
+        let multiAliasSeed = Data(
+            #"""
+            [
+              {
+                "id": 1,
+                "name": "牛番茄",
+                "alias": "番茄|毛柿|西红柿",
+                "category": "蔬菜类",
+                "edible": 100,
+                "energyKcal": 19,
+                "energyRaw": "19",
+                "energyUnit": "kcal/100g",
+                "sourceID": "fixture-food-source",
+                "sourceRecordID": "fixture-tomato",
+                "sourceVersion": "fixture-v1",
+                "licenseStatus": "verified",
+                "proteinG": 0.9,
+                "fatG": 0.2,
+                "carbohydrateG": 4.0,
+                "fiberG": 1.2
+              }
+            ]
+            """#.utf8
+        )
+        let database = try FoodDatabase(seedJSON: multiAliasSeed)
+
+        let exactRanked = try database.rankedSearch(query: "西红柿")
+        XCTAssertEqual(exactRanked.first?.item.name, "牛番茄")
+        XCTAssertEqual(exactRanked.first?.score, 1.0)
+
+        let prefixRanked = try database.rankedSearch(query: "西红")
+        XCTAssertEqual(prefixRanked.first?.item.name, "牛番茄")
+        XCTAssertEqual(prefixRanked.first?.score, 0.8)
+
+        let prefixItems = try database.searchByPrefix("西红")
+        XCTAssertEqual(prefixItems.map(\.name), ["牛番茄"])
+
+        XCTAssertTrue(try database.search(query: "%").isEmpty)
+        XCTAssertTrue(try database.searchByPrefix("_").isEmpty)
+    }
+
     private var seedData: Data {
         Data(
             #"""

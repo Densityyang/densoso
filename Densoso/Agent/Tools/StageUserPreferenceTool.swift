@@ -16,7 +16,7 @@ struct StageUserPreferenceTool: ConfirmationRequiredTool {
     }
 
     func prepare(argumentsJSON: String, context: AgentSession) async throws -> ActionPayload {
-        .userPreference(try draft(argumentsJSON: argumentsJSON, asOf: Date()))
+        .userPreference(try draft(argumentsJSON: argumentsJSON, asOf: context.currentToolTimeAnchor))
     }
 
     /// Builds a user-reported domain value without persisting it.

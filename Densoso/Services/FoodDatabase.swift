@@ -107,21 +107,29 @@ final class FoodDatabase {
     }
 
     func searchByPrefix(_ prefix: String, limit: Int = 20) throws -> [FoodItem] {
-        try dbQueue.read { db in
+        let sanitized = sanitizeLikeToken(prefix)
+        guard !sanitized.isEmpty else { return [] }
+        return try dbQueue.read { db in
             try FoodItem
-                .filter(Column("name").like("\(prefix)%") || Column("alias").like("\(prefix)%"))
+                .filter(
+                    Column("name").like("\(sanitized)%") ||
+                    Column("alias").like("\(sanitized)%") ||
+                    Column("alias").like("%|\(sanitized)%")
+                )
                 .limit(limit)
                 .fetchAll(db)
         }
     }
 
-    /// 模糊搜索（包含子串匹配）—— GRDB 参数化查询，query 中的 % 为 SQL LIKE 通配符
+    /// 模糊搜索（包含子串匹配）—— GRDB 参数化查询，移除用户输入中的 SQL LIKE 通配符
     func search(query: String, limit: Int = 10) throws -> [FoodItem] {
-        try dbQueue.read { db in
+        let sanitized = sanitizeLikeToken(query)
+        guard !sanitized.isEmpty else { return [] }
+        return try dbQueue.read { db in
             try FoodItem
                 .filter(
-                    Column("name").like("%\(query)%") ||
-                    Column("alias").like("%\(query)%")
+                    Column("name").like("%\(sanitized)%") ||
+                    Column("alias").like("%\(sanitized)%")
                 )
                 .order(Column("category"))
                 .limit(limit)
@@ -137,17 +145,31 @@ final class FoodDatabase {
         var ranked: [FoodMatch] = []
         for item in candidates {
             let name = normalize(item.name)
-            let alias = normalize(item.alias ?? "")
+            let aliases = (item.alias ?? "")
+                .split(separator: "|")
+                .map { normalize(String($0)) }
+                .filter { !$0.isEmpty }
             let score: Double
-            if name == normalizedQuery || alias == normalizedQuery { score = 1 }
-            else if name.hasPrefix(normalizedQuery) || alias.hasPrefix(normalizedQuery) { score = 0.8 }
-            else { score = 0.55 }
+            if name == normalizedQuery || aliases.contains(normalizedQuery) {
+                score = 1
+            } else if name.hasPrefix(normalizedQuery) || aliases.contains(where: { $0.hasPrefix(normalizedQuery) }) {
+                score = 0.8
+            } else {
+                score = 0.55
+            }
             ranked.append(FoodMatch(item: item, score: score))
         }
         ranked.sort { lhs, rhs in
             lhs.score == rhs.score ? lhs.item.name < rhs.item.name : lhs.score > rhs.score
         }
         return Array(ranked.prefix(max(0, limit)))
+    }
+
+    private func sanitizeLikeToken(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "%", with: "")
+            .replacingOccurrences(of: "_", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func normalize(_ value: String) -> String {

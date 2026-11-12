@@ -305,6 +305,7 @@ final class AgentSession {
     private(set) var lastConfirmationStatus: AgentConfirmationStatus?
     private(set) var pendingActionsReadError: String?
     private(set) var restoredVisibleMessages: [PersistedChatMessage] = []
+    private(set) var restoredMessagesRevision: Int = 0
     private(set) var latestEvent: AgentEvent?
     private(set) var streamedText = ""
     private var transientMealImageEvidence: [MealEvidence] = []
@@ -358,6 +359,7 @@ final class AgentSession {
         let persisted = try await conversationRepository.messageData(conversationID: conversationID)
         conversationHistory = try persisted.map(Self.decodePersistedMessage)
         restoredVisibleMessages = conversationHistory.compactMap(Self.visibleMessage)
+        restoredMessagesRevision &+= 1
         pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
         pendingActionsReadError = nil
     }
@@ -1285,6 +1287,13 @@ final class AgentSession {
                             await appendToolResults(
                                 for: result.toolCalls[offset...],
                                 output: encodedToolError(code: "request_deadline_exceeded"),
+                                requestID: requestID
+                            )
+                            throw error
+                        } catch {
+                            await appendToolResults(
+                                for: result.toolCalls[offset...],
+                                output: encodedToolError(code: "tool_batch_aborted"),
                                 requestID: requestID
                             )
                             throw error
@@ -2231,6 +2240,7 @@ final class AgentSession {
         try await conversationRepository.reset(conversationID: conversationID)
         conversationHistory.removeAll()
         restoredVisibleMessages.removeAll()
+        restoredMessagesRevision &+= 1
         pendingActions = try await confirmationCoordinator.activeActions(conversationID: conversationID)
     }
 

@@ -76,6 +76,27 @@ final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
         XCTAssertEqual(records.first?.reasoningTokens, 3)
     }
 
+    func testIdempotentSetConsentPreservesDecidedAtAndSendConsentRevision() async throws {
+        let container = try makeContainer()
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        let initialRevisions = try await repository.currentSendConsentRevisions(provider: .deepSeek)
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        let repeatedRevisions = try await repository.currentSendConsentRevisions(provider: .deepSeek)
+        XCTAssertEqual(initialRevisions[.healthText], repeatedRevisions[.healthText])
+    }
+
     func testMonthlyUsageQueriesProviderAndHalfOpenDateWindowAndKeepsUnknownCost() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)

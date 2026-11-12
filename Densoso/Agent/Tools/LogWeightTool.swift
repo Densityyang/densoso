@@ -28,7 +28,7 @@ struct LogWeightTool: ConfirmationRequiredTool {
         }
         let measuredAt: Date
         if let rawDate = json["measuredAt"] as? String {
-            guard let parsed = ISO8601DateFormatter().date(from: rawDate) else {
+            guard let parsed = Self.parseISO8601Date(rawDate) else {
                 throw DraftError.invalidWeight
             }
             measuredAt = parsed
@@ -38,5 +38,12 @@ struct LogWeightTool: ConfirmationRequiredTool {
         return .weight(
             WeightDraft(measuredAt: measuredAt, kilograms: kilograms)
         )
+    }
+
+    private static func parseISO8601Date(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)
     }
 }

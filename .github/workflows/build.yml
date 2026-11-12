@@ -622,6 +622,7 @@ jobs:
           print(json.dumps(report, indent=2, sort_keys=True))
           if report["status"] != "PASS":
               sys.exit(1)
+          PY
 
       - name: Upload Gate 3 evidence
         if: always()
@@ -1368,6 +1369,9 @@ jobs:
               elif outcome == "cancelled":
                   status = "BLOCKED"
                   reason = "upstream job was cancelled"
+              elif outcome == "abandoned":
+                  status = "BLOCKED"
+                  reason = "upstream job was abandoned before completing"
               else:
                   status = "NOT RUN"
                   reason = "upstream job did not complete successfully"
@@ -1532,7 +1536,7 @@ jobs:
             -only-testing:DensosoTests/GetHealthHistoryToolTests \
             -only-testing:DensosoTests/AgentCoordinatorTests/testHealthContextLoadsOnlyForRelevantHealthQuestions \
             -only-testing:DensosoTests/AgentCoordinatorTests/testHealthContextReadFailureDoesNotClaimDataIsMissing \
-            -only-testing:DensosoTests/DailyBriefRefreshPolicyTests/testActivationRefreshWaitsForInitialRefreshAndOnlyRefreshesStaleLocalDay \
+            -only-testing:DensosoTests/DailyBriefRefreshPolicyTests \
             -only-testing:DensosoTests/DailyLoopBackgroundSchedulerTests \
             -only-testing:DensosoTests/HistoricalMetricsRecomputeServiceTests \
             -only-testing:DensosoTests/HealthNarrativePolicyTests \

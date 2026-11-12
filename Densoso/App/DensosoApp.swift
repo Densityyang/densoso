@@ -185,6 +185,8 @@ struct AppRoot: View {
         guard !launchConfiguration.isUITesting,
               hasCompletedInitialDailyBriefRefresh,
               !isRefreshingStaleDailyBrief else { return }
+        isRefreshingStaleDailyBrief = true
+        defer { isRefreshingStaleDailyBrief = false }
         let now = Date()
         let healthIntelligenceService = dependencies.healthIntelligenceService
         let sourceFingerprintChanged: Bool
@@ -194,8 +196,7 @@ struct AppRoot: View {
             // Force a refresh attempt when fingerprint validation itself failed.
             sourceFingerprintChanged = true
         }
-        guard !isRefreshingStaleDailyBrief,
-              DailyBriefRefreshPolicy.shouldRefreshAfterActivation(
+        guard DailyBriefRefreshPolicy.shouldRefreshAfterActivation(
                 initialRefreshCompleted: true,
                 cachedBriefDayStart: healthIntelligenceService.dailyBrief?.dayStart,
                 validatedAt: healthIntelligenceService.dailyBriefValidatedAt,
@@ -206,9 +207,6 @@ struct AppRoot: View {
                 asOf: now,
                 calendar: .autoupdatingCurrent
               ) else { return }
-
-        isRefreshingStaleDailyBrief = true
-        defer { isRefreshingStaleDailyBrief = false }
         do {
             _ = try await healthIntelligenceService.refresh(asOf: now)
             dependencies.watchConnectivityCoordinator.refreshApplicationContext()

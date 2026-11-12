@@ -55,12 +55,15 @@ enum TrainingPlanCompileError: Equatable, SharedErrorDescribing {
 struct TrainingPlanCompiler {
     private let workoutPlanCompiler = WorkoutPlanCompiler()
 
-    func compile(_ draft: TrainingPlanDraft) throws -> CompiledTrainingPlan {
+    func compile(
+        _ draft: TrainingPlanDraft,
+        excludingScheduledSessionIDs scheduledSessionIDs: Set<UUID> = []
+    ) throws -> CompiledTrainingPlan {
         if let validationError = draft.validationError {
             throw TrainingPlanCompileError.invalidDraft(validationError)
         }
         guard draft.sessions
-            .filter({ !$0.isRestDay })
+            .filter({ !$0.isRestDay && !scheduledSessionIDs.contains($0.id) })
             .allSatisfy({ $0.date > Date() }) else {
             throw TrainingPlanCompileError.sessionInPast
         }

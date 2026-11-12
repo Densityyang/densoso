@@ -218,12 +218,12 @@ struct DashboardScreen: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             Button {
-                updateNutritionRecordStatus(
-                    result.nutritionRecordStatus == .complete
-                        ? (metrics.mealCount == 0 ? .unknown : .inProgress)
-                        : .complete,
-                    for: metrics
-                )
+                let targetStatus: NutritionDayRecordStatus = result.nutritionRecordStatus == .complete
+                    ? (metrics.mealCount == 0 ? .unknown : .inProgress)
+                    : .complete
+                Task {
+                    await updateNutritionRecordStatus(targetStatus, for: metrics)
+                }
             } label: {
                 Label(
                     result.nutritionRecordStatus == .complete
@@ -261,21 +261,34 @@ struct DashboardScreen: View {
     private func updateNutritionRecordStatus(
         _ status: NutritionDayRecordStatus,
         for metric: DailyMetrics
-    ) {
-        guard !metric.requiresRecompute else {
-            nutritionRecordActionError = "今日投影正在刷新，完成后再更新饮食记录状态。"
-            return
-        }
-        guard DailyMetricsReadModelMapper.setNutritionDayRecordStatus(status, for: metric) else {
-            nutritionRecordActionError = "今日饮食记录尚未完成投影，请刷新后重试。"
-            return
-        }
+    ) async {
         do {
-            try modelContext.save()
-            nutritionRecordActionError = nil
-            Task { await loadData() }
+            let operationBarrier = PersistenceOperationBarrier.shared
+            let operationLease = try await operationBarrier.acquireMutationOperation()
+            defer { operationBarrier.release(operationLease) }
+            try await operationBarrier.withLease(operationLease) {
+                try await DailyMetricsProjectionWriteGate.withLock(for: modelContext) {
+                    guard !metric.requiresRecompute else {
+                        nutritionRecordActionError = "今日投影正在刷新，完成后再更新饮食记录状态。"
+                        return
+                    }
+                    guard DailyMetricsReadModelMapper.setNutritionDayRecordStatus(status, for: metric) else {
+                        nutritionRecordActionError = "今日饮食记录尚未完成投影，请刷新后重试。"
+                        return
+                    }
+                    do {
+                        try modelContext.save()
+                        nutritionRecordActionError = nil
+                    } catch {
+                        modelContext.rollback()
+                        throw error
+                    }
+                }
+            }
+            if nutritionRecordActionError == nil {
+                await loadData()
+            }
         } catch {
-            modelContext.rollback()
             nutritionRecordActionError = SharedErrorDescriptor.mapped(
                 from: error,
                 fallback: .projectionFailedFallback

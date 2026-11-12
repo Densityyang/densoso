@@ -234,25 +234,21 @@ struct SettingsScreen: View {
                 Text("密钥保存在本机 Keychain，仅用于你选择的 DeepSeek 请求。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Toggle("同意向 DeepSeek 上传主动提交的健康文字", isOn: $deepSeekTextConsent)
-                    .onChange(of: deepSeekTextConsent) { _, value in
-                        Task { await saveConsent(provider: .deepSeek, granted: value) }
-                }
+                Toggle("同意向 DeepSeek 上传主动提交的健康文字", isOn: consentBinding(
+                    for: $deepSeekTextConsent,
+                    provider: .deepSeek,
+                    dataClass: .healthText
+                ))
                 healthContextConsentControls(provider: .deepSeek, selection: $deepSeekHealthContextClasses)
                 conversationHistoryConsentControl(provider: .deepSeek, selection: $deepSeekConversationHistoryConsent)
                 Text("本轮主动提交的文字由上方单独授权；此前聊天记录与历史健康汇总使用独立权限。未配置健康类别时不会自动附加健康上下文；撤销后立即从后续请求与续轮中移除。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Toggle("同意向 DeepSeek 上传处理后的餐食照片", isOn: $deepSeekMealImageConsent)
-                    .onChange(of: deepSeekMealImageConsent) { _, value in
-                        Task {
-                            await saveConsent(
-                                provider: .deepSeek,
-                                dataClass: .mealImage,
-                                granted: value
-                            )
-                        }
-                    }
+                Toggle("同意向 DeepSeek 上传处理后的餐食照片", isOn: consentBinding(
+                    for: $deepSeekMealImageConsent,
+                    provider: .deepSeek,
+                    dataClass: .mealImage
+                ))
                 Text("餐食照片经本机缩放并移除元数据；原图不留存。仅在选择 DeepSeek 且启用此项后，照片才随本次 Agent 请求上传。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -289,10 +285,11 @@ struct SettingsScreen: View {
                     Task { await saveQwenKey() }
                 }
                 .disabled(qwenAPIKey.isEmpty)
-                Toggle("同意向 Qwen 上传主动提交的健康文字", isOn: $qwenTextConsent)
-                    .onChange(of: qwenTextConsent) { _, value in
-                        Task { await saveConsent(provider: .qwen, granted: value) }
-                }
+                Toggle("同意向 Qwen 上传主动提交的健康文字", isOn: consentBinding(
+                    for: $qwenTextConsent,
+                    provider: .qwen,
+                    dataClass: .healthText
+                ))
                 healthContextConsentControls(provider: .qwen, selection: $qwenHealthContextClasses)
                 conversationHistoryConsentControl(provider: .qwen, selection: $qwenConversationHistoryConsent)
                 Text("本轮主动提交的文字由上方单独授权；此前聊天记录与历史健康汇总使用独立权限。未配置健康类别时不会自动附加健康上下文；撤销后立即从后续请求与续轮中移除。")
@@ -305,31 +302,21 @@ struct SettingsScreen: View {
                         set: { dependencies.providerConfiguration.qwenSpeechFallbackEnabled = $0 }
                     )
                 )
-                Toggle("同意向 Qwen 上传单次临时音频", isOn: $qwenSpeechConsent)
-                    .onChange(of: qwenSpeechConsent) { _, value in
-                        Task {
-                            await saveConsent(
-                                provider: .qwen,
-                                dataClass: .speechAudio,
-                                granted: value
-                            )
-                        }
-                    }
+                Toggle("同意向 Qwen 上传单次临时音频", isOn: consentBinding(
+                    for: $qwenSpeechConsent,
+                    provider: .qwen,
+                    dataClass: .speechAudio
+                ))
                 Toggle(
                     "启用 Qwen 开放式餐食照片观察",
                     isOn: .constant(false)
                 )
                 .disabled(true)
-                Toggle("同意向 Qwen 上传处理后的餐食照片", isOn: $qwenMealImageConsent)
-                    .onChange(of: qwenMealImageConsent) { _, value in
-                        Task {
-                            await saveConsent(
-                                provider: .qwen,
-                                dataClass: .mealImage,
-                                granted: value
-                            )
-                        }
-                    }
+                Toggle("同意向 Qwen 上传处理后的餐食照片", isOn: consentBinding(
+                    for: $qwenMealImageConsent,
+                    provider: .qwen,
+                    dataClass: .mealImage
+                ))
                 Text("Qwen 开放照片在真实照片质量门禁完成前保持关闭；开放照片默认走 DeepSeek，且需单独授权，不会自动切到 Qwen。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -472,7 +459,12 @@ struct SettingsScreen: View {
 
     private func loadGoalFields() async {
         do {
-            guard let goal = try await dependencies.healthIntelligenceService.goalProfile() else { return }
+            guard let goal = try await dependencies.healthIntelligenceService.goalProfile() else {
+                goalTargetWeight = ""
+                goalDailyDeficit = ""
+                goalDailyProtein = ""
+                return
+            }
             goalTargetWeight = goal.targetWeightKilograms.map { String($0) } ?? ""
             goalDailyDeficit = goal.dailyDeficitKcal.map(String.init) ?? ""
             goalDailyProtein = goal.dailyProteinGrams.map { String($0) } ?? ""
@@ -767,7 +759,29 @@ struct SettingsScreen: View {
             }
         } catch {
             healthAuthorizationError = "无法保存云端同意状态：\(safeErrorMessage(error))"
+            await refreshProviderGovernance()
         }
+    }
+
+    private func consentBinding(
+        for state: Binding<Bool>,
+        provider: ProviderID,
+        dataClass: ProviderDataClass = .healthText
+    ) -> Binding<Bool> {
+        Binding(
+            get: { state.wrappedValue },
+            set: { value in
+                guard state.wrappedValue != value else { return }
+                state.wrappedValue = value
+                Task {
+                    await saveConsent(
+                        provider: provider,
+                        dataClass: dataClass,
+                        granted: value
+                    )
+                }
+            }
+        )
     }
 
     private func refreshProviderGovernance() async {
@@ -1036,13 +1050,30 @@ struct SettingsScreen: View {
                 warnings.append("备份数据已恢复，但对话状态刷新失败：\(safeErrorMessage(error))")
             }
 
-            await dependencies.foregroundHealthRebaselineCoordinator.rebaselineAfterDatasetRestore()
-            switch dependencies.foregroundHealthRebaselineCoordinator.state {
-            case .completed:
-                break
-            case .partiallyCompleted, .failed, .superseded, .preparing, .syncing, .queued, .idle:
-                warnings.append("备份数据已恢复，但 Apple 健康数据的首次同步尚未完整完成；系统会按重试策略继续同步。")
+            let restoredProfile = try? UserProfileSingletonPolicy.primary(in: modelContext)
+            appState.userProfile = restoredProfile
+            if restoredProfile != nil {
+                appState.isOnboarded = true
             }
+            await loadGoalFields()
+            await refreshProviderGovernance()
+
+            if dependencies.healthKitService.hasRequestedAuthorization {
+                await dependencies.foregroundHealthRebaselineCoordinator.rebaselineAfterDatasetRestore()
+                switch dependencies.foregroundHealthRebaselineCoordinator.state {
+                case .completed:
+                    break
+                case .partiallyCompleted, .failed, .superseded, .preparing, .syncing, .queued, .idle:
+                    warnings.append("备份数据已恢复，但 Apple 健康数据的首次同步尚未完整完成；系统会按重试策略继续同步。")
+                }
+            } else {
+                let healthRepository = HealthRepository(modelContext: modelContext)
+                await dependencies.healthKitSyncCoordinator.purgeUnauthorizedHealthSnapshotIfNeeded(
+                    using: healthRepository
+                )
+            }
+            await refreshDiagnostics()
+            dependencies.watchConnectivityCoordinator.refreshApplicationContext()
 
             if summary.pendingProjectionDays > 0 {
                 warnings.append("备份数据已恢复，但有 \(summary.pendingProjectionDays) 天的每日指标仍待更新；系统已保留重试标记。")
@@ -1275,7 +1306,7 @@ private struct ProfileEditorSheet: View {
                         Button {
                             dateOfBirthDraft = dateOfBirth
                                 ?? (Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date())
-                            hasEditedDateOfBirth = false
+                            hasEditedDateOfBirth = true
                             showingDateOfBirthPicker = true
                         } label: {
                             LabeledContent(
