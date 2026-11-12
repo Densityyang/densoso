@@ -11,7 +11,7 @@ enum WatchEnqueueResult: Equatable {
 @MainActor
 @Observable
 final class WatchConnectivityClient: NSObject, WCSessionDelegate {
-    private static let payloadKey = "densoso.watch.payload"
+    nonisolated private static let payloadKey = "densoso.watch.payload"
 
     @ObservationIgnored private let session: WCSession
     @ObservationIgnored private let outboxStore: WatchMessageOutboxStore?
