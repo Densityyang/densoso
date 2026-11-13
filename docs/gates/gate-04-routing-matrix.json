@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "modern-success",
+      "localResult": "success",
+      "audioPresent": true,
+      "audioConsent": false,
+      "expectedRoute": "speechAnalyzer",
+      "expectedCloudCalls": 0
+    },
+    {
+      "id": "modern-prepare-fails",
+      "localResult": "modernPrepareFailure",
+      "audioPresent": true,
+      "audioConsent": false,
+      "expectedRoute": "legacySpeechRecognizer",
+      "expectedCloudCalls": 0
+    },
+    {
+      "id": "local-fails-audio-consented",
+      "localResult": "failure",
+      "audioPresent": true,
+      "audioConsent": true,
+      "expectedRoute": "qwenASR",
+      "expectedCloudCalls": 1
+    },
+    {
+      "id": "local-fails-no-audio",
+      "localResult": "failure",
+      "audioPresent": false,
+      "audioConsent": true,
+      "expectedRoute": "manualEntry",
+      "expectedCloudCalls": 0
+    },
+    {
+      "id": "consent-revoked-before-upload",
+      "localResult": "failure",
+      "audioPresent": true,
+      "audioConsent": false,
+      "expectedRoute": "manualEntry",
+      "expectedCloudCalls": 0
+    },
+    {
+      "id": "engine-never-started",
+      "localResult": "notStarted",
+      "audioPresent": false,
+      "audioConsent": true,
+      "expectedRoute": "manualEntry",
+      "expectedCloudCalls": 0
+    },
+    {
+      "id": "system-event-stop",
+      "localResult": "interruptedOrRouteReset",
+      "audioPresent": true,
+      "audioConsent": true,
+      "expectedRoute": "failedNoUpload",
+      "expectedCloudCalls": 0
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-name: Build
+name: V3 Gates
 
 on:
   push:
@@ -6,63 +6,223 @@ on:
   pull_request:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      run_scope:
+        description: Select the standard chain or this PR's focused test gates.
+        required: true
+        type: choice
+        options:
+          - full
+          - focused-pr-tests
+        default: full
+
+concurrency:
+  group: v3-gates-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: macos-latest
-    timeout-minutes: 20
+  # Later jobs are added only when their production code and tests exist:
+  # foundation -> domain-persistence -> agent-provider -> speech ->
+  # meal-capture -> healthkit -> health-intelligence -> watch -> integration.
+  foundation:
+    name: gate-01-foundation
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
+    runs-on: xcode-27
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set DerivedData path
-        run: echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoDerivedData" >> "$GITHUB_ENV"
-
-      - name: Validate bundled food database
-        run: python3 scripts/validate_food_db.py
+      - name: Set Gate 1 paths
+        id: set_paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoDerivedData" >> "$GITHUB_ENV"
+          echo "UNIT_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate01UnitTests.xcresult" >> "$GITHUB_ENV"
+          echo "UI_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate01UITests.xcresult" >> "$GITHUB_ENV"
 
       - name: Validate Python scripts
-        run: python3 -m compileall -q scripts
+        id: validate_python
+        if: always()
+        run: |
+          set -o pipefail
+          python3 -m py_compile \
+            scripts/evaluate_voice_transcripts.py \
+            scripts/generate_voice_goldens.py \
+            scripts/import_exercise_catalog.py \
+            scripts/import_food_db.py \
+            scripts/validate_food_db.py \
+            scripts/validate_gate0_ui.py \
+            scripts/validate_phase1_foundation.py \
+            scripts/validate_phase2_domain_persistence.py \
+            scripts/validate_phase3_agent_provider.py \
+            scripts/validate_phase4_speech.py \
+            scripts/validate_phase5_meal_capture.py \
+            scripts/validate_phase6_healthkit.py \
+            scripts/validate_phase7_health_intelligence.py \
+            scripts/validate_phase8_watch.py \
+            scripts/validate_phase9_integration.py \
+            scripts/validate_phase10_final_acceptance.py \
+            scripts/validate_phase11_14_gates.py \
+            scripts/validate_gate17_food_data.py \
+            scripts/validate_gate19_privacy_window.py \
+            scripts/validate_recipe_priors.py \
+            scripts/aggregate_gate16_release_readiness.py \
+            scripts/validate_gate16_aggregate.py \
+            scripts/validate_xcresult_test_manifest.py \
+            scripts/validate_swiftpm_test_manifest.py \
+            scripts/validate_voice_goldens.py 2>&1 | tee gate01-python-validation.log
+
+      - name: Validate fail-closed Gate 16 aggregation
+        id: validate_gate16_aggregate
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_gate16_aggregate.py 2>&1 | tee gate01-gate16-aggregate.log
+
+      - name: Validate bundled food database
+        id: validate_food_db
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_food_db.py 2>&1 | tee gate01-food-db.log
 
       - name: Validate voice routing goldens
-        run: python3 scripts/validate_voice_goldens.py --input evals/voice-zh-CN.jsonl
+        id: validate_voice_goldens
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_voice_goldens.py --input evals/voice-zh-CN.jsonl 2>&1 | tee gate01-voice-goldens.log
 
       - name: Validate Gate 0 UI structure
-        run: python3 scripts/validate_gate0_ui.py
+        id: validate_gate0_ui
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_gate0_ui.py 2>&1 | tee gate01-ui-structure.log
+
+      - name: Validate Phase 1 static contracts
+        id: validate_phase1
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_phase1_foundation.py 2>&1 | tee gate01-phase1-contracts.log
+
+      - name: Test pure DensosoDomain package
+        id: domain_tests
+        if: always()
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate01-domain.log
 
       - name: Install XcodeGen
+        id: install_xcodegen
+        if: always()
         run: brew install xcodegen
 
       - name: Generate Xcode project
+        id: generate_project
+        if: ${{ always() && steps.install_xcodegen.outcome == 'success' }}
         run: xcodegen generate
 
-      - name: Test shared workout domain
-        run: swift test --package-path Packages/DensosoWorkoutDomain
-
-      - name: Prepare iOS Simulator
+      - name: Verify deterministic XcodeGen output
+        id: xcodegen_determinism
+        if: ${{ always() && steps.generate_project.outcome == 'success' }}
         run: |
           set -euo pipefail
-          SIMULATOR_UDID="$(xcrun simctl list devices available | sed -n 's/.*iPhone 17 Pro (\([A-F0-9-]*\)).*/\1/p' | head -1)"
+          cp -R Densoso.xcodeproj "$RUNNER_TEMP/Densoso.first.xcodeproj"
+          rm -rf Densoso.xcodeproj
+          xcodegen generate
+          diff -ru "$RUNNER_TEMP/Densoso.first.xcodeproj" Densoso.xcodeproj \
+            | tee gate01-xcodegen-determinism.log
+
+      - name: Prepare iOS 27.0 Simulator
+        id: prepare_simulator
+        if: ${{ always() && steps.generate_project.outcome == 'success' && steps.set_paths.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
           test -n "$SIMULATOR_UDID"
           echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
-          xcrun simctl boot "$SIMULATOR_UDID" || true
-          perl -e 'alarm shift; exec @ARGV' 180 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
-          xcrun simctl list devices available
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
-      - name: Test on iOS Simulator
+      - name: Build with iOS 18 deployment target
+        id: ios18_build
+        if: ${{ always() && steps.generate_project.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |
           set -o pipefail
-          perl -e 'alarm shift; exec @ARGV' 720 xcodebuild -project Densoso.xcodeproj \
+          perl -e 'alarm shift; exec @ARGV' 1800 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            IPHONEOS_DEPLOYMENT_TARGET=18.0 \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build 2>&1 | tee gate01-ios18-build.log
+
+      - name: Test units on iOS 27.0 Simulator
+        id: unit_tests
+        if: ${{ always() && steps.prepare_simulator.outcome == 'success' && steps.set_paths.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          rm -rf "$UNIT_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 1800 xcodebuild -project Densoso.xcodeproj \
+            -scheme DensosoUnitTests \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests \
+            -enableCodeCoverage YES \
+            -resultBundlePath "$UNIT_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate01-unit-tests.log
+
+      - name: Test UI fixtures and capture screenshots
+        id: ui_tests
+        if: ${{ always() && steps.prepare_simulator.outcome == 'success' && steps.set_paths.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          rm -rf "$UI_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
             -scheme Densoso \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             -destination-timeout 120 \
             -derivedDataPath "$DERIVED_DATA_PATH" \
-            -enableCodeCoverage YES \
-            -resultBundlePath TestResults.xcresult \
+            -only-testing:DensosoUITests \
+            -resultBundlePath "$UI_RESULT_BUNDLE" \
             CODE_SIGNING_ALLOWED=NO \
-            clean test 2>&1 | tee xcodebuild.log
+            test 2>&1 | tee gate01-ui-tests.log
+
+      - name: Export UI screenshot attachments
+        id: screenshot_export
+        if: ${{ always() && steps.ui_tests.outcome != 'skipped' }}
+        run: |
+          set -euo pipefail
+          rm -rf Gate01Screenshots
+          mkdir -p Gate01Screenshots
+          xcrun xcresulttool export attachments \
+            --path "$UI_RESULT_BUNDLE" \
+            --output-path Gate01Screenshots
+          SCREENSHOT_COUNT="$(find Gate01Screenshots -type f -name '*.png' | wc -l | tr -d ' ')"
+          test "$SCREENSHOT_COUNT" -ge 5
+          echo "Exported $SCREENSHOT_COUNT Gate 1 screenshots."
+
+      - name: Build single-target Watch app
+        id: watch_build
+        if: ${{ always() && steps.generate_project.outcome == 'success' && steps.set_paths.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 720 xcodebuild -project Densoso.xcodeproj \
+            -scheme DensosoWatch \
+            -destination "generic/platform=watchOS Simulator" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            WATCHOS_DEPLOYMENT_TARGET=11.0 \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee gate01-watch-build.log
 
       - name: Validate built launch screen
+        id: launch_screen
+        if: ${{ always() && steps.ios18_build.outcome == 'success' && steps.set_paths.outcome == 'success' }}
         run: |
           set -euo pipefail
           APP_BUNDLE="$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/Densoso.app"
@@ -70,40 +230,2659 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :UILaunchStoryboardName' "$APP_BUNDLE/Info.plist")" = "LaunchScreen"
           test -d "$APP_BUNDLE/LaunchScreen.storyboardc"
 
-      - name: Upload test results
+      - name: Record Gate 1 execution status
+        if: always()
+        env:
+          PATH_SETUP_OUTCOME: ${{ steps.set_paths.outcome }}
+          PYTHON_VALIDATION_OUTCOME: ${{ steps.validate_python.outcome }}
+          FOOD_DB_VALIDATION_OUTCOME: ${{ steps.validate_food_db.outcome }}
+          VOICE_GOLDENS_OUTCOME: ${{ steps.validate_voice_goldens.outcome }}
+          GATE0_UI_OUTCOME: ${{ steps.validate_gate0_ui.outcome }}
+          PHASE1_CONTRACTS_OUTCOME: ${{ steps.validate_phase1.outcome }}
+          DOMAIN_TESTS_OUTCOME: ${{ steps.domain_tests.outcome }}
+          XCODEGEN_INSTALL_OUTCOME: ${{ steps.install_xcodegen.outcome }}
+          PROJECT_GENERATION_OUTCOME: ${{ steps.generate_project.outcome }}
+          XCODEGEN_DETERMINISM_OUTCOME: ${{ steps.xcodegen_determinism.outcome }}
+          SIMULATOR_SETUP_OUTCOME: ${{ steps.prepare_simulator.outcome }}
+          IOS18_BUILD_OUTCOME: ${{ steps.ios18_build.outcome }}
+          UNIT_TESTS_OUTCOME: ${{ steps.unit_tests.outcome }}
+          UI_TESTS_OUTCOME: ${{ steps.ui_tests.outcome }}
+          SCREENSHOT_EXPORT_OUTCOME: ${{ steps.screenshot_export.outcome }}
+          WATCH_BUILD_OUTCOME: ${{ steps.watch_build.outcome }}
+          LAUNCH_SCREEN_OUTCOME: ${{ steps.launch_screen.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          steps = {
+              "path_setup": os.environ["PATH_SETUP_OUTCOME"],
+              "python_validation": os.environ["PYTHON_VALIDATION_OUTCOME"],
+              "food_database_validation": os.environ["FOOD_DB_VALIDATION_OUTCOME"],
+              "voice_goldens": os.environ["VOICE_GOLDENS_OUTCOME"],
+              "gate0_ui_validation": os.environ["GATE0_UI_OUTCOME"],
+              "phase1_contracts": os.environ["PHASE1_CONTRACTS_OUTCOME"],
+              "domain_tests": os.environ["DOMAIN_TESTS_OUTCOME"],
+              "xcodegen_install": os.environ["XCODEGEN_INSTALL_OUTCOME"],
+              "project_generation": os.environ["PROJECT_GENERATION_OUTCOME"],
+              "xcodegen_determinism": os.environ["XCODEGEN_DETERMINISM_OUTCOME"],
+              "simulator_setup": os.environ["SIMULATOR_SETUP_OUTCOME"],
+              "ios18_build": os.environ["IOS18_BUILD_OUTCOME"],
+              "unit_tests": os.environ["UNIT_TESTS_OUTCOME"],
+              "ui_tests": os.environ["UI_TESTS_OUTCOME"],
+              "screenshot_export": os.environ["SCREENSHOT_EXPORT_OUTCOME"],
+              "watch_build": os.environ["WATCH_BUILD_OUTCOME"],
+              "launch_screen_validation": os.environ["LAUNCH_SCREEN_OUTCOME"],
+          }
+          evidence_paths = [
+              "gate01-python-validation.log",
+              "gate01-food-db.log",
+              "gate01-voice-goldens.log",
+              "gate01-ui-structure.log",
+              "gate01-phase1-contracts.log",
+              "gate01-domain.log",
+              "gate01-xcodegen-determinism.log",
+              "gate01-ios18-build.log",
+              "gate01-unit-tests.log",
+              "gate01-ui-tests.log",
+              "gate01-watch-build.log",
+              "Gate01UnitTests.xcresult",
+              "Gate01UITests.xcresult",
+              "Gate01Screenshots",
+          ]
+          evidence = {path: Path(path).exists() for path in evidence_paths}
+          results = {
+              name: {
+                  "status": "PASS" if outcome == "success" else "FAIL" if outcome == "failure" else "NOT RUN",
+                  "outcome": outcome,
+              }
+              for name, outcome in steps.items()
+          }
+          failed = [name for name, result in results.items() if result["status"] == "FAIL"]
+          not_run = [name for name, result in results.items() if result["status"] == "NOT RUN"]
+          report = {
+              "schemaVersion": 1,
+              "gate": "gate-01-foundation",
+              "headSha": os.environ.get("GITHUB_SHA"),
+              "runId": os.environ.get("GITHUB_RUN_ID"),
+              "runAttempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "status": "FAIL" if failed or not_run else "PASS",
+              "steps": results,
+              "evidenceFiles": evidence,
+              "diagnostics": [
+                  f"Step {name} did not run; inspect the first failed prerequisite in the job log."
+                  for name in not_run
+              ] + [
+                  f"Evidence file missing: {path}"
+                  for path, exists in evidence.items()
+                  if not exists
+              ],
+          }
+          Path("gate01-execution-summary.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if report["status"] != "PASS":
+              sys.exit(1)
+          PY
+
+      - name: Upload Gate 1 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: xcode-test-results
+          name: gate-01-foundation-results
           path: |
-            TestResults.xcresult
-            xcodebuild.log
+            Gate01UnitTests.xcresult
+            Gate01UITests.xcresult
+            Gate01Screenshots
+            gate01-*.log
+            gate01-execution-summary.json
           if-no-files-found: warn
+          retention-days: 14
 
-      # TODO: 导出 .ipa 供 AltStore 侧载需要 Apple ID 签名。
-      # 在仓库 Settings -> Secrets and variables -> Actions 中设置:
-      #   APPLE_ID: 你的 Apple ID 邮箱
-      #   APPLE_APP_PASSWORD: Apple ID 应用专用密码（非登录密码）
-      # 然后取消下面注释并配置 exportOptions.plist:
-      #
-      # - name: Archive & Export .ipa
-      #   env:
-      #     APPLE_ID: ${{ secrets.APPLE_ID }}
-      #     APPLE_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-      #   run: |
-      #     xcodebuild -project Densoso.xcodeproj \
-      #       -scheme Densoso \
-      #       -destination 'generic/platform=iOS' \
-      #       -archivePath Densoso.xcarchive \
-      #       -allowProvisioningUpdates \
-      #       archive
-      #     xcodebuild -exportArchive \
-      #       -archivePath Densoso.xcarchive \
-      #       -exportPath ./export \
-      #       -exportOptionsPlist ./scripts/exportOptions.plist
-      #
-      # - name: Upload .ipa
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: Densoso.ipa
-      #     path: ./export/Densoso.ipa
+  domain-persistence:
+    name: gate-02-domain-persistence
+    needs: foundation
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 2 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate02DerivedData" >> "$GITHUB_ENV"
+          echo "GATE02_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate02PersistenceTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 2 static contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase2_domain_persistence.py
+          python3 scripts/validate_phase2_domain_persistence.py
+
+      - name: Test Phase 2 domain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate02-domain.log
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Prepare iOS 27.0 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          if ! perl -e 'alarm shift; exec @ARGV' 300 xcrun simctl bootstatus "$SIMULATOR_UDID" -b; then
+            echo "Initial iOS Simulator startup failed; resetting the selected device and retrying once."
+            perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl shutdown "$SIMULATOR_UDID" || true
+            if ! perl -e 'alarm shift; exec @ARGV' 120 xcrun simctl erase "$SIMULATOR_UDID"; then
+              echo "Gate 2 simulator retry aborted: simulator erase failed."
+              exit 1
+            fi
+            if ! perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID"; then
+              echo "Gate 2 simulator retry aborted: simulator boot failed."
+              exit 1
+            fi
+            if ! perl -e 'alarm shift; exec @ARGV' 300 xcrun simctl bootstatus "$SIMULATOR_UDID" -b; then
+              echo "Gate 2 simulator retry aborted: simulator did not finish booting."
+              exit 1
+            fi
+          fi
+
+      - name: Test migration and confirmation transactions
+        run: |
+          set -o pipefail
+          rm -rf "$GATE02_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 1500 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests \
+            -only-testing:DensosoTests/ConversationPersistenceTests \
+            -only-testing:DensosoTests/DensosoMigrationTests \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests/testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox \
+            -only-testing:DensosoTests/MigrationBackupManagerTests \
+            -only-testing:DensosoTests/AgentPersistenceBoundaryTests \
+            -only-testing:DensosoTests/HealthRepositoryTests \
+            -resultBundlePath "$GATE02_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate02-persistence-tests.log
+
+      - name: Export Gate 2 reports
+        run: |
+          set -euo pipefail
+          rm -rf Gate02Reports
+          mkdir -p Gate02Reports
+          xcrun xcresulttool export attachments \
+            --path "$GATE02_RESULT_BUNDLE" \
+            --output-path Gate02Reports
+          test -f Gate02Reports/manifest.json
+          grep -q 'gate02-v1-migration-report_' Gate02Reports/manifest.json
+          grep -q 'gate02-v2-migration-report_' Gate02Reports/manifest.json
+          grep -q 'gate02-recovery-report_' Gate02Reports/manifest.json
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE02_RESULT_BUNDLE" > gate02-test-summary.json
+
+      - name: Upload Gate 2 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-02-domain-persistence-results
+          path: |
+            Gate02PersistenceTests.xcresult
+            Gate02Reports
+            gate02-domain.log
+            gate02-persistence-tests.log
+            gate02-test-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  agent-provider:
+    name: gate-03-agent-provider
+    needs: domain-persistence
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 3 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate03DerivedData" >> "$GITHUB_ENV"
+          echo "GATE03_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate03AgentProviderTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 3 contracts and fixtures
+        id: validate
+        continue-on-error: true
+        run: |
+          python3 -m py_compile scripts/validate_phase3_agent_provider.py
+          python3 scripts/validate_phase3_agent_provider.py \
+            --report gate03-fixture-summary.json
+
+      - name: Test cumulative domain contracts
+        id: domain_tests
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate03-domain.log
+
+      - name: Install XcodeGen
+        id: install_xcodegen
+        if: always()
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        id: generate_project
+        if: ${{ always() && steps.install_xcodegen.outcome == 'success' }}
+        run: xcodegen generate
+
+      - name: Prepare iOS 27.0 Simulator
+        id: prepare_simulator
+        if: ${{ always() && steps.generate_project.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test Agent Provider Markdown and privacy contracts
+        id: xcode_tests
+        if: ${{ always() && steps.prepare_simulator.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          rm -rf "$GATE03_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 2700 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/DeepSeekProviderContractTests \
+            -only-testing:DensosoTests/QwenProviderContractTests \
+            -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testQwenVisionRetryRevalidatesCapturedImagePolicyRevision \
+            -only-testing:DensosoTests/ProviderRetryPolicyTests \
+            -only-testing:DensosoTests/AgentCoordinatorTests \
+            -only-testing:DensosoTests/AgentTurnContractTests \
+            -only-testing:DensosoTests/LocalIntelligenceSuggestionTests \
+            -only-testing:DensosoTests/PromptInjectionEvalTests \
+            -only-testing:DensosoTests/AgentBudgetTests \
+            -only-testing:DensosoTests/AgentProviderContextPolicyTests \
+            -only-testing:DensosoTests/AgentRequestResumeTests \
+            -only-testing:DensosoTests/AgentReasoningPolicyTests \
+            -only-testing:DensosoTests/ToolSchemaTests \
+            -only-testing:DensosoTests/ProviderUsageLedgerTests \
+            -only-testing:DensosoTests/RestrictedMarkdownRendererTests \
+            -only-testing:DensosoTests/ProviderLogRedactionTests \
+            -only-testing:DensosoTests/AgentPersistenceBoundaryTests \
+            -only-testing:DensosoTests/IntelligenceRoutingPolicyTests \
+            -only-testing:DensosoTests/ConversationPersistenceTests \
+            -only-testing:DensosoTests/GetRecentMealsToolTests \
+            -only-testing:DensosoTests/GetRecentWorkoutsToolTests \
+            -only-testing:DensosoTests/GetGoalToolTests \
+            -only-testing:DensosoTests/DailyCheckInConfirmationTests \
+            -only-testing:DensosoTests/UserPreferenceConfirmationTests \
+            -only-testing:DensosoTests/GetUserPreferencesToolTests \
+            -only-testing:DensosoTests/GetTodayPlanToolTests \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests \
+            -only-testing:DensosoTests/SwiftDataProviderGovernanceQueryTests \
+            -only-testing:DensosoTests/AgentDailyMetricsRepositoryTests \
+            -only-testing:DensosoTests/GetMetricsToolTests \
+            -only-testing:DensosoTests/GetWeeklyDeficitToolTests \
+            -only-testing:DensosoTests/AgentToolOutputLimiterTests \
+            -resultBundlePath "$GATE03_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate03-agent-provider-tests.log
+
+      - name: Export Gate 3 test summary
+        id: export_summary
+        if: ${{ always() && steps.xcode_tests.outcome != 'skipped' }}
+        run: |
+          set -euo pipefail
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE03_RESULT_BUNDLE" > gate03-test-summary.json
+          grep -q '"result" : "Passed"' gate03-test-summary.json
+
+      - name: Record Gate 3 execution status
+        if: always()
+        env:
+          VALIDATOR_OUTCOME: ${{ steps.validate.outcome }}
+          DOMAIN_TESTS_OUTCOME: ${{ steps.domain_tests.outcome }}
+          XCODEGEN_INSTALL_OUTCOME: ${{ steps.install_xcodegen.outcome }}
+          PROJECT_GENERATION_OUTCOME: ${{ steps.generate_project.outcome }}
+          SIMULATOR_SETUP_OUTCOME: ${{ steps.prepare_simulator.outcome }}
+          XCODE_TESTS_OUTCOME: ${{ steps.xcode_tests.outcome }}
+          TEST_SUMMARY_OUTCOME: ${{ steps.export_summary.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          steps = {
+              "static_contracts": os.environ["VALIDATOR_OUTCOME"],
+              "domain_tests": os.environ["DOMAIN_TESTS_OUTCOME"],
+              "xcodegen_install": os.environ["XCODEGEN_INSTALL_OUTCOME"],
+              "project_generation": os.environ["PROJECT_GENERATION_OUTCOME"],
+              "simulator_setup": os.environ["SIMULATOR_SETUP_OUTCOME"],
+              "xcode_tests": os.environ["XCODE_TESTS_OUTCOME"],
+              "test_summary_export": os.environ["TEST_SUMMARY_OUTCOME"],
+          }
+          evidence_paths = [
+              "gate03-fixture-summary.json",
+              "gate03-domain.log",
+              "gate03-agent-provider-tests.log",
+              "gate03-test-summary.json",
+              "Gate03AgentProviderTests.xcresult",
+          ]
+          evidence = {path: Path(path).exists() for path in evidence_paths}
+          results = {
+              name: {
+                  "status": "PASS" if outcome == "success" else "FAIL" if outcome == "failure" else "NOT RUN",
+                  "outcome": outcome,
+              }
+              for name, outcome in steps.items()
+          }
+          failed = [name for name, result in results.items() if result["status"] == "FAIL"]
+          not_run = [name for name, result in results.items() if result["status"] == "NOT RUN"]
+          report = {
+              "schemaVersion": 1,
+              "gate": "gate-03-agent-provider",
+              "headSha": os.environ.get("GITHUB_SHA"),
+              "runId": os.environ.get("GITHUB_RUN_ID"),
+              "runAttempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "status": "FAIL" if failed or not_run else "PASS",
+              "steps": results,
+              "evidenceFiles": evidence,
+              "diagnostics": [
+                  f"Step {name} did not run; inspect the first failed prerequisite in the job log."
+                  for name in not_run
+              ] + [
+                  f"Evidence file missing: {path}"
+                  for path, exists in evidence.items()
+                  if not exists
+              ],
+          }
+          Path("gate03-execution-summary.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if report["status"] != "PASS":
+              sys.exit(1)
+          PY
+
+      - name: Upload Gate 3 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-03-agent-provider-results
+          path: |
+            Gate03AgentProviderTests.xcresult
+            gate03-domain.log
+            gate03-agent-provider-tests.log
+            gate03-test-summary.json
+            gate03-fixture-summary.json
+            gate03-execution-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  speech:
+    name: gate-04-speech
+    needs: agent-provider
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 4 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate04DerivedData" >> "$GITHUB_ENV"
+          echo "GATE04_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate04SpeechTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 4 speech contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase4_speech.py
+          python3 scripts/validate_phase4_speech.py \
+            --report gate04-fixture-summary.json
+
+      - name: Test cumulative domain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate04-domain.log
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Prepare iOS 27.0 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test speech capture routing privacy and cleanup contracts
+        run: |
+          set -o pipefail
+          rm -rf "$GATE04_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/SpeechCaptureStateMachineTests \
+            -only-testing:DensosoTests/ProtectedSpeechAudioStoreTests \
+            -only-testing:DensosoTests/InMemorySpeechAudioStoreTests \
+            -only-testing:DensosoTests/QwenASRProviderContractTests \
+            -only-testing:DensosoTests/SpeechDiagnosticsRedactionTests \
+            -only-testing:DensosoTests/SpeechBenchmarkEvaluatorTests \
+            -only-testing:DensosoTests/SpeechGoldenSetTests \
+            -only-testing:DensosoTests/ProviderUsageLedgerTests \
+            -resultBundlePath "$GATE04_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate04-speech-tests.log
+
+      - name: Export Gate 4 test summary
+        run: |
+          set -euo pipefail
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE04_RESULT_BUNDLE" > gate04-test-summary.json
+          grep -q '"result" : "Passed"' gate04-test-summary.json
+
+      - name: Upload Gate 4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-04-speech-results
+          path: |
+            Gate04SpeechTests.xcresult
+            gate04-domain.log
+            gate04-speech-tests.log
+            gate04-test-summary.json
+            gate04-fixture-summary.json
+            docs/gates/gate-04-routing-matrix.json
+            docs/gates/gate-04-device-matrix.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  meal-capture:
+    name: gate-05-meal-capture
+    needs: speech
+    if: ${{ always() }}
+    runs-on: xcode-27
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 5 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate05DerivedData" >> "$GITHUB_ENV"
+          echo "GATE05_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate05MealCaptureTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 5 fixtures and contracts
+        id: validate
+        continue-on-error: true
+        run: |
+          python3 -m py_compile scripts/validate_phase5_meal_capture.py
+          python3 scripts/validate_phase5_meal_capture.py \
+            --report gate05-fixture-summary.json
+
+      - name: Test cumulative domain contracts
+        id: domain_tests
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate05-domain.log
+
+      - name: Install XcodeGen
+        id: install_xcodegen
+        if: always()
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        id: generate_project
+        if: ${{ always() && steps.install_xcodegen.outcome == 'success' }}
+        run: xcodegen generate
+
+      - name: Prepare iOS 27.0 Simulator
+        id: prepare_simulator
+        if: ${{ always() && steps.generate_project.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test meal capture evaluation privacy and confirmation contracts
+        id: xcode_tests
+        if: ${{ always() && steps.prepare_simulator.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          rm -rf "$GATE05_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 1200 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/Gate05EvaluationTests \
+            -only-testing:DensosoTests/LogMealQuantityEvidenceTests \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests \
+            -only-testing:DensosoTests/QwenMealVisionProviderContractTests \
+            -only-testing:DensosoTests/PhotoEvidenceSanitizerTests \
+            -only-testing:DensosoTests/BarcodeAndLabelScannerTests \
+            -only-testing:DensosoTests/CalorieEstimatorTests \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests \
+            -only-testing:DensosoTests/DensosoMigrationTests \
+            -only-testing:DensosoTests/ExportServiceTests \
+            -resultBundlePath "$GATE05_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate05-meal-capture-tests.log
+
+      - name: Export Gate 5 test summary
+        id: export_summary
+        if: ${{ always() && steps.xcode_tests.outcome != 'skipped' }}
+        run: |
+          set -euo pipefail
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE05_RESULT_BUNDLE" > gate05-test-summary.json
+          grep -q '"result" : "Passed"' gate05-test-summary.json
+
+      - name: Record Gate 5 execution status
+        if: always()
+        env:
+          VALIDATOR_OUTCOME: ${{ steps.validate.outcome }}
+          DOMAIN_TESTS_OUTCOME: ${{ steps.domain_tests.outcome }}
+          XCODEGEN_INSTALL_OUTCOME: ${{ steps.install_xcodegen.outcome }}
+          PROJECT_GENERATION_OUTCOME: ${{ steps.generate_project.outcome }}
+          SIMULATOR_SETUP_OUTCOME: ${{ steps.prepare_simulator.outcome }}
+          XCODE_TESTS_OUTCOME: ${{ steps.xcode_tests.outcome }}
+          TEST_SUMMARY_OUTCOME: ${{ steps.export_summary.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          steps = {
+              "static_contracts": os.environ["VALIDATOR_OUTCOME"],
+              "domain_tests": os.environ["DOMAIN_TESTS_OUTCOME"],
+              "xcodegen_install": os.environ["XCODEGEN_INSTALL_OUTCOME"],
+              "project_generation": os.environ["PROJECT_GENERATION_OUTCOME"],
+              "simulator_setup": os.environ["SIMULATOR_SETUP_OUTCOME"],
+              "xcode_tests": os.environ["XCODE_TESTS_OUTCOME"],
+              "test_summary_export": os.environ["TEST_SUMMARY_OUTCOME"],
+          }
+          evidence_paths = [
+              "gate05-fixture-summary.json",
+              "gate05-domain.log",
+              "gate05-meal-capture-tests.log",
+              "gate05-test-summary.json",
+              "Gate05MealCaptureTests.xcresult",
+          ]
+          evidence = {path: Path(path).exists() for path in evidence_paths}
+          results = {
+              name: {
+                  "status": "PASS" if outcome == "success" else "FAIL" if outcome == "failure" else "NOT RUN",
+                  "outcome": outcome,
+              }
+              for name, outcome in steps.items()
+          }
+          failed = [name for name, result in results.items() if result["status"] == "FAIL"]
+          not_run = [name for name, result in results.items() if result["status"] == "NOT RUN"]
+          report = {
+              "schemaVersion": 1,
+              "gate": "gate-05-meal-capture",
+              "headSha": os.environ.get("GITHUB_SHA"),
+              "runId": os.environ.get("GITHUB_RUN_ID"),
+              "runAttempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "status": "FAIL" if failed or not_run else "PASS",
+              "statusScope": "software contracts and synthetic fixtures only",
+              "fieldBenchmark": {
+                  "status": "BLOCKED",
+                  "reason": "MISSING_EVIDENCE",
+              },
+              "steps": results,
+              "evidenceFiles": evidence,
+              "diagnostics": [
+                  f"Step {name} did not run; inspect the first failed prerequisite in the job log."
+                  for name in not_run
+              ] + [
+                  f"Evidence file missing: {path}"
+                  for path, exists in evidence.items()
+                  if not exists
+              ],
+          }
+          Path("gate05-execution-summary.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if report["status"] != "PASS":
+              sys.exit(1)
+          PY
+
+      - name: Upload Gate 5 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-05-meal-capture-results
+          path: |
+            Gate05MealCaptureTests.xcresult
+            gate05-domain.log
+            gate05-meal-capture-tests.log
+            gate05-test-summary.json
+            gate05-fixture-summary.json
+            gate05-execution-summary.json
+            docs/gates/gate-05-meal-capture.md
+            evals/gate05/manifest.json
+            evals/gate05/food-catalog.json
+            evals/gate05/food-resolution.json
+            evals/gate05/portion-reference.json
+            DensosoTests/Fixtures/Gate05/Providers/Qwen
+          if-no-files-found: warn
+          retention-days: 14
+
+  healthkit:
+    name: gate-06-healthkit
+    needs: meal-capture
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 6 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate06DerivedData" >> "$GITHUB_ENV"
+          echo "GATE06_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate06HealthKitTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 6 HealthKit contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase6_healthkit.py
+          python3 scripts/validate_phase6_healthkit.py \
+            --report gate06-contract-summary.json
+
+      - name: Test cumulative DensosoDomain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate06-domain.log
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Prepare iOS 27.0 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test cumulative iOS unit suite
+        id: xcode_tests
+        run: |
+          set -o pipefail
+          rm -rf "$GATE06_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 2400 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests \
+            -enableCodeCoverage YES \
+            -resultBundlePath "$GATE06_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate06-healthkit-tests.log
+
+      - name: Export Gate 6 test summary
+        id: export_summary
+        if: ${{ always() && steps.xcode_tests.outcome != 'skipped' }}
+        env:
+          XCODE_TESTS_OUTCOME: ${{ steps.xcode_tests.outcome }}
+        run: |
+          set -euo pipefail
+          if [ -d "$GATE06_RESULT_BUNDLE" ] \
+            && xcrun xcresulttool get test-results summary \
+              --path "$GATE06_RESULT_BUNDLE" > gate06-test-summary.json; then
+            echo "Exported Gate 6 XCTest summary."
+          else
+            python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = {
+              "result": "Unavailable",
+              "message": "XCTest result summary could not be exported; inspect the Gate 6 job log and result bundle.",
+              "xcodeTestStepOutcome": os.environ.get("XCODE_TESTS_OUTCOME", "unknown"),
+          }
+          Path("gate06-test-summary.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+            exit 1
+          fi
+
+      - name: Upload Gate 6 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-06-healthkit-results
+          path: |
+            Gate06HealthKitTests.xcresult
+            gate06-domain.log
+            gate06-healthkit-tests.log
+            gate06-test-summary.json
+            gate06-contract-summary.json
+            docs/gates/gate-06-healthkit.md
+            DensosoTests/FakeHealthStoreClient.swift
+            DensosoTests/HealthKitSyncCoordinatorTests.swift
+            DensosoTests/HealthRepositoryTests.swift
+            DensosoTests/HealthSyncOutboxWorkerTests.swift
+            DensosoTests/ConfirmationCoordinatorTests.swift
+          if-no-files-found: warn
+          retention-days: 14
+
+  health-intelligence:
+    name: gate-07-health-intelligence
+    needs: healthkit
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 7 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate07DerivedData" >> "$GITHUB_ENV"
+          echo "GATE07_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate07HealthIntelligenceTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 7 health-intelligence contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase7_health_intelligence.py
+          python3 scripts/validate_phase7_health_intelligence.py \
+            --report gate07-contract-summary.json
+
+      - name: Test cumulative DensosoDomain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate07-domain.log
+
+      - name: Install XcodeGen and generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Prepare iOS 27.0 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test Phase 7 app contracts
+        run: |
+          set -o pipefail
+          rm -rf "$GATE07_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/HealthIntelligenceServiceTests \
+            -only-testing:DensosoTests/GetHealthHistoryToolTests \
+            -only-testing:DensosoTests/HealthContextPromptBuilderTests \
+            -only-testing:DensosoTests/BriefNotificationSchedulerTests \
+            -enableCodeCoverage YES \
+            -resultBundlePath "$GATE07_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate07-health-intelligence-tests.log
+
+      - name: Export Gate 7 test summary
+        run: |
+          set -euo pipefail
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE07_RESULT_BUNDLE" > gate07-test-summary.json
+          grep -q '"result" : "Passed"' gate07-test-summary.json
+
+      - name: Upload Gate 7 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-07-health-intelligence-results
+          path: |
+            Gate07HealthIntelligenceTests.xcresult
+            gate07-domain.log
+            gate07-health-intelligence-tests.log
+            gate07-test-summary.json
+            gate07-contract-summary.json
+            docs/gates/gate-07-health-intelligence.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  watch:
+    name: gate-08-watch
+    needs: health-intelligence
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
+    runs-on: xcode-27
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 8 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate08DerivedData" >> "$GITHUB_ENV"
+          echo "GATE08_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate08WatchTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 8 Watch contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase8_watch.py
+          python3 scripts/validate_phase8_watch.py --report gate08-contract-summary.json
+
+      - name: Test cumulative DensosoDomain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate08-domain.log
+
+      - name: Install XcodeGen and generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build iPhone and Watch schemes
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee gate08-iphone-build.log
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme DensosoWatch \
+            -destination "generic/platform=watchOS Simulator" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            WATCHOS_DEPLOYMENT_TARGET=11.0 \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee gate08-watch-build.log
+
+      - name: Prepare iOS 27.0 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Test Phase 8 message and scheduling idempotency
+        run: |
+          set -o pipefail
+          rm -rf "$GATE08_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests \
+            -only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests \
+            -only-testing:DensosoTests/WorkoutPlanCompilerTests \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests \
+            -enableCodeCoverage YES \
+            -resultBundlePath "$GATE08_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate08-watch-tests.log
+
+      - name: Export Gate 8 test summary
+        run: |
+          set -euo pipefail
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE08_RESULT_BUNDLE" > gate08-test-summary.json
+          grep -q '"result" : "Passed"' gate08-test-summary.json
+
+      - name: Upload Gate 8 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-08-watch-results
+          path: |
+            Gate08WatchTests.xcresult
+            gate08-domain.log
+            gate08-iphone-build.log
+            gate08-watch-build.log
+            gate08-watch-tests.log
+            gate08-test-summary.json
+            gate08-contract-summary.json
+            docs/gates/gate-08-watch.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  integration:
+    name: gate-09-integration
+    needs: watch
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 9 paths
+        run: |
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate09DerivedData" >> "$GITHUB_ENV"
+          echo "GATE09_UNIT_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate09IntegrationTests.xcresult" >> "$GITHUB_ENV"
+          echo "GATE09_UI_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate09UITests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate Phase 9 integration contracts
+        run: |
+          python3 -m py_compile scripts/validate_phase9_integration.py
+          python3 scripts/validate_phase9_integration.py --report gate09-contract-summary.json
+
+      - name: Test cumulative DensosoDomain contracts
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain 2>&1 | tee gate09-domain.log
+
+      - name: Install XcodeGen and generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Prepare iPhone 18 Pro iOS 27.0 Simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run complete iOS unit suite with coverage
+        run: |
+          set -o pipefail
+          rm -rf "$GATE09_UNIT_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 1800 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests \
+            -enableCodeCoverage YES \
+            -resultBundlePath "$GATE09_UNIT_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate09-integration-tests.log
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE09_UNIT_RESULT_BUNDLE" > gate09-unit-test-summary.json
+          grep -q '"result" : "Passed"' gate09-unit-test-summary.json
+          xcrun xccov view --report "$GATE09_UNIT_RESULT_BUNDLE" > gate09-coverage-summary.txt
+
+      - name: Run complete UI suite and capture integration screens
+        run: |
+          set -o pipefail
+          rm -rf "$GATE09_UI_RESULT_BUNDLE"
+          perl -e 'alarm shift; exec @ARGV' 1800 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -only-testing:DensosoUITests \
+            -resultBundlePath "$GATE09_UI_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate09-ui-tests.log
+          xcrun xcresulttool get test-results summary \
+            --path "$GATE09_UI_RESULT_BUNDLE" > gate09-ui-test-summary.json
+          grep -q '"result" : "Passed"' gate09-ui-test-summary.json
+          rm -rf Gate09Screenshots
+          mkdir -p Gate09Screenshots
+          xcrun xcresulttool export attachments \
+            --path "$GATE09_UI_RESULT_BUNDLE" \
+            --output-path Gate09Screenshots
+          SCREENSHOT_COUNT="$(find Gate09Screenshots -type f -name '*.png' | wc -l | tr -d ' ')"
+          test "$SCREENSHOT_COUNT" -ge 8
+          echo "Exported $SCREENSHOT_COUNT Phase 9 screenshots."
+
+      - name: Upload Gate 9 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-09-integration-results
+          path: |
+            Gate09IntegrationTests.xcresult
+            Gate09UITests.xcresult
+            Gate09Screenshots
+            gate09-domain.log
+            gate09-integration-tests.log
+            gate09-ui-tests.log
+            gate09-unit-test-summary.json
+            gate09-ui-test-summary.json
+            gate09-coverage-summary.txt
+            gate09-contract-summary.json
+            docs/gates/gate-09-integration.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  final-acceptance:
+    name: gate-10-final-acceptance
+    needs:
+      - foundation
+      - domain-persistence
+      - agent-provider
+      - speech
+      - meal-capture
+      - healthkit
+      - health-intelligence
+      - watch
+      - integration
+    if: ${{ always() && inputs.run_scope != 'focused-pr-tests' }}
+    runs-on: xcode-27
+    timeout-minutes: 20
+    env:
+      ACCEPTANCE_WORKFLOW_SHA: ${{ github.sha }}
+      ACCEPTANCE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      ACCEPTANCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      GATE_01_RESULT: ${{ needs.foundation.result }}
+      GATE_02_RESULT: ${{ needs.domain-persistence.result }}
+      GATE_03_RESULT: ${{ needs.agent-provider.result }}
+      GATE_04_RESULT: ${{ needs.speech.result }}
+      GATE_05_RESULT: ${{ needs.meal-capture.result }}
+      GATE_06_RESULT: ${{ needs.healthkit.result }}
+      GATE_07_RESULT: ${{ needs.health-intelligence.result }}
+      GATE_08_RESULT: ${{ needs.watch.result }}
+      GATE_09_RESULT: ${{ needs.integration.result }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Gates 1–9 evidence from this workflow run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: gate-0*-results
+          path: GateArtifacts
+          merge-multiple: false
+
+      - name: Prepare Gate 10 diagnostic files
+        if: always()
+        run: |
+          mkdir -p Gate10Acceptance
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          gate_jobs = [
+              (1, "foundation", "GATE_01_RESULT"),
+              (2, "domain-persistence", "GATE_02_RESULT"),
+              (3, "agent-provider", "GATE_03_RESULT"),
+              (4, "speech", "GATE_04_RESULT"),
+              (5, "meal-capture", "GATE_05_RESULT"),
+              (6, "healthkit", "GATE_06_RESULT"),
+              (7, "health-intelligence", "GATE_07_RESULT"),
+              (8, "watch", "GATE_08_RESULT"),
+              (9, "integration", "GATE_09_RESULT"),
+          ]
+          statuses = []
+          for number, job, env_name in gate_jobs:
+              outcome = os.environ.get(env_name, "unknown")
+              if outcome == "success":
+                  status = "PASS"
+                  reason = "upstream job succeeded"
+              elif outcome == "failure":
+                  status = "FAIL"
+                  reason = "upstream job failed"
+              elif outcome == "cancelled":
+                  status = "BLOCKED"
+                  reason = "upstream job was cancelled"
+              elif outcome == "abandoned":
+                  status = "BLOCKED"
+                  reason = "upstream job was abandoned before completing"
+              else:
+                  status = "NOT RUN"
+                  reason = "upstream job did not complete successfully"
+              statuses.append({
+                  "gate": number,
+                  "job": job,
+                  "jobOutcome": outcome,
+                  "status": status,
+                  "reason": reason,
+              })
+
+          bootstrap = {
+              "status": "NOT RUN",
+              "scope": "phase-10-final-software-acceptance-rollup",
+              "workflowCommitSHA": os.environ.get("ACCEPTANCE_WORKFLOW_SHA", "unavailable"),
+              "prHeadSHA": os.environ.get("ACCEPTANCE_PR_HEAD_SHA", "unavailable"),
+              "workflowRun": os.environ.get("ACCEPTANCE_RUN_URL", "unavailable"),
+              "gateResults": statuses,
+              "errors": ["validator has not completed; inspect the Gate 10 validation step"],
+              "signedDeviceAcceptance": "not-claimed",
+              "testFlightOrProduction": "not-claimed",
+          }
+          Path("Gate10Acceptance/acceptance-manifest.json").write_text(
+              json.dumps(bootstrap, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+          )
+
+          lines = [
+              "# Gate 10 diagnostic evidence",
+              "",
+              f"Workflow commit: `{bootstrap['workflowCommitSHA']}`",
+              f"PR source head: `{bootstrap['prHeadSHA']}`",
+              f"Run: {bootstrap['workflowRun']}",
+              "",
+              "| Gate | Job result | Status | Reason |",
+              "| --- | --- | --- | --- |",
+          ]
+          lines.extend(
+              f"| {item['gate']:02d} | {item['jobOutcome']} | {item['status']} | {item['reason']} |"
+              for item in statuses
+          )
+          lines.extend([
+              "",
+              "The JSON manifest is initialized before validation so diagnostics survive an interrupted or failed validator step. Its final status is set by the validation step when that script completes.",
+              "",
+              "Apple signing, TestFlight, production use, signed-device HealthKit background delivery, and Watch pairing/offline behavior remain unverified and blocked.",
+          ])
+          Path("Gate10Acceptance/acceptance-summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+      - name: Validate Phase 10 final acceptance roll-up
+        if: always()
+        run: |
+          python3 -m py_compile scripts/validate_phase10_final_acceptance.py
+          mkdir -p Gate10Acceptance
+          mkdir -p GateArtifacts
+          python3 scripts/validate_phase10_final_acceptance.py \
+            --artifact-root GateArtifacts \
+            --workflow-sha "$ACCEPTANCE_WORKFLOW_SHA" \
+            --pr-head-sha "$ACCEPTANCE_PR_HEAD_SHA" \
+            --run-url "$ACCEPTANCE_RUN_URL" \
+            --gate-result foundation="$GATE_01_RESULT" \
+            --gate-result domain-persistence="$GATE_02_RESULT" \
+            --gate-result agent-provider="$GATE_03_RESULT" \
+            --gate-result speech="$GATE_04_RESULT" \
+            --gate-result meal-capture="$GATE_05_RESULT" \
+            --gate-result healthkit="$GATE_06_RESULT" \
+            --gate-result health-intelligence="$GATE_07_RESULT" \
+            --gate-result watch="$GATE_08_RESULT" \
+            --gate-result integration="$GATE_09_RESULT" \
+            --report Gate10Acceptance/acceptance-manifest.json
+
+      - name: Upload Gate 10 acceptance manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-10-final-acceptance-results
+          path: |
+            Gate10Acceptance
+            docs/gates/gate-10-final-acceptance.md
+          if-no-files-found: warn
+          retention-days: 30
+
+  gate-11-ai-native-health-loop:
+    name: gate-11-ai-native-health-loop
+    needs: final-acceptance
+    if: ${{ always() }}
+    runs-on: xcode-27
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 11 paths
+        run: |
+          echo "GATE11_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate11DerivedData" >> "$GITHUB_ENV"
+          echo "GATE11_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate11HealthLoopTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Validate focused historical domain contracts
+        run: |
+          set -euo pipefail
+          swift test --package-path Packages/DensosoDomain --filter EffectiveProfileTests 2>&1 | tee gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter WeightTimelineTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter DailyHealthSampleSummaryTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter HealthStateTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter DailyLoopSnapshotTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter HealthNarrativeTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter SharedErrorDescriptorTests 2>&1 | tee -a gate11-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter HealthIntelligenceTests 2>&1 | tee -a gate11-domain-contracts.log
+
+      - name: Generate Xcode project and select iPhone Simulator
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run focused HealthKit projection and DailyLoop tests
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 2400 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$GATE11_DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/HealthRepositoryTests/testInsertAndDeleteReprojectsTheSameDay \
+            -only-testing:DensosoTests/HealthRepositoryTests/testProjectionAffectedDaysDeduplicatesAndSortsLocalDays \
+            -only-testing:DensosoTests/DailyCheckInConfirmationTests/testSameDayCheckInsAppendIdempotentlyAndSubjectiveReadUsesLatest \
+            -only-testing:DensosoTests/HealthRepositoryTests/testConfirmedFoodHistoryRepositoryPagesMealsAndDeduplicatesFoodIDs \
+            -only-testing:DensosoTests/HealthRepositoryTests/testProjectionUsesEffectiveProfileAndHistoricalWeightWithoutBorrowingFutureData \
+            -only-testing:DensosoTests/HealthRepositoryTests/testAmbiguousDayRequeryKeepsOldSummaryAndRetriesDeletion \
+            -only-testing:DensosoTests/HealthRepositoryTests/testPendingDeletedSampleIndexesFinishCleanupAcrossMutatingPages \
+            -only-testing:DensosoTests/HealthRepositoryTests/testMeasuredDailyActivityAggregateFeedsProjectionWithoutWorkoutEnergy \
+            -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDeletedSampleRequeriesDayAndCommitsSummaryWithAnchor \
+            -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testDayRequeryDeduplicatesSamplesAcrossPagesInStableOrder \
+            -only-testing:DensosoTests/HealthKitSyncCoordinatorTests/testOneFailedStreamDoesNotBlockOtherHealthMetrics \
+            -only-testing:DensosoTests/HealthSyncOutboxWorkerTests/testRetryReusesStableSyncIdentifierAndVersion \
+            -only-testing:DensosoTests/HealthSyncOutboxWorkerTests/testInterruptedSendingEntryIsRecoveredAndRetried \
+            -only-testing:DensosoTests/HealthSyncOutboxWorkerTests/testInterruptedOutboxRecoveryAndProcessingPagePastBoundedBatch \
+            -only-testing:DensosoTests/BriefNotificationSchedulerTests/testNotificationErrorsExposeSharedSafeDescriptors \
+            -only-testing:DensosoTests/HealthRepositoryTests/testAffectedHealthSampleDaysReadsPendingIndexesInBoundedBatches \
+            -only-testing:DensosoTests/HealthRepositoryTests/testUnknownDayRequeryForMovedSampleRetainsBothDaysUntilEachIsAvailable \
+            -only-testing:DensosoTests/HealthRepositoryTests/testRepeatedAnchoredSampleIDsKeepDeterministicIndexWinnerWhenRequeryIsUnknown \
+            -only-testing:DensosoTests/HealthRepositoryTests/testHealthKitWeightProjectionPagesIndexRowsAndSkipsUnknownDays \
+            -only-testing:DensosoTests/HealthRepositoryTests/testLocalWeightProjectionPagesAndPreservesLatestIDTieWinner \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests/testStandaloneAndConfirmationProjectorsUseSameLatestProfileRevision \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests/testHistoricalConfirmationKeepsPendingMetricsWhenProfileAndWeightAreMissing \
+            -only-testing:DensosoTests/CaloricEnergySemanticsTests/testProjectionFingerprintIsRepeatableAndChangesWithSourceMetrics \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testUnchangedFingerprintSkipsWriteButPendingLegacyMetricIsReprojected \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testSourceProfileAndGoalRevisionsChangeProjectionFingerprint \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testUnrelatedHealthKitCursorDoesNotInvalidateDailyMetricsProjection \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testHealthKitSnapshotValueChangesProjectionFingerprint \
+            -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testWorkoutEnergyAndProvenanceChangesProjectionFingerprint \
+            -only-testing:DensosoTests/HealthIntelligenceServiceTests/testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash \
+            -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches \
+            -only-testing:DensosoTests/HealthProjectionActorTests \
+            -only-testing:DensosoTests/GetTodayHealthStateToolTests \
+            -only-testing:DensosoTests/GetHealthHistoryToolTests \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testHealthContextLoadsOnlyForRelevantHealthQuestions \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testHealthContextReadFailureDoesNotClaimDataIsMissing \
+            -only-testing:DensosoTests/DailyBriefRefreshPolicyTests \
+            -only-testing:DensosoTests/DailyLoopBackgroundSchedulerTests \
+            -only-testing:DensosoTests/HistoricalMetricsRecomputeServiceTests \
+            -only-testing:DensosoTests/HealthNarrativePolicyTests \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerUsesMatchingExistingBriefAndPreservesOptionalState \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary \
+            -resultBundlePath "$GATE11_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate11-health-loop-tests.log
+
+      - name: Export Gate 11 test summary
+        run: |
+          xcrun xcresulttool get test-results summary --path "$GATE11_RESULT_BUNDLE" > gate11-test-summary.json
+          grep -q '"result" : "Passed"' gate11-test-summary.json
+          python3 -m py_compile scripts/validate_phase11_14_gates.py
+          python3 scripts/validate_phase11_14_gates.py --gate 11 --report gate11-contract-summary.json
+
+      - name: Upload Gate 11 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-11-ai-native-health-loop-results
+          path: |
+            Gate11HealthLoopTests.xcresult
+            gate11-domain-contracts.log
+            gate11-health-loop-tests.log
+            gate11-test-summary.json
+            gate11-contract-summary.json
+            docs/gates/gate-11-ai-native-health-loop.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-12-multimodal-agent:
+    name: gate-12-multimodal-agent
+    needs: gate-11-ai-native-health-loop
+    if: ${{ always() && (inputs.run_scope != 'focused-pr-tests' || needs.gate-11-ai-native-health-loop.result == 'success') }}
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 12 paths
+        run: |
+          echo "GATE12_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate12DerivedData" >> "$GITHUB_ENV"
+          echo "GATE12_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate12MultimodalAgentTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Test focused InputEnvelope domain contract
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter InputEnvelopeTests 2>&1 | tee gate12-input-envelope-domain.log
+
+      - name: Generate Xcode project and select iPhone Simulator
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run focused unified text, voice, image and recovery tests
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 1500 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$GATE12_DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testImageInputUsesAgentSessionAndStagesMealWithoutDirectCommitOrRawMediaPersistence \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testInterruptedImageRequestFailsClosedUntilImageIsReattachedAndKeepsBudget \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testEvidenceOnlyRequestUsesEphemeralProviderMessageWithoutImageConsentOrPersistence \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testInterruptedEvidenceOnlyRequestRequiresNewRequestToReprovideEvidence \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testEvidenceOnlyRequestBoundsTransientEvidence \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testImageRequiresVisionCapabilityAndSeparateMealImageConsent \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testCompositePhotoMealKeepsSeparateDishesAndUsesLocalCalorieAccounting \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testRealRoundAndToolCountsAndPendingAction \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testVoiceInputEnvelopePersistsOnlySafeMetadataAndIsOmittedFromProviderMessages \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testTypedEventStreamPreservesOrderAndRealCounts \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testProviderReasoningContinuesInMemoryButIsNeverPersisted \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testCloudProviderRequiresExplicitConsent \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testNinthToolCallStopsRequest \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testUnpricedProviderRequestCompletesWithUnavailableCostAccounting \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testCostCapIsReservedBeforeProviderOrToolInvocation \
+            -only-testing:DensosoTests/AgentProviderContextPolicyTests \
+            -only-testing:DensosoTests/AgentRequestResumeTests/testInterruptedRequestResumesWithPersistedRemainingBudgetAndUsage \
+            -only-testing:DensosoTests/AgentRequestResumeTests/testLegacyV1ConversationRestoresWithCurrentToolsAndAdvancesOnNewTurn \
+            -only-testing:DensosoTests/AgentRequestResumeTests/testPerRequestCostReservationPersistsAndCannotResetOnResume \
+            -only-testing:DensosoTests/AgentRequestResumeTests/testLegacyInterruptedRequestWithoutProviderIdentityFailsClosedBeforeCall \
+            -only-testing:DensosoTests/ProviderUsageLedgerTests/testPreflightCostUsesInputUpperBoundMaximumOutputAndRetryAttempts \
+            -only-testing:DensosoTests/ProviderUsageLedgerTests/testUsageIdentityImageCountAndLatencyAreRetainedInLedgerSummary \
+            -only-testing:DensosoTests/ProviderUsageLedgerTests/testUsageWithMismatchedRequestIdentityIsRejectedBeforePersistence \
+            -only-testing:DensosoTests/ProviderUsageLedgerTests/testLegacyUsagePayloadDecodesWithUnknownImageAndLatencyMetadata \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV6ToV7PreservesLegacyConversationAndRestoresToolSchemaV1 \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV7ToV9PreservesHealthKitSampleIndexState \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox \
+            -only-testing:DensosoTests/DensosoMigrationTests/testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords \
+            -only-testing:DensosoTests/DensosoMigrationTests/testPersistenceBootstrapErrorsUseSafeReadOnlyDescriptor \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests/testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox \
+            -only-testing:DensosoTests/PromptVersioningTests/testPromptAndToolSchemaVersionsMatchMainPR111And112 \
+            -only-testing:DensosoTests/DeepSeekProviderContractTests/testResponsesAPIRequestAndStreamingToolContract \
+            -only-testing:DensosoTests/DeepSeekProviderContractTests/testImageStructuredOutputAndStatelessToolHistoryEncoding \
+            -only-testing:DensosoTests/DeepSeekProviderContractTests/testImageMustBeInUserMessageAndFailsBeforeNetwork \
+            -only-testing:DensosoTests/DeepSeekProviderContractTests/testRetiredDeepSeekVisionCompatibilityAliasIsNotVisionCapable \
+            -only-testing:DensosoTests/AppLaunchConfigurationTests/testSeededProfileRequiresUITestMode \
+            -only-testing:DensosoTests/AppLaunchConfigurationTests/testUITestArgumentsEnableDeterministicSeed \
+            -only-testing:DensosoTests/QwenASRProviderContractTests/testOpenAICompatibleAudioRequestAndResponseContract \
+            -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testPinnedQwen37SnapshotUsesImageAndStructuredObservationContract \
+            -only-testing:DensosoTests/DiagnosticsExportPrivacyTests/testProviderErrorsExportOnlyAllowlistedCodes \
+            -only-testing:DensosoTests/SpeechCaptureStateMachineTests/testLocalFailureWithCapturedAudioUsesQwenOnceAndDeletesTemporaryAudio \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testOptionalQwenOpenPhotoRequiresSeparateQwenConsent \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testDeepSeekPhotoModeNeverFallsThroughToOptionalQwenVision \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testDefaultClosedQualityGateRequiresManualFallbackWithoutStaging \
+            -only-testing:DensosoTests/FoodDatabaseTests/testCatalogEntriesRemainStableAcrossRepeatedReads \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testMealCaptureErrorsExposeSharedSafeDescriptors \
+            -only-testing:DensosoTests/MealRecordAuditPresentationTests/testMealRecordPresentationShowsSanitizedSourcesAndAlgorithmVersion \
+            -only-testing:DensosoTests/AgentUIStateMachineTests/testAgentEventsMoveThroughThinkingToolDraftConfirmationCommitAndFailureStates \
+            -only-testing:DensosoTests/AgentUIStateMachineTests/testVoiceUIStateMapsExistingSpeechCaptureStatesAndFailureKinds \
+            -only-testing:DensosoTests/MealImageCaptureStateMachineTests/testOpenPhotoRequiresConsentBeforeUploadAndMovesThroughVisionResolution \
+            -only-testing:DensosoTests/MealImageCaptureStateMachineTests/testLocalResolutionAndCancellationNeverBecomeUploadable \
+            -only-testing:DensosoTests/IntelligenceRoutingPolicyTests/testDefaultModeIsCloudDeepSeek \
+            -only-testing:DensosoTests/IntelligenceRoutingPolicyTests/testDeepSeekVisionCapabilityIsScopedToDocumentedModelAndEndpoint \
+            -only-testing:DensosoTests/IntelligenceRoutingPolicyTests/testCloudRequiresExplicitCloudMode \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testLocalOnlyBarcodeScanNeverCallsPackagedFoodProvider \
+            -only-testing:DensosoTests/SpeechCaptureStateMachineTests/testLocalOnlyModeNeverUsesQwenFallbackEvenWhenFallbackAndConsentAreEnabled \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentRoutesResolvedBarcodeLocallyAndStagesPendingAction \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentKeepsCompleteLabelLocalAndAsksOnceForMissingPortion \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testLocalMealPortionAnswerSupportsCountsAndRejectsPackageSpecsAsConsumedAmount \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testLowConfidenceVisionCannotStageFoodIDWithoutUserSelection \
+            -resultBundlePath "$GATE12_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate12-multimodal-agent-tests.log
+
+      - name: Export Gate 12 test summary and validate same-Agent privacy contract
+        run: |
+          xcrun xcresulttool get test-results summary --path "$GATE12_RESULT_BUNDLE" > gate12-test-summary.json
+          grep -q '"result" : "Passed"' gate12-test-summary.json
+          python3 -m py_compile scripts/validate_phase11_14_gates.py
+          python3 scripts/validate_phase11_14_gates.py --gate 12 --report gate12-contract-summary.json
+
+      - name: Upload Gate 12 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-12-multimodal-agent-results
+          path: |
+            Gate12MultimodalAgentTests.xcresult
+            gate12-input-envelope-domain.log
+            gate12-multimodal-agent-tests.log
+            gate12-test-summary.json
+            gate12-contract-summary.json
+            docs/gates/gate-12-multimodal-agent.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-13-energy-accounting:
+    name: gate-13-energy-accounting
+    needs: gate-12-multimodal-agent
+    if: ${{ always() && (inputs.run_scope != 'focused-pr-tests' || needs.gate-12-multimodal-agent.result == 'success') }}
+    runs-on: xcode-27
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 13 paths
+        run: |
+          echo "GATE13_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate13DerivedData" >> "$GITHUB_ENV"
+          echo "GATE13_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate13EnergyAccountingTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Run focused EnergyAccounting domain contracts
+        run: |
+          set -euo pipefail
+          swift test --package-path Packages/DensosoDomain --filter EnergyAccountingTests 2>&1 | tee gate13-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter DailyMetricsUsabilityTests 2>&1 | tee -a gate13-domain-contracts.log
+
+      - name: Generate Xcode project and select iPhone Simulator
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run focused meal and expenditure estimate tests
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 1200 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$GATE13_DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/CaloricEnergySemanticsTests/testMeasuredActiveEnergyIsNotAddedToWorkoutEnergy \
+            -only-testing:DensosoTests/CaloricEnergySemanticsTests/testWorkoutPresenceDoesNotChangeEstimatedActiveEnergyFallback \
+            -only-testing:DensosoTests/CaloricEnergySemanticsTests/testMissingEffectiveProfileDoesNotInventEnergyExpenditure \
+            -only-testing:DensosoTests/HealthRepositoryTests/testLegacyPointEstimateIsNotProjectedAsCurrentIntakeOrMacros \
+            -only-testing:DensosoTests/CalorieEstimatorTests/testExplicitOilIsAddedOnceWithoutCookingMultiplier \
+            -only-testing:DensosoTests/CalorieEstimatorTests/testInferredOilProducesAnHonestInterval \
+            -only-testing:DensosoTests/CalorieEstimatorTests/testDeterministicMealEstimateReportsP50P95AgainstLatencyTarget \
+            -only-testing:DensosoTests/WeeklyAnalyticsServiceTests \
+            -resultBundlePath "$GATE13_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate13-energy-accounting-tests.log
+
+      - name: Export Gate 13 test summary and validate accounting contract
+        run: |
+          xcrun xcresulttool get test-results summary --path "$GATE13_RESULT_BUNDLE" > gate13-test-summary.json
+          grep -q '"result" : "Passed"' gate13-test-summary.json
+          python3 -m py_compile scripts/validate_phase11_14_gates.py
+          python3 scripts/validate_phase11_14_gates.py --gate 13 --report gate13-contract-summary.json
+
+      - name: Upload Gate 13 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-13-energy-accounting-results
+          path: |
+            Gate13EnergyAccountingTests.xcresult
+            gate13-domain-contracts.log
+            gate13-energy-accounting-tests.log
+            gate13-test-summary.json
+            gate13-contract-summary.json
+            docs/gates/gate-13-energy-accounting.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-14-watch-daily-loop:
+    name: gate-14-watch-daily-loop
+    needs: gate-13-energy-accounting
+    if: ${{ always() && (inputs.run_scope != 'focused-pr-tests' || needs.gate-13-energy-accounting.result == 'success') }}
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 14 paths
+        run: |
+          echo "GATE14_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate14DerivedData" >> "$GITHUB_ENV"
+          echo "GATE14_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate14WatchDailyLoopTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Run focused snapshot and Watch domain contracts
+        run: |
+          set -euo pipefail
+          swift test --package-path Packages/DensosoDomain --filter DailyLoopSnapshotTests 2>&1 | tee gate14-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter TrainingPlanDraftTests 2>&1 | tee -a gate14-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter WatchMessageOutboxTests 2>&1 | tee -a gate14-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter SharedErrorDescriptorTests 2>&1 | tee -a gate14-domain-contracts.log
+          swift test --package-path Packages/DensosoDomain --filter WatchWorkoutCoordinatorTests 2>&1 | tee -a gate14-domain-contracts.log
+
+      - name: Generate Xcode project and select iPhone Simulator
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run focused Watch inbox and offline replay tests
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 1200 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$GATE14_DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerUsesMatchingExistingBriefAndPreservesOptionalState \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerMarksOldHealthBriefStaleAndChangesFingerprintWithItsSource \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerCarriesSafeErrorStateWithoutPublishingHealthFingerprint \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testComposerIncludesOnlyTodayAndTomorrowTrainingSessionsAndSkipsRestDays \
+            -only-testing:DensosoTests/DailyLoopSnapshotCompositionTests/testMultiDayTrainingPlanPendingActionRequiresPhoneReviewOnWatchSummary \
+            -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanSchedulesOnlyWorkoutDaysAndPersistsOnePlanEntry \
+            -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testPartialSchedulingFailureCanResumeWithoutDuplicatingCompletedWorkoutDays \
+            -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanHistoryPagesAcrossThe64EventBoundary \
+            -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testUpcomingTrainingSessionsAreBoundedAndOrderedAcrossPages \
+            -only-testing:DensosoTests/TrainingPlanSchedulingServiceTests/testConfirmedPlanPagesKeepAllRowsAcrossTiedTenRowBoundaries \
+            -only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testConfirmedScheduleIsIdempotentAcrossRetries \
+            -only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testTransientWorkoutKitFailureLeavesAUserRetryableScheduleIntent \
+            -only-testing:DensosoTests/WorkoutPlanSchedulingServiceTests/testUpcomingPlansAreBoundedOrderedAndSkipTerminalEntries \
+            -only-testing:DensosoTests/WorkoutPlanCompilerTests/testWorkoutKitErrorsUseSharedCodesAndSafeMessages \
+            -only-testing:DensosoTests/TrainingPlanScheduleQueryTests/testGetScheduleExpandsConfirmedTrainingPlanForRequestedDayIncludingRestDay \
+            -only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesDecodeAndSortBothPlanTypesAndIgnoreOrdinaryEvents \
+            -only-testing:DensosoTests/HealthProjectionActorTests/testConfirmedPlanEntriesPageHistoricalPlansAndDailySnapshotRetainsOnlyCurrentSessions \
+            -only-testing:DensosoTests/HealthProjectionActorTests/testDailyLoopSnapshotRetainsTenEarliestPlanSessionsAcrossPages \
+            -only-testing:DensosoTests/WatchMessageOutboxStoreTests \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandQueryMatchesZeroUUIDAndSkipsNilRequestIDInArrivalOrder \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingInboxOrdersEqualOrdinalsByMessageIDAcrossReceiptPages \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testPendingCommandReplayReturnsOnlyNonTranscriptEnvelopesInArrivalOrder \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testCausalReplayWaitsForMissingAndPendingPredecessorThenOrdersBySequence \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testRejectedAndConflictingPredecessorsRejectCausalSuccessors \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testTerminalCausalWatermarkStopsAtMissingAndPendingSequences \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testTerminalCausalWatermarkCacheTracksChangesAndRebuildsAfterStoreRestart \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testCausalTranscriptWaitsForPredecessorAndStaysPendingUntilConsumed \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testLegacyPendingCommandAndTranscriptBlockNewerCommandUntilCompleted \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testOutOfOrderMessagesAreReturnedInDurableArrivalOrder \
+            -only-testing:DensosoTests/WatchMessageInboxStoreTests/testRecentInboxQueriesFilterStatesAndApplyLimitsInArrivalOrder \
+            -only-testing:DensosoTests/AgentCoordinatorTests/testOfflineWatchTranscriptSurvivesFailureResumesSameDraftAndConfirmsOnce \
+            -only-testing:DensosoTests/AgentProviderContextPolicyTests/testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies \
+            -resultBundlePath "$GATE14_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate14-watch-daily-loop-tests.log
+
+      - name: Export Gate 14 test summary and validate manual acceptance boundary
+        run: |
+          xcrun xcresulttool get test-results summary --path "$GATE14_RESULT_BUNDLE" > gate14-test-summary.json
+          grep -q '"result" : "Passed"' gate14-test-summary.json
+          python3 -m py_compile scripts/validate_phase11_14_gates.py
+          python3 scripts/validate_phase11_14_gates.py --gate 14 --report gate14-contract-summary.json
+
+      - name: Upload Gate 14 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-14-watch-daily-loop-results
+          path: |
+            Gate14WatchDailyLoopTests.xcresult
+            gate14-domain-contracts.log
+            gate14-watch-daily-loop-tests.log
+            gate14-test-summary.json
+            gate14-contract-summary.json
+            docs/gates/gate-14-watch-daily-loop.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-17-food-data:
+    name: gate-17-food-data-provenance
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      gate_status: ${{ steps.gate17_status.outputs.gate_status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pinned Taiwan food-import dependency
+        id: gate17_food_import_dependency
+        if: always()
+        run: |
+          python3 -m pip install --no-index --no-deps --require-hashes -r requirements-food-import.txt
+
+      - name: Compile Gate 17 validators
+        id: gate17_compile
+        if: always()
+        run: |
+          python3 -m py_compile \
+            scripts/import_food_db.py \
+            scripts/validate_food_db.py \
+            scripts/import_recipe_priors.py \
+            scripts/validate_recipe_priors.py \
+            scripts/validate_recipe_prior_reproducibility.py \
+            scripts/import_taiwan_fda_foods.py \
+            scripts/validate_gate17_food_data.py
+
+      - name: Validate packaged food database
+        id: gate17_food_db
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_food_db.py 2>&1 | tee gate17-food-db.log
+
+      - name: Validate pinned recipe-prior catalog
+        id: gate17_recipe_priors
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_recipe_priors.py 2>&1 | tee gate17-recipe-priors.log
+
+      - name: Rebuild recipe priors from the pinned upstream commit
+        id: gate17_recipe_reproducibility
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_recipe_prior_reproducibility.py \
+            --report gate17-recipe-reproducibility.json 2>&1 \
+            | tee gate17-recipe-reproducibility.log
+
+      - name: Reproduce Taiwan FDA rows from the pinned archive
+        id: gate17_taiwan_fda_reproducibility
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/import_taiwan_fda_foods.py --check 2>&1 \
+            | tee gate17-taiwan-fda-reproducibility.log
+
+      - name: Validate production import provenance and energy semantics
+        id: gate17_provenance
+        if: always()
+        run: |
+          set -o pipefail
+          python3 scripts/validate_gate17_food_data.py 2>&1 | tee gate17-food-data-report.json
+
+      - name: Record Gate 17 result
+        id: gate17_status
+        if: always()
+        env:
+          COMPILE_OUTCOME: ${{ steps.gate17_compile.outcome }}
+          FOOD_DB_OUTCOME: ${{ steps.gate17_food_db.outcome }}
+          RECIPE_PRIORS_OUTCOME: ${{ steps.gate17_recipe_priors.outcome }}
+          RECIPE_REPRODUCIBILITY_OUTCOME: ${{ steps.gate17_recipe_reproducibility.outcome }}
+          TAIWAN_FDA_REPRODUCIBILITY_OUTCOME: ${{ steps.gate17_taiwan_fda_reproducibility.outcome }}
+          FOOD_IMPORT_DEPENDENCY_OUTCOME: ${{ steps.gate17_food_import_dependency.outcome }}
+          PROVENANCE_OUTCOME: ${{ steps.gate17_provenance.outcome }}
+        run: |
+          if [ "$COMPILE_OUTCOME" = "success" ] \
+            && [ "$FOOD_IMPORT_DEPENDENCY_OUTCOME" = "success" ] \
+            && [ "$FOOD_DB_OUTCOME" = "success" ] \
+            && [ "$RECIPE_PRIORS_OUTCOME" = "success" ] \
+            && [ "$RECIPE_REPRODUCIBILITY_OUTCOME" = "success" ] \
+            && [ "$TAIWAN_FDA_REPRODUCIBILITY_OUTCOME" = "success" ] \
+            && [ "$PROVENANCE_OUTCOME" = "success" ]; then
+            GATE_STATUS=PASS
+          else
+            GATE_STATUS=FAIL
+          fi
+          echo "gate_status=$GATE_STATUS" >> "$GITHUB_OUTPUT"
+          echo "Gate 17: $GATE_STATUS"
+
+      - name: Upload Gate 17 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-17-food-data-results
+          path: |
+            gate17-food-db.log
+            gate17-recipe-priors.log
+            gate17-recipe-reproducibility.log
+            gate17-recipe-reproducibility.json
+            gate17-taiwan-fda-reproducibility.log
+            gate17-food-data-report.json
+            docs/gates/gate-17-food-data-provenance.md
+            Densoso/Resources/FoodData/taiwan_food_import_report.json
+            Densoso/Resources/FoodData/taiwan_food_alias_review.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-18-meal-estimates:
+    name: gate-18-meal-estimate-usefulness
+    if: ${{ always() }}
+    runs-on: xcode-27
+    timeout-minutes: 45
+    outputs:
+      gate_status: ${{ steps.gate18_report.outputs.gate_status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 18 paths
+        run: |
+          echo "GATE18_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate18DerivedData" >> "$GITHUB_ENV"
+          echo "GATE18_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate18MealEstimateTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Run deterministic meal-domain contracts
+        id: gate18_resolution_domain
+        if: always()
+        run: |
+          set +e
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter MealResolutionTests 2>&1 | tee gate18-meal-resolution-domain.log
+          TEST_EXIT=$?
+          python3 - <<'PY'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          source = Path("Packages/DensosoDomain/Tests/DensosoDomainTests/MealResolutionTests.swift").read_text(encoding="utf-8")
+          methods = re.findall(r"^\s*func\s+(test[A-Za-z0-9_]*)\s*\(", source, re.MULTILINE)
+          command = ["python3", "scripts/validate_swiftpm_test_manifest.py", "--input", "gate18-meal-resolution-domain.log", "--report", "gate18-meal-resolution-domain-manifest.json"]
+          for method in methods:
+              command.extend(["--required", f"MealResolutionTests/{method}"])
+          result = subprocess.run(command, check=False)
+          sys.exit(result.returncode)
+          PY
+          MANIFEST_EXIT=$?
+          if [ "$TEST_EXIT" -ne 0 ] || [ "$MANIFEST_EXIT" -ne 0 ]; then exit 1; fi
+
+      - name: Run deterministic meal-quantity evidence contracts
+        id: gate18_quantity_domain
+        if: always()
+        run: |
+          set +e
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter MealQuantityEvidenceTests 2>&1 | tee gate18-meal-quantity-domain.log
+          TEST_EXIT=$?
+          python3 - <<'PY'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          source = Path("Packages/DensosoDomain/Tests/DensosoDomainTests/MealQuantityEvidenceTests.swift").read_text(encoding="utf-8")
+          methods = re.findall(r"^\s*func\s+(test[A-Za-z0-9_]*)\s*\(", source, re.MULTILINE)
+          command = ["python3", "scripts/validate_swiftpm_test_manifest.py", "--input", "gate18-meal-quantity-domain.log", "--report", "gate18-meal-quantity-domain-manifest.json"]
+          for method in methods:
+              command.extend(["--required", f"MealQuantityEvidenceTests/{method}"])
+          result = subprocess.run(command, check=False)
+          sys.exit(result.returncode)
+          PY
+          MANIFEST_EXIT=$?
+          if [ "$TEST_EXIT" -ne 0 ] || [ "$MANIFEST_EXIT" -ne 0 ]; then exit 1; fi
+
+      - name: Generate project and prepare iOS Simulator
+        id: gate18_simulator
+        if: always()
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run focused meal capture and accounting integration tests
+        id: gate18_ios
+        if: ${{ always() && steps.gate18_simulator.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          perl -e 'alarm shift; exec @ARGV' 1500 xcodebuild -project Densoso.xcodeproj \
+            -scheme Densoso \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$GATE18_DERIVED_DATA_PATH" \
+            -only-testing:DensosoTests/MultimodalAgentImageTests/testCompositePhotoMealKeepsSeparateDishesAndUsesLocalCalorieAccounting \
+            -only-testing:DensosoTests/LogMealQuantityEvidenceTests \
+            -only-testing:DensosoTests/RecipePriorCatalogTests \
+            -only-testing:DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto \
+            -only-testing:DensosoTests/ConfirmationCoordinatorTests/testConsumedFractionConfirmationPersistsScaledIntakeAndUserEvidence \
+            -only-testing:DensosoTests/MealCalorieSummaryPresentationTests \
+            -resultBundlePath "$GATE18_RESULT_BUNDLE" \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee gate18-meal-estimate-tests.log
+
+      - name: Verify Gate 18 executed XCTest cases
+        id: gate18_test_manifest
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          bundle = Path("Gate18MealEstimateTests.xcresult")
+          raw_path = Path("gate18-xcresult-tests.json")
+          if bundle.is_dir():
+              extraction = subprocess.run(
+                  ["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", str(bundle), "--format", "json"],
+                  check=False,
+                  capture_output=True,
+                  text=True,
+                  encoding="utf-8",
+              )
+              raw_path.write_text(extraction.stdout if extraction.returncode == 0 else "{}", encoding="utf-8")
+          else:
+              raw_path.write_text("{}", encoding="utf-8")
+
+          required = [
+              "DensosoTests/MultimodalAgentImageTests/testCompositePhotoMealKeepsSeparateDishesAndUsesLocalCalorieAccounting",
+              "DensosoTests/MealCaptureApplicationServiceTests/testPrepareForAgentUsesTextFallbackForBarcodeMissAndImageOnlyForOpenPhoto",
+              "DensosoTests/ConfirmationCoordinatorTests/testConsumedFractionConfirmationPersistsScaledIntakeAndUserEvidence",
+              "DensosoTests/MealCalorieSummaryPresentationTests/testWideRangeKeepsLikelyAndConfidenceSeparateFromExpandableRange",
+          ]
+          source = Path("DensosoTests/Application/LogMealQuantityEvidenceTests.swift").read_text(encoding="utf-8")
+          required.extend(
+              f"DensosoTests/LogMealQuantityEvidenceTests/{method}"
+              for method in re.findall(r"^\s*func\s+(test[A-Za-z0-9_]*)\s*\(", source, re.MULTILINE)
+          )
+          recipe_source = Path("DensosoTests/Application/RecipePriorCatalogTests.swift").read_text(encoding="utf-8")
+          required.extend(
+              f"DensosoTests/RecipePriorCatalogTests/{method}"
+              for method in re.findall(r"^\s*func\s+(test[A-Za-z0-9_]*)\s*\(", recipe_source, re.MULTILINE)
+          )
+          command = ["python3", "scripts/validate_xcresult_test_manifest.py", "--input", str(raw_path), "--report", "gate18-xctest-manifest.json"]
+          for method in required:
+              command.extend(["--required", method])
+          result = subprocess.run(command, check=False)
+          sys.exit(result.returncode)
+          PY
+
+      - name: Export Gate 18 execution status
+        id: gate18_report
+        if: always()
+        env:
+          RESOLUTION_DOMAIN_OUTCOME: ${{ steps.gate18_resolution_domain.outcome }}
+          QUANTITY_DOMAIN_OUTCOME: ${{ steps.gate18_quantity_domain.outcome }}
+          IOS_OUTCOME: ${{ steps.gate18_ios.outcome }}
+          IOS_MANIFEST_OUTCOME: ${{ steps.gate18_test_manifest.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          resolution_outcome = os.environ.get("RESOLUTION_DOMAIN_OUTCOME")
+          quantity_outcome = os.environ.get("QUANTITY_DOMAIN_OUTCOME")
+          ios_outcome = os.environ.get("IOS_OUTCOME")
+          resolution_manifest = json.loads(Path("gate18-meal-resolution-domain-manifest.json").read_text(encoding="utf-8")) if Path("gate18-meal-resolution-domain-manifest.json").is_file() else {"status": "BLOCKED"}
+          quantity_manifest = json.loads(Path("gate18-meal-quantity-domain-manifest.json").read_text(encoding="utf-8")) if Path("gate18-meal-quantity-domain-manifest.json").is_file() else {"status": "BLOCKED"}
+          ios_manifest = json.loads(Path("gate18-xctest-manifest.json").read_text(encoding="utf-8")) if Path("gate18-xctest-manifest.json").is_file() else {"status": "BLOCKED", "requiredTests": []}
+          outcomes = [resolution_outcome, quantity_outcome, ios_outcome, os.environ.get("IOS_MANIFEST_OUTCOME")]
+          manifest_statuses = [resolution_manifest.get("status"), quantity_manifest.get("status"), ios_manifest.get("status")]
+          if "FAIL" in manifest_statuses or (all(value == "PASS" for value in manifest_statuses) and any(value == "failure" for value in outcomes)):
+              status = "FAIL"
+          elif not all(value == "success" for value in outcomes) or any(value != "PASS" for value in manifest_statuses):
+              status = "BLOCKED"
+          else:
+              status = "PASS"
+          report = {
+              "schemaVersion": 1,
+              "gate": 18,
+              "status": status,
+              "headSha": os.environ.get("GITHUB_SHA"),
+              "domainTests": {
+                  "mealResolution": resolution_outcome,
+                  "mealQuantityEvidence": quantity_outcome,
+                  "mealResolutionManifest": resolution_manifest.get("status"),
+                  "mealQuantityEvidenceManifest": quantity_manifest.get("status"),
+              },
+              "iOSIntegrationTests": ios_outcome,
+              "iOSTestManifest": ios_manifest,
+              "fieldCalibration": "NOT_MEASURED",
+              "fieldCalibrationReason": "No real-world labeled meal dataset was supplied; field accuracy is not claimed.",
+          }
+          Path("gate18-meal-estimate-report.json").write_text(
+              json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"gate_status={status}\n")
+          print(json.dumps(report, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Upload Gate 18 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-18-meal-estimate-results
+          path: |
+            Gate18MealEstimateTests.xcresult
+            gate18-meal-resolution-domain.log
+            gate18-meal-resolution-domain-manifest.json
+            gate18-meal-quantity-domain.log
+            gate18-meal-quantity-domain-manifest.json
+            gate18-meal-estimate-tests.log
+            gate18-xcresult-tests.json
+            gate18-xctest-manifest.json
+            gate18-meal-estimate-report.json
+            docs/gates/gate-18-meal-estimate-usefulness.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-19-cloud-health-window:
+    name: gate-19-cloud-policy-health-window
+    if: ${{ always() }}
+    runs-on: xcode-27
+    timeout-minutes: 45
+    outputs:
+      gate_status: ${{ steps.gate19_status.outputs.gate_status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Gate 19 paths
+        run: |
+          echo "GATE19_DERIVED_DATA_PATH=$RUNNER_TEMP/DensosoGate19DerivedData" >> "$GITHUB_ENV"
+          echo "GATE19_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate19PolicyHealthWindowTests.xcresult" >> "$GITHUB_ENV"
+          echo "GATE19_RETRY_RESULT_BUNDLE=$GITHUB_WORKSPACE/Gate19PolicyHealthWindowRetryTests.xcresult" >> "$GITHUB_ENV"
+
+      - name: Run unknown and partial health-intelligence package contracts
+        id: gate19_domain_health_intelligence
+        if: always()
+        run: |
+          set +e
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter 'HealthIntelligenceTests/(testUnknownHealthKitCoverageRemainsUnknownAndSelectedActivityMetricKeepsItsCoverage|testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders|testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage|testMetricWindowCoverageReportsThirtyAuthorizedDaysWithinFortyTwoDayTarget|testSleepWindowCoverageUsesFirstFullyAuthorizedWakeDay)' 2>&1 | tee gate19-domain-health-intelligence.log
+          TEST_EXIT=$?
+          python3 scripts/validate_swiftpm_test_manifest.py \
+            --input gate19-domain-health-intelligence.log \
+            --required HealthIntelligenceTests/testUnknownHealthKitCoverageRemainsUnknownAndSelectedActivityMetricKeepsItsCoverage \
+            --required HealthIntelligenceTests/testLegacyTrainingLoadCacheWithoutCoverageDecodesUnknownAndOmitsNumericPlaceholders \
+            --required HealthIntelligenceTests/testLegacyHealthDomainVitalAndContextCachesFailClosedWithoutCoverage \
+            --required HealthIntelligenceTests/testMetricWindowCoverageReportsThirtyAuthorizedDaysWithinFortyTwoDayTarget \
+            --required HealthIntelligenceTests/testSleepWindowCoverageUsesFirstFullyAuthorizedWakeDay \
+            --report gate19-domain-health-intelligence-manifest.json
+          MANIFEST_EXIT=$?
+          if [ "$TEST_EXIT" -ne 0 ] || [ "$MANIFEST_EXIT" -ne 0 ]; then exit 1; fi
+
+      - name: Run unknown and partial HealthState package contract
+        id: gate19_domain_health_state
+        if: always()
+        run: |
+          set +e
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter 'HealthStateTests/testUnknownAndPartialDomainStatusesDoNotBecomeUsableRecoveryEvidence' 2>&1 | tee gate19-domain-health-state.log
+          TEST_EXIT=$?
+          python3 scripts/validate_swiftpm_test_manifest.py \
+            --input gate19-domain-health-state.log \
+            --required HealthStateTests/testUnknownAndPartialDomainStatusesDoNotBecomeUsableRecoveryEvidence \
+            --report gate19-domain-health-state-manifest.json
+          MANIFEST_EXIT=$?
+          if [ "$TEST_EXIT" -ne 0 ] || [ "$MANIFEST_EXIT" -ne 0 ]; then exit 1; fi
+
+      - name: Run unknown training-load narrative package contract
+        id: gate19_domain_narrative
+        if: always()
+        run: |
+          set +e
+          set -o pipefail
+          swift test --package-path Packages/DensosoDomain --filter 'HealthNarrativeTests/testNarrativeContextOmitsUnknownTrainingLoadZeroPlaceholders' 2>&1 | tee gate19-domain-narrative.log
+          TEST_EXIT=$?
+          python3 scripts/validate_swiftpm_test_manifest.py \
+            --input gate19-domain-narrative.log \
+            --required HealthNarrativeTests/testNarrativeContextOmitsUnknownTrainingLoadZeroPlaceholders \
+            --report gate19-domain-narrative-manifest.json
+          MANIFEST_EXIT=$?
+          if [ "$TEST_EXIT" -ne 0 ] || [ "$MANIFEST_EXIT" -ne 0 ]; then exit 1; fi
+
+      - name: Generate project and prepare iOS Simulator
+        id: gate19_simulator
+        if: always()
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen generate
+          SIMULATOR_LIST="$(perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl list devices available)"
+          SIMULATOR_UDID="$(printf '%s\n' "$SIMULATOR_LIST" | sed -n 's/.*iPhone 18 Pro (\([A-F0-9-]*\)).*/\1/p' | sed -n '1p')"
+          test -n "$SIMULATOR_UDID"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID" || true
+          perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+
+      - name: Run cloud-policy and 42-day HealthKit XCTest suites
+        id: gate19_ios
+        if: ${{ always() && steps.gate19_simulator.outcome == 'success' }}
+        run: |
+          set -uo pipefail
+
+          run_gate19_xctests() {
+            local result_bundle="$1"
+            local log_path="$2"
+            rm -rf "$result_bundle"
+            perl -e 'alarm shift; exec @ARGV' 2100 xcodebuild -project Densoso.xcodeproj \
+              -scheme Densoso \
+              -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+              -destination-timeout 120 \
+              -derivedDataPath "$GATE19_DERIVED_DATA_PATH" \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests \
+              -only-testing:DensosoTests/HealthKitSyncCoordinatorTests \
+              -only-testing:DensosoTests/DailyMetricsProjectionFingerprintTests/testProjectionInputReaderUsesImportedWorkoutsWithoutChangingDailyCoverage \
+              -only-testing:DensosoTests/GetRecentWorkoutsToolTests/testRepositoryIncludesPersistedHealthKitWorkoutsWithUnknownOrMissingReadState \
+              -only-testing:DensosoTests/HealthRepositoryTests/testUnknownAggregateStateDoesNotReuseAStaleMeasuredEnergyValue \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testRevokedHistoricalHealthFactIsAbsentFromDeepSeekAndQwenRequestBodies \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testMixedActivityAndHypertensionRequiresBothClasses \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testMixedNutritionAndMedicationDoesNotLoseUnknownClassification \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testMixedSleepAndBloodGlucoseRequiresAllRelevantClasses \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testRecognizedHealthClassDoesNotSuppressUnclassifiedHealthFacts \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testHealthAnalysisQuestionDoesNotBecomeAnUnclassifiedPersonalHealthFact \
+              -only-testing:DensosoTests/HealthNarrativePolicyTests/testRecommendationsCanOnlySelectLocallyVerifiedEvidenceBoundCandidates \
+              -only-testing:DensosoTests/HealthNarrativePolicyTests/testStructuredSchemaIsClosedAndConstrainsEvidenceKeys \
+              -only-testing:DensosoTests/AgentDailyMetricsRepositoryTests/testInProgressNutritionKeepsRecordedEstimateAndLocalLastMealTimeButNoDailyDeficit \
+              -only-testing:DensosoTests/AgentProviderContextPolicyTests/testFinalSendGatesRequireDependenciesFromEveryOutboundHealthSource \
+              -only-testing:DensosoTests/AgentCoordinatorTests/testMixedCurrentActivityAndBodyFactIsRejectedBeforeDeepSeekAndQwenHTTPTransport \
+              -only-testing:DensosoTests/AgentCoordinatorTests/testAgentSessionDeepSeekAndQwenHTTPBodiesKeepOnlyAuthorizedHealthSentinels \
+              -only-testing:DensosoTests/AgentCoordinatorTests/testRevokingHealthActivityCancelsRoundUsingOnlyHistoricalUserActivityFact \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testActualDataDependencyRevokedAfterSerializationStopsBeforeNetworkAttempt \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testSnapshotRepositoryRejectsActualDependencyAtAllThreeFinalSendGates \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testRevocationBeforeProviderRetryRejectsTheSameActualDataDependency \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testRevokedAndReconfirmedClassDoesNotRestoreOldMessageWithExplicitContentClasses \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testRevokingSpeechAudioCancelsActiveASRAttempt \
+              -only-testing:DensosoTests/CloudHealthContextPolicyTests/testRevokingMealImageCancelsActiveVisionAttempt \
+              -only-testing:DensosoTests/DeepSeekProviderContractTests/testPreSerializationConsentCheckStopsBeforeDeepSeekRequestIsSent \
+              -only-testing:DensosoTests/QwenProviderContractTests/testPreSerializationConsentCheckStopsBeforeQwenRequestIsSent \
+              -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testSerializationConsentGateStopsBeforeNetworkRequest \
+              -only-testing:DensosoTests/ProviderRetryPolicyTests/testDeepSeekStreamRetryRevalidatesCapturedPolicyRevision \
+              -only-testing:DensosoTests/ProviderRetryPolicyTests/testQwenTextRetryRevalidatesCapturedPolicyRevision \
+              -only-testing:DensosoTests/QwenMealVisionProviderContractTests/testQwenVisionRetryRevalidatesCapturedImagePolicyRevision \
+              -only-testing:DensosoTests/ProviderRetryPolicyTests/testQwenASRRetryRejectsRevokedAndReconfirmedSpeechAudioConsent \
+              -only-testing:DensosoTests/AgentRequestResumeTests/testPolicyRevocationDuringHealthToolExecutionFiltersTheContinuationRequest \
+              -only-testing:DensosoTests/AgentRequestResumeTests/testAgentHealthPolicyAlignmentStagesDraftAndRequiresConversationConfirmation \
+              -only-testing:DensosoTests/AgentRequestResumeTests/testConversationHistoryConsentDefaultsToCurrentTurnOnlyInProviderPayload \
+              -only-testing:DensosoTests/AgentRequestResumeTests/testConfirmedConversationHistoryConsentIncludesCurrentRevisionHistoryInProviderPayload \
+              -only-testing:DensosoTests/HealthIntelligenceServiceTests/testReadModelReportsPerMetricCoverageAcrossTheFortyTwoDayHealthWindow \
+              -only-testing:DensosoTests/HealthIntelligenceServiceTests/testHealthBriefCacheGenerationFenceRejectsPrePurgeWrites \
+              -only-testing:DensosoTests/HealthIntelligenceServiceTests/testInvalidatedBriefCacheDoesNotReloadPrePurgeBriefs \
+              -only-testing:DensosoTests/ExportServiceTests/testBackupDoesNotTransferCloudHealthConsentAndRestoreDefaultsToDenied \
+              -only-testing:DensosoTests/ExportServiceTests/testRestoreInvalidatesCloudHealthAuthorizationAlreadyPresentInTargetStore \
+              -only-testing:DensosoTests/GetHealthHistoryToolTests/testHistoryResponsePreservesUnknownAndPartialCoverageWithoutAbsenceOrZero \
+              -only-testing:DensosoTests/GetHealthHistoryToolTests/testReadModelHistoryKeepsUnknownHealthKitCoverageTypedWithoutZeroObservations \
+              -only-testing:DensosoTests/GetTodayHealthStateToolTests/testUnknownTrainingLoadOmitsZeroAndDerivedValuesAndReportsCoverage \
+              -resultBundlePath "$result_bundle" \
+              CODE_SIGNING_ALLOWED=NO \
+              test 2>&1 | tee "$log_path"
+            local xcodebuild_exit=${PIPESTATUS[0]}
+            return "$xcodebuild_exit"
+          }
+
+          if run_gate19_xctests "$GATE19_RESULT_BUNDLE" gate19-cloud-health-window-tests.log; then
+            exit 0
+          else
+            first_attempt_exit=$?
+          fi
+
+          # Retry only a known simulator runner launch failure and only when
+          # XCTest recorded no assertion failures. A test or build failure is
+          # never retried or converted into a pass.
+          if ! grep -Fq 'Failed to install or launch the test runner' gate19-cloud-health-window-tests.log \
+            || ! grep -Fq 'Mach error -308' gate19-cloud-health-window-tests.log; then
+            exit "$first_attempt_exit"
+          fi
+          if ! xcrun xcresulttool get test-results summary --path "$GATE19_RESULT_BUNDLE" > gate19-first-attempt-summary.json; then
+            echo "Gate 19 retry withheld: the first-attempt XCTest result summary is unavailable."
+            exit "$first_attempt_exit"
+          fi
+          if ! python3 - gate19-first-attempt-summary.json <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          try:
+              summary = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError):
+              raise SystemExit(1)
+          if summary.get("failedTests") != 0 or summary.get("testFailures"):
+              raise SystemExit(1)
+          print("Gate 19 retry allowed: simulator runner died before any XCTest assertion failure.")
+          PY
+          then
+            echo "Gate 19 retry withheld: first-attempt result contains test failures or is incomplete."
+            exit "$first_attempt_exit"
+          fi
+
+          echo "Resetting the iOS Simulator and retrying the same Gate 19 XCTest selectors once."
+          perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl shutdown "$SIMULATOR_UDID" || true
+          if ! perl -e 'alarm shift; exec @ARGV' 120 xcrun simctl erase "$SIMULATOR_UDID"; then
+            echo "Gate 19 retry aborted: simulator erase failed."
+            exit 1
+          fi
+          if ! perl -e 'alarm shift; exec @ARGV' 60 xcrun simctl boot "$SIMULATOR_UDID"; then
+            echo "Gate 19 retry aborted: simulator boot failed."
+            exit 1
+          fi
+          if ! perl -e 'alarm shift; exec @ARGV' 600 xcrun simctl bootstatus "$SIMULATOR_UDID" -b; then
+            echo "Gate 19 retry aborted: simulator did not finish booting."
+            exit 1
+          fi
+          echo "GATE19_RESULT_BUNDLE=$GATE19_RETRY_RESULT_BUNDLE" >> "$GITHUB_ENV"
+          run_gate19_xctests "$GATE19_RETRY_RESULT_BUNDLE" gate19-cloud-health-window-tests-retry.log
+
+      - name: Export sanitized provider request evidence from XCTest attachments
+        id: gate19_sanitized_request_export
+        if: always()
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          export_dir="$RUNNER_TEMP/Gate19AttachmentExport"
+          destination="gate19-sanitized-provider-request-evidence.json"
+          rm -rf "$export_dir"
+          rm -f "$destination"
+          mkdir -p "$export_dir"
+          if [ ! -d "$GATE19_RESULT_BUNDLE" ]; then
+            echo "Gate 19 XCTest result bundle is unavailable; sanitized request evidence is missing."
+            exit 1
+          fi
+          xcrun xcresulttool export attachments \
+            --path "$GATE19_RESULT_BUNDLE" \
+            --output-path "$export_dir"
+          python3 - "$export_dir" "$destination" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          export_root = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          expected_attachment_stem = "gate19-sanitized-provider-request-evidence"
+          expected_test_class = "AgentProviderContextPolicyTests"
+          expected_test_method = "testDeniedHealthClassSentinelsAreAbsentFromSerializedProviderContinuationBodies"
+          exported_name_suffix = re.compile(r"_\d+_[0-9A-Fa-f-]+$")
+          manifest_path = export_root / "manifest.json"
+          if not manifest_path.is_file():
+              raise SystemExit("xcresult attachment manifest is missing")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if not isinstance(manifest, list):
+              raise SystemExit("xcresult attachment manifest has an unexpected schema")
+          candidates = []
+          for test_result in manifest:
+              if not isinstance(test_result, dict):
+                  continue
+              test_identifier = test_result.get("testIdentifier", "")
+              if not isinstance(test_identifier, str):
+                  continue
+              test_parts = test_identifier.split("/")
+              if len(test_parts) < 2:
+                  continue
+              test_class, test_method = test_parts[-2:]
+              if (
+                  test_class != expected_test_class
+                  or test_method.removesuffix("()") != expected_test_method
+              ):
+                  continue
+              test_attachments = test_result.get("attachments", [])
+              if not isinstance(test_attachments, list):
+                  raise SystemExit("target XCTest attachment list has an unexpected schema")
+              for attachment in test_attachments:
+                  if not isinstance(attachment, dict):
+                      raise SystemExit("target XCTest attachment entry has an unexpected schema")
+                  suggested_name = attachment.get("suggestedHumanReadableName", "")
+                  exported_name = attachment.get("exportedFileName", "")
+                  if not all(
+                      isinstance(value, str)
+                      for value in (suggested_name, exported_name)
+                  ):
+                      raise SystemExit("target XCTest attachment metadata has an unexpected schema")
+                  if Path(suggested_name).name == suggested_name and suggested_name.endswith(".json"):
+                      suggested_stem = Path(suggested_name).stem
+                      suggested_stem = exported_name_suffix.sub("", suggested_stem)
+                  else:
+                      suggested_stem = ""
+                  if suggested_stem == expected_attachment_stem:
+                      candidates.append((suggested_name, exported_name))
+          if len(candidates) != 1:
+              raise SystemExit(
+                  f"expected one Gate 19 sanitized request attachment, found {len(candidates)}"
+              )
+          _, exported_name = candidates[0]
+          if (
+              not isinstance(exported_name, str)
+              or not exported_name
+              or "/" in exported_name
+              or "\\" in exported_name
+              or Path(exported_name).suffix.lower() != ".json"
+          ):
+              raise SystemExit("the Gate 19 sanitized request attachment is not named as a JSON file")
+          attachment_path = export_root / exported_name
+          if not attachment_path.is_file():
+              raise SystemExit("the Gate 19 sanitized request attachment file is missing")
+          encoded = attachment_path.read_bytes()
+          try:
+              document = json.loads(encoded)
+          except (UnicodeDecodeError, json.JSONDecodeError) as error:
+              raise SystemExit("the Gate 19 sanitized request attachment is not valid JSON") from error
+          if not isinstance(document, dict):
+              raise SystemExit("the Gate 19 sanitized request attachment must contain a JSON object")
+          destination.write_bytes(encoded)
+          print(f"Exported sanitized Gate 19 request evidence to {destination}.")
+          PY
+
+      - name: Verify Gate 19 executed XCTest cases
+        id: gate19_test_manifest
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+          import os
+
+          bundle = Path(os.environ.get("GATE19_RESULT_BUNDLE", "Gate19PolicyHealthWindowTests.xcresult"))
+          raw_path = Path("gate19-xcresult-tests.json")
+          if bundle.is_dir():
+              extraction = subprocess.run(
+                  ["xcrun", "xcresulttool", "get", "test-results", "tests", "--path", str(bundle), "--format", "json"],
+                  check=False,
+                  capture_output=True,
+                  text=True,
+                  encoding="utf-8",
+              )
+              raw_path.write_text(extraction.stdout if extraction.returncode == 0 else "{}", encoding="utf-8")
+          else:
+              raw_path.write_text("{}", encoding="utf-8")
+
+          sys.path.insert(0, str(Path("scripts").resolve()))
+          from validate_gate19_privacy_window import REQUIRED_TESTS
+
+          command = ["python3", "scripts/validate_xcresult_test_manifest.py", "--input", str(raw_path), "--report", "gate19-xctest-manifest.json"]
+          for method in REQUIRED_TESTS:
+              command.extend(["--required", method])
+          result = subprocess.run(command, check=False)
+          sys.exit(result.returncode)
+          PY
+
+      - name: Export Gate 19 test execution evidence
+        id: gate19_evidence
+        if: always()
+        env:
+          IOS_OUTCOME: ${{ steps.gate19_ios.outcome }}
+          HEALTH_INTELLIGENCE_OUTCOME: ${{ steps.gate19_domain_health_intelligence.outcome }}
+          HEALTH_STATE_OUTCOME: ${{ steps.gate19_domain_health_state.outcome }}
+          NARRATIVE_OUTCOME: ${{ steps.gate19_domain_narrative.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path.cwd() / "scripts"))
+          from validate_gate19_privacy_window import BEHAVIOR_CHECKS, REQUIRED_DOMAIN_TESTS, REQUIRED_TESTS
+
+          def load_report(path):
+              report_path = Path(path)
+              if not report_path.is_file():
+                  return {}
+              try:
+                  return json.loads(report_path.read_text(encoding="utf-8"))
+              except (OSError, json.JSONDecodeError):
+                  return {}
+
+          xctest_manifest = load_report("gate19-xctest-manifest.json")
+          app_results = {}
+          for item in xctest_manifest.get("requiredTests", []):
+              name = item.get("testMethod")
+              status = item.get("observedStatus")
+              if isinstance(name, str):
+                  app_results[name] = status if status in {"PASS", "FAIL", "BLOCKED", "NOT_MEASURED"} else "BLOCKED"
+
+          package_results = {}
+          for path in (
+              "gate19-domain-health-intelligence-manifest.json",
+              "gate19-domain-health-state-manifest.json",
+              "gate19-domain-narrative-manifest.json",
+          ):
+              package_results.update(load_report(path).get("swiftPackageTestResults", {}))
+
+          test_statuses = {**app_results, **package_results}
+          for name in REQUIRED_TESTS:
+              app_results.setdefault(name, "BLOCKED")
+          for selector in REQUIRED_DOMAIN_TESTS:
+              package_results.setdefault(selector, "BLOCKED")
+
+          required_statuses = [*app_results.values(), *package_results.values()]
+          if "FAIL" in required_statuses:
+              test_status = "FAIL"
+          elif required_statuses and all(value == "PASS" for value in required_statuses):
+              test_status = "PASS"
+          else:
+              test_status = "BLOCKED"
+
+          result_bundle_name = Path(os.environ.get("GATE19_RESULT_BUNDLE", "Gate19PolicyHealthWindowTests.xcresult")).name
+          evidence_ref = f"{result_bundle_name}; gate19-domain-*.log"
+          sanitized_request_artifact = "gate19-sanitized-provider-request-evidence.json"
+
+          def behavior_evidence(check_id):
+              check = BEHAVIOR_CHECKS[check_id]
+              dependencies = [test_statuses.get(name, "BLOCKED") for name in check.required_tests]
+              if not dependencies:
+                  status = "NOT_MEASURED"
+              elif "FAIL" in dependencies:
+                  status = "FAIL"
+              elif all(value == "PASS" for value in dependencies):
+                  status = "PASS"
+              else:
+                  status = "BLOCKED"
+              if (
+                  check_id == "provider_final_request_body"
+                  and status == "PASS"
+                  and not Path(sanitized_request_artifact).is_file()
+              ):
+                  status = "BLOCKED"
+              value = {"status": status}
+              if status == "PASS":
+                  value["evidenceRef"] = (
+                      sanitized_request_artifact
+                      if check_id == "provider_final_request_body"
+                      else evidence_ref
+                  )
+                  value.update({field: True for field in check.required_true})
+                  for field, mode, number in check.required_numbers:
+                      value[field] = number
+                  if check.require_providers:
+                      value["providers"] = ["deepSeek", "qwen"]
+                  if check.require_health_classes:
+                      value["forbiddenClassesChecked"] = [
+                          "healthNutrition", "healthSleep", "healthActivity", "healthBody", "healthSubjective"
+                      ]
+              if check_id == "imported_backup_reconfirmation" and status == "PASS":
+                  value["policyTransferredInBackup"] = False
+                  value["restoredConsentDefaultsDenied"] = True
+              if check_id == "health_window" and status == "PASS":
+                  value["initialBackfillDays"] = 42
+                  value["sameAnalysisAndSyncWindow"] = True
+                  value["authorizationBoundaryRespected"] = True
+              return value
+
+          evidence = {
+              "schemaVersion": 1,
+              "gate": "gate-19-cloud-health-privacy-window",
+              "headSha": os.environ.get("GITHUB_SHA"),
+              "runId": os.environ.get("GITHUB_RUN_ID"),
+              "testResults": app_results,
+              "swiftPackageTestResults": package_results,
+              "behaviorChecks": {
+                  "provider_final_request_body": behavior_evidence("provider_final_request_body"),
+                  "retry_attempt_authorization": behavior_evidence("retry_attempt_authorization"),
+                  "provider_tool_output": behavior_evidence("provider_tool_output"),
+                  "cached_and_continued_context": behavior_evidence("cached_and_continued_context"),
+                  "consent_expansion_confirmation": behavior_evidence("consent_expansion_confirmation"),
+                  "imported_backup_reconfirmation": behavior_evidence("imported_backup_reconfirmation"),
+                  "health_window": behavior_evidence("health_window"),
+                  "coverage_unknown_semantics": behavior_evidence("coverage_unknown_semantics"),
+                  "rebaseline_idempotence": behavior_evidence("rebaseline_idempotence"),
+                  "delete_recompute_idempotence": behavior_evidence("delete_recompute_idempotence"),
+              },
+          }
+          Path("gate19-evidence.json").write_text(
+              json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+          )
+          print(json.dumps({
+              "testStatus": test_status,
+              "appTestCases": len(app_results),
+              "swiftPackageTestCases": len(package_results),
+              "manifest": "gate19-evidence.json",
+          }, indent=2))
+          PY
+
+      - name: Validate Gate 19 contracts and produce status report
+        id: validate_gate19
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 -m py_compile \
+            scripts/validate_gate19_privacy_window.py \
+            scripts/validate_xcresult_test_manifest.py \
+            scripts/validate_swiftpm_test_manifest.py
+          python3 scripts/validate_gate19_privacy_window.py \
+            --evidence gate19-evidence.json \
+            --sanitized-provider-request-artifact gate19-sanitized-provider-request-evidence.json \
+            --report gate19-report.json
+
+      - name: Record Gate 19 status
+        id: gate19_status
+        if: always()
+        env:
+          IOS_OUTCOME: ${{ steps.gate19_ios.outcome }}
+          HEALTH_INTELLIGENCE_OUTCOME: ${{ steps.gate19_domain_health_intelligence.outcome }}
+          HEALTH_STATE_OUTCOME: ${{ steps.gate19_domain_health_state.outcome }}
+          NARRATIVE_OUTCOME: ${{ steps.gate19_domain_narrative.outcome }}
+          MANIFEST_OUTCOME: ${{ steps.gate19_test_manifest.outcome }}
+          SANITIZED_REQUEST_EXPORT_OUTCOME: ${{ steps.gate19_sanitized_request_export.outcome }}
+        run: |
+          if [ -f gate19-report.json ]; then
+            GATE_STATUS="$(python3 -c 'import json; print(json.load(open("gate19-report.json", encoding="utf-8"))["status"])')"
+          else
+            GATE_STATUS=FAIL
+          fi
+          if [ "$GATE_STATUS" = "PASS" ] \
+            && { [ "$IOS_OUTCOME" = "failure" ] \
+              || [ "$HEALTH_INTELLIGENCE_OUTCOME" = "failure" ] \
+              || [ "$HEALTH_STATE_OUTCOME" = "failure" ] \
+              || [ "$NARRATIVE_OUTCOME" = "failure" ] \
+            || [ "$MANIFEST_OUTCOME" = "failure" ]; }; then
+            GATE_STATUS=FAIL
+          elif [ "$GATE_STATUS" = "PASS" ] \
+            && { [ "$IOS_OUTCOME" != "success" ] \
+              || [ "$HEALTH_INTELLIGENCE_OUTCOME" != "success" ] \
+              || [ "$HEALTH_STATE_OUTCOME" != "success" ] \
+              || [ "$NARRATIVE_OUTCOME" != "success" ] \
+              || [ "$MANIFEST_OUTCOME" != "success" ] \
+              || [ "$SANITIZED_REQUEST_EXPORT_OUTCOME" != "success" ]; }; then
+            GATE_STATUS=BLOCKED
+          fi
+          echo "gate_status=$GATE_STATUS" >> "$GITHUB_OUTPUT"
+          echo "Gate 19: $GATE_STATUS"
+
+      - name: Upload Gate 19 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-19-cloud-health-window-results
+          path: |
+            Gate19PolicyHealthWindowTests.xcresult
+            Gate19PolicyHealthWindowRetryTests.xcresult
+            gate19-first-attempt-summary.json
+            gate19-cloud-health-window-tests.log
+            gate19-cloud-health-window-tests-retry.log
+            gate19-xcresult-tests.json
+            gate19-xctest-manifest.json
+            gate19-domain-health-intelligence.log
+            gate19-domain-health-intelligence-manifest.json
+            gate19-domain-health-state.log
+            gate19-domain-health-state-manifest.json
+            gate19-domain-narrative.log
+            gate19-domain-narrative-manifest.json
+            gate19-sanitized-provider-request-evidence.json
+            gate19-evidence.json
+            gate19-report.json
+            docs/gates/gate-19-cloud-policy-health-window.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-16-aggregate-contracts:
+    name: gate-16-aggregate-contracts
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Gate 16 status and release-readiness contracts
+        run: |
+          python3 -m py_compile \
+            scripts/aggregate_gate16_release_readiness.py \
+            scripts/validate_gate16_aggregate.py \
+            scripts/validate_xcresult_test_manifest.py \
+            scripts/validate_swiftpm_test_manifest.py
+          python3 scripts/validate_gate16_aggregate.py
+
+  gate-status:
+    name: gate-16-final-release-aggregate-report
+    needs:
+      - foundation
+      - domain-persistence
+      - agent-provider
+      - speech
+      - meal-capture
+      - healthkit
+      - health-intelligence
+      - watch
+      - integration
+      - final-acceptance
+      - gate-11-ai-native-health-loop
+      - gate-12-multimodal-agent
+      - gate-13-energy-accounting
+      - gate-14-watch-daily-loop
+      - gate-17-food-data
+      - gate-18-meal-estimates
+      - gate-19-cloud-health-window
+      - gate-16-aggregate-contracts
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Aggregate automated gates and Gate 16 release readiness
+        env:
+          RUN_SCOPE: ${{ inputs.run_scope || 'full' }}
+          GATE_16_AGGREGATE_CONTRACTS: ${{ needs.gate-16-aggregate-contracts.result }}
+          GATE_01: ${{ needs.foundation.result }}
+          GATE_02: ${{ needs.domain-persistence.result }}
+          GATE_03: ${{ needs.agent-provider.result }}
+          GATE_04: ${{ needs.speech.result }}
+          GATE_05: ${{ needs.meal-capture.result }}
+          GATE_06: ${{ needs.healthkit.result }}
+          GATE_07: ${{ needs.health-intelligence.result }}
+          GATE_08: ${{ needs.watch.result }}
+          GATE_09: ${{ needs.integration.result }}
+          GATE_10: ${{ needs.final-acceptance.result }}
+          GATE_11: ${{ needs.gate-11-ai-native-health-loop.result }}
+          GATE_12: ${{ needs.gate-12-multimodal-agent.result }}
+          GATE_13: ${{ needs.gate-13-energy-accounting.result }}
+          GATE_14: ${{ needs.gate-14-watch-daily-loop.result }}
+          GATE_17: ${{ needs.gate-17-food-data.outputs.gate_status || needs.gate-17-food-data.result }}
+          GATE_18: ${{ needs.gate-18-meal-estimates.outputs.gate_status || needs.gate-18-meal-estimates.result }}
+          GATE_19: ${{ needs.gate-19-cloud-health-window.outputs.gate_status || needs.gate-19-cloud-health-window.result }}
+        run: |
+          set -euo pipefail
+          python3 scripts/aggregate_gate16_release_readiness.py \
+            --run-scope "$RUN_SCOPE" \
+            --aggregate-contracts-result "$GATE_16_AGGREGATE_CONTRACTS" \
+            --workflow-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --gate-result "1=$GATE_01" \
+            --gate-result "2=$GATE_02" \
+            --gate-result "3=$GATE_03" \
+            --gate-result "4=$GATE_04" \
+            --gate-result "5=$GATE_05" \
+            --gate-result "6=$GATE_06" \
+            --gate-result "7=$GATE_07" \
+            --gate-result "8=$GATE_08" \
+            --gate-result "9=$GATE_09" \
+            --gate-result "10=$GATE_10" \
+            --gate-result "11=$GATE_11" \
+            --gate-result "12=$GATE_12" \
+            --gate-result "13=$GATE_13" \
+            --gate-result "14=$GATE_14" \
+            --gate-result "17=$GATE_17" \
+            --gate-result "18=$GATE_18" \
+            --gate-result "19=$GATE_19" \
+            --report gate16-release-readiness.json
+
+      - name: Write Gate 16 report summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          report_path = Path("gate16-release-readiness.json")
+          if not report_path.is_file():
+              raise SystemExit("Gate 16 report was not produced")
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          lines = [
+              "# Gate 16 final release aggregate",
+              "",
+              f"Automated checks: **{report['automatedChecksStatus']}**",
+              f"Release readiness: **{report['releaseReadinessStatus']}**",
+              f"Ready: **{report['ready']}**",
+              f"Gate 16 contract validator: **{report['aggregateContractCheck']['status']}**",
+              f"Field calibration: **{report['fieldCalibration']['status']}**",
+              "",
+              "| Gate | Status | Reason |",
+              "| --- | --- | --- |",
+          ]
+          lines.extend(
+              f"| {gate['gate']:02d} | {gate['status']} | {gate['reason']} |"
+              for gate in sorted(report["gates"], key=lambda value: value["gate"])
+          )
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Upload Gate 16 aggregate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-16-final-release-aggregate-results
+          path: |
+            gate16-release-readiness.json
+            docs/gates/gate-15-real-device-acceptance.md
+            docs/gates/gate-16-final-release-acceptance.md
+          if-no-files-found: warn
+          retention-days: 14

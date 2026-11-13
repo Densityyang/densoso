@@ -1,13 +1,41 @@
+import DensosoDomain
 import Foundation
 import GRDB
 
 /// 本地食材库（只读 SQLite + FTS5）
 final class FoodDatabase {
+    private struct FoodCompositionSourceRecord: Decodable {
+        let nutrientBasis: String?
+        let massBasis: String?
+        let dataQuality: String?
+        let sourceName: String?
+        let sourceDataType: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case nutrientBasis
+            case massBasis
+            case dataQuality
+            case sourceName
+            case sourceDataType
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            nutrientBasis = try? values.decodeIfPresent(String.self, forKey: .nutrientBasis)
+            massBasis = try? values.decodeIfPresent(String.self, forKey: .massBasis)
+            dataQuality = try? values.decodeIfPresent(String.self, forKey: .dataQuality)
+            sourceName = try? values.decodeIfPresent(String.self, forKey: .sourceName)
+            sourceDataType = try? values.decodeIfPresent(String.self, forKey: .sourceDataType)
+        }
+    }
+
     struct FoodMatch {
         let item: FoodItem
         let score: Double
     }
     private let dbQueue: DatabaseQueue
+    private let catalogCacheLock = NSLock()
+    private var catalogEntriesCache: [FoodCatalogEntry]?
 
     init() throws {
         guard let dbURL = Bundle.main.url(forResource: "food_composition", withExtension: "db") else {
@@ -36,13 +64,23 @@ final class FoodDatabase {
                 t.primaryKey("id", .integer)
                 t.column("name", .text).notNull()
                 t.column("alias", .text)
+                t.column("preparation", .text)
+                t.column("isCookedComposite", .integer)
                 t.column("category", .text).notNull()
                 t.column("edible", .integer).notNull().defaults(to: 100)
                 t.column("energyKcal", .integer).notNull()
-                t.column("proteinG", .double).notNull().defaults(to: 0)
-                t.column("fatG", .double).notNull().defaults(to: 0)
-                t.column("carbohydrateG", .double).notNull().defaults(to: 0)
+                t.column("proteinG", .double)
+                t.column("fatG", .double)
+                t.column("carbohydrateG", .double)
                 t.column("fiberG", .double)
+                t.column("energyRaw", .text)
+                t.column("energyUnit", .text)
+                t.column("sourceID", .text)
+                t.column("sourceRecordID", .text)
+                t.column("sourceVersion", .text)
+                t.column("licenseStatus", .text)
+                t.column("sourceRecordJSON", .text)
+                t.column("importWarningsJSON", .text)
             }
             try db.create(index: "idx_food_name", on: "food_items", columns: ["name"])
             try db.create(index: "idx_food_category", on: "food_items", columns: ["category"])
@@ -69,21 +107,31 @@ final class FoodDatabase {
     }
 
     func searchByPrefix(_ prefix: String, limit: Int = 20) throws -> [FoodItem] {
-        try dbQueue.read { db in
+        let escaped = escapeLikeToken(prefix)
+        guard !escaped.isEmpty else { return [] }
+        let primaryPattern = "\(escaped)%"
+        let secondaryPattern = "%|\(escaped)%"
+        return try dbQueue.read { db in
             try FoodItem
-                .filter(Column("name").like("\(prefix)%") || Column("alias").like("\(prefix)%"))
+                .filter(
+                    sql: "(name LIKE ? ESCAPE '\\' OR alias LIKE ? ESCAPE '\\' OR alias LIKE ? ESCAPE '\\')",
+                    arguments: [primaryPattern, primaryPattern, secondaryPattern]
+                )
                 .limit(limit)
                 .fetchAll(db)
         }
     }
 
-    /// 模糊搜索（包含子串匹配）—— GRDB 参数化查询，query 中的 % 为 SQL LIKE 通配符
+    /// 模糊搜索（包含子串匹配）—— GRDB 参数化查询，并将用户输入中的 LIKE 通配符按字面匹配。
     func search(query: String, limit: Int = 10) throws -> [FoodItem] {
-        try dbQueue.read { db in
+        let escaped = escapeLikeToken(query)
+        guard !escaped.isEmpty else { return [] }
+        let pattern = "%\(escaped)%"
+        return try dbQueue.read { db in
             try FoodItem
                 .filter(
-                    Column("name").like("%\(query)%") ||
-                    Column("alias").like("%\(query)%")
+                    sql: "(name LIKE ? ESCAPE '\\' OR alias LIKE ? ESCAPE '\\')",
+                    arguments: [pattern, pattern]
                 )
                 .order(Column("category"))
                 .limit(limit)
@@ -99,17 +147,32 @@ final class FoodDatabase {
         var ranked: [FoodMatch] = []
         for item in candidates {
             let name = normalize(item.name)
-            let alias = normalize(item.alias ?? "")
+            let aliases = (item.alias ?? "")
+                .split(separator: "|")
+                .map { normalize(String($0)) }
+                .filter { !$0.isEmpty }
             let score: Double
-            if name == normalizedQuery || alias == normalizedQuery { score = 1 }
-            else if name.hasPrefix(normalizedQuery) || alias.hasPrefix(normalizedQuery) { score = 0.8 }
-            else { score = 0.55 }
+            if name == normalizedQuery || aliases.contains(normalizedQuery) {
+                score = 1
+            } else if name.hasPrefix(normalizedQuery) || aliases.contains(where: { $0.hasPrefix(normalizedQuery) }) {
+                score = 0.8
+            } else {
+                score = 0.55
+            }
             ranked.append(FoodMatch(item: item, score: score))
         }
         ranked.sort { lhs, rhs in
             lhs.score == rhs.score ? lhs.item.name < rhs.item.name : lhs.score > rhs.score
         }
         return Array(ranked.prefix(max(0, limit)))
+    }
+
+    private func escapeLikeToken(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
     }
 
     private func normalize(_ value: String) -> String {
@@ -156,6 +219,54 @@ final class FoodDatabase {
         try dbQueue.read { db in
             try String.fetchAll(db, sql: "SELECT DISTINCT category FROM food_items ORDER BY category")
         }
+    }
+
+    func catalogEntries() throws -> [FoodCatalogEntry] {
+        catalogCacheLock.lock()
+        defer { catalogCacheLock.unlock() }
+        if let catalogEntriesCache { return catalogEntriesCache }
+
+        let items = try dbQueue.read { db in try FoodItem.order(Column("id")).fetchAll(db) }
+        let entries = items.map { item in
+            let sourceRecord = item.sourceRecordJSON
+                .flatMap { $0.data(using: .utf8) }
+                .flatMap { try? JSONDecoder().decode(FoodCompositionSourceRecord.self, from: $0) }
+            let importWarnings = item.importWarningsJSON
+                .flatMap { $0.data(using: .utf8) }
+                .flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+            return FoodCatalogEntry(
+                id: "food:\(item.id)",
+                localFoodID: String(item.id),
+                name: item.name,
+                aliases: (item.alias ?? "")
+                    .split(separator: "|")
+                    .map(String.init),
+                preparation: FoodPreparation(rawValue: item.preparation ?? "") ?? .unknown,
+                category: item.category,
+                edibleFraction: Double(item.edible) / 100,
+                nutrients: FoodNutrientProfile(
+                    energyKcalPer100Grams: Double(item.energyKcal),
+                    proteinGramsPer100Grams: item.proteinG,
+                    fatGramsPer100Grams: item.fatG,
+                    carbohydrateGramsPer100Grams: item.carbohydrateG
+                ),
+                isCookedComposite: item.isCookedComposite == true,
+                sourceVersion: item.sourceVersion ?? "unknown-food-data-version",
+                sourceID: item.sourceID,
+                sourceRecordID: item.sourceRecordID,
+                licenseStatus: item.licenseStatus,
+                dataQuality: sourceRecord?.dataQuality,
+                nutrientBasis: sourceRecord?.nutrientBasis,
+                massBasis: sourceRecord?.massBasis,
+                energyRaw: item.energyRaw,
+                energyUnit: item.energyUnit,
+                sourceName: sourceRecord?.sourceName,
+                sourceDataType: sourceRecord?.sourceDataType,
+                importWarnings: importWarnings
+            )
+        }
+        catalogEntriesCache = entries
+        return entries
     }
 
     var count: Int {

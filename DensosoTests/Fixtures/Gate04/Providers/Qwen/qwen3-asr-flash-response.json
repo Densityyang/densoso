@@ -1,0 +1,25 @@
+{
+  "id": "chatcmpl-gate04-asr",
+  "object": "chat.completion",
+  "model": "qwen3-asr-flash",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "午饭吃了米饭二百克"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 42,
+    "completion_tokens": 12,
+    "seconds": 1,
+    "total_tokens": 54,
+    "prompt_tokens_details": {
+      "audio_tokens": 42,
+      "text_tokens": 0
+    }
+  }
+}

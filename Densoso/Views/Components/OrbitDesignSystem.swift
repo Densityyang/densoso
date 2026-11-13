@@ -80,6 +80,7 @@ struct OrbitScreenHeader: View {
                 .font(.largeTitle.weight(.bold))
                 .fontWidth(.condensed)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
 
             if let subtitle {
                 Text(subtitle)
@@ -89,7 +90,7 @@ struct OrbitScreenHeader: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 }
 

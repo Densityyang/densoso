@@ -1,0 +1,627 @@
+import DensosoDomain
+import SwiftData
+import XCTest
+@testable import Densoso
+
+@MainActor
+final class HealthIntelligenceServiceTests: XCTestCase {
+    func testFailedRefreshClearsPreviousBriefAndCannotRemainFresh() async throws {
+        let container = try makeContainer()
+        let reference = Date(timeIntervalSince1970: 1_800_000_000)
+        let dayStart = Calendar.current.startOfDay(for: reference)
+        let brief = Self.fixtureBrief(dayStart: dayStart)
+        var shouldFail = false
+        let projectionActor = HealthProjectionActor(modelContainer: container)
+        let service = HealthIntelligenceService(
+            projectionActor: projectionActor,
+            briefCacheGenerationFence: HealthBriefCacheGenerationFence(),
+            refreshOperation: { date, _ in
+                guard !shouldFail else { throw InjectedRefreshError.failure }
+                return HealthIntelligenceRefreshSnapshot(
+                    dailyBrief: brief,
+                    dailyBriefSourceFingerprint: "fixture-current-source",
+                    dailyBriefValidatedAt: date,
+                    weeklyBrief: nil,
+                    updatesWeeklyBrief: true
+                )
+            }
+        )
+
+        _ = try await service.refresh(asOf: reference)
+        XCTAssertNotNil(service.dailyBrief)
+        XCTAssertEqual(service.dailyBriefValidatedAt, reference)
+
+        shouldFail = true
+        do {
+            _ = try await service.refresh(asOf: reference.addingTimeInterval(60))
+            XCTFail("A failed refresh must be surfaced to its caller")
+        } catch InjectedRefreshError.failure {
+            // Expected.
+        }
+
+        XCTAssertNil(service.dailyBrief)
+        XCTAssertNil(service.dailyBriefSourceFingerprint)
+        XCTAssertNil(service.dailyBriefValidatedAt)
+        XCTAssertNil(service.weeklyBrief)
+        let snapshot = DailyLoopSnapshotComposer().compose(
+            asOf: reference.addingTimeInterval(60),
+            dailyBrief: service.dailyBrief,
+            dailyBriefSourceFingerprint: service.dailyBriefSourceFingerprint,
+            dailyBriefValidatedAt: service.dailyBriefValidatedAt,
+            pendingActions: [],
+            workoutPlans: []
+        )
+        XCTAssertEqual(snapshot.refreshState, .refreshRequired)
+    }
+
+    func testRefreshBuildsSevenAndTwentyEightDaySummaryAndCachesBySourceHash() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let reference = Date(timeIntervalSince1970: 1_800_000_000)
+        let day = Calendar.current.startOfDay(for: reference)
+        let key = dayKey(day)
+        let sample = HealthSampleSnapshot(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000801")!,
+            metric: .bodyMass,
+            startDate: reference,
+            endDate: reference,
+            value: 71.2
+        )
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: Calendar.current.timeZone.identifier,
+            energyIntakeKcal: try EstimateRange(low: 450, likely: 500, high: 600),
+            activeEnergyKcal: 420,
+            restingEnergyKcal: 1_400,
+            stepCount: 7_200,
+            exerciseMinutes: 40,
+            healthKitSamples: [sample],
+            healthReadStates: [
+                HealthMetricID.activeEnergy.rawValue: .available,
+                HealthMetricID.restingEnergy.rawValue: .available,
+            ],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: key,
+            timezoneID: snapshot.timezoneIdentifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "source-hash-1",
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        ))
+        let metric = DailyMetrics(
+            date: day,
+            bmrKcal: 1_400,
+            activeCaloriesKcal: 420,
+            totalExpenditureKcal: 1_820,
+            totalIntakeKcal: 500,
+            deficitKcal: 1_320,
+            proteinG: 25,
+            fatG: 20,
+            carbsG: 60,
+            mealCount: 1,
+            workoutCount: 0,
+            energyQuality: "observed",
+            dataCoverageJSON: #"{"intake":true,"allRecordedMealsHaveEvidence":true,"protein":true,"proteinComplete":true,"fat":true,"fatComplete":true,"carbs":true,"carbsComplete":true,"nutritionRecordStatus":"complete","nutritionMealFingerprint":"fixture-meal-set","nutritionCompletionMealFingerprint":"fixture-meal-set"}"#,
+            projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+            sourceFingerprint: "health-intelligence-fixture"
+        )
+        context.insert(metric)
+        context.insert(WeightRecord(
+            sourceActionKey: "service-test-weight",
+            measuredAt: reference,
+            kilograms: 71.2
+        ))
+        context.insert(GoalProfileRecord(
+            profileKey: "primary",
+            targetWeightKilograms: 68,
+            dailyDeficitKcal: 400,
+            dailyProteinGrams: 90,
+            effectiveFrom: day
+        ))
+        try context.save()
+
+        let service = HealthIntelligenceService(modelContainer: container)
+        let firstResult = try await service.refresh(asOf: reference)
+        let first = try XCTUnwrap(firstResult)
+        XCTAssertFalse(service.dailyBriefSourceFingerprint?.isEmpty ?? true)
+        XCTAssertEqual(service.dailyBriefValidatedAt, reference)
+        XCTAssertEqual(first.contextSummary.sevenDay.windowDays, 7)
+        XCTAssertEqual(first.contextSummary.twentyEightDay.windowDays, 28)
+        XCTAssertEqual(first.contextSummary.targetWeightKilograms, 68)
+        XCTAssertEqual(first.domains.first(where: { $0.domain == .nutrition })?.currentValue, 500)
+
+        let firstRecord = try XCTUnwrap(
+            context.fetch(FetchDescriptor<DailyBriefRecord>()).first(where: { $0.dayKey == key })
+        )
+        let firstHash = firstRecord.snapshotHash
+        let firstPayload = firstRecord.payloadData
+        XCTAssertEqual(service.dailyBriefSourceFingerprint, firstHash)
+        _ = try await service.refresh(asOf: reference)
+        let unchanged = try XCTUnwrap(context.fetch(FetchDescriptor<DailyBriefRecord>()).first(where: { $0.dayKey == key }))
+        XCTAssertEqual(unchanged.snapshotHash, firstHash)
+        XCTAssertEqual(unchanged.payloadData, firstPayload)
+        XCTAssertEqual(service.dailyBriefValidatedAt, reference)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyBriefRecord>()), 1)
+
+        let cachedService = HealthIntelligenceService(modelContainer: container)
+        await cachedService.loadCachedBriefs()
+        XCTAssertEqual(cachedService.dailyBriefSourceFingerprint, firstHash)
+        XCTAssertNil(cachedService.dailyBriefValidatedAt)
+        cachedService.invalidateBriefsForHealthSnapshotRebuild()
+        XCTAssertNil(cachedService.dailyBrief)
+        XCTAssertNil(cachedService.weeklyBrief)
+        await cachedService.loadCachedBriefs()
+        XCTAssertNil(cachedService.dailyBrief)
+        XCTAssertNil(cachedService.weeklyBrief)
+
+        metric.totalExpenditureKcal = 2_400
+        metric.expenditureEnergyLowKcal = 2_400
+        metric.expenditureEnergyLikelyKcal = 2_400
+        metric.expenditureEnergyHighKcal = 2_400
+        metric.deficitKcal = 1_900
+        metric.sourceFingerprint = "health-intelligence-fixture-updated"
+        try context.save()
+        _ = try await service.refresh(asOf: reference)
+        let changed = try XCTUnwrap(context.fetch(FetchDescriptor<DailyBriefRecord>()).first(where: { $0.dayKey == key }))
+        XCTAssertNotEqual(changed.snapshotHash, firstHash)
+
+        let changedMetricFingerprint = changed.snapshotHash
+        let tomorrow = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 1, to: day))
+        let workoutPlan = ConfirmedWorkoutPlanEntry(
+            actionID: UUID(uuidString: "00000000-0000-0000-0000-000000000991")!,
+            idempotencyKey: "health-intelligence-plan-refresh",
+            draft: WorkoutPlanDraft(
+                name: "明日步行",
+                activity: .walking,
+                scheduledAt: tomorrow.addingTimeInterval(9 * 60 * 60)
+            )
+        )
+        let scheduledAt = try XCTUnwrap(workoutPlan.draft.scheduledAt)
+        context.insert(ScheduleEvent(
+            date: scheduledAt,
+            title: workoutPlan.draft.name,
+            notes: try workoutPlan.encodedNotes(),
+            startTime: scheduledAt
+        ))
+        try context.save()
+
+        let guidanceBeforePlan = service.dailyBrief?.healthState?.tomorrowGuidance
+        _ = try await service.refresh(asOf: reference)
+        let planUpdated = try XCTUnwrap(
+            context.fetch(FetchDescriptor<DailyBriefRecord>()).first(where: { $0.dayKey == key })
+        )
+        XCTAssertNotEqual(planUpdated.snapshotHash, changedMetricFingerprint)
+        XCTAssertNotEqual(service.dailyBrief?.healthState?.tomorrowGuidance, guidanceBeforePlan)
+    }
+
+    func testHealthBriefCacheGenerationFenceRejectsPrePurgeWrites() throws {
+        let fence = HealthBriefCacheGenerationFence()
+        let prePurgeGeneration = fence.currentGeneration
+        _ = fence.invalidate()
+        var didCommit = false
+
+        XCTAssertThrowsError(try fence.withCurrentGeneration(prePurgeGeneration) {
+            didCommit = true
+        })
+        XCTAssertFalse(didCommit)
+    }
+
+    func testInvalidatedBriefCacheDoesNotReloadPrePurgeBriefs() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let reference = Date(timeIntervalSince1970: 1_800_000_000)
+        let day = Calendar.current.startOfDay(for: reference)
+        let snapshot = DailyHealthSnapshot(
+            dayStart: day,
+            timezoneIdentifier: Calendar.current.timeZone.identifier,
+            energyIntakeKcal: try EstimateRange(low: 450, likely: 500, high: 600),
+            activeEnergyKcal: 420,
+            restingEnergyKcal: 1_400,
+            stepCount: 7_200,
+            exerciseMinutes: 40,
+            healthReadStates: [
+                HealthMetricID.activeEnergy.rawValue: .available,
+                HealthMetricID.restingEnergy.rawValue: .available,
+            ],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        context.insert(DailyHealthSnapshotRecord(
+            dayKey: dayKey(day),
+            timezoneID: snapshot.timezoneIdentifier,
+            payloadData: try encoder.encode(snapshot),
+            snapshotHash: "brief-invalidation-fixture",
+            algorithmVersion: snapshot.algorithmVersion
+        ))
+        context.insert(GoalProfileRecord(
+            profileKey: "primary",
+            targetWeightKilograms: 68,
+            dailyDeficitKcal: 400,
+            dailyProteinGrams: 90,
+            effectiveFrom: day
+        ))
+        try context.save()
+
+        let service = HealthIntelligenceService(modelContainer: container)
+        let initialBrief = try await service.refresh(asOf: reference)
+        XCTAssertNotNil(initialBrief)
+        XCTAssertFalse(try context.fetch(FetchDescriptor<DailyBriefRecord>()).isEmpty)
+        XCTAssertFalse(try context.fetch(FetchDescriptor<WeeklyBriefRecord>()).isEmpty)
+
+        service.invalidateBriefsForHealthSnapshotRebuild()
+        await service.loadCachedBriefs()
+        XCTAssertNil(service.dailyBrief)
+        XCTAssertNil(service.weeklyBrief)
+        var prePurgeRefreshWasRejected = false
+        do {
+            _ = try await service.refresh(asOf: reference)
+        } catch {
+            prePurgeRefreshWasRejected = true
+        }
+        XCTAssertTrue(prePurgeRefreshWasRejected)
+        XCTAssertNil(service.dailyBrief)
+        XCTAssertNil(service.weeklyBrief)
+
+        service.allowBriefRefreshAfterSuccessfulHealthSnapshotPurge()
+        let refreshedBrief = try await service.refresh(asOf: reference)
+        XCTAssertNotNil(refreshedBrief)
+        XCTAssertNotNil(service.dailyBrief)
+    }
+
+    func testReadModelReportsPerMetricCoverageAcrossTheFortyTwoDayHealthWindow() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let reference = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 12)))
+        let today = calendar.startOfDay(for: reference)
+        let authorizationStart = try XCTUnwrap(calendar.date(byAdding: .day, value: -29, to: today))
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+
+        for offset in -41...0 {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: today))
+            let isAuthorized = day >= authorizationStart
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                stepCount: isAuthorized ? 5_000 : nil,
+                healthReadStates: [
+                    HealthMetricID.stepCount.rawValue: isAuthorized
+                        ? .available
+                        : .dataUnavailableOrReadScopeUnknown,
+                ],
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: dayKey(day),
+                timezoneID: snapshot.timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "metric-coverage-\(offset)",
+                algorithmVersion: snapshot.algorithmVersion
+            ))
+        }
+        context.insert(HealthKitImportCursor(
+            stream: HealthMetricID.stepCount.rawValue,
+            lastSuccessfulAt: reference,
+            lookbackStart: authorizationStart
+        ))
+        try context.save()
+
+        let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
+        let refreshed = try await service.refresh(asOf: reference)
+        let result = try XCTUnwrap(refreshed)
+        let coverage = try XCTUnwrap(result.contextSummary.analysisWindowCoverage["steps"])
+
+        XCTAssertEqual(coverage.expectedCalendarDays, 42)
+        XCTAssertEqual(coverage.actualEarliestDate, authorizationStart)
+        XCTAssertEqual(coverage.validCalendarDays, 30)
+        XCTAssertEqual(coverage.missingCalendarDays, 12)
+        XCTAssertEqual(coverage.authorizationLimited, true)
+        XCTAssertEqual(coverage.dataAvailabilityLimited, false)
+    }
+
+    func testVerifiedWorkoutRestDaysReachReadModelAndUnknownEffortStaysPartial() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let reference = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 12)))
+        let today = calendar.startOfDay(for: reference)
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        var snapshotsByDay: [Date: DailyHealthSnapshotRecord] = [:]
+
+        for offset in -41...0 {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: today))
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                healthReadStates: [
+                    HealthMetricID.workout.rawValue: .available,
+                    HealthMetricID.workoutEffort.rawValue: .available,
+                ],
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            )
+            let record = DailyHealthSnapshotRecord(
+                dayKey: dayKey(day),
+                timezoneID: snapshot.timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "verified-workout-coverage-\(offset)",
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            )
+            context.insert(record)
+            snapshotsByDay[day] = record
+        }
+
+        for offset in [-33, -29, -25, -21, -17, -13, -9] {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: today))
+            context.insert(WorkoutRecord(
+                date: day.addingTimeInterval(12 * 60 * 60),
+                type: "running",
+                durationMinutes: 60,
+                intensity: "moderate"
+            ))
+        }
+        try context.save()
+
+        let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
+        let completeResult = try await service.refresh(asOf: reference)
+        let complete = try XCTUnwrap(completeResult)
+        XCTAssertEqual(complete.trainingLoad.dataCoverage, .complete)
+        XCTAssertEqual(complete.trainingLoad.readiness, .mature)
+        XCTAssertEqual(complete.trainingLoad.priorTwentyEightDayAverage, 525)
+
+        let incompleteDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -2, to: today))
+        let previousSnapshot = try XCTUnwrap(snapshotsByDay[incompleteDay])
+        let incompleteSnapshot = DailyHealthSnapshot(
+            dayStart: incompleteDay,
+            timezoneIdentifier: calendar.timeZone.identifier,
+            healthReadStates: [
+                HealthMetricID.workout.rawValue: .available,
+                HealthMetricID.workoutEffort.rawValue: .dataUnavailableOrReadScopeUnknown,
+            ],
+            algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+        )
+        previousSnapshot.payloadData = try encoder.encode(incompleteSnapshot)
+        previousSnapshot.snapshotHash = "verified-workout-coverage-effort-unknown"
+        context.insert(WorkoutRecord(
+            date: incompleteDay.addingTimeInterval(12 * 60 * 60),
+            type: "running",
+            durationMinutes: 45,
+            intensity: "moderate",
+            healthKitUUID: UUID(),
+            workoutOrigin: WorkoutOrigin.watchHealthKit.rawValue,
+            energySource: "healthKit"
+        ))
+        try context.save()
+
+        let partialResult = try await service.refresh(asOf: reference)
+        let partial = try XCTUnwrap(partialResult)
+        XCTAssertEqual(partial.trainingLoad.dataCoverage, .partial)
+        XCTAssertEqual(partial.trainingLoad.readiness, .mature)
+        XCTAssertNil(partial.trainingLoad.ratio)
+        XCTAssertEqual(partial.trainingLoad.band, .unavailable)
+
+        let readModel = HealthIntelligenceReadModel(calendar: calendar)
+        let readModelContext = try readModel.healthNarrativeContext(asOf: reference, in: context)
+        let encodedContext = try JSONEncoder().encode(readModelContext)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: encodedContext) as? [String: Any])
+        let state = try XCTUnwrap(root["healthState"] as? [String: Any])
+        let load = try XCTUnwrap(state["trainingLoad"] as? [String: Any])
+        XCTAssertEqual(load["dataCoverage"] as? String, HealthDataCoverage.partial.rawValue)
+        XCTAssertNil(load["recentSevenDayLoad"])
+        XCTAssertNil(load["priorTwentyEightDayAverage"])
+        XCTAssertNil(load["ratio"])
+    }
+
+    func testSavingGoalUpdatesTheSinglePrimaryProfile() async throws {
+        let container = try makeContainer()
+        let service = HealthIntelligenceService(modelContainer: container)
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        try await service.saveGoalProfile(GoalProfile(effectiveFrom: date, targetWeightKilograms: 68, dailyDeficitKcal: 400))
+        try await service.saveGoalProfile(GoalProfile(effectiveFrom: date.addingTimeInterval(60), targetWeightKilograms: 66, dailyDeficitKcal: 300))
+
+        let context = ModelContext(container)
+        let goals = try context.fetch(FetchDescriptor<GoalProfileRecord>())
+        XCTAssertEqual(goals.count, 1)
+        XCTAssertEqual(goals[0].targetWeightKilograms, 66)
+        XCTAssertEqual(goals[0].dailyDeficitKcal, 300)
+    }
+
+    func testPreviousWeekUsesItsFullTwentyEightDayBaselineOnSunday() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let reference = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: 26, hour: 12)))
+        XCTAssertEqual(calendar.component(.weekday, from: reference), 1, "Fixture date must be Sunday")
+        for offset in -41...0 {
+            let day = calendar.startOfDay(for: calendar.date(byAdding: .day, value: offset, to: reference)!)
+            context.insert(DailyMetrics(
+                date: day,
+                bmrKcal: 1_400,
+                activeCaloriesKcal: 400,
+                totalExpenditureKcal: 1_800,
+                totalIntakeKcal: 1_600,
+                deficitKcal: 200,
+                proteinG: 80,
+                fatG: 50,
+                carbsG: 180,
+                mealCount: 1,
+                workoutCount: 0,
+                energyQuality: "observed",
+                dataCoverageJSON: #"{"intake":true,"allRecordedMealsHaveEvidence":true,"protein":true,"proteinComplete":true,"fat":true,"fatComplete":true,"carbs":true,"carbsComplete":true,"nutritionRecordStatus":"complete","nutritionMealFingerprint":"fixture-meal-set","nutritionCompletionMealFingerprint":"fixture-meal-set"}"#,
+                projectionVersion: AlgorithmVersions.dailyMetricsProjection,
+                sourceFingerprint: "weekly-health-intelligence-\(day.timeIntervalSince1970)"
+            ))
+        }
+        try context.save()
+
+        let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
+        _ = try await service.refresh(asOf: reference)
+        let nutrition = try XCTUnwrap(service.weeklyBrief?.domainStatuses.first(where: { $0.domain == .nutrition }))
+
+        XCTAssertEqual(nutrition.baseline.validDays, 28)
+        XCTAssertEqual(nutrition.baseline.readiness, .mature)
+    }
+
+    func testHistoryBuildsDailyStatesFromThePriorBaselineWithoutWritingBriefCaches() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 1)))
+        let end = try XCTUnwrap(calendar.date(byAdding: .day, value: 2, to: start))
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+
+        for offset in -41...2 {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: start))
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                stepCount: Double(5_000 + offset),
+                healthReadStates: [HealthMetricID.stepCount.rawValue: .available],
+                algorithmVersion: DailyHealthSnapshot.currentAlgorithmVersion
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: dayKey(day),
+                timezoneID: snapshot.timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "history-\(offset)",
+                algorithmVersion: snapshot.algorithmVersion
+            ))
+        }
+        for offset in [-42, 3] {
+            let day = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: start))
+            let snapshot = DailyHealthSnapshot(
+                dayStart: day,
+                timezoneIdentifier: calendar.timeZone.identifier,
+                stepCount: 99_999,
+                healthReadStates: [HealthMetricID.stepCount.rawValue: .available],
+                algorithmVersion: "outside-history-window"
+            )
+            context.insert(DailyHealthSnapshotRecord(
+                dayKey: dayKey(day),
+                timezoneID: snapshot.timezoneIdentifier,
+                payloadData: try encoder.encode(snapshot),
+                snapshotHash: "outside-history-window-\(offset)",
+                algorithmVersion: snapshot.algorithmVersion
+            ))
+        }
+        try context.save()
+
+        let service = HealthIntelligenceService(modelContainer: container, calendar: calendar)
+        let history = try await service.healthHistory(from: start, through: end)
+
+        XCTAssertEqual(history.map(\.date), [
+            start,
+            try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: start)),
+            end,
+        ])
+        let firstActivity = try XCTUnwrap(history.first?.state.domains.first(where: { $0.domain == .activity }))
+        let lastActivity = try XCTUnwrap(history.last?.state.domains.first(where: { $0.domain == .activity }))
+        XCTAssertEqual(firstActivity.currentValue, 5_000)
+        XCTAssertEqual(lastActivity.currentValue, 5_002)
+        XCTAssertGreaterThanOrEqual(firstActivity.baseline.validDays, 28)
+        XCTAssertTrue(history.allSatisfy { $0.state.tomorrowGuidance == nil })
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyBriefRecord>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WeeklyBriefRecord>()), 0)
+    }
+
+    func testHealthHistoryRejectsInvalidAndOversizedRanges() async throws {
+        let container = try makeContainer()
+        let service = HealthIntelligenceService(modelContainer: container)
+        let start = Date(timeIntervalSince1970: 1_780_000_000)
+        let tooLate = Calendar.current.date(byAdding: .day, value: 14, to: start)!
+
+        do {
+            _ = try await service.healthHistory(from: tooLate, through: start)
+            XCTFail("Expected invalid historical range to be rejected")
+        } catch {
+            XCTAssertEqual(error as? HealthHistoryQueryError, .invalidRange)
+        }
+        do {
+            _ = try await service.healthHistory(from: start, through: tooLate)
+            XCTFail("Expected oversized historical range to be rejected")
+        } catch {
+            XCTAssertEqual(error as? HealthHistoryQueryError, .rangeTooLarge)
+        }
+    }
+
+    private func makeContainer() throws -> ModelContainer {
+        let schema = Schema(versionedSchema: DensosoSchemaV4.self)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        return try ModelContainer(for: schema, configurations: [configuration])
+    }
+
+    private static func fixtureBrief(dayStart: Date) -> DailyHealthBrief {
+        func window(days: Int) -> HealthContextWindowSummary {
+            HealthContextWindowSummary(
+                windowDays: days,
+                coverageDays: [:],
+                averageSleepMinutes: nil,
+                averageStepCount: nil,
+                averageActiveEnergyKcal: nil,
+                averageEnergyIntakeKcal: nil,
+                averageDailyDeficitKcal: nil,
+                averageProteinGrams: nil,
+                medianWeightKilograms: nil
+            )
+        }
+        let load = TrainingLoadSummary(
+            recentSevenDayLoad: 0,
+            priorTwentyEightDayAverage: nil,
+            ratio: nil,
+            readiness: .noData,
+            band: .unavailable,
+            estimatedWorkoutCount: 0,
+            unavailableEffortCount: 0,
+            dataCoverage: .unknown
+        )
+        let state = HealthStateV2(
+            domains: [],
+            recovery: RecoveryAssessment(
+                status: .insufficientEvidence,
+                confidence: .low,
+                evidence: [],
+                recommendedAction: .collectData
+            ),
+            trainingLoad: load,
+            tomorrowGuidance: nil
+        )
+        return DailyHealthBrief(
+            dayStart: dayStart,
+            summary: "Fixture brief",
+            domains: [],
+            recommendations: [],
+            sleep: nil,
+            vitalTrends: [],
+            trainingLoad: load,
+            contextSummary: HealthContextSummary(
+                sevenDay: window(days: 7),
+                twentyEightDay: window(days: 28),
+                targetWeightKilograms: nil,
+                dailyDeficitGoalKcal: nil,
+                dailyProteinGoalGrams: nil,
+                recommendationReferences: []
+            ),
+            algorithmVersion: "fixture",
+            healthState: state
+        )
+    }
+
+    private func dayKey(_ date: Date) -> String {
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+}
+
+private enum InjectedRefreshError: Error {
+    case failure
+}

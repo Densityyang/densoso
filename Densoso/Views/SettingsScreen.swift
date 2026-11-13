@@ -1,9 +1,24 @@
 import SwiftData
 import SwiftUI
 import UIKit
+import DensosoDomain
+import UniformTypeIdentifiers
 
 struct SettingsScreen: View {
+    private struct PendingHealthPolicyExpansion: Equatable {
+        let provider: ProviderID
+        let dataClass: ProviderDataClass
+        let expectedSnapshot: CloudHealthContextPolicySnapshot
+        let currentlyAllowedClasses: Set<ProviderDataClass>
+    }
+
+    private enum PendingCloudPolicyExpansion {
+        case health(PendingHealthPolicyExpansion)
+        case conversationHistory(ProviderID, CloudHealthContextPolicySnapshot)
+    }
+
     @Environment(Dependencies.self) private var dependencies
+    @Environment(AppState.self) private var appState
     @Environment(\.modelContext) private var modelContext
 
     @Query private var profiles: [UserProfile]
@@ -11,14 +26,39 @@ struct SettingsScreen: View {
 
     @State private var apiKey = ""
     @State private var hasSavedAPIKey = false
+    @State private var qwenAPIKey = ""
+    @State private var hasSavedQwenAPIKey = false
+    @State private var deepSeekTextConsent = false
+    @State private var deepSeekConversationHistoryConsent = false
+    @State private var deepSeekMealImageConsent = false
+    @State private var deepSeekHealthContextClasses: Set<ProviderDataClass> = []
+    @State private var qwenTextConsent = false
+    @State private var qwenConversationHistoryConsent = false
+    @State private var qwenSpeechConsent = false
+    @State private var qwenMealImageConsent = false
+    @State private var qwenHealthContextClasses: Set<ProviderDataClass> = []
+    @State private var pendingCloudPolicyExpansion: PendingCloudPolicyExpansion?
+    @State private var isConfirmingCloudPolicyExpansion = false
+    @State private var deepSeekUsage = "尚无用量"
+    @State private var qwenUsage = "尚无用量"
     @State private var statusMessage: String?
     @State private var exportURL: URL?
     @State private var showShareSheet = false
+    @State private var isChoosingBackup = false
+    @State private var pendingBackupURL: URL?
+    @State private var isConfirmingBackupRestore = false
+    @State private var isRestoringBackup = false
+    @State private var backupRestoreMessage: String?
+    @State private var backupRestoreWarning: String?
+    @State private var isExportingDiagnostics = false
     @State private var isAuthorizingHealth = false
     @State private var healthAuthorizationError: String?
     @State private var isEditingProfile = false
-    @State private var healthKitWorkoutImporter = HealthKitWorkoutImporter()
-    @State private var workoutRouteImporter = WorkoutRouteImporter()
+    @State private var goalTargetWeight = ""
+    @State private var goalDailyDeficit = ""
+    @State private var goalDailyProtein = ""
+    @State private var isConfirmingGoalSave = false
+    @State private var notificationError: String?
 
     var body: some View {
         NavigationStack {
@@ -36,7 +76,11 @@ struct SettingsScreen: View {
 
                     intelligenceSection
                     profileSection
+                    MealPortionPriorSettingsSection()
+                    MealDishPriorSettingsSection()
+                    goalsSection
                     capabilitySections
+                    notificationSection
                     dataSection
 
                     if let statusMessage {
@@ -47,7 +91,7 @@ struct SettingsScreen: View {
                         }
                     }
 
-                    if let error = healthAuthorizationError ?? dependencies.exportService.lastError {
+                    if let error = healthAuthorizationError ?? notificationError ?? dependencies.exportService.lastError {
                         Section("需要处理") {
                             Label(error, systemImage: "exclamationmark.triangle.fill")
                                 .font(.footnote)
@@ -65,12 +109,57 @@ struct SettingsScreen: View {
             .orbitScrollBackground()
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
+            .confirmationDialog(
+                "确认云端数据授权变更？",
+                isPresented: $isConfirmingCloudPolicyExpansion,
+                titleVisibility: .visible
+            ) {
+                switch pendingCloudPolicyExpansion {
+                case .some(.health(let pending)):
+                    Button("允许上传\(pending.dataClass.healthContextTitle ?? "健康")历史汇总") {
+                        Task { await confirmHealthPolicyExpansion(pending) }
+                    }
+                case .some(.conversationHistory(let provider, let expectedSnapshot)):
+                    Button("允许向\(provider == .deepSeek ? "DeepSeek" : "Qwen")发送此前聊天记录") {
+                        Task {
+                            await saveConversationHistoryConsent(
+                                provider: provider,
+                                granted: true,
+                                confirmedAt: Date(),
+                                expectedSnapshot: expectedSnapshot
+                            )
+                        }
+                    }
+                case nil:
+                    EmptyView()
+                }
+                Button("取消", role: .cancel) {
+                    pendingCloudPolicyExpansion = nil
+                }
+            } message: {
+                switch pendingCloudPolicyExpansion {
+                case .health(let pending)?:
+                    Text("仅允许所选的\(pending.dataClass.healthContextTitle ?? "健康")类别用于\(pending.provider == .deepSeek ? "DeepSeek" : "Qwen")后续请求。扩权会保存新的本地 policy revision；你可以随时撤销。")
+                case .some(.conversationHistory(_, _)):
+                    Text("此前聊天记录与本轮你主动提交的文字是两项独立权限。确认后，后续请求只会包含仍符合当前云端健康类别策略且 policy revision 一致的完整对话轮次。")
+                case nil:
+                    Text("确认后会保存新的本地云端授权 policy revision。")
+                }
+            }
             .task {
-                hasSavedAPIKey = (try? KeychainStore.shared.readAPIKey()) != nil
-                await refreshDiagnostics()
+                await loadGoalFields()
+                if !AppLaunchConfiguration.current.isUITesting {
+                    hasSavedAPIKey = (try? KeychainStore.shared.readAPIKey()) != nil
+                    hasSavedQwenAPIKey = (try? KeychainStore.shared.readModelStudioAPIKey()) != nil
+                    await refreshProviderGovernance()
+                    await refreshDiagnostics()
+                }
             }
             .onChange(of: healthImportCursors.first?.updatedAt) { _, _ in
-                Task { await refreshDiagnostics() }
+                Task {
+                    await refreshDiagnostics()
+                    _ = try? await dependencies.healthIntelligenceService.refresh()
+                }
             }
             .sheet(isPresented: $showShareSheet) {
                 if let exportURL {
@@ -85,6 +174,34 @@ struct SettingsScreen: View {
                         }
                 }
             }
+            .fileImporter(
+                isPresented: $isChoosingBackup,
+                allowedContentTypes: [.json],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    pendingBackupURL = url
+                    backupRestoreWarning = nil
+                    isConfirmingBackupRestore = true
+                case .failure(let error):
+                    backupRestoreWarning = "无法选择备份：\(safeErrorMessage(error))"
+                }
+            }
+            .alert("还原备份并替换当前数据？", isPresented: $isConfirmingBackupRestore) {
+                Button("还原备份", role: .destructive) {
+                    Task { await restoreBackup() }
+                }
+                .disabled(appState.isAgentProcessing || dependencies.agentSession.hasActiveRequest)
+                Button("取消", role: .cancel) {
+                    pendingBackupURL = nil
+                }
+            } message: {
+                Text(appState.isAgentProcessing || dependencies.agentSession.hasActiveRequest
+                    ? "当前对话任务结束后才能还原。还原前会验证文件完整性；确认后将替换本机备份范围内的数据、清除待确认操作，并撤销云端健康历史授权。"
+                    : "还原前会验证文件完整性。确认后将替换本机备份范围内的数据、清除待确认操作，并撤销云端健康历史授权；你可以取消并保留当前数据。")
+            }
         }
     }
 
@@ -97,10 +214,11 @@ struct SettingsScreen: View {
                 )) {
                     Text("设备端").tag(IntelligenceMode.localOnly)
                     Text("DeepSeek").tag(IntelligenceMode.cloudDeepSeek)
+                    Text("Qwen").tag(IntelligenceMode.cloudQwen)
                 }
                 .pickerStyle(.segmented)
 
-                Text("设备端模式不会把餐食和训练文字发送给 DeepSeek；云端模式只发送你主动提交的文字。")
+                Text("设备端模式不上传文字；DeepSeek/Qwen 仅在你显式选择并同意文字上传后调用，不会静默切换供应商。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -110,10 +228,115 @@ struct SettingsScreen: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 Button("保存到 Keychain", systemImage: "key.fill") {
-                    Task { await saveKey() }
+                    Task { await saveDeepSeekKey() }
                 }
                 .disabled(apiKey.isEmpty)
                 Text("密钥保存在本机 Keychain，仅用于你选择的 DeepSeek 请求。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Toggle("同意向 DeepSeek 上传主动提交的健康文字", isOn: consentBinding(
+                    for: $deepSeekTextConsent,
+                    provider: .deepSeek,
+                    dataClass: .healthText
+                ))
+                healthContextConsentControls(provider: .deepSeek, selection: $deepSeekHealthContextClasses)
+                conversationHistoryConsentControl(provider: .deepSeek, selection: $deepSeekConversationHistoryConsent)
+                Text("本轮主动提交的文字由上方单独授权；此前聊天记录与历史健康汇总使用独立权限。未配置健康类别时不会自动附加健康上下文；撤销后立即从后续请求与续轮中移除。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Toggle("同意向 DeepSeek 上传处理后的餐食照片", isOn: consentBinding(
+                    for: $deepSeekMealImageConsent,
+                    provider: .deepSeek,
+                    dataClass: .mealImage
+                ))
+                Text("餐食照片经本机缩放并移除元数据；原图不留存。仅在选择 DeepSeek 且启用此项后，照片才随本次 Agent 请求上传。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                LabeledContent("本月用量", value: deepSeekUsage)
+                TextField(
+                    "软提醒预算 USD/月",
+                    value: Binding(
+                        get: { Double(dependencies.providerConfiguration.deepSeekMonthlyBudgetMicros) / 1_000_000 },
+                        set: {
+                            guard $0.isFinite,
+                                  $0 >= 0,
+                                  $0 < Double(Int64.max) / 1_000_000 else { return }
+                            dependencies.providerConfiguration.deepSeekMonthlyBudgetMicros =
+                                Int64($0 * 1_000_000)
+                        }
+                    ),
+                    format: .number.precision(.fractionLength(0...2))
+                )
+                .keyboardType(.decimalPad)
+            }
+
+            Section("Qwen Model Studio") {
+                SecureField(hasSavedQwenAPIKey ? "输入新 Key 以替换" : "输入 Model Studio Key", text: $qwenAPIKey)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Workspace ID", text: Binding(
+                    get: { dependencies.providerConfiguration.qwenWorkspaceID },
+                    set: { dependencies.providerConfiguration.qwenWorkspaceID = $0 }
+                ))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                LabeledContent("区域", value: "北京")
+                Button("保存到 Keychain", systemImage: "key.fill") {
+                    Task { await saveQwenKey() }
+                }
+                .disabled(qwenAPIKey.isEmpty)
+                Toggle("同意向 Qwen 上传主动提交的健康文字", isOn: consentBinding(
+                    for: $qwenTextConsent,
+                    provider: .qwen,
+                    dataClass: .healthText
+                ))
+                healthContextConsentControls(provider: .qwen, selection: $qwenHealthContextClasses)
+                conversationHistoryConsentControl(provider: .qwen, selection: $qwenConversationHistoryConsent)
+                Text("本轮主动提交的文字由上方单独授权；此前聊天记录与历史健康汇总使用独立权限。未配置健康类别时不会自动附加健康上下文；撤销后立即从后续请求与续轮中移除。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Toggle(
+                    "本地转写失败时启用 Qwen 单次语音兜底",
+                    isOn: Binding(
+                        get: { dependencies.providerConfiguration.qwenSpeechFallbackEnabled },
+                        set: { dependencies.providerConfiguration.qwenSpeechFallbackEnabled = $0 }
+                    )
+                )
+                Toggle("同意向 Qwen 上传单次临时音频", isOn: consentBinding(
+                    for: $qwenSpeechConsent,
+                    provider: .qwen,
+                    dataClass: .speechAudio
+                ))
+                Toggle(
+                    "启用 Qwen 开放式餐食照片观察",
+                    isOn: .constant(false)
+                )
+                .disabled(true)
+                Toggle("同意向 Qwen 上传处理后的餐食照片", isOn: consentBinding(
+                    for: $qwenMealImageConsent,
+                    provider: .qwen,
+                    dataClass: .mealImage
+                ))
+                Text("Qwen 开放照片在真实照片质量门禁完成前保持关闭；开放照片默认走 DeepSeek，且需单独授权，不会自动切到 Qwen。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                LabeledContent("本月用量", value: qwenUsage)
+                TextField(
+                    "软提醒预算 CNY/月",
+                    value: Binding(
+                        get: { Double(dependencies.providerConfiguration.qwenMonthlyBudgetMicros) / 1_000_000 },
+                        set: {
+                            guard $0.isFinite,
+                                  $0 >= 0,
+                                  $0 < Double(Int64.max) / 1_000_000 else { return }
+                            dependencies.providerConfiguration.qwenMonthlyBudgetMicros =
+                                Int64($0 * 1_000_000)
+                        }
+                    ),
+                    format: .number.precision(.fractionLength(0...2))
+                )
+                .keyboardType(.decimalPad)
+                Text("文本、qwen3-asr-flash 与 qwen3.7-flash-2026-07-15 均固定北京区域；音频和处理后照片分别取得同意，原图不会保存。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -137,6 +360,205 @@ struct SettingsScreen: View {
                 Button("编辑个人资料", systemImage: "person.crop.circle") {
                     isEditingProfile = true
                 }
+            }
+        }
+    }
+
+    private var goalsSection: some View {
+        Section("健康目标") {
+            TextField("目标体重 kg（可选）", text: $goalTargetWeight)
+                .keyboardType(.decimalPad)
+            TextField("每日缺口 kcal（可选）", text: $goalDailyDeficit)
+                .keyboardType(.numberPad)
+            TextField("每日蛋白质 g（可选）", text: $goalDailyProtein)
+                .keyboardType(.decimalPad)
+            Button("确认并保存目标", systemImage: "checkmark.circle") {
+                isConfirmingGoalSave = true
+            }
+            .confirmationDialog("确认保存健康目标？", isPresented: $isConfirmingGoalSave) {
+                Button("确认并保存") {
+                    saveGoalProfile()
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("目标只用于本机健康摘要与趋势，不会单独上传；之后可随时修改。")
+            }
+            Text("目标是你设定的参考，不构成医疗建议。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var notificationSection: some View {
+        Section("本地健康回顾提醒") {
+            Toggle(
+                "晨间回顾提醒",
+                isOn: Binding(
+                    get: { dependencies.briefNotificationScheduler.morningEnabled },
+                    set: { setMorningNotification($0) }
+                )
+            )
+            if dependencies.briefNotificationScheduler.morningEnabled {
+                DatePicker(
+                    "晨间提醒时间",
+                    selection: reminderTimeBinding(
+                        hour: dependencies.briefNotificationScheduler.morningHour,
+                        minute: dependencies.briefNotificationScheduler.morningMinute,
+                        onChange: setMorningNotificationTime
+                    ),
+                    displayedComponents: .hourAndMinute
+                )
+            }
+            Toggle(
+                "晚间回顾提醒",
+                isOn: Binding(
+                    get: { dependencies.briefNotificationScheduler.eveningEnabled },
+                    set: { setEveningNotification($0) }
+                )
+            )
+            if dependencies.briefNotificationScheduler.eveningEnabled {
+                DatePicker(
+                    "晚间提醒时间",
+                    selection: reminderTimeBinding(
+                        hour: dependencies.briefNotificationScheduler.eveningHour,
+                        minute: dependencies.briefNotificationScheduler.eveningMinute,
+                        onChange: setEveningNotificationTime
+                    ),
+                    displayedComponents: .hourAndMinute
+                )
+            }
+            Toggle(
+                "每周一 08:00 提醒查看周报",
+                isOn: Binding(
+                    get: { dependencies.briefNotificationScheduler.weeklyEnabled },
+                    set: { setWeeklyNotification($0) }
+                )
+            )
+            Text("晨间和晚间提醒默认时间为 08:00 和 21:00；提醒默认关闭，可随时调整或关闭。通知只使用本地健康摘要，不显示健康数值。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func reminderTimeBinding(
+        hour: Int,
+        minute: Int,
+        onChange: @escaping (Int, Int) -> Void
+    ) -> Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.date(from: DateComponents(hour: hour, minute: minute)) ?? Date()
+            },
+            set: { date in
+                let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+                guard let hour = components.hour, let minute = components.minute else { return }
+                onChange(hour, minute)
+            }
+        )
+    }
+
+    private func loadGoalFields() async {
+        do {
+            guard let goal = try await dependencies.healthIntelligenceService.goalProfile() else {
+                goalTargetWeight = ""
+                goalDailyDeficit = ""
+                goalDailyProtein = ""
+                return
+            }
+            goalTargetWeight = goal.targetWeightKilograms.map { String($0) } ?? ""
+            goalDailyDeficit = goal.dailyDeficitKcal.map(String.init) ?? ""
+            goalDailyProtein = goal.dailyProteinGrams.map { String($0) } ?? ""
+        } catch {
+            healthAuthorizationError = "无法加载健康目标：\(safeErrorMessage(error))"
+        }
+    }
+
+    private func saveGoalProfile() {
+        Task {
+            do {
+                let targetWeight = try optionalNumber(goalTargetWeight, field: "目标体重", range: 25...350)
+                let deficitValue = try optionalNumber(goalDailyDeficit, field: "每日缺口", range: 0...3_000)
+                let protein = try optionalNumber(goalDailyProtein, field: "蛋白质目标", range: 0...500)
+                let goal = GoalProfile(
+                    effectiveFrom: Date(),
+                    targetWeightKilograms: targetWeight,
+                    dailyDeficitKcal: deficitValue.map { Int($0.rounded()) },
+                    dailyProteinGrams: protein
+                )
+                try await dependencies.healthIntelligenceService.saveGoalProfile(goal)
+                _ = try await dependencies.healthIntelligenceService.refresh()
+                statusMessage = "健康目标已确认并保存。"
+                healthAuthorizationError = nil
+            } catch {
+                healthAuthorizationError = "未保存健康目标：\(safeErrorMessage(error))"
+            }
+        }
+    }
+
+    private func optionalNumber(
+        _ text: String,
+        field: String,
+        range: ClosedRange<Double>
+    ) throws -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let value = Double(trimmed), value.isFinite, range.contains(value) else {
+            throw GoalInputError.invalid(field)
+        }
+        return value
+    }
+
+    private func setMorningNotification(_ enabled: Bool) {
+        Task {
+            do {
+                try await dependencies.briefNotificationScheduler.setMorningEnabled(enabled)
+                notificationError = nil
+            } catch {
+                notificationError = safeErrorMessage(error)
+            }
+        }
+    }
+
+    private func setEveningNotification(_ enabled: Bool) {
+        Task {
+            do {
+                try await dependencies.briefNotificationScheduler.setEveningEnabled(enabled)
+                notificationError = nil
+            } catch {
+                notificationError = safeErrorMessage(error)
+            }
+        }
+    }
+
+    private func setMorningNotificationTime(_ hour: Int, _ minute: Int) {
+        Task {
+            do {
+                try await dependencies.briefNotificationScheduler.setMorningTime(hour: hour, minute: minute)
+                notificationError = nil
+            } catch {
+                notificationError = safeErrorMessage(error)
+            }
+        }
+    }
+
+    private func setEveningNotificationTime(_ hour: Int, _ minute: Int) {
+        Task {
+            do {
+                try await dependencies.briefNotificationScheduler.setEveningTime(hour: hour, minute: minute)
+                notificationError = nil
+            } catch {
+                notificationError = safeErrorMessage(error)
+            }
+        }
+    }
+
+    private func setWeeklyNotification(_ enabled: Bool) {
+        Task {
+            do {
+                try await dependencies.briefNotificationScheduler.setWeeklyEnabled(enabled)
+                notificationError = nil
+            } catch {
+                notificationError = safeErrorMessage(error)
             }
         }
     }
@@ -183,7 +605,7 @@ struct SettingsScreen: View {
                 }
 
                 Button(
-                    dependencies.healthKitService.isAuthorized ? "同步训练记录" : "连接 Apple Health",
+                    dependencies.healthKitService.hasRequestedAuthorization ? "同步 Apple Health" : "连接 Apple Health",
                     systemImage: "heart.fill"
                 ) {
                     Task { await authorizeAndImportHealthData() }
@@ -207,7 +629,7 @@ struct SettingsScreen: View {
                 )
                 CapabilityRow(
                     title: "语音识别",
-                    detail: "兼容路径的 Speech 授权状态",
+                    detail: "兼容 Speech 授权；设备不支持本地识别时可能使用 Apple 语音服务",
                     state: snapshot.speechRecognitionPermission
                 )
                 CapabilityRow(
@@ -229,7 +651,52 @@ struct SettingsScreen: View {
             Button("导出 JSON 备份", systemImage: "square.and.arrow.up") {
                 Task { await exportData() }
             }
-            .disabled(dependencies.exportService.isExporting)
+            .disabled(dependencies.exportService.isExporting || isRestoringBackup)
+
+            Button("导入 JSON 备份", systemImage: "square.and.arrow.down") {
+                isChoosingBackup = true
+            }
+            .disabled(
+                dependencies.exportService.isExporting
+                    || isRestoringBackup
+                    || appState.isAgentProcessing
+                    || dependencies.agentSession.hasActiveRequest
+            )
+
+            Text("导入会替换本机备份范围内的数据；未完成请求不会恢复为可续跑状态，待确认草稿与回执会清除，云端健康历史授权需要重新确认。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if isRestoringBackup {
+                ProgressView("正在验证并还原备份")
+            }
+            if let backupRestoreMessage {
+                Label(backupRestoreMessage, systemImage: "checkmark.circle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(OrbitPalette.green)
+            }
+            if let backupRestoreWarning {
+                Label(backupRestoreWarning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(OrbitPalette.coral)
+            }
+
+            Button("导出脱敏语音诊断", systemImage: "waveform.badge.magnifyingglass") {
+                Task { await exportSpeechDiagnostics() }
+            }
+
+            Button("导出系统诊断 JSON", systemImage: "stethoscope") {
+                Task { await exportDiagnostics() }
+            }
+            .disabled(isExportingDiagnostics)
+
+            Text("仅包含版本、云端提供方与模型、策略修订号、42 天逐指标覆盖统计、延迟/用量/错误码、同步投影和 Watch 状态；不含原始健康记录或指标值、备注、转录、偏好、密钥、策略内容或同意明细。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if isExportingDiagnostics {
+                ProgressView("正在生成脱敏诊断")
+            }
 
             if dependencies.exportService.isExporting {
                 ProgressView("正在生成备份")
@@ -237,7 +704,7 @@ struct SettingsScreen: View {
         }
     }
 
-    private func saveKey() async {
+    private func saveDeepSeekKey() async {
         guard !apiKey.isEmpty else { return }
         do {
             try KeychainStore.shared.saveAPIKey(apiKey)
@@ -246,8 +713,292 @@ struct SettingsScreen: View {
             statusMessage = "API Key 已保存到 Keychain。"
         } catch {
             statusMessage = nil
-            healthAuthorizationError = "无法保存 API Key：\(error.localizedDescription)"
+            healthAuthorizationError = "无法保存 API Key：\(safeErrorMessage(error))"
         }
+    }
+
+    private func saveQwenKey() async {
+        guard !qwenAPIKey.isEmpty else { return }
+        do {
+            try KeychainStore.shared.saveModelStudioAPIKey(qwenAPIKey)
+            qwenAPIKey = ""
+            hasSavedQwenAPIKey = true
+            statusMessage = "Model Studio Key 已保存到 Keychain。"
+        } catch {
+            statusMessage = nil
+            healthAuthorizationError = "无法保存 Model Studio Key：\(safeErrorMessage(error))"
+        }
+    }
+
+    private func saveConsent(
+        provider: ProviderID,
+        dataClass: ProviderDataClass = .healthText,
+        granted: Bool
+    ) async {
+        do {
+            let policyVersion: String
+            switch (provider, dataClass) {
+            case (.qwen, .speechAudio): policyVersion = "qwen-single-audio-v1"
+            case (.qwen, .mealImage): policyVersion = "qwen-sanitized-meal-image-v1"
+            case (.deepSeek, .mealImage): policyVersion = "deepseek-sanitized-meal-image-v1"
+            case (_, let value) where value.isHealthContextClass: policyVersion = "cloud-health-context-v1"
+            default: policyVersion = "cloud-health-text-v1"
+            }
+            try await dependencies.providerGovernanceRepository.setConsent(
+                provider: provider,
+                dataClass: dataClass,
+                granted: granted,
+                policyVersion: policyVersion
+            )
+            if !granted {
+                await CloudHealthContextPolicy.notifyRevokedConsent(
+                    provider: provider,
+                    dataClass: dataClass,
+                    repository: dependencies.providerGovernanceRepository
+                )
+            }
+        } catch {
+            healthAuthorizationError = "无法保存云端同意状态：\(safeErrorMessage(error))"
+            await refreshProviderGovernance()
+        }
+    }
+
+    private func consentBinding(
+        for state: Binding<Bool>,
+        provider: ProviderID,
+        dataClass: ProviderDataClass = .healthText
+    ) -> Binding<Bool> {
+        Binding(
+            get: { state.wrappedValue },
+            set: { value in
+                guard state.wrappedValue != value else { return }
+                state.wrappedValue = value
+                Task {
+                    await saveConsent(
+                        provider: provider,
+                        dataClass: dataClass,
+                        granted: value
+                    )
+                }
+            }
+        )
+    }
+
+    private func refreshProviderGovernance() async {
+        deepSeekTextConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+            provider: .deepSeek,
+            dataClass: .healthText
+        )) == true
+        deepSeekMealImageConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+            provider: .deepSeek,
+            dataClass: .mealImage
+        )) == true
+        qwenTextConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+            provider: .qwen,
+            dataClass: .healthText
+        )) == true
+        qwenSpeechConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+            provider: .qwen,
+            dataClass: .speechAudio
+        )) == true
+        qwenMealImageConsent = (try? await dependencies.providerGovernanceRepository.isConsentGranted(
+            provider: .qwen,
+            dataClass: .mealImage
+        )) == true
+        let deepSeekPolicy = try? await CloudHealthContextPolicy.load(
+            from: dependencies.providerGovernanceRepository,
+            provider: .deepSeek
+        )
+        let qwenPolicy = try? await CloudHealthContextPolicy.load(
+            from: dependencies.providerGovernanceRepository,
+            provider: .qwen
+        )
+        deepSeekHealthContextClasses = deepSeekPolicy?.allowedClasses ?? []
+        deepSeekConversationHistoryConsent = deepSeekPolicy?.allowsConversationHistory == true
+        qwenHealthContextClasses = qwenPolicy?.allowedClasses ?? []
+        qwenConversationHistoryConsent = qwenPolicy?.allowsConversationHistory == true
+        deepSeekUsage = await usageText(provider: .deepSeek)
+        qwenUsage = await usageText(provider: .qwen)
+    }
+
+    @ViewBuilder
+    private func healthContextConsentControls(
+        provider: ProviderID,
+        selection: Binding<Set<ProviderDataClass>>
+    ) -> some View {
+        ForEach(CloudHealthContextPolicy.dataClasses, id: \.self) { dataClass in
+            Toggle(
+                "允许上传\(dataClass.healthContextTitle ?? "健康")历史汇总",
+                isOn: Binding(
+                    get: { selection.wrappedValue.contains(dataClass) },
+                    set: { granted in
+                        var updated = selection.wrappedValue
+                        if granted {
+                            Task { await requestHealthPolicyExpansion(provider: provider, dataClass: dataClass) }
+                        } else {
+                            updated.remove(dataClass)
+                            selection.wrappedValue = updated
+                            Task {
+                                await saveHealthContextPolicy(
+                                    provider: provider,
+                                    allowedClasses: updated,
+                                    source: .settings
+                                )
+                            }
+                        }
+                    }
+                )
+            )
+        }
+    }
+
+    private func confirmHealthPolicyExpansion(_ pending: PendingHealthPolicyExpansion) async {
+        await saveHealthContextPolicy(
+            provider: pending.provider,
+            allowedClasses: pending.currentlyAllowedClasses.union([pending.dataClass]),
+            source: .settings,
+            confirmedAt: Date(),
+            expectedSnapshot: pending.expectedSnapshot
+        )
+        pendingCloudPolicyExpansion = nil
+    }
+
+    private func requestHealthPolicyExpansion(
+        provider: ProviderID,
+        dataClass: ProviderDataClass
+    ) async {
+        do {
+            let policy = try await CloudHealthContextPolicy.load(
+                from: dependencies.providerGovernanceRepository,
+                provider: provider
+            )
+            pendingCloudPolicyExpansion = .health(PendingHealthPolicyExpansion(
+                provider: provider,
+                dataClass: dataClass,
+                expectedSnapshot: policy.snapshot,
+                currentlyAllowedClasses: policy.allowedClasses
+            ))
+            isConfirmingCloudPolicyExpansion = true
+        } catch {
+            healthAuthorizationError = "无法读取云端健康授权策略：\(safeErrorMessage(error))"
+            await refreshProviderGovernance()
+        }
+    }
+
+    private func saveHealthContextPolicy(
+        provider: ProviderID,
+        allowedClasses: Set<ProviderDataClass>,
+        source: CloudHealthPolicyChangeSource,
+        confirmedAt: Date? = nil,
+        expectedSnapshot: CloudHealthContextPolicySnapshot? = nil
+    ) async {
+        do {
+            if let confirmedAt {
+                _ = try await CloudHealthContextPolicy.confirmExpandedPolicy(
+                    provider: provider,
+                    allowedClasses: allowedClasses,
+                    repository: dependencies.providerGovernanceRepository,
+                    expectedSnapshot: expectedSnapshot,
+                    confirmedAt: confirmedAt,
+                    changeSource: source
+                )
+            } else {
+                _ = try await CloudHealthContextPolicy.applyRestrictiveChange(
+                    provider: provider,
+                    allowedClasses: allowedClasses,
+                    repository: dependencies.providerGovernanceRepository,
+                    changeSource: source
+                )
+            }
+            if provider == .deepSeek {
+                deepSeekHealthContextClasses = allowedClasses
+            } else {
+                qwenHealthContextClasses = allowedClasses
+            }
+        } catch {
+            healthAuthorizationError = "无法保存云端健康授权策略：\(safeErrorMessage(error))"
+            await refreshProviderGovernance()
+        }
+    }
+
+    @ViewBuilder
+    private func conversationHistoryConsentControl(
+        provider: ProviderID,
+        selection: Binding<Bool>
+    ) -> some View {
+        Toggle(
+            "允许向\(provider == .deepSeek ? "DeepSeek" : "Qwen")发送此前聊天记录",
+            isOn: Binding(
+                get: { selection.wrappedValue },
+                set: { granted in
+                    if granted {
+                        Task { await requestConversationHistoryExpansion(provider: provider) }
+                    } else {
+                        selection.wrappedValue = false
+                        Task {
+                            await saveConversationHistoryConsent(provider: provider, granted: false)
+                        }
+                    }
+                }
+            )
+        )
+    }
+
+    private func saveConversationHistoryConsent(
+        provider: ProviderID,
+        granted: Bool,
+        confirmedAt: Date? = nil,
+        expectedSnapshot: CloudHealthContextPolicySnapshot? = nil
+    ) async {
+        do {
+            _ = try await CloudHealthContextPolicy.updateConversationHistoryConsent(
+                provider: provider,
+                allowed: granted,
+                repository: dependencies.providerGovernanceRepository,
+                expectedSnapshot: expectedSnapshot,
+                confirmedAt: confirmedAt,
+                changeSource: .settings
+            )
+            if provider == .deepSeek {
+                deepSeekConversationHistoryConsent = granted
+            } else {
+                qwenConversationHistoryConsent = granted
+            }
+            pendingCloudPolicyExpansion = nil
+        } catch {
+            healthAuthorizationError = "无法保存聊天记录云端授权：\(safeErrorMessage(error))"
+            await refreshProviderGovernance()
+        }
+    }
+
+    private func requestConversationHistoryExpansion(provider: ProviderID) async {
+        do {
+            let policy = try await CloudHealthContextPolicy.load(
+                from: dependencies.providerGovernanceRepository,
+                provider: provider
+            )
+            pendingCloudPolicyExpansion = .conversationHistory(provider, policy.snapshot)
+            isConfirmingCloudPolicyExpansion = true
+        } catch {
+            healthAuthorizationError = "无法读取云端聊天记录授权策略：\(safeErrorMessage(error))"
+            await refreshProviderGovernance()
+        }
+    }
+
+    private func usageText(provider: ProviderID) async -> String {
+        guard let summary = try? await dependencies.providerUsageLedger.monthlySummary(provider: provider) else {
+            return "暂不可用"
+        }
+        let tokens = summary.inputTokens + summary.outputTokens
+        let audio = summary.audioSeconds > 0
+            ? " · \(summary.audioSeconds.formatted(.number.precision(.fractionLength(0...1)))) 秒音频"
+            : ""
+        let images = summary.imageCount > 0 ? " · \(summary.imageCount) 张图" : ""
+        let latency = summary.averageLatencyMilliseconds.map { " · 平均 \($0) ms" } ?? ""
+        guard let cost = summary.estimatedCostMicros, let currency = summary.currency else {
+            return "\(tokens) tokens\(images)\(audio)\(latency) · 费用暂不可估"
+        }
+        return "\(tokens) tokens\(images)\(audio)\(latency) · 保守估算 \(String(format: "%.2f", Double(cost) / 1_000_000)) \(currency)"
     }
 
     private func exportData() async {
@@ -256,7 +1007,151 @@ struct SettingsScreen: View {
             exportURL = url
             showShareSheet = true
         } catch {
-            dependencies.exportService.lastError = error.localizedDescription
+            dependencies.exportService.lastError = safeErrorMessage(error)
+        }
+    }
+
+    private func restoreBackup() async {
+        guard let url = pendingBackupURL else { return }
+        guard !appState.isAgentProcessing, !dependencies.agentSession.hasActiveRequest else {
+            backupRestoreWarning = "请等待当前对话任务结束，再导入备份。"
+            return
+        }
+        isRestoringBackup = true
+        backupRestoreMessage = nil
+        backupRestoreWarning = nil
+        dependencies.exportService.lastError = nil
+        defer {
+            isRestoringBackup = false
+            pendingBackupURL = nil
+        }
+
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing { url.stopAccessingSecurityScopedResource() }
+        }
+
+        do {
+            let summary = try await dependencies.exportService.restoreJSON(url: url, context: modelContext)
+            let restoredCounts = [
+                "餐食 \(summary.meals)",
+                "训练 \(summary.workouts)",
+                "体重 \(summary.weights)",
+                "每日记录 \(summary.dailyCheckIns)",
+                "Agent 请求 \(summary.agentRequests)",
+                "Agent 成本记录 \(summary.agentRequestCostBudgets)",
+            ].joined(separator: "、")
+            backupRestoreMessage = "备份已恢复：\(restoredCounts)。"
+            var warnings: [String] = []
+
+            do {
+                try await dependencies.agentSession.restore()
+            } catch {
+                warnings.append("备份数据已恢复，但对话状态刷新失败：\(safeErrorMessage(error))")
+            }
+
+            let restoredProfile = try? UserProfileSingletonPolicy.primary(in: modelContext)
+            appState.userProfile = restoredProfile
+            appState.isOnboarded = restoredProfile != nil
+            await loadGoalFields()
+            await refreshProviderGovernance()
+
+            if dependencies.healthKitService.hasRequestedAuthorization {
+                await dependencies.foregroundHealthRebaselineCoordinator.rebaselineAfterDatasetRestore()
+                switch dependencies.foregroundHealthRebaselineCoordinator.state {
+                case .completed:
+                    break
+                case .partiallyCompleted, .failed, .superseded, .preparing, .syncing, .queued, .idle:
+                    warnings.append("备份数据已恢复，但 Apple 健康数据的首次同步尚未完整完成；系统会按重试策略继续同步。")
+                }
+            } else {
+                let healthRepository = HealthRepository(modelContext: modelContext)
+                let healthContextExportGate = dependencies.healthContextExportGate
+                let foregroundPurgeHoldToken = healthContextExportGate.ensureForegroundPurgeHold()
+                do {
+                    _ = try await dependencies.healthKitSyncCoordinator.prepareForegroundSnapshotRebuild(
+                        using: healthRepository
+                    )
+                    healthContextExportGate.releaseForegroundPurgeHoldAfterSuccessfulSnapshotRebuild(
+                        foregroundPurgeHoldToken,
+                        healthKitCacheMayRemain: false
+                    )
+                    if healthContextExportGate.isOpen {
+                        dependencies.healthIntelligenceService.allowBriefRefreshAfterSuccessfulHealthSnapshotPurge()
+                    }
+                } catch {
+                    warnings.append("备份数据已恢复，但未授权的 Apple 健康数据缓存尚未清理；健康数据云端导出保持关闭，系统会稍后重试。")
+                }
+            }
+            await refreshDiagnostics()
+            dependencies.watchConnectivityCoordinator.refreshApplicationContext()
+
+            if summary.pendingProjectionDays > 0 {
+                warnings.append("备份数据已恢复，但有 \(summary.pendingProjectionDays) 天的每日指标仍待更新；系统已保留重试标记。")
+            }
+
+            if !summary.quarantinedAgentLedgerEntries.isEmpty {
+                let examples = summary.quarantinedAgentLedgerEntries.prefix(3).map { entry in
+                    "\(entry.recordType == .request ? "请求" : "成本预算") \(entry.requestID.uuidString)：\(quarantineReasonDescription(entry.reason))"
+                }.joined(separator: "、")
+                let additional = summary.quarantinedAgentLedgerEntries.count > 3
+                    ? "，另有 \(summary.quarantinedAgentLedgerEntries.count - 3) 条"
+                    : ""
+                warnings.append("有 \(summary.quarantinedAgentLedgerEntries.count) 条 Agent 请求记录因格式或关联校验未通过而隔离（\(examples)\(additional)）；其余备份数据已恢复。")
+            }
+            backupRestoreWarning = warnings.isEmpty ? nil : warnings.joined(separator: " ")
+        } catch {
+            dependencies.exportService.lastError = "备份未导入：\(safeErrorMessage(error))"
+        }
+    }
+
+    private func quarantineReasonDescription(
+        _ reason: ExportService.QuarantinedAgentLedgerEntry.Reason
+    ) -> String {
+        switch reason {
+        case .duplicateIdentifier: "标识重复"
+        case .invalidDateRange: "日期范围无效"
+        case .invalidCounter: "计数值无效"
+        case .unsupportedRequestState: "请求状态不支持"
+        case .missingRequest: "找不到关联请求"
+        case .conversationMismatch: "对话关联不匹配"
+        case .oversizedField: "字段长度超出限制"
+        case .unsupportedCostState: "成本状态不支持"
+        }
+    }
+
+    private func exportSpeechDiagnostics() async {
+        do {
+            exportURL = try await dependencies.speechService.exportDiagnostics()
+            showShareSheet = true
+        } catch {
+            healthAuthorizationError = "无法导出语音诊断：\(safeErrorMessage(error))"
+        }
+    }
+
+    private func exportDiagnostics() async {
+        isExportingDiagnostics = true
+        defer { isExportingDiagnostics = false }
+        await Task.yield()
+        let watch = dependencies.watchConnectivityCoordinator
+        do {
+            exportURL = try dependencies.diagnosticsExportService.exportJSON(
+                context: modelContext,
+                mode: dependencies.intelligencePreferences.mode,
+                watch: DiagnosticsWatchStatus(
+                    isAvailable: watch.isAvailable,
+                    isActivated: watch.isActivated,
+                    hasError: watch.lastError != nil
+                ),
+                dailyLoop: DiagnosticsDailyLoopStatus(
+                    lastGeneratedAt: dependencies.dailyLoopSnapshotService.lastGeneratedAt,
+                    nextRefreshEarliestAt: dependencies.dailyLoopBackgroundScheduler.nextRefreshEarliestAt
+                )
+            )
+            healthAuthorizationError = nil
+            showShareSheet = true
+        } catch {
+            healthAuthorizationError = "无法生成系统诊断文件，请稍后重试。"
         }
     }
 
@@ -273,15 +1168,57 @@ struct SettingsScreen: View {
 
         do {
             try await dependencies.healthKitService.requestAuthorization()
-            healthKitWorkoutImporter.importChanges(in: modelContext)
-            workoutRouteImporter.importPendingRoutes(in: modelContext)
-            statusMessage = "已请求 HealthKit 导入；完成后会更新最近导入时间。"
+            dependencies.dailyLoopBackgroundScheduler.scheduleNextRefresh()
+            let healthRepository = HealthRepository(modelContext: modelContext)
+            let backgroundDeliveryEnabled = try await dependencies.healthKitSyncCoordinator
+                .startBackgroundObservers(using: healthRepository)
+            let syncResult = try await dependencies.healthKitSyncCoordinator.syncAvailableData(
+                using: healthRepository,
+                forceRebaseline: true
+            )
+            await dependencies.healthSyncOutboxWorker.processPending(in: modelContext)
+            if syncResult.hasFailures {
+                statusMessage = "HealthKit 已部分同步；失败流的未完成页不前移游标，其他数据仍已更新。读取范围由系统保护，无数据不代表已拒绝授权。"
+            } else {
+                statusMessage = backgroundDeliveryEnabled
+                    ? "已完成本次 HealthKit 同步；读取范围由系统保护，无数据不代表已拒绝授权。"
+                    : "前台同步已完成；系统未确认后台投递可用（可能受签名 entitlement 限制）。读取范围由系统保护，无数据不代表已拒绝授权。"
+            }
             await refreshDiagnostics()
         } catch {
-            healthAuthorizationError = "Apple Health 授权失败：\(error.localizedDescription)"
+            let errorMessage = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .healthKitUnavailableFallback
+            ).userMessage
+            healthAuthorizationError = "Apple Health 授权失败：\(errorMessage)"
             await refreshDiagnostics()
         }
     }
+}
+
+private func safeErrorMessage(
+    _ error: Error,
+    fallback: SharedErrorDescriptor = .actionConflictFallback
+) -> String {
+    SharedErrorDescriptor.mapped(from: error, fallback: fallback).userMessage
+}
+
+private enum GoalInputError: SharedErrorDescribing {
+    case invalid(String)
+
+    var sharedErrorDescriptor: SharedErrorDescriptor {
+        switch self {
+        case .invalid(let field):
+            SharedErrorDescriptor(
+                code: .toolArgumentsInvalid,
+                userMessage: "\(field)格式无效或超出允许范围。",
+                subsystem: .confirmation,
+                reason: .invalidToolArguments
+            )
+        }
+    }
+
+    var errorDescription: String? { sharedErrorDescriptor.userMessage }
 }
 
 private struct CapabilityRow: View {
@@ -335,12 +1272,16 @@ private struct CapabilityRow: View {
 private struct ProfileEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(Dependencies.self) private var dependencies
 
     let profile: UserProfile
 
     @State private var name: String
     @State private var sex: String
-    @State private var dateOfBirth: Date
+    @State private var dateOfBirth: Date?
+    @State private var dateOfBirthDraft: Date
+    @State private var hasEditedDateOfBirth = false
+    @State private var showingDateOfBirthPicker = false
     @State private var height: String
     @State private var weight: String
     @State private var activity: String
@@ -352,6 +1293,11 @@ private struct ProfileEditorSheet: View {
         _name = State(initialValue: profile.name)
         _sex = State(initialValue: profile.biologicalSex)
         _dateOfBirth = State(initialValue: profile.dateOfBirth)
+        _dateOfBirthDraft = State(
+            initialValue: profile.dateOfBirth
+                ?? Calendar.current.date(byAdding: .year, value: -30, to: Date())
+                ?? Date()
+        )
         _height = State(initialValue: String(format: "%.1f", profile.heightCm))
         _weight = State(initialValue: String(format: "%.1f", profile.weightKg))
         _activity = State(initialValue: profile.activityLevel)
@@ -368,7 +1314,17 @@ private struct ProfileEditorSheet: View {
                             Text("女").tag("female")
                             Text("其他").tag("other")
                         }
-                        DatePicker("出生日期", selection: $dateOfBirth, in: ...Date(), displayedComponents: .date)
+                        Button {
+                            dateOfBirthDraft = dateOfBirth
+                                ?? (Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date())
+                            hasEditedDateOfBirth = true
+                            showingDateOfBirthPicker = true
+                        } label: {
+                            LabeledContent(
+                                "出生日期",
+                                value: dateOfBirth?.formatted(date: .abbreviated, time: .omitted) ?? "未填写"
+                            )
+                        }
                         TextField("身高 (cm)", text: $height)
                             .keyboardType(.decimalPad)
                         TextField("体重 (kg)", text: $weight)
@@ -398,18 +1354,51 @@ private struct ProfileEditorSheet: View {
             .orbitScrollBackground()
             .navigationTitle("编辑个人资料")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showingDateOfBirthPicker) {
+                NavigationStack {
+                    Form {
+                        DatePicker(
+                            "出生日期",
+                            selection: $dateOfBirthDraft,
+                            in: ...Date(),
+                            displayedComponents: .date
+                        )
+                        Button("清除出生日期", role: .destructive) {
+                            dateOfBirth = nil
+                            showingDateOfBirthPicker = false
+                        }
+                    }
+                    .navigationTitle("选择出生日期")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("取消") { showingDateOfBirthPicker = false }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("保存") {
+                                dateOfBirth = dateOfBirthDraft
+                                showingDateOfBirthPicker = false
+                            }
+                            .disabled(!hasEditedDateOfBirth)
+                        }
+                    }
+                    .onChange(of: dateOfBirthDraft) { _, _ in
+                        hasEditedDateOfBirth = true
+                    }
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消", systemImage: "xmark") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存", systemImage: "checkmark") { save() }
+                    Button("保存", systemImage: "checkmark") { Task { await save() } }
                 }
             }
         }
     }
 
-    private func save() {
+    private func save() async {
         guard let heightValue = Double(height), (80...250).contains(heightValue),
               let weightValue = Double(weight), (20...500).contains(weightValue),
               let targetValue = Int(deficitTarget), (0...5_000).contains(targetValue) else {
@@ -417,24 +1406,115 @@ private struct ProfileEditorSheet: View {
             return
         }
 
-        profile.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        profile.biologicalSex = sex
-        profile.dateOfBirth = dateOfBirth
-        profile.heightCm = heightValue
-        if abs(profile.weightKg - weightValue) > 0.001 {
-            profile.updateWeight(weightValue)
-        }
-        profile.activityLevel = activity
-        profile.dailyDeficitTarget = targetValue
-        profile.updatedAt = Date()
-
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let now = Date()
+        var projectionPending = false
         do {
-            try modelContext.save()
+            let operationBarrier = PersistenceOperationBarrier.shared
+            let operationLease = try await operationBarrier.acquireMutationOperation()
+            defer { operationBarrier.release(operationLease) }
+            try await operationBarrier.withLease(operationLease) {
+                try await DailyMetricsProjectionWriteGate.withLockAndLease(for: modelContext) { lease in
+                try Task.checkCancellation()
+                let weightChanged = abs(profile.weightKg - weightValue) > 0.001
+                let revisionChanged = profile.name != trimmedName
+                    || profile.biologicalSex != sex
+                    || profile.dateOfBirth != dateOfBirth
+                    || abs(profile.heightCm - heightValue) > 0.001
+                    || weightChanged
+                    || profile.activityLevel != activity
+                    || profile.dailyDeficitTarget != targetValue
+
+                profile.name = trimmedName
+                profile.biologicalSex = sex
+                profile.dateOfBirth = dateOfBirth
+                profile.profileNeedsCompletion = dateOfBirth == nil
+                profile.heightCm = heightValue
+                profile.weightKg = weightValue
+                profile.activityLevel = activity
+                profile.dailyDeficitTarget = targetValue
+                profile.updatedAt = now
+
+                if revisionChanged {
+                    modelContext.insert(
+                        ProfileRevisionRecord(
+                            profileKey: profile.profileKey,
+                            effectiveFrom: now,
+                            dateOfBirth: dateOfBirth,
+                            biologicalSex: sex,
+                            heightCm: heightValue,
+                            weightKg: weightValue,
+                            activityLevel: activity,
+                            source: "userEdited",
+                            createdAt: now
+                        )
+                    )
+                }
+
+                if weightChanged {
+                    try await HealthRepository(modelContext: modelContext).insert(
+                        WeightRecord(
+                            sourceActionKey: "settings-weight-\(UUID().uuidString.lowercased())",
+                            measuredAt: now,
+                            kilograms: weightValue,
+                            source: "manual",
+                            algorithmVersion: "weight-v2",
+                            confidence: 0.9
+                        ),
+                        whileHoldingStoreGate: lease
+                    )
+                    let day = Calendar.current.startOfDay(for: now)
+                    let predicate = #Predicate<DailyMetrics> { $0.date == day }
+                    projectionPending = (
+                        try? modelContext.fetch(FetchDescriptor<DailyMetrics>(predicate: predicate)).first?.requiresRecompute
+                    ) ?? true
+                } else {
+                    do {
+                        try DailyMetricsProjector.markPendingForReprojectionWhileGateHeld(on: now, in: modelContext)
+                        try modelContext.save()
+                    } catch {
+                        modelContext.rollback()
+                        throw error
+                    }
+                    do {
+                        try Task.checkCancellation()
+                        try await DailyMetricsProjector.reprojectAndCommitWhileGateHeld(
+                            on: now,
+                            in: modelContext
+                        )
+                    } catch {
+                        // Profile/revision and the initial pending marker are durable.
+                        // Keep the editor open with a truthful saved-but-pending result.
+                        modelContext.rollback()
+                        try? DailyMetricsProjector.markPendingForReprojectionWhileGateHeld(on: now, in: modelContext)
+                        try? modelContext.save()
+                        projectionPending = true
+                    }
+                }
+                }
+            }
+            if projectionPending {
+                do {
+                    _ = try await dependencies.healthIntelligenceService.refresh()
+                } catch {
+                    validationError = "资料已保存，但每日指标仍待更新；健康摘要也暂时无法刷新：\(safeErrorMessage(error))"
+                    return
+                }
+                validationError = "资料已保存，但每日指标仍待更新；系统已保留重试标记。"
+                return
+            }
+            do {
+                _ = try await dependencies.healthIntelligenceService.refresh()
+            } catch {
+                validationError = "资料已保存，但健康摘要暂时无法更新：\(safeErrorMessage(error))"
+                return
+            }
             dismiss()
         } catch {
-            validationError = "保存失败：\(error.localizedDescription)"
+            validationError = "保存失败：\(safeErrorMessage(error))"
         }
     }
+
 }
 
 struct ShareSheet: UIViewControllerRepresentable {
@@ -448,7 +1528,9 @@ struct ShareSheet: UIViewControllerRepresentable {
 }
 
 #Preview {
+    let persistence = PersistenceBootstrap.make(inMemory: true)
     SettingsScreen()
-        .modelContainer(for: [UserProfile.self, HealthKitImportCursor.self], inMemory: true)
-        .environment(Dependencies())
+        .modelContainer(persistence.container)
+        .environment(Dependencies(modelContainer: persistence.container))
+        .environment(AppState.shared)
 }

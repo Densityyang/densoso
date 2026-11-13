@@ -5,8 +5,11 @@ densoso 是一个面向 iPhone 与 Apple Watch 的个人健康记录应用：语
 ## 产品能力
 
 - 五个原生 SwiftUI 页面：对话、仪表盘、历史、训练计划和设置。
-- 语音输入：设备支持 `SpeechAnalyzer` 时优先使用，否则回退到兼容 Speech 路径。
+- 语音输入：`SpeechAnalyzer → legacy Speech → 可选单次 Qwen ASR → 手动编辑`；
+  云端兜底只在本地失败、已采到音频并单独同意上传时触发。
 - 结构化餐食与训练草稿，支持最少量澄清问题和用户修正。
+- 照片记餐先在本地检查条码和营养标签；开放式菜品仅在独立同意和
+  质量门禁允许时调用 Qwen VL，且模型不能生成本地 food ID。
 - 本地食物数据库、食物匹配、确定性区间估算和数据证据展示。
 - HealthKit 体重、身高、训练和饮食能量同步。
 - WorkoutKit/HealthKit 运动记录与 Apple Watch 到 iPhone 的增量导入。
@@ -22,9 +25,9 @@ densoso 是一个面向 iPhone 与 Apple Watch 的个人健康记录应用：语
         ↓
 本地校验、食物匹配、区间估算
         ↓
-PendingActionStore + 用户确认
+持久化 PendingAction + 用户确认
         ↓
-幂等写入 SwiftData
+ConfirmationCoordinator 原子写入 record / projection / receipt / outbox
         ↓
 DailyMetricsProjector / WeeklyAnalyticsService
         ↓
@@ -35,14 +38,25 @@ DailyMetricsProjector / WeeklyAnalyticsService
 
 - Agent 只负责意图提取、草稿生成和澄清问题。
 - 营养计算、权限判断、确认状态、幂等写入和日指标重算由本地领域代码负责。
-- `PendingActionStore` 是所有餐食和训练写入的确认边界，模型输出不能直接成为健康事实。
+- `ConfirmationCoordinator` 与 SwiftData repository 是餐食/体重的确认边界；
+  已完成运动事实只由 HealthKit 导入，模型输出不能直接写入。
 - `IntelligenceRoutingPolicy` 统一选择本地模型、Speech 路径或显式云端路径。
 - `DailyMetrics` 是日指标和周分析的唯一聚合来源。
+
+恢复与重试边界：
+
+- 恢复备份后，以恢复的主档案和目标重新加载应用状态；备份不会授予云端健康数据权限。HealthKit 快照清理或重建完成前，云端健康数据导出保持关闭；完成后刷新 Watch 应用上下文。
+- 训练计划只接受受支持的活动/目标和未来时间。部分重试会排除已调度课次，并跳过已过期但尚未调度的课次，让后续有效课次继续执行。
+- 食物搜索包含名称和别名，先匹配精确名称/别名，再匹配前缀；`%`、`_` 和反斜杠按字面字符查询。
 
 ## 数据与隐私边界
 
 - API Key 保存在设备 Keychain。
 - 启用云端路径时，Key 和请求文本会发送给所选服务商；本地路径不应被描述为云端同步。
+- Qwen 健康文字与单次临时音频使用两个独立同意项；临时 WAV 使用 Complete
+  protection，并在成功、失败、取消和下次启动时清理。
+- Qwen 餐食照片使用第三个独立同意项；上传前图片缩放到最长边 1280px、
+  JPEG 0.75 并移除来源元数据，原图不持久化。
 - 原始照片只作为条码、营养标签、食物类别和份量区间的辅助证据，不能从单张图像承诺精确克重或热量。
 - HealthKit 读取权限受到系统隐私保护；应用不会把“无数据”误报为用户拒绝读取。
 - 所有健康数据写入都应经过用户确认，并通过幂等键避免重复记录。
@@ -60,7 +74,7 @@ HealthKit 有两个独立层面：工程/签名能力和用户授权。工程 ta
 ```bash
 brew install xcodegen
 xcodegen generate
-swift test --package-path Packages/DensosoWorkoutDomain
+swift test --package-path Packages/DensosoDomain
 ```
 
 执行 iOS Simulator 测试：
@@ -88,16 +102,29 @@ IPA workflow 生成的包包含 `Payload/Densoso.app` 和嵌入的 Watch App，�
 ```bash
 python scripts/validate_food_db.py
 python scripts/validate_voice_goldens.py --input evals/voice-zh-CN.jsonl
-python -m compileall -q scripts
+python -m py_compile scripts/evaluate_voice_transcripts.py scripts/generate_voice_goldens.py \
+  scripts/import_exercise_catalog.py scripts/import_food_db.py scripts/validate_food_db.py \
+  scripts/validate_gate0_ui.py scripts/validate_phase1_foundation.py \
+  scripts/validate_phase2_domain_persistence.py \
+  scripts/validate_phase3_agent_provider.py \
+  scripts/validate_phase4_speech.py \
+  scripts/validate_phase5_meal_capture.py \
+  scripts/validate_voice_goldens.py
 ```
 
 GitHub Actions 工作流位于 `.github/workflows/`：
 
-- `build.yml`：食物库校验、XcodeGen、共享 workout domain 测试、模拟器上的完整 XCTest。
+- `build.yml`：面向 `master` 的 PR、`master` 更新或手动触发时运行分阶段门禁。完整模式覆盖
+  Gate 1–14、Gate 17–19，并由 Gate 16 汇总发布就绪状态；Gate 1 包含纯
+  `DensosoDomain` 测试、确定性 XcodeGen、iOS 18 deployment 构建、iOS 27.0
+  Simulator 测试/UI 截图和单目标 Watch app 编译。工作流会上传测试结果与门禁证据。
+  手动触发可选择 `full` 或 `focused-pr-tests`。Provider/ASR/VL 测试只使用本地
+  fixture/fake transport。Gate 5 的 100/50 评测集是公开合成算法验证，不冒充真实照片或厨房秤实测。
 - `build-ipa.yml`：手动触发 Release device build、IPA 打包和 artifact 上传。
 
 ## 文档索引
 
+- [AI-native Personal Health Loop 主 PR](docs/AI-NATIVE-PERSONAL-HEALTH-LOOP-MAIN-PR.md)
 - [Orbit UI v1.2 实现说明](docs/orbit-ui-v1.2.md)
 - [语音评测基线](docs/speech-evaluation.md)
 - [PR-001 历史设计与审计基线](docs/PR-001-stabilize-agent-and-calorie-pipeline.md)

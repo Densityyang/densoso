@@ -1,95 +1,178 @@
+import DensosoDomain
 import Foundation
-import SwiftData
 
-/// 工具注册中心
 @MainActor
 final class ToolRegistry {
-    weak var foodDatabase: FoodDatabase?
+    static let toolSchemaVersion = ToolSchemaVersion.current
 
-    var toolDefinitions: [DeepSeekClient.ToolDef] {
-        allTools.map { $0.definition }
+    private let todayHealthStateProvider: TodayHealthStateProvider
+    private let healthHistoryProvider: HealthHistoryProvider
+    private let goalProfileProvider: GoalProfileProvider
+    private let mealPortionPriorRepository: (any MealPortionPriorRepository)?
+
+    init(
+        todayHealthStateProvider: @escaping TodayHealthStateProvider = { _ in nil },
+        healthHistoryProvider: @escaping HealthHistoryProvider = { _, _ in [] },
+        goalProfileProvider: @escaping GoalProfileProvider = { _ in nil },
+        mealPortionPriorRepository: (any MealPortionPriorRepository)? = nil
+    ) {
+        self.todayHealthStateProvider = todayHealthStateProvider
+        self.healthHistoryProvider = healthHistoryProvider
+        self.goalProfileProvider = goalProfileProvider
+        self.mealPortionPriorRepository = mealPortionPriorRepository
     }
+
+    var toolDefinitions: [ToolSchema] { allTools.map(\.definition) }
 
     private var allTools: [any AgentTool] {
         [
-            LogMealTool(),
-            LogWorkoutTool(),
-            QueryFoodTool(),
+            LogMealTool(mealPortionPriorRepository: mealPortionPriorRepository),
+            LogWeightTool(),
+            CreateWorkoutPlanTool(),
+            CreateTrainingPlanTool(),
+            StageDailyCheckInTool(),
+            StageUserPreferenceTool(),
+            SearchFoodTool(),
             GetMetricsTool(),
             GetWeeklyDeficitTool(),
             SuggestMealPlanTool(),
             GetScheduleTool(),
+            GetTodayPlanTool(),
+            GetTodayHealthStateTool(stateProvider: todayHealthStateProvider),
+            GetHealthHistoryTool(historyProvider: healthHistoryProvider),
+            GetPendingActionsTool(),
+            GetRecentMealsTool(),
+            GetRecentWorkoutsTool(),
+            GetRecipePriorTool(),
+            GetGoalTool(goalProvider: goalProfileProvider),
+            GetUserPreferencesTool(),
         ]
     }
 
-    @MainActor
-    func execute(name: String, argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
+    func execute(
+        name: String,
+        arguments: JSONValue,
+        context: AgentSession,
+        clientRequestID: UUID
+    ) async throws -> String {
+        try Task.checkCancellation()
         guard let tool = allTools.first(where: { $0.definition.name == name }) else {
             throw ToolError.unknownTool(name)
         }
-        return try await tool.execute(argumentsJSON: argumentsJSON, context: context, modelContext: modelContext)
+        try ToolSchemaValidator.validate(arguments, against: tool.definition.parameters)
+        let data = try arguments.encodedData()
+        guard let argumentsJSON = String(data: data, encoding: .utf8) else {
+            throw ToolError.invalidArguments
+        }
+        let output = try await tool.execute(
+            argumentsJSON: argumentsJSON,
+            context: context,
+            clientRequestID: clientRequestID
+        )
+        try Task.checkCancellation()
+        return AgentToolOutputLimiter.limit(output)
+    }
+
+    func effect(for name: String) -> ToolEffect? {
+        allTools.first(where: { $0.definition.name == name })?.definition.effect
     }
 }
 
-enum ToolError: Error, LocalizedError {
+enum AgentToolOutputLimiter {
+    static let maximumUTF8Bytes = 64_000
+
+    static func limit(_ output: String) -> String {
+        guard output.utf8.count > maximumUTF8Bytes else { return output }
+        return #"{"error":{"code":"tool_output_limit_exceeded","message":"Narrow the requested date range or ask for fewer records.","truncated":true}}"#
+    }
+}
+
+enum ToolError: Equatable, Sendable, SharedErrorDescribing {
     case unknownTool(String)
-    var errorDescription: String? {
+    case invalidArguments
+
+    var sharedErrorDescriptor: SharedErrorDescriptor {
         switch self {
-        case .unknownTool(let n): "未知工具: \(n)"
+        case .unknownTool:
+            SharedErrorDescriptor(
+                code: .toolArgumentsInvalid,
+                userMessage: "暂时无法处理该请求，请重试。",
+                subsystem: .agent,
+                reason: .unknownTool
+            )
+        case .invalidArguments:
+            SharedErrorDescriptor(
+                code: .toolArgumentsInvalid,
+                userMessage: "请求参数暂时无法处理，请重试。",
+                subsystem: .agent,
+                reason: .invalidToolArguments
+            )
         }
     }
+
+    var errorDescription: String? {
+        sharedErrorDescriptor.userMessage
+    }
 }
 
-@MainActor protocol AgentTool {
-    var definition: DeepSeekClient.ToolDef { get }
-    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String
+@MainActor
+protocol AgentTool {
+    var definition: ToolSchema { get }
+    func execute(
+        argumentsJSON: String,
+        context: AgentSession,
+        clientRequestID: UUID
+    ) async throws -> String
 }
 
-extension AgentTool {
-    var effect: ToolEffect { .readOnly }
-}
-
-/// 写入类工具只能准备待确认操作；它们不接收持久化上下文。
-@MainActor protocol ConfirmationRequiredTool: AgentTool {
-    func prepare(argumentsJSON: String, context: AgentSession) async throws -> PendingActionPreparation
+@MainActor
+protocol ConfirmationRequiredTool: AgentTool {
+    func prepare(argumentsJSON: String, context: AgentSession) async throws -> ActionPayload
 }
 
 extension ConfirmationRequiredTool {
-    var effect: ToolEffect { .requiresConfirmation }
-
-    func execute(argumentsJSON: String, context: AgentSession, modelContext: ModelContext) async throws -> String {
-        let action = try context.enqueuePendingAction(try await prepare(argumentsJSON: argumentsJSON, context: context))
-        let response: [String: Any] = [
-            "actionId": action.id.uuidString,
-            "effect": ToolEffect.requiresConfirmation.rawValue,
-            "expiresAt": ISO8601DateFormatter().string(from: action.expiresAt),
-            "summary": action.payload.summary,
-            "saved": false,
-        ]
-        let data = try JSONSerialization.data(withJSONObject: response)
-        return String(data: data, encoding: .utf8) ?? #"{"error":"确认草稿编码失败"}"#
+    func execute(
+        argumentsJSON: String,
+        context: AgentSession,
+        clientRequestID: UUID
+    ) async throws -> String {
+        let action = try await context.stageAction(
+            try await prepare(argumentsJSON: argumentsJSON, context: context),
+            clientRequestID: clientRequestID
+        )
+        return try AgentToolResult.stagedAction(action)
     }
 }
 
-extension DeepSeekClient.ToolDef {
-    static func make(
+enum AgentToolResult {
+    static func stagedAction(_ action: PendingAction) throws -> String {
+        let response: JSONValue = .object([
+            "actionId": .string(action.id.uuidString.lowercased()),
+            "effect": .string(ToolEffect.stagesAction.rawValue),
+            "expiresAt": .string(ISO8601DateFormatter().string(from: action.expiresAt)),
+            "summary": .string(action.payload.summary),
+            "saved": .boolean(false),
+        ])
+        return String(data: try response.encodedData(), encoding: .utf8) ?? "{}"
+    }
+}
+
+extension ToolSchema {
+    static func strictObject(
         name: String,
         description: String,
-        properties: [(String, String, String, Bool)]
-    ) -> DeepSeekClient.ToolDef {
-        var props: [String: DeepSeekClient.PropertySchema] = [:]
-        var required: [String] = []
-        for (key, type, desc, req) in properties {
-            props[key] = DeepSeekClient.PropertySchema(type: type, description: desc)
-            if req { required.append(key) }
-        }
-        return DeepSeekClient.ToolDef(
+        effect: ToolEffect = .readOnly,
+        properties: [String: JSONSchemaNode],
+        required: [String]
+    ) -> ToolSchema {
+        ToolSchema(
             name: name,
             description: description,
-            inputSchema: DeepSeekClient.JSONSchema(
-                type: "object",
-                properties: props,
-                required: required.isEmpty ? nil : required
+            effect: effect,
+            parameters: .object(
+                properties: properties,
+                required: required,
+                additionalProperties: false
             )
         )
     }

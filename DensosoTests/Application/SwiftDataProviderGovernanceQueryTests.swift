@@ -1,0 +1,322 @@
+import Foundation
+import SwiftData
+import XCTest
+@testable import Densoso
+
+@MainActor
+final class SwiftDataProviderGovernanceQueryTests: XCTestCase {
+    func testConsentAndUsageDedupResolveExactKeysWithoutDuplicatingRows() async throws {
+        let container = try makeContainer()
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+
+        let initiallyGranted = try await repository.isConsentGranted(provider: .deepSeek, dataClass: .healthText)
+        XCTAssertFalse(initiallyGranted)
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "fixture-v1"
+        )
+        let granted = try await repository.isConsentGranted(provider: .deepSeek, dataClass: .healthText)
+        XCTAssertTrue(granted)
+
+        let requestID = UUID()
+        let usage = ProviderUsage(
+            provider: .deepSeek,
+            model: "fixture",
+            capability: .text,
+            inputTokens: 40,
+            outputTokens: 5,
+            audioSeconds: 0,
+            attempt: 2,
+            cachedInputTokens: 5,
+            reasoningTokens: 3,
+            imageCount: 2,
+            requestID: requestID,
+            latencyMilliseconds: 125
+        )
+        try await repository.recordUsage(
+            usage: usage,
+            usageKey: "exact-usage-key",
+            requestID: requestID,
+            estimatedCostMicros: 12,
+            currency: "USD",
+            rateVersion: "fixture-v1"
+        )
+        try await repository.recordUsage(
+            usage: ProviderUsage(
+                provider: .deepSeek,
+                model: "fixture",
+                capability: .text,
+                inputTokens: 999,
+                outputTokens: 999,
+                audioSeconds: 0,
+                attempt: 2
+            ),
+            usageKey: "exact-usage-key",
+            requestID: requestID,
+            estimatedCostMicros: 999,
+            currency: "USD",
+            rateVersion: "fixture-v2"
+        )
+
+        let context = ModelContext(container)
+        let consents = try context.fetch(FetchDescriptor<ConsentRecord>())
+        let records = try context.fetch(FetchDescriptor<ProviderUsageRecord>())
+        XCTAssertEqual(consents.count, 1)
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.requestID, requestID)
+        XCTAssertEqual(records.first?.attempt, 2)
+        XCTAssertEqual(records.first?.inputTokens, 40)
+        XCTAssertEqual(records.first?.cachedInputTokens, 5)
+        XCTAssertEqual(records.first?.estimatedCostMicros, 12)
+        XCTAssertEqual(records.first?.rateVersion, "fixture-v1")
+        XCTAssertEqual(records.first?.imageCount, 2)
+        XCTAssertEqual(records.first?.latencyMilliseconds, 125)
+        XCTAssertEqual(records.first?.reasoningTokens, 3)
+    }
+
+    func testIdempotentSetConsentPreservesDecidedAtAndSendConsentRevision() async throws {
+        let container = try makeContainer()
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        let initialRevisions = try await repository.currentSendConsentRevisions(provider: .deepSeek)
+        try await repository.setConsent(
+            provider: .deepSeek,
+            dataClass: .healthText,
+            granted: true,
+            policyVersion: "cloud-health-text-v1"
+        )
+        let repeatedRevisions = try await repository.currentSendConsentRevisions(provider: .deepSeek)
+        XCTAssertEqual(initialRevisions[.healthText], repeatedRevisions[.healthText])
+    }
+
+    func testMonthlyUsageQueriesProviderAndHalfOpenDateWindowAndKeepsUnknownCost() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let monthStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let monthEnd = monthStart.addingTimeInterval(30 * 86_400)
+        let insideEnd = monthEnd.addingTimeInterval(-1)
+
+        [
+            usageRecord(
+                key: "start", provider: .deepSeek, createdAt: monthStart,
+                input: 10, output: 1, cost: 100, cachedInput: 2, reasoning: 1,
+                imageCount: 2, latencyMilliseconds: 100
+            ),
+            usageRecord(key: "inside-end", provider: .deepSeek, createdAt: insideEnd, input: 20, output: 2, cost: 200),
+            usageRecord(key: "before", provider: .deepSeek, createdAt: monthStart.addingTimeInterval(-1), input: 500, output: 50, cost: 500),
+            usageRecord(key: "end-exclusive", provider: .deepSeek, createdAt: monthEnd, input: 600, output: 60, cost: 600),
+            usageRecord(key: "other-provider", provider: .qwen, createdAt: monthStart, input: 700, output: 70, cost: 700),
+        ].forEach(context.insert)
+        try context.save()
+
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        let pricedSummary = try await repository.monthlyUsage(
+            provider: .deepSeek,
+            monthStart: monthStart,
+            monthEnd: monthEnd
+        )
+        XCTAssertEqual(pricedSummary.inputTokens, 30)
+        XCTAssertEqual(pricedSummary.cachedInputTokens, 2)
+        XCTAssertEqual(pricedSummary.outputTokens, 3)
+        XCTAssertEqual(pricedSummary.reasoningTokens, 1)
+        XCTAssertEqual(pricedSummary.imageCount, 2)
+        XCTAssertEqual(pricedSummary.averageLatencyMilliseconds, 100)
+        XCTAssertEqual(pricedSummary.estimatedCostMicros, 300)
+        XCTAssertEqual(pricedSummary.currency, "USD")
+
+        context.insert(usageRecord(
+            key: "unknown-price",
+            provider: .deepSeek,
+            createdAt: monthStart.addingTimeInterval(10),
+            input: 5,
+            output: 1,
+            cost: -1,
+            currency: "unavailable"
+        ))
+        try context.save()
+        let summaryWithUnknownPrice = try await repository.monthlyUsage(
+            provider: .deepSeek,
+            monthStart: monthStart,
+            monthEnd: monthEnd
+        )
+        XCTAssertEqual(summaryWithUnknownPrice.inputTokens, 35)
+        XCTAssertNil(summaryWithUnknownPrice.estimatedCostMicros)
+        XCTAssertNil(summaryWithUnknownPrice.currency)
+    }
+
+    func testMonthlyUsagePagesLastCrossCurrencyRecordAndFiltersProviderWindow() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let monthStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let monthEnd = monthStart.addingTimeInterval(30 * 86_400)
+        let recordCount = SwiftDataProviderGovernanceRepository.monthlyUsageBatchSize + 1
+        for index in 0..<recordCount {
+            let record = usageRecord(
+                key: String(format: "monthly-page-%04d", index),
+                provider: .deepSeek,
+                createdAt: monthStart.addingTimeInterval(60),
+                input: 1,
+                output: 2,
+                audioSeconds: 1.25,
+                cost: index == recordCount - 1 ? 200 : 100,
+                currency: index == recordCount - 1 ? "EUR" : "USD"
+            )
+            context.insert(record)
+        }
+        [
+            usageRecord(
+                key: "monthly-page-before-window",
+                provider: .deepSeek,
+                createdAt: monthStart.addingTimeInterval(-1),
+                input: 999,
+                output: 999,
+                audioSeconds: 999,
+                cost: 999
+            ),
+            usageRecord(
+                key: "monthly-page-end-exclusive",
+                provider: .deepSeek,
+                createdAt: monthEnd,
+                input: 999,
+                output: 999,
+                audioSeconds: 999,
+                cost: 999
+            ),
+            usageRecord(
+                key: "monthly-page-other-provider",
+                provider: .qwen,
+                createdAt: monthStart.addingTimeInterval(60),
+                input: 999,
+                output: 999,
+                audioSeconds: 999,
+                cost: 999
+            ),
+        ].forEach(context.insert)
+        try context.save()
+
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        let summary = try await repository.monthlyUsage(
+            provider: .deepSeek,
+            monthStart: monthStart,
+            monthEnd: monthEnd
+        )
+
+        XCTAssertEqual(summary.inputTokens, recordCount)
+        XCTAssertEqual(summary.outputTokens, recordCount * 2)
+        XCTAssertEqual(summary.audioSeconds, Double(recordCount) * 1.25)
+        XCTAssertNil(summary.estimatedCostMicros)
+        XCTAssertNil(summary.currency)
+    }
+
+    func testMonthlyUsageSaturatesCorruptTokenTotalsAndMarksCostOverflowUnpriced() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let monthStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let monthEnd = monthStart.addingTimeInterval(30 * 86_400)
+
+        [
+            usageRecord(
+                key: "overflow-a", provider: .deepSeek, createdAt: monthStart,
+                input: Int.max - 1, output: Int.max - 1,
+                cost: Int64.max - 1, cachedInput: Int.max - 2, reasoning: Int.max - 3
+            ),
+            usageRecord(
+                key: "overflow-b", provider: .deepSeek, createdAt: monthStart,
+                input: 2, output: 2,
+                cost: 2, cachedInput: 3, reasoning: 4
+            ),
+            usageRecord(
+                key: "corrupt-negative-tokens", provider: .deepSeek, createdAt: monthStart,
+                input: Int.min, output: Int.min,
+                cost: 0, cachedInput: Int.min, reasoning: Int.min
+            ),
+            usageRecord(
+                key: "near-limit-exact-a", provider: .qwen, createdAt: monthStart,
+                input: Int.max - 10, output: Int.max - 20,
+                cost: Int64.max - 50, cachedInput: Int.max - 30, reasoning: Int.max - 40
+            ),
+            usageRecord(
+                key: "near-limit-exact-b", provider: .qwen, createdAt: monthStart,
+                input: 5, output: 7,
+                cost: 25, cachedInput: 11, reasoning: 13
+            ),
+        ].forEach(context.insert)
+        try context.save()
+
+        let repository = SwiftDataProviderGovernanceRepository(modelContainer: container)
+        let summary = try await repository.monthlyUsage(
+            provider: .deepSeek,
+            monthStart: monthStart,
+            monthEnd: monthEnd
+        )
+
+        XCTAssertEqual(summary.inputTokens, Int.max)
+        XCTAssertEqual(summary.cachedInputTokens, Int.max)
+        XCTAssertEqual(summary.outputTokens, Int.max)
+        XCTAssertEqual(summary.reasoningTokens, Int.max)
+        XCTAssertNil(summary.estimatedCostMicros)
+        XCTAssertNil(summary.currency)
+
+        let nearLimitSummary = try await repository.monthlyUsage(
+            provider: .qwen,
+            monthStart: monthStart,
+            monthEnd: monthEnd
+        )
+        XCTAssertEqual(nearLimitSummary.inputTokens, Int.max - 5)
+        XCTAssertEqual(nearLimitSummary.cachedInputTokens, Int.max - 19)
+        XCTAssertEqual(nearLimitSummary.outputTokens, Int.max - 13)
+        XCTAssertEqual(nearLimitSummary.reasoningTokens, Int.max - 27)
+        XCTAssertEqual(nearLimitSummary.estimatedCostMicros, Int64.max - 25)
+        XCTAssertEqual(nearLimitSummary.currency, "USD")
+    }
+
+    private func makeContainer() throws -> ModelContainer {
+        let schema = Schema(versionedSchema: DensosoSchemaV9.self)
+        return try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+    }
+
+    private func usageRecord(
+        key: String,
+        provider: ProviderID,
+        createdAt: Date,
+        input: Int,
+        output: Int,
+        audioSeconds: Double = 0,
+        cost: Int64,
+        currency: String = "USD",
+        cachedInput: Int = 0,
+        reasoning: Int = 0,
+        imageCount: Int = 0,
+        latencyMilliseconds: Int? = nil
+    ) -> ProviderUsageRecord {
+        let record = ProviderUsageRecord(
+            usageKey: key,
+            provider: provider.rawValue,
+            model: "fixture",
+            capability: ProviderCapability.text.rawValue
+        )
+        record.createdAt = createdAt
+        record.inputTokens = input
+        record.cachedInputTokens = cachedInput
+        record.outputTokens = output
+        record.reasoningTokens = reasoning
+        record.audioSeconds = audioSeconds
+        record.imageCount = imageCount
+        record.latencyMilliseconds = latencyMilliseconds
+        record.estimatedCostMicros = cost
+        record.currency = currency
+        record.rateVersion = cost < 0 ? "unknown" : "fixture-v1"
+        return record
+    }
+}

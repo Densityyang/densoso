@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "sourceID": "anduin-howtocook",
+    "sourceURL": "https://github.com/Anduin2017/HowToCook",
+    "sourceVersion": "5fb3140c20b2a713296696dc6fdd3b83ccc617a6",
+    "retrievedAt": "2026-10-26T07:17:41Z",
+    "licenseSPDX": "Unlicense",
+    "dataRole": "recipe-prior",
+    "redistributionAllowed": true,
+    "verificationStatus": "verified",
+    "licenseURL": "https://github.com/Anduin2017/HowToCook/blob/5fb3140c20b2a713296696dc6fdd3b83ccc617a6/LICENSE",
+    "notes": "Recipe structure and ingredient/quantity evidence are extracted from the pinned public HowToCook commit. Recipe priors are not nutrition authority, food-composition data, photo facts, or consumed portions."
+  }
+}

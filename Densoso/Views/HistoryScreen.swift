@@ -1,3 +1,5 @@
+import Combine
+import DensosoDomain
 import SwiftData
 import SwiftUI
 
@@ -5,6 +7,7 @@ struct HistoryScreen: View {
     private enum RecordKind: String, CaseIterable, Identifiable {
         case meals = "饮食"
         case workouts = "运动"
+        case weights = "体重"
 
         var id: Self { self }
     }
@@ -17,12 +20,28 @@ struct HistoryScreen: View {
     }
 
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \MealRecord.date, order: .reverse) private var meals: [MealRecord]
-    @Query(sort: \WorkoutRecord.date, order: .reverse) private var workouts: [WorkoutRecord]
+    @Environment(Dependencies.self) private var dependencies
+    private let pageReader = HistoryRecordPageReader()
 
     @State private var selectedKind: RecordKind = .meals
     @State private var dateScope: DateScope = .all
     @State private var selectedDate = Date()
+    @State private var meals: [MealRecord] = []
+    @State private var workouts: [WorkoutRecord] = []
+    @State private var weights: [WeightRecord] = []
+    @State private var mealCursor: HistoryRecordCursor?
+    @State private var workoutCursor: HistoryRecordCursor?
+    @State private var weightCursor: HistoryRecordCursor?
+    @State private var mealsHaveMore = false
+    @State private var workoutsHaveMore = false
+    @State private var weightsHaveMore = false
+    @State private var syncSummary = HistorySyncSummary(
+        pendingCount: 0,
+        failedCount: 0,
+        latestSuccessfulImport: nil
+    )
+    @State private var hasNewerRecords = false
+    @State private var loadError: String?
 
     var body: some View {
         NavigationStack {
@@ -31,7 +50,7 @@ struct HistoryScreen: View {
                     OrbitScreenHeader(
                         eyebrow: "Records stay inspectable",
                         title: "按时间回看每一次确认。",
-                        subtitle: "餐食和运动分别浏览；筛选只改变显示范围，不修改记录。"
+                        subtitle: "餐食、体重和 HealthKit 运动都保留来源与同步状态。"
                     )
                     .padding(.vertical, 8)
                 }
@@ -58,23 +77,63 @@ struct HistoryScreen: View {
                     }
                 }
 
+                Section("HealthKit 同步") {
+                    LabeledContent("待处理写入", value: "\(syncSummary.pendingCount)")
+                    LabeledContent("需处理失败", value: "\(syncSummary.failedCount)")
+                    LabeledContent("最近导入") {
+                        if let lastSync = syncSummary.latestSuccessfulImport {
+                            Text(lastSync, format: .dateTime.month().day().hour().minute())
+                        } else {
+                            Text("尚无成功导入")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if hasNewerRecords {
+                    Section {
+                        Button("记录已更新，刷新列表") { reloadSelectedRecords() }
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+
+                if let loadError {
+                    Section {
+                        Label("记录加载失败：\(loadError)", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 if selectedKind == .meals {
                     mealSection
-                } else {
+                } else if selectedKind == .workouts {
                     workoutSection
+                } else {
+                    weightSection
                 }
             }
+            .refreshable { reload() }
             .listStyle(.plain)
             .orbitScrollBackground()
-            .navigationTitle("历史")
+            .navigationTitle("记录")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear(perform: reload)
+            .onChange(of: selectedKind) { _, _ in reloadSelectedRecords() }
+            .onChange(of: dateScope) { _, _ in reloadSelectedRecords() }
+            .onChange(of: selectedDate) { _, _ in reloadSelectedRecords() }
+            .onReceive(
+                NotificationCenter.default.publisher(for: ModelContext.didSave)
+                    .receive(on: DispatchQueue.main)
+            ) { notification in
+                handleModelContextSave(notification)
+            }
         }
     }
 
     @ViewBuilder
     private var mealSection: some View {
         Section("餐食记录") {
-            if filteredMeals.isEmpty {
+            if meals.isEmpty {
                 ContentUnavailableView(
                     "没有餐食记录",
                     systemImage: "fork.knife",
@@ -82,7 +141,7 @@ struct HistoryScreen: View {
                 )
                 .listRowBackground(Color.clear)
             } else {
-                ForEach(filteredMeals) { meal in
+                ForEach(meals) { meal in
                     HStack(spacing: 12) {
                         Image(systemName: "fork.knife.circle.fill")
                             .font(.title2)
@@ -98,16 +157,48 @@ struct HistoryScreen: View {
                             Text(meal.date, format: .dateTime.month().day().hour().minute())
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
+                            Text(MealRecordAuditPresentation.summary(
+                                evidenceData: meal.evidenceData,
+                                algorithmVersion: meal.algorithmVersion
+                            ))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            if let sourceVersions = MealRecordAuditPresentation.sourceVersionSummary(
+                                evidenceData: meal.evidenceData
+                            ) {
+                                Text(sourceVersions)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(2)
+                            }
+                            if let portionCalibration = MealRecordAuditPresentation.portionCalibrationSummary(
+                                evidenceData: meal.evidenceData
+                            ) {
+                                Label(portionCalibration, systemImage: "checkmark.circle")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
                         }
 
                         Spacer()
-                        Text("\(meal.totalCaloriesKcal) kcal")
+                        let energy = MealRecordEnergyPresentation(
+                            totalCaloriesKcal: meal.totalCaloriesKcal,
+                            evidenceData: meal.evidenceData
+                        )
+                        Text(energy.label)
                             .font(.subheadline.weight(.semibold))
                             .monospacedDigit()
+                            .foregroundStyle(energy.isAvailable ? Color.primary : Color.secondary)
                     }
                     .padding(.vertical, 6)
                 }
                 .onDelete(perform: deleteMeals)
+            }
+            if mealsHaveMore {
+                Button("加载更早餐食") { loadOlderRecords() }
+                    .frame(maxWidth: .infinity)
             }
         }
     }
@@ -115,7 +206,7 @@ struct HistoryScreen: View {
     @ViewBuilder
     private var workoutSection: some View {
         Section("运动记录") {
-            if filteredWorkouts.isEmpty {
+            if workouts.isEmpty {
                 ContentUnavailableView(
                     "没有运动记录",
                     systemImage: "figure.run",
@@ -123,7 +214,7 @@ struct HistoryScreen: View {
                 )
                 .listRowBackground(Color.clear)
             } else {
-                ForEach(filteredWorkouts) { workout in
+                ForEach(workouts) { workout in
                     HStack(spacing: 12) {
                         Image(systemName: "figure.run.circle.fill")
                             .font(.title2)
@@ -149,17 +240,195 @@ struct HistoryScreen: View {
                 }
                 .onDelete(perform: deleteWorkouts)
             }
+            if workoutsHaveMore {
+                Button("加载更早运动") { loadOlderRecords() }
+                    .frame(maxWidth: .infinity)
+            }
         }
     }
 
-    private var filteredMeals: [MealRecord] {
-        guard dateScope == .day else { return meals }
-        return meals.filter { Calendar.current.isDate($0.date, inSameDayAs: selectedDate) }
+    @ViewBuilder
+    private var weightSection: some View {
+        Section("体重记录") {
+            if weights.isEmpty {
+                ContentUnavailableView(
+                    "没有手工体重记录",
+                    systemImage: "scalemass",
+                    description: Text(dateScope == .day ? "所选日期没有记录。" : "已确认的手工体重会出现在这里。")
+                )
+                .listRowBackground(Color.clear)
+            } else {
+                ForEach(weights) { weight in
+                    HStack(spacing: 12) {
+                        Image(systemName: "scalemass.fill")
+                            .font(.title2)
+                            .foregroundStyle(OrbitPalette.blue)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(weight.measuredAt, format: .dateTime.month().day().hour().minute())
+                                .font(.headline)
+                            Text(weight.source == "healthKit" ? "Apple Health 导入" : "手工确认")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("\(weight.kilograms.formatted(.number.precision(.fractionLength(1)))) kg")
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                    }
+                    .padding(.vertical, 6)
+                }
+                .onDelete(perform: deleteWeights)
+            }
+            if weightsHaveMore {
+                Button("加载更早体重") { loadOlderRecords() }
+                    .frame(maxWidth: .infinity)
+            }
+        }
     }
 
-    private var filteredWorkouts: [WorkoutRecord] {
-        guard dateScope == .day else { return workouts }
-        return workouts.filter { Calendar.current.isDate($0.date, inSameDayAs: selectedDate) }
+    private var selectedDateRange: HistoryRecordDateRange? {
+        guard dateScope == .day else { return nil }
+        let startDate = Calendar.current.startOfDay(for: selectedDate)
+        let endDate = Calendar.current.date(byAdding: .day, value: 1, to: startDate)
+            ?? startDate.addingTimeInterval(86_400)
+        return HistoryRecordDateRange(startDate: startDate, endDate: endDate)
+    }
+
+    private func reload() {
+        reloadSelectedRecords()
+        loadSyncSummary()
+    }
+
+    private func loadSyncSummary() {
+        do {
+            syncSummary = try pageReader.syncSummary(in: modelContext)
+        } catch {
+            loadError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .healthKitUnavailableFallback
+            ).userMessage
+        }
+    }
+
+    private func reloadSelectedRecords() {
+        hasNewerRecords = false
+        meals = []
+        workouts = []
+        weights = []
+        mealCursor = nil
+        workoutCursor = nil
+        weightCursor = nil
+        mealsHaveMore = false
+        workoutsHaveMore = false
+        weightsHaveMore = false
+        loadError = nil
+
+        do {
+            switch selectedKind {
+            case .meals:
+                let page = try pageReader.meals(in: modelContext, during: selectedDateRange)
+                meals = page.records
+                mealCursor = page.nextCursor
+                mealsHaveMore = page.hasMore
+            case .workouts:
+                let page = try pageReader.workouts(in: modelContext, during: selectedDateRange)
+                workouts = page.records
+                workoutCursor = page.nextCursor
+                workoutsHaveMore = page.hasMore
+            case .weights:
+                let page = try pageReader.weights(in: modelContext, during: selectedDateRange)
+                weights = page.records
+                weightCursor = page.nextCursor
+                weightsHaveMore = page.hasMore
+            }
+        } catch {
+            loadError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
+        }
+    }
+
+    private func handleModelContextSave(_ notification: Notification) {
+        let identifierKeys: [ModelContext.NotificationKey] = [
+            .insertedIdentifiers,
+            .updatedIdentifiers,
+            .deletedIdentifiers,
+            .invalidatedAllIdentifiers,
+        ]
+        let potentiallyNewRecordKeys: [ModelContext.NotificationKey] = [
+            .insertedIdentifiers,
+            .updatedIdentifiers,
+            .invalidatedAllIdentifiers,
+        ]
+        var changedEntityNames = Set<String>()
+        for key in identifierKeys {
+            guard let identifiers = notification.userInfo?[key] as? Set<PersistentIdentifier> else { continue }
+            changedEntityNames.formUnion(identifiers.map(\.entityName))
+        }
+        var potentiallyNewEntityNames = Set<String>()
+        for key in potentiallyNewRecordKeys {
+            guard let identifiers = notification.userInfo?[key] as? Set<PersistentIdentifier> else { continue }
+            potentiallyNewEntityNames.formUnion(identifiers.map(\.entityName))
+        }
+
+        let outboxEntity = Schema.entityName(for: HealthSyncOutboxEntry.self)
+        let cursorEntity = Schema.entityName(for: HealthKitImportCursor.self)
+        if changedEntityNames.contains(outboxEntity) || changedEntityNames.contains(cursorEntity) {
+            loadSyncSummary()
+        }
+
+        let selectedEntity: String
+        switch selectedKind {
+        case .meals: selectedEntity = Schema.entityName(for: MealRecord.self)
+        case .workouts: selectedEntity = Schema.entityName(for: WorkoutRecord.self)
+        case .weights: selectedEntity = Schema.entityName(for: WeightRecord.self)
+        }
+        if changedEntityNames.contains(selectedEntity) {
+            if shouldRefreshSelectedRecordsFromNewest {
+                reloadSelectedRecords()
+            } else if potentiallyNewEntityNames.contains(selectedEntity) {
+                hasNewerRecords = true
+            }
+        }
+    }
+
+    private var shouldRefreshSelectedRecordsFromNewest: Bool {
+        switch selectedKind {
+        case .meals: !mealsHaveMore && meals.count <= HistoryRecordPageReader.pageSize
+        case .workouts: !workoutsHaveMore && workouts.count <= HistoryRecordPageReader.pageSize
+        case .weights: !weightsHaveMore && weights.count <= HistoryRecordPageReader.pageSize
+        }
+    }
+
+    private func loadOlderRecords() {
+        do {
+            switch selectedKind {
+            case .meals:
+                guard let mealCursor else { return }
+                let page = try pageReader.meals(in: modelContext, during: selectedDateRange, before: mealCursor)
+                meals.append(contentsOf: page.records)
+                self.mealCursor = page.nextCursor
+                mealsHaveMore = page.hasMore
+            case .workouts:
+                guard let workoutCursor else { return }
+                let page = try pageReader.workouts(in: modelContext, during: selectedDateRange, before: workoutCursor)
+                workouts.append(contentsOf: page.records)
+                self.workoutCursor = page.nextCursor
+                workoutsHaveMore = page.hasMore
+            case .weights:
+                guard let weightCursor else { return }
+                let page = try pageReader.weights(in: modelContext, during: selectedDateRange, before: weightCursor)
+                weights.append(contentsOf: page.records)
+                self.weightCursor = page.nextCursor
+                weightsHaveMore = page.hasMore
+            }
+        } catch {
+            loadError = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            ).userMessage
+        }
     }
 
     private func mealTypeLabel(_ type: String) -> String {
@@ -173,21 +442,85 @@ struct HistoryScreen: View {
     }
 
     private func deleteMeals(offsets: IndexSet) {
-        let visibleMeals = filteredMeals
-        for index in offsets {
-            try? HealthRepository(modelContext: modelContext).delete(visibleMeals[index])
+        let selected = offsets.compactMap { meals.indices.contains($0) ? meals[$0] : nil }
+        Task { @MainActor in
+            var didDelete = false
+            for meal in selected {
+                do {
+                    try await HealthRepository(modelContext: modelContext).deleteMeal(id: meal.id)
+                    meals.removeAll { $0.id == meal.id }
+                    didDelete = true
+                } catch {
+                    loadError = SharedErrorDescriptor.mapped(
+                        from: error,
+                        fallback: .actionConflictFallback
+                    ).userMessage
+                }
+            }
+            if didDelete { await refreshHealthBriefAfterLocalMutation() }
+            loadSyncSummary()
         }
     }
 
     private func deleteWorkouts(offsets: IndexSet) {
-        let visibleWorkouts = filteredWorkouts
-        for index in offsets {
-            try? HealthRepository(modelContext: modelContext).delete(visibleWorkouts[index])
+        let selected = offsets.compactMap { workouts.indices.contains($0) ? workouts[$0] : nil }
+        Task { @MainActor in
+            var didDelete = false
+            for workout in selected {
+                do {
+                    try await HealthRepository(modelContext: modelContext).deleteWorkout(id: workout.id)
+                    workouts.removeAll { $0.id == workout.id }
+                    didDelete = true
+                } catch {
+                    loadError = SharedErrorDescriptor.mapped(
+                        from: error,
+                        fallback: .actionConflictFallback
+                    ).userMessage
+                }
+            }
+            if didDelete { await refreshHealthBriefAfterLocalMutation() }
+            loadSyncSummary()
+        }
+    }
+
+    private func deleteWeights(offsets: IndexSet) {
+        let selected = offsets.compactMap { weights.indices.contains($0) ? weights[$0] : nil }
+        Task { @MainActor in
+            var didDelete = false
+            for weight in selected {
+                do {
+                    try await HealthRepository(modelContext: modelContext).deleteWeight(id: weight.id)
+                    weights.removeAll { $0.id == weight.id }
+                    didDelete = true
+                } catch {
+                    loadError = SharedErrorDescriptor.mapped(
+                        from: error,
+                        fallback: .actionConflictFallback
+                    ).userMessage
+                }
+            }
+            if didDelete { await refreshHealthBriefAfterLocalMutation() }
+            loadSyncSummary()
+        }
+    }
+
+    @MainActor
+    private func refreshHealthBriefAfterLocalMutation() async {
+        do {
+            _ = try await dependencies.healthIntelligenceService.refresh()
+        } catch {
+            let descriptor = SharedErrorDescriptor.mapped(
+                from: error,
+                fallback: .projectionFailedFallback
+            )
+            loadError = "记录已删除，但健康摘要暂时无法更新：\(descriptor.userMessage)"
         }
     }
 }
 
 #Preview {
+    let persistence = PersistenceBootstrap.make(inMemory: true)
     HistoryScreen()
-        .modelContainer(for: [MealRecord.self, DishEntry.self, WorkoutRecord.self], inMemory: true)
+        .modelContainer(persistence.container)
+        .environment(Dependencies(modelContainer: persistence.container))
 }

@@ -1,0 +1,396 @@
+#!/usr/bin/env python3
+"""Validate static contracts for PLAN_v3 gate-02-domain-persistence.
+
+The scanner uses explicit source roots and never traverses Densoso/Resources or
+the private OCR validation script. SwiftData migration and transaction evidence
+must still come from the Simulator test gate.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def require_text(path: Path, needles: list[str], errors: list[str]) -> None:
+    if not path.is_file():
+        errors.append(f"missing {path.relative_to(ROOT)}")
+        return
+    text = path.read_text(encoding="utf-8")
+    for needle in needles:
+        if needle not in text:
+            errors.append(f"{path.relative_to(ROOT)} is missing {needle}")
+
+
+def main() -> int:
+    errors: list[str] = []
+
+    domain = ROOT / "Packages" / "DensosoDomain"
+    for relative in (
+        "Sources/DensosoDomain/EstimateRange.swift",
+        "Sources/DensosoDomain/Evidence.swift",
+        "Sources/DensosoDomain/HealthDomainDrafts.swift",
+        "Sources/DensosoDomain/ActionPayload.swift",
+        "Tests/DensosoDomainTests/EstimateRangePropertyTests.swift",
+        "Tests/DensosoDomainTests/CanonicalActionPayloadTests.swift",
+    ):
+        if not (domain / relative).is_file():
+            errors.append(f"missing Packages/DensosoDomain/{relative}")
+
+    schemas = ROOT / "Densoso" / "Persistence" / "Schemas"
+    for name in (
+        "DensosoSchemaV1.swift",
+        "DensosoSchemaV1Bridge.swift",
+        "DensosoSchemaV2.swift",
+        "DensosoSchemaV2Bridge.swift",
+        "DensosoSchemaV3.swift",
+        "DensosoSchemaV4.swift",
+        "DensosoSchemaV5.swift",
+        "DensosoSchemaV6.swift",
+        "DensosoSchemaV7.swift",
+        "DensosoSchemaV8.swift",
+        "DensosoSchemaV9.swift",
+        "DensosoSchemaV10.swift",
+        "DensosoSchemaV11.swift",
+        "DensosoSchemaV12.swift",
+        "DensosoSchemaV13.swift",
+        "DensosoSchemaV14.swift",
+        "DensosoSchemaV15.swift",
+    ):
+        if not (schemas / name).is_file():
+            errors.append(f"missing Densoso/Persistence/Schemas/{name}")
+
+    require_text(
+        ROOT / "Densoso" / "Persistence" / "DensosoMigrationPlan.swift",
+        [
+            "DensosoSchemaV1Bridge.self",
+            "DensosoSchemaV2Bridge.self",
+            "legacy-meal-",
+            "legacy-outbox-",
+            "legacyPointEstimate",
+            "DensosoSchemaV6.self",
+            "DensosoSchemaV8.self",
+            "DensosoSchemaV9.self",
+            "DensosoSchemaV10.self",
+            "DensosoSchemaV11.self",
+            "DensosoSchemaV12.self",
+            "DensosoSchemaV13.self",
+            "DensosoSchemaV14.self",
+            "DensosoSchemaV15.self",
+            "ConfirmedPlanSessionIndexRepository.rebuild(in: context)",
+            "let sampleBucketKey = Self.snapshotBucketKey(dayKey: sampleDayKey, calendar: located.calendar)",
+            "var sleepSamplesByWakeDay: [String: (date: Date, dayKey: String, calendar: Calendar, samples: [HealthSampleSnapshot])] = [:]",
+            "for wakeDay in Self.sleepWakeDays(",
+            "for bucketKey in sleepSamplesByWakeDay.keys.sorted()",
+            "let wakeSamples = wakeDayEntry.samples.sorted(",
+            "let dayWorkouts = workouts.filter {",
+            "for (sampleID, location) in locationsBySampleID {",
+            ".lightweight(fromVersion: DensosoSchemaV8.self, toVersion: DensosoSchemaV9.self)",
+            ".lightweight(fromVersion: DensosoSchemaV9.self, toVersion: DensosoSchemaV10.self)",
+            ".lightweight(fromVersion: DensosoSchemaV10.self, toVersion: DensosoSchemaV11.self)",
+            ".lightweight(fromVersion: DensosoSchemaV11.self, toVersion: DensosoSchemaV12.self)",
+            ".lightweight(fromVersion: DensosoSchemaV12.self, toVersion: DensosoSchemaV13.self)",
+            ".lightweight(fromVersion: DensosoSchemaV13.self, toVersion: DensosoSchemaV14.self)",
+            "fromVersion: DensosoSchemaV14.self",
+            "toVersion: DensosoSchemaV15.self",
+        ],
+        errors,
+    )
+    migration_text = (ROOT / "Densoso" / "Persistence" / "DensosoMigrationPlan.swift").read_text(
+        encoding="utf-8"
+    )
+    if "allUniqueSamples.filter" in migration_text:
+        errors.append("V5-to-V6 wake-day migration must use its prebuilt sleep window index")
+    if "workouts.filter { calendar.isDate($0.date, inSameDayAs: day) }" in migration_text:
+        errors.append("V5-to-V6 snapshot migration must use its prebuilt workout-day index")
+    if "locationsBySampleID.sorted(" in migration_text:
+        errors.append("V5-to-V6 sample-index insertion must not materialize an insertion-order sort")
+    require_text(
+        schemas / "DensosoSchemaV3.swift",
+        [
+            "ConversationRecord.self",
+            "MessageRecord.self",
+            "PendingActionRecord.self",
+            "CommittedActionReceiptRecord.self",
+            "GoalProfileRecord.self",
+            "DailyHealthSnapshotRecord.self",
+            "ProviderUsageRecord.self",
+            "WatchMessageReceiptRecord.self",
+            "ConsentRecord.self",
+            "attemptCount",
+            "nextAttemptAt",
+        ],
+        errors,
+    )
+
+    agent_roots = [ROOT / "Densoso" / "Agent", ROOT / "Densoso" / "Agent" / "Tools"]
+    for agent_root in agent_roots:
+        for path in agent_root.rglob("*.swift"):
+            text = path.read_text(encoding="utf-8")
+            if "import SwiftData" in text or "ModelContext" in text:
+                errors.append(f"Agent persistence boundary violated in {path.relative_to(ROOT)}")
+    if (ROOT / "Densoso" / "Agent" / "Tools" / "LogWorkoutTool.swift").exists():
+        errors.append("LogWorkoutTool must not exist in the model tool registry")
+
+    require_text(
+        ROOT / "Packages" / "DensosoDomain" / "Sources" / "DensosoDomain" / "ActionPayload.swift",
+        ["CanonicalizationError", "CanonicalInteger", "rounded > Double(Int64.min)"],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Agent" / "AgentSession.swift",
+        ["import Observation", "restoredVisibleMessages"],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Application" / "Confirmation" / "ConfirmationCoordinator.swift",
+        ["24 * 60 * 60", "canonicalData", "recoverInterruptedCommits"],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataConfirmationRepository.swift",
+        [
+            "modelContext.transaction",
+            "CommittedActionReceiptRecord",
+            "HealthSyncOutboxEntry",
+            "afterTransactionCommitted",
+            "record_without_receipt",
+            "HealthSyncState.retryable.rawValue",
+            "reprojectDailyHealthSnapshot",
+            "let expiredPredicate = #Predicate<PendingActionRecord>",
+            "static let expiredActionBatchSize = 64",
+            "expiredDescriptor.fetchLimit = Self.expiredActionBatchSize",
+            "static let activeActionBatchSize = 64",
+            "activeDescriptor.fetchLimit = Self.activeActionBatchSize",
+            "cursorIdempotencyKey",
+            "static let recoveryBatchSize = 64",
+            "actionDescriptor.fetchLimit = Self.recoveryBatchSize",
+            "outboxDescriptor.fetchLimit = Self.recoveryBatchSize",
+            "action.id > cursorID",
+            "entry.idempotencyKey > cursorKey",
+            "let activePredicate = #Predicate<PendingActionRecord>",
+            "let committingPredicate: Predicate<PendingActionRecord>",
+            "let sendingPredicate: Predicate<HealthSyncOutboxEntry>",
+            "private func pendingAction(id: UUID)",
+            "private func receipt(actionID: UUID)",
+            "descriptor.fetchLimit = 1",
+            "private func updateProfileWeight(_ kilograms: Double, measuredAt: Date)",
+            "UserProfile> { $0.profileKey == primaryProfileKey }",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "PersistenceBootstrap.swift",
+        [
+            "PersistentStoreVersionInspector.version",
+            "MigrationBackupManager.restore",
+            "backupProvider",
+            "DensosoDiagnostic",
+            "isStoredInMemoryOnly: true",
+            "Schema(versionedSchema: DensosoSchemaV15.self)",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "PersistentStoreVersionInspector.swift",
+        [
+            "metadataForPersistentStore",
+            "NSReadOnlyPersistentStoreOption",
+            "NSStoreModelVersionHashesKey",
+            "missingModelVersionHashes",
+            "!hashes.isEmpty",
+            "densoso-store-metadata-",
+            'storeURL.path + "-wal"',
+            'storeURL.path + "-shm"',
+            "DensosoSchemaV1.self",
+            "DensosoSchemaV6.self",
+            "DensosoSchemaV8.self",
+            "DensosoSchemaV9.self",
+            "DensosoSchemaV10.self",
+            "DensosoSchemaV11.self",
+            "DensosoSchemaV12.self",
+            "DensosoSchemaV13.self",
+            "DensosoSchemaV14.self",
+            "DensosoSchemaV15.self",
+            "DensosoSchemaV2.self",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "MigrationBackupManager.swift",
+        ["checksumMismatch", "stagedDirectory", "rollbackDirectory"],
+        errors,
+    )
+    bootstrap_text = (ROOT / "Densoso" / "Infrastructure" / "Persistence" / "PersistenceBootstrap.swift").read_text(encoding="utf-8")
+    if "allowsSave: false" in bootstrap_text:
+        errors.append("Diagnostic in-memory container must not use the invalid read-only /dev/null combination")
+    if 'ModelConfiguration("DensosoRecovery"' in bootstrap_text:
+        errors.append("PersistenceBootstrap must not create a writable DensosoRecovery store")
+
+    require_text(
+        ROOT / "Densoso" / "App" / "DensosoApp.swift",
+        [
+            "PersistenceRecoveryView",
+            "if dependencies.persistenceWriteGate.state.allowsWrites",
+        ],
+        errors,
+    )
+
+    fixture_root = ROOT / "DensosoTests" / "Fixtures" / "Gate02"
+    fixture_names = ["v1-seed.json", "v2-seed.json", "expected-migration.json"]
+    for name in fixture_names:
+        path = fixture_root / name
+        if not path.is_file():
+            errors.append(f"missing DensosoTests/Fixtures/Gate02/{name}")
+        else:
+            json.loads(path.read_text(encoding="utf-8"))
+
+    for test_name in (
+        "ConfirmationCoordinatorTests.swift",
+        "ConversationPersistenceTests.swift",
+        "DensosoMigrationTests.swift",
+        "MigrationBackupManagerTests.swift",
+        "AgentPersistenceBoundaryTests.swift",
+    ):
+        if not (ROOT / "DensosoTests" / test_name).is_file():
+            errors.append(f"missing DensosoTests/{test_name}")
+    require_text(
+        ROOT / "DensosoTests" / "ConversationPersistenceTests.swift",
+        (
+            "testResetPagesMessagesAndRequestsAcross64RowBoundaries",
+            "AgentRequestCostBudgetRecord",
+            "budgets.count, 1",
+            "budgets.first?.requestID, otherRequestID",
+        ),
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests/DensosoMigrationTests.swift",
+        [
+            "testV1DiskFixtureMigratesToCurrentSchemaWithoutRecalculation",
+            "testV2DiskFixtureMigratesToCurrentSchemaAndPreservesCursorAndOutbox",
+            "testV3MigrationToCurrentSchemaCreatesTimeAwareProfileAndWeightRecords",
+            "openCurrentStore(at: location.storeURL)",
+            "testV5MigrationMovesRawSamplesIntoIndexAndDailySummary",
+            "testV5MigrationIndexesSleepSamplesAcrossMidnightAndAdjacentWindows",
+            "testV7ToV9PreservesHealthKitSampleIndexState",
+            "testV9StoreMigratesToV10WithPreMigrationBackupAndRetrySafeOpen",
+            "testV11DiskStoreMigratesToV15WithDishPriorTableAndPreservedPolicy",
+            "testV12DiskStoreMigratesToV15WithEmptyToolExecutionJournalAndContributionLedger",
+            "testV13DiskStoreAddsEmptyMealPriorContributionLedger",
+            "testV8MigrationMarksPriorRoundRequestCostUnavailableWithoutProviderIdentity",
+            "existingDaySnapshot.healthKitSampleSummary?.workoutEffort.first?.score",
+        ],
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests/Application/AgentRequestResumeTests.swift",
+        ("testPerRequestCostReservationPersistsAndCannotResetOnResume",),
+        errors,
+    )
+    require_text(
+        ROOT / "DensosoTests/ConfirmationCoordinatorTests.swift",
+        (
+            "testTransactionFaultRollsBackThenRecoveryRestoresPending",
+            "testPendingActionSurvivesRepositoryRecreation",
+            "testActiveActionsExpiresPendingRowsAcrossBoundedBatchesAndKeepsCommitting",
+            "testActiveActionsKeysetPagesPendingAndCommittingInCreatedAtOrder",
+            "testConfirmedWeightCreatesAndUpdatesPrimaryWhenOnlySecondaryProfileExists",
+            "testConfirmationAndStandaloneProjectionPageCompleteDailyMealsAndWorkouts",
+            "testConfirmationDailySnapshotPagesMealsAndReadsLatestWeightOnly",
+            "testConfirmedActionTraceabilityLinksReceiptLocalRecordAndOutbox",
+            "testRecoveryPagesCommittingActionsAndSendingOutboxAcrossBoundaries",
+            "testRecoveryFindsInterruptedWorkoutPlanAfterFirstScheduleEventPage",
+        ),
+        errors,
+    )
+    confirmation_repository = (
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataConfirmationRepository.swift"
+    ).read_text(encoding="utf-8")
+    daily_projection_loop_index = confirmation_repository.find(
+        "for metricDate in affectedDailyMetricDates.sorted()"
+    )
+    daily_projection_index = confirmation_repository.find("try reprojectDaily(on: metricDate)")
+    snapshot_projection_index = confirmation_repository.find("try reprojectDailyHealthSnapshot(on: affectedDate)")
+    if (
+        daily_projection_loop_index < 0
+        or daily_projection_index < daily_projection_loop_index
+        or snapshot_projection_index < 0
+        or daily_projection_index > snapshot_projection_index
+    ):
+        errors.append("confirmation must refresh DailyMetrics before deriving the DailyHealthSnapshot intake")
+
+    require_text(
+        ROOT / "Densoso" / "Services" / "DailyMetricsProjectionInputReader.swift",
+        (
+            "static let fetchBatchSize = 64",
+            "descriptor.fetchLimit = fetchBatchSize",
+            "meal.id > lastID",
+            "workout.id > lastID",
+        ),
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Services" / "DailyMetricsProjector.swift",
+        ("DailyMetricsProjectionInputReader.read", "projectionInputs.meals", "projectionInputs.workouts"),
+        errors,
+    )
+    require_text(
+        ROOT / "Densoso" / "Infrastructure" / "Persistence" / "SwiftDataConfirmationRepository.swift",
+        (
+            "DailyMetricsProjectionInputReader.read",
+            "projectionInputs.meals",
+            "projectionInputs.workouts",
+            "DailyMetricsReadModelMapper.make($0).intake.value",
+            "weightDescriptor.fetchLimit = 1",
+            "SortDescriptor(\\WeightRecord.id, order: .reverse)",
+            "static let scheduleEventFetchBatchSize = 64",
+            "private func scheduleEventExists(",
+            "descriptor.fetchLimit = Self.scheduleEventFetchBatchSize",
+            "descriptor.fetchOffset = offset",
+        ),
+        errors,
+    )
+
+    require_text(
+        ROOT / "docs" / "gates" / "gate-01-foundation.md",
+        ["approved by user on 2026-08-18", "Phase 2 authorized"],
+        errors,
+    )
+    if not (ROOT / "docs" / "gates" / "gate-02-domain-persistence.md").is_file():
+        errors.append("missing docs/gates/gate-02-domain-persistence.md")
+
+    require_text(
+        ROOT / ".github" / "workflows" / "build.yml",
+        [
+            "domain-persistence:",
+            "needs: foundation",
+            "gate-02-domain-persistence",
+            "validate_phase2_domain_persistence.py",
+            "Gate02PersistenceTests.xcresult",
+            "DensosoTests/ConfirmationCoordinatorTests",
+            "DensosoTests/DensosoMigrationTests",
+            "xcresulttool export attachments",
+            "gate02-v1-migration-report_",
+            "gate02-v2-migration-report_",
+            "gate02-recovery-report_",
+            "gate-02-domain-persistence-results",
+        ],
+        errors,
+    )
+
+    if errors:
+        for error in errors:
+            print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+    print("Phase 2 domain-persistence static contracts: PASS")
+    print("Migration, transaction, crash-recovery, and rollback evidence must come from Simulator CI.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
