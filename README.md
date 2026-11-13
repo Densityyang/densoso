@@ -43,6 +43,12 @@ DailyMetricsProjector / WeeklyAnalyticsService
 - `IntelligenceRoutingPolicy` 统一选择本地模型、Speech 路径或显式云端路径。
 - `DailyMetrics` 是日指标和周分析的唯一聚合来源。
 
+恢复与重试边界：
+
+- 恢复备份后，以恢复的主档案和目标重新加载应用状态；备份不会授予云端健康数据权限。HealthKit 快照清理或重建完成前，云端健康数据导出保持关闭；完成后刷新 Watch 应用上下文。
+- 训练计划只接受受支持的活动/目标和未来时间。部分重试会排除已调度课次，并跳过已过期但尚未调度的课次，让后续有效课次继续执行。
+- 食物搜索包含名称和别名，先匹配精确名称/别名，再匹配前缀；`%`、`_` 和反斜杠按字面字符查询。
+
 ## 数据与隐私边界
 
 - API Key 保存在设备 Keychain。
@@ -108,12 +114,12 @@ python -m py_compile scripts/evaluate_voice_transcripts.py scripts/generate_voic
 
 GitHub Actions 工作流位于 `.github/workflows/`：
 
-- `build.yml`：`gate-01-foundation` 执行纯 `DensosoDomain` 测试、确定性 XcodeGen、
-  iOS 18 deployment 构建、iOS 27.0 Simulator 单测/UI 截图与单目标 Watch app 编译，
-  并上传 `.xcresult` 和日志证据；后续依次运行 `gate-02-domain-persistence`
-  `gate-03-agent-provider`、`gate-04-speech` 和 `gate-05-meal-capture`；
-  Provider/ASR/VL 测试只使用本地 fixture/fake transport。Gate 5 的 100/50
-  评测集是公开合成算法验证，不冒充真实照片或厨房秤实测。
+- `build.yml`：面向 `master` 的 PR、`master` 更新或手动触发时运行分阶段门禁。完整模式覆盖
+  Gate 1–14、Gate 17–19，并由 Gate 16 汇总发布就绪状态；Gate 1 包含纯
+  `DensosoDomain` 测试、确定性 XcodeGen、iOS 18 deployment 构建、iOS 27.0
+  Simulator 测试/UI 截图和单目标 Watch app 编译。工作流会上传测试结果与门禁证据。
+  手动触发可选择 `full` 或 `focused-pr-tests`。Provider/ASR/VL 测试只使用本地
+  fixture/fake transport。Gate 5 的 100/50 评测集是公开合成算法验证，不冒充真实照片或厨房秤实测。
 - `build-ipa.yml`：手动触发 Release device build、IPA 打包和 artifact 上传。
 
 ## 文档索引
