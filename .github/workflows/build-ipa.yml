@@ -13,6 +13,15 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Generate production food database
+        run: |
+          python3 scripts/import_food_db.py \
+            --input Densoso/Resources/seed_foods.json \
+            --manifest Densoso/Resources/FoodData/sources.json \
+            --output Densoso/Resources/food_composition.db \
+            --production
+          test -s Densoso/Resources/food_composition.db
+
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -27,11 +36,19 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             clean build
 
+      - name: Verify bundled food database
+        run: test -s DerivedData/Build/Products/Release-iphoneos/Densoso.app/food_composition.db
+
       - name: Package unsigned .ipa
         run: |
+          set -euo pipefail
+          APP_PATH=DerivedData/Build/Products/Release-iphoneos/Densoso.app
+          test -s "$APP_PATH/food_composition.db"
           mkdir -p Payload
-          cp -R DerivedData/Build/Products/Release-iphoneos/Densoso.app Payload/
+          cp -R "$APP_PATH" Payload/
+          test -s Payload/Densoso.app/food_composition.db
           zip -ry Densoso.ipa Payload/
+          unzip -Z1 Densoso.ipa | grep -Fx 'Payload/Densoso.app/food_composition.db'
           rm -rf Payload
 
       - name: Upload .ipa
