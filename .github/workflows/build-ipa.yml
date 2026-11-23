@@ -39,6 +39,9 @@ jobs:
       - name: Verify bundled food database
         run: test -s DerivedData/Build/Products/Release-iphoneos/Densoso.app/food_composition.db
 
+      - name: Verify HealthKit Info.plist marker
+        run: plutil -extract DensosoHealthKitCapabilityConfigured raw DerivedData/Build/Products/Release-iphoneos/Densoso.app/Info.plist | grep -qx true
+
       - name: Package unsigned .ipa
         run: |
           set -euo pipefail
