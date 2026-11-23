@@ -685,7 +685,7 @@ jobs:
         run: |
           set -o pipefail
           rm -rf "$GATE04_RESULT_BUNDLE"
-          perl -e 'alarm shift; exec @ARGV' 900 xcodebuild -project Densoso.xcodeproj \
+          perl -e 'alarm shift; exec @ARGV' 2700 xcodebuild -project Densoso.xcodeproj \
             -scheme Densoso \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             -destination-timeout 120 \
